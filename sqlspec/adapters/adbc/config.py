@@ -8,21 +8,23 @@ from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessio
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
-    build_postgres_extension_probe_names,
     detect_postgres_extensions,
     get_statement_config,
     is_postgres_dialect,
-    is_postgres_extension_active,
     resolve_dialect_from_config,
     resolve_dialect_name,
     resolve_driver_connect_func,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
 )
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core.config_runtime import (
+    build_postgres_extension_probe_names,
+    is_postgres_extension_active,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
+)
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -296,23 +298,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             err_driver_name = self.connection_config.get("driver_name", "Unknown")
             msg = f"Could not configure connection using driver '{err_driver_name}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
-
-    def _update_dialect_for_extensions(self) -> None:
-        """Update statement_config dialect based on detected extensions.
-
-        Priority: paradedb > pg_textsearch > pgvector > postgres (default).
-        Only switches when current dialect is ``postgres``.
-        """
-        current_dialect = self.statement_config.dialect or "postgres"
-        if current_dialect != "postgres":
-            return
-
-        if self._paradedb_available:
-            self.statement_config = self.statement_config.replace(dialect="paradedb")
-        elif self._pg_textsearch_available:
-            self.statement_config = self.statement_config.replace(dialect="pg_textsearch")
-        elif self._pgvector_available:
-            self.statement_config = self.statement_config.replace(dialect="pgvector")
 
     @property
     def pg_textsearch_available(self) -> bool:

@@ -165,8 +165,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         super().__init__(config)
         self.tracker = self._create_tracker()
-
-        # Create context with extension configurations
         context = MigrationContext.from_config(config)
         context.extension_config = self.extension_configs
 
@@ -340,7 +338,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         except Exception as exc:
             use_txn = self.runner.should_use_transaction(migration, self.config)
             rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_exception(
+            _output_error(
                 use_logger,
                 echo,
                 summary_only,
@@ -394,7 +392,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         except Exception as exc:
             use_txn = self.runner.should_use_transaction(migration, self.config)
             rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_exception(
+            _output_error(
                 use_logger,
                 echo,
                 summary_only,
@@ -563,7 +561,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 self._validate_migration_schema(driver)
                 self.tracker.ensure_tracking_table(driver)
 
-                # config auto_sync=False cannot be overridden by the call-site flag.
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
                     self._synchronize_version_records(
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
@@ -819,27 +816,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        version = generate_timestamp_version()
-        selected_format = file_type or self._template_settings.default_format
-        file_path = create_migration_file(
-            self.migrations_path,
-            version,
-            message,
-            selected_format,
-            config=self.config,
-            template_settings=self._template_settings,
-        )
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "migration.create",
-            db_system=resolve_db_system(type(self.config).__name__),
-            version=version,
-            file_path=str(file_path),
-            file_type=selected_format,
-            description=message,
-        )
-        console.print(f"[green]Created migration:[/] {file_path}")
+        _create_revision(self.migrations_path, self.config, self._template_settings, message, file_type)
 
     def squash(
         self,
@@ -873,7 +850,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         squasher = MigrationSquasher(self.migrations_path, self.runner, self._template_settings)
 
-        # Infer start/end from all sequential migrations when not provided
         if start_version is None or end_version is None:
             all_migrations = self.runner.get_migration_files()
             sequential = [(v, p) for v, p in all_migrations if v.isdigit() or v.lstrip("0").isdigit()]
@@ -886,7 +862,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 end_version = sequential[-1][0]
             console.print(f"[cyan]Squashing range: {start_version} to {end_version}[/]")
 
-        # Prompt for description when not provided
         if description is None:
             from rich.prompt import Prompt
 
@@ -896,7 +871,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             start_version, end_version, description, allow_gaps=allow_gaps, output_format=output_format
         )
 
-        # Display plan for each squash group
         table = Table(title="Squash Plan")
         table.add_column("Version", style="cyan")
         table.add_column("File")
@@ -1042,8 +1016,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """
         super().__init__(config)
         self.tracker = self._create_tracker()
-
-        # Create context with extension configurations
         context = MigrationContext.from_config(config)
         context.extension_config = self.extension_configs
 
@@ -1216,7 +1188,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         except Exception as exc:
             use_txn = self.runner.should_use_transaction(migration, self.config)
             rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_exception(
+            _output_error(
                 use_logger,
                 echo,
                 summary_only,
@@ -1270,7 +1242,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         except Exception as exc:
             use_txn = self.runner.should_use_transaction(migration, self.config)
             rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_exception(
+            _output_error(
                 use_logger,
                 echo,
                 summary_only,
@@ -1439,7 +1411,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 await self._validate_migration_schema(driver)
                 await self.tracker.ensure_tracking_table(driver)
 
-                # config auto_sync=False cannot be overridden by the call-site flag.
                 if auto_sync and self.config.migration_config.get("auto_sync", True):
                     await self._synchronize_version_records(
                         driver, use_logger=ul, echo=echo_value, summary_only=summary_value
@@ -1702,27 +1673,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             message: Description for the migration.
             file_type: Type of migration file to create ('sql' or 'py').
         """
-        version = generate_timestamp_version()
-        selected_format = file_type or self._template_settings.default_format
-        file_path = create_migration_file(
-            self.migrations_path,
-            version,
-            message,
-            selected_format,
-            config=self.config,
-            template_settings=self._template_settings,
-        )
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "migration.create",
-            db_system=resolve_db_system(type(self.config).__name__),
-            version=version,
-            file_path=str(file_path),
-            file_type=selected_format,
-            description=message,
-        )
-        console.print(f"[green]Created migration:[/] {file_path}")
+        _create_revision(self.migrations_path, self.config, self._template_settings, message, file_type)
 
     async def squash(
         self,
@@ -1768,7 +1719,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
 
         squasher = MigrationSquasher(self.migrations_path, sync_runner, self._template_settings)
 
-        # Infer start/end from all sequential migrations when not provided
         if start_version is None or end_version is None:
             all_migrations = sync_runner.get_migration_files()
             sequential = [(v, p) for v, p in all_migrations if v.isdigit() or v.lstrip("0").isdigit()]
@@ -1781,7 +1731,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 end_version = sequential[-1][0]
             console.print(f"[cyan]Squashing range: {start_version} to {end_version}[/]")
 
-        # Prompt for description when not provided
         if description is None:
             import anyio
             from rich.prompt import Prompt
@@ -1798,7 +1747,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             output_format=output_format,
         )
 
-        # Display plan for each squash group
         table = Table(title="Squash Plan")
         table.add_column("Version", style="cyan")
         table.add_column("File")
@@ -1967,34 +1915,40 @@ def _output_info(
         console.print(rich_message or message % args if args else message)
 
 
-def _output_warning(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
+def _create_revision(
+    migrations_path: "Path", config: Any, template_settings: Any, message: str, file_type: str | None = None
 ) -> None:
-    """Output a warning message to logger or console."""
-    if use_logger:
-        logger.warning(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
+    """Create a new migration file with timestamp-based versioning and log it.
+
+    Args:
+        migrations_path: Path to migrations directory.
+        config: Database configuration.
+        template_settings: Migration template settings.
+        message: Description for the migration.
+        file_type: Type of migration file to create ('sql' or 'py').
+    """
+    version = generate_timestamp_version()
+    selected_format = file_type or template_settings.default_format
+    file_path = create_migration_file(
+        migrations_path, version, message, selected_format, config=config, template_settings=template_settings
+    )
+    log_with_context(
+        logger,
+        logging.DEBUG,
+        "migration.create",
+        db_system=resolve_db_system(type(config).__name__),
+        version=version,
+        file_path=str(file_path),
+        file_type=selected_format,
+        description=message,
+    )
+    console.print(f"[green]Created migration:[/] {file_path}")
 
 
 def _output_error(
     use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
 ) -> None:
     """Output an error message to logger or console."""
-    if use_logger:
-        logger.error(message, *args)
-    else:
-        if not echo:
-            return
-        console.print(rich_message or message % args if args else message)
-
-
-def _output_exception(
-    use_logger: bool, echo: bool, summary_only: bool, message: str, *args: Any, rich_message: str | None = None
-) -> None:
-    """Output an exception message to logger or console."""
     if use_logger:
         logger.error(message, *args)
     else:

@@ -455,7 +455,7 @@ class SQLProcessor:
 
         # Structural fingerprinting means same SQL structure = same cache entry,
         # but we must still process the caller's actual parameter values.
-        processed_params = self._parameter_processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+        processed_params = self._parameter_processor.transform_cached_parameters(
             parameters,
             cached_result.parameter_profile,
             self._parameter_config,

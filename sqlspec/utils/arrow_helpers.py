@@ -170,30 +170,6 @@ _ARROW_TOKEN_FACTORIES: "dict[str, Callable[[Any], Any]]" = {
 }
 
 
-def _resolve_null_columns(table: "ArrowTable", column_types: "Mapping[str, str] | None" = None) -> "ArrowTable":
-    """Give value-inferred Arrow ``null`` columns their real type.
-
-    ``pa.Table.from_pylist`` infers column types from values alone, so a column
-    that is ``NULL`` in every row arrives as Arrow ``null`` and loses the type
-    the database declared. When the adapter reported that column's type, use it.
-    Otherwise fall back to ``string``, which holds the nulls without breaking
-    string operations downstream.
-    """
-    import pyarrow as pa
-
-    if not any(pa.types.is_null(field.type) for field in table.schema):
-        return table
-
-    hints = column_types or {}
-    fields = [
-        field.with_type(arrow_type_from_token(hints[field.name]))
-        if pa.types.is_null(field.type) and field.name in hints
-        else (field.with_type(pa.string()) if pa.types.is_null(field.type) else field)
-        for field in table.schema
-    ]
-    return table.cast(pa.schema(fields))
-
-
 def convert_dict_to_arrow_with_schema(
     data: "list[dict[str, Any]]",
     return_format: Literal["table", "reader", "batch", "batches"] = "table",
@@ -302,29 +278,6 @@ def coerce_arrow_table(source: "ArrowResult | Any") -> "ArrowTable":
     raise TypeError(msg)
 
 
-def _coerce_arrow_table_identity(source: Any) -> Any:
-    return source
-
-
-def _coerce_arrow_record_batch(source: Any) -> Any:
-    import pyarrow as pa
-
-    return pa.Table.from_batches([source])
-
-
-def _get_arrow_table_coercer() -> "TypeDispatcher[Any]":
-    global _ARROW_TABLE_COERCER
-    if _ARROW_TABLE_COERCER is None:
-        ensure_pyarrow()
-        import pyarrow as pa
-
-        dispatcher = TypeDispatcher[Any]()
-        dispatcher.register(pa.Table, _coerce_arrow_table_identity)
-        dispatcher.register(pa.RecordBatch, _coerce_arrow_record_batch)
-        _ARROW_TABLE_COERCER = dispatcher
-    return _ARROW_TABLE_COERCER
-
-
 def ensure_arrow_table(data: Any) -> "ArrowTable":
     """Ensure data is a PyArrow Table."""
     ensure_pyarrow()
@@ -400,46 +353,12 @@ def arrow_table_to_rows(
         msg = "Arrow table has no columns to import"
         raise ValueError(msg)
 
-    # Use column-oriented access with zip transpose (O(n) vs O(n*m) row iteration)
-    # Extract columns as Python lists and transpose to rows
     col_data = [table.column(col).to_pylist() for col in resolved_columns]
-
-    # Handle empty table case
     if not col_data or not col_data[0]:
         return resolved_columns, []
 
-    # Transpose columns to rows using zip
     records: list[tuple[Any, ...]] = [tuple(row) for row in zip(*col_data, strict=False)]
     return resolved_columns, records
-
-
-def _arrow_type_needs_preparation(data_type: Any) -> bool:
-    ensure_pyarrow()
-    import pyarrow as pa
-
-    if pa.types.is_dictionary(data_type):
-        return _arrow_type_needs_preparation(data_type.value_type)
-
-    is_extension = getattr(pa.types, "is_extension", None)
-    if is_extension is not None and is_extension(data_type):
-        return _arrow_type_needs_preparation(data_type.storage_type)
-
-    nested_type_checks = (
-        "is_struct",
-        "is_list",
-        "is_large_list",
-        "is_fixed_size_list",
-        "is_map",
-        "is_union",
-        "is_list_view",
-        "is_large_list_view",
-    )
-    return any(getattr(pa.types, check, lambda _: False)(data_type) for check in nested_type_checks)
-
-
-@lru_cache(maxsize=_ARROW_SCHEMA_DECISION_CACHE_SIZE)
-def _arrow_schema_needs_preparation(schema: Any) -> bool:
-    return any(_arrow_type_needs_preparation(field.type) for field in schema)
 
 
 def arrow_table_needs_parameter_preparation(table: "ArrowTable") -> bool:
@@ -508,36 +427,6 @@ def build_ingest_telemetry(table: "ArrowTable", *, format_label: str = "arrow") 
         rows = 0
         bytes_processed = 0
     return {"rows_processed": rows, "bytes_processed": bytes_processed, "format": format_label}
-
-
-class _DeferredCloseBatchIterator:
-    """Iterate RecordBatches from a reader and invoke a callback on exhaustion or error."""
-
-    __slots__ = ("_close_callback", "_closed", "_reader")
-
-    def __init__(self, reader: Any, close_callback: "Callable[[], None]") -> None:
-        self._reader = reader
-        self._close_callback = close_callback
-        self._closed = False
-
-    def __iter__(self) -> "_DeferredCloseBatchIterator":
-        return self
-
-    def _finalize(self) -> None:
-        if not self._closed:
-            self._closed = True
-            with contextlib.suppress(Exception):
-                self._close_callback()
-
-    def __next__(self) -> Any:
-        try:
-            return self._reader.read_next_batch()
-        except StopIteration:
-            self._finalize()
-            raise
-        except Exception:
-            self._finalize()
-            raise
 
 
 def arrow_reader_with_deferred_close(reader: Any, close_callback: "Callable[[], None]") -> "ArrowRecordBatchReader":
@@ -615,3 +504,109 @@ def _arrow_uuid_column_to_pylist(column: Any, data_type: Any) -> "list[Any]":
             for value in nested_values
         ]
     return cast("list[Any]", column.to_pylist())
+
+
+def _resolve_null_columns(table: "ArrowTable", column_types: "Mapping[str, str] | None" = None) -> "ArrowTable":
+    """Give value-inferred Arrow ``null`` columns their real type.
+
+    ``pa.Table.from_pylist`` infers column types from values alone, so a column
+    that is ``NULL`` in every row arrives as Arrow ``null`` and loses the type
+    the database declared. When the adapter reported that column's type, use it.
+    Otherwise fall back to ``string``, which holds the nulls without breaking
+    string operations downstream.
+    """
+    import pyarrow as pa
+
+    if not any(pa.types.is_null(field.type) for field in table.schema):
+        return table
+
+    hints = column_types or {}
+    fields = [
+        field.with_type(arrow_type_from_token(hints[field.name]))
+        if pa.types.is_null(field.type) and field.name in hints
+        else (field.with_type(pa.string()) if pa.types.is_null(field.type) else field)
+        for field in table.schema
+    ]
+    return table.cast(pa.schema(fields))
+
+
+def _coerce_arrow_table_identity(source: Any) -> Any:
+    return source
+
+
+def _coerce_arrow_record_batch(source: Any) -> Any:
+    import pyarrow as pa
+
+    return pa.Table.from_batches([source])
+
+
+def _get_arrow_table_coercer() -> "TypeDispatcher[Any]":
+    global _ARROW_TABLE_COERCER
+    if _ARROW_TABLE_COERCER is None:
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        dispatcher = TypeDispatcher[Any]()
+        dispatcher.register(pa.Table, _coerce_arrow_table_identity)
+        dispatcher.register(pa.RecordBatch, _coerce_arrow_record_batch)
+        _ARROW_TABLE_COERCER = dispatcher
+    return _ARROW_TABLE_COERCER
+
+
+def _arrow_type_needs_preparation(data_type: Any) -> bool:
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    if pa.types.is_dictionary(data_type):
+        return _arrow_type_needs_preparation(data_type.value_type)
+
+    is_extension = getattr(pa.types, "is_extension", None)
+    if is_extension is not None and is_extension(data_type):
+        return _arrow_type_needs_preparation(data_type.storage_type)
+
+    nested_type_checks = (
+        "is_struct",
+        "is_list",
+        "is_large_list",
+        "is_fixed_size_list",
+        "is_map",
+        "is_union",
+        "is_list_view",
+        "is_large_list_view",
+    )
+    return any(getattr(pa.types, check, lambda _: False)(data_type) for check in nested_type_checks)
+
+
+@lru_cache(maxsize=_ARROW_SCHEMA_DECISION_CACHE_SIZE)
+def _arrow_schema_needs_preparation(schema: Any) -> bool:
+    return any(_arrow_type_needs_preparation(field.type) for field in schema)
+
+
+class _DeferredCloseBatchIterator:
+    """Iterate RecordBatches from a reader and invoke a callback on exhaustion or error."""
+
+    __slots__ = ("_close_callback", "_closed", "_reader")
+
+    def __init__(self, reader: Any, close_callback: "Callable[[], None]") -> None:
+        self._reader = reader
+        self._close_callback = close_callback
+        self._closed = False
+
+    def __iter__(self) -> "_DeferredCloseBatchIterator":
+        return self
+
+    def _finalize(self) -> None:
+        if not self._closed:
+            self._closed = True
+            with contextlib.suppress(Exception):
+                self._close_callback()
+
+    def __next__(self) -> Any:
+        try:
+            return self._reader.read_next_batch()
+        except StopIteration:
+            self._finalize()
+            raise
+        except Exception:
+            self._finalize()
+            raise

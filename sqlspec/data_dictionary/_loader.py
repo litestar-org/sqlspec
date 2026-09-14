@@ -30,10 +30,6 @@ if TYPE_CHECKING:
 __all__ = ("DataDictionaryLoader", "get_data_dictionary_loader")
 
 
-SQL_RESOURCE_PACKAGE = "sqlspec.data_dictionary"
-SQL_RESOURCE_NAME = "sql"
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class DataDictionaryLoader:
     """Loads and manages data dictionary SQL for all dialects."""
@@ -328,10 +324,6 @@ def get_data_dictionary_loader() -> DataDictionaryLoader:
     if _loader_instance is None:
         _loader_instance = DataDictionaryLoader()
     return _loader_instance
-
-
-def _sql_resource_root() -> "Traversable":
-    return resources.files(SQL_RESOURCE_PACKAGE).joinpath(SQL_RESOURCE_NAME)
 
 
 def _normalize_domain_key(name: str) -> str:

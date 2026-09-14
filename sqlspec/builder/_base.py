@@ -29,7 +29,6 @@ from sqlspec.core import (
     SQL,
     ParameterStyle,
     ParameterStyleConfig,
-    SQLResult,
     StatementConfig,
     get_cache,
     get_cache_config,
@@ -235,15 +234,6 @@ class QueryBuilder:
 
         Returns:
             A new sqlglot expression appropriate for the query type.
-        """
-
-    @property
-    @abstractmethod
-    def _expected_result_type(self) -> "type[SQLResult]":
-        """The expected result type for the query being built.
-
-        Returns:
-            type[ResultT]: The type of the result.
         """
 
     @staticmethod
@@ -1253,10 +1243,6 @@ class ExpressionBuilder(QueryBuilder):
             msg = "ExpressionBuilder requires an expression at construction."
             self._raise_builder_error(msg)
         return self._expression
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult]":
-        return SQLResult
 
 
 class _BuilderCacheEntry:

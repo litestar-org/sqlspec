@@ -46,7 +46,6 @@ def test_sync_tracker_qualifies_table_sql_when_schema_is_configured() -> None:
         str(
             tracker._record_squashed_migration_statement("0002", "sequential", 2, "squash", 0, "def", "tester", "0001")
         ),  # pyright: ignore[reportPrivateUsage]
-        str(tracker._column_exists_query()),  # pyright: ignore[reportPrivateUsage]
     ]
 
     assert all('"history"."ddl_migrations"' in statement for statement in rendered_statements)

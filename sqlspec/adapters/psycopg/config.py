@@ -15,14 +15,7 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncCursor,
     PsycopgSyncSessionContext,
 )
-from sqlspec.adapters.psycopg.core import (
-    apply_driver_features,
-    build_postgres_extension_probe_names,
-    default_statement_config,
-    is_postgres_extension_active,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
-)
+from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
     PsycopgAsyncExceptionHandler,
@@ -32,6 +25,12 @@ from sqlspec.adapters.psycopg.driver import (
 from sqlspec.adapters.psycopg.type_converter import register_pgvector_async, register_pgvector_sync
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core.config_runtime import (
+    build_postgres_extension_probe_names,
+    is_postgres_extension_active,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
+)
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError

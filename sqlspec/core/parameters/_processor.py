@@ -8,6 +8,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._converter import ParameterConverter
 from sqlspec.core.parameters._types import (
+    _EXPANDING_POSITIONAL_STYLES,
     _NAMED_STYLE_VALUES,
     _NAMED_STYLES,
     _POSITIONAL_STYLE_VALUES,
@@ -22,6 +23,7 @@ from sqlspec.core.parameters._types import (
     wrap_with_type,
 )
 from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (
@@ -37,11 +39,6 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 
 _EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10
 _EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3
-_OCCURRENCE_BASED_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
-    ParameterStyle.QMARK,
-    ParameterStyle.POSITIONAL_COLON,
-    ParameterStyle.POSITIONAL_PYFORMAT,
-})
 
 _TYPE_COERCION_DISPATCHERS: Final[dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]] = {}
 
@@ -308,7 +305,7 @@ class ParameterProcessor:
                     )
                 # Return cached SQL transformation with NEW parameters transformed
                 # to match the cached SQL's placeholder format
-                transformed_params = self._transform_cached_parameters(
+                transformed_params = self.transform_cached_parameters(
                     parameters,
                     cached_result.parameter_profile,
                     config,
@@ -524,18 +521,7 @@ class ParameterProcessor:
         is_many: bool = False,
     ) -> "ConvertedParameters":
         fallback_items = type_coercion_fallbacks(type_coercion_map)
-        result = _coerce_parameters_payload(parameters, type_coercion_map, fallback_items, is_many)
-        # Fast type narrowing - _coerce_parameters_payload returns object but produces concrete types
-        if result is None:
-            return None
-        result_type = type(result)
-        if result_type is dict:
-            return result
-        if result_type is list:
-            return result
-        if result_type is tuple:
-            return result
-        return result
+        return _coerce_parameters_payload(parameters, type_coercion_map, fallback_items, is_many)
 
     def _store_cached_result(
         self, cache_key: Any | None, result: "ParameterProcessingResult"
@@ -548,7 +534,7 @@ class ParameterProcessor:
             self._cache.popitem(last=False)
         return result
 
-    def _transform_cached_parameters(
+    def transform_cached_parameters(
         self,
         parameters: "ParameterPayload",
         cached_profile: "ParameterProfile",
@@ -682,12 +668,7 @@ class ParameterProcessor:
             for idx, row in enumerate(parameter_rows):
                 if type(row) is dict or isinstance(row, Mapping):
                     if strict:
-                        missing = [name for name in named_order if name not in row]
-                        if missing:
-                            from sqlspec.exceptions import SQLSpecError
-
-                            msg = f"Missing required parameters: {missing}"
-                            raise SQLSpecError(msg)
+                        _validate_missing_parameters(named_order, row)
                     mapped_row: Any = tuple(row.get(name) for name in named_order)
                 else:
                     mapped_row = row
@@ -706,12 +687,7 @@ class ParameterProcessor:
 
         if isinstance(parameters, Mapping):
             if strict:
-                missing = [name for name in named_order if name not in parameters]
-                if missing:
-                    from sqlspec.exceptions import SQLSpecError
-
-                    msg = f"Missing required parameters: {missing}"
-                    raise SQLSpecError(msg)
+                _validate_missing_parameters(named_order, parameters)
             return tuple(parameters.get(name) for name in named_order)
 
         return parameters
@@ -1141,6 +1117,22 @@ def _named_parameters_for_style(
     param_info: "list[ParameterInfo]", target_style: "ParameterStyle | None"
 ) -> "tuple[str, ...]":
     names = tuple(p.name for p in param_info if p.name is not None)
-    if target_style in _OCCURRENCE_BASED_POSITIONAL_STYLES:
+    if target_style in _EXPANDING_POSITIONAL_STYLES:
         return names
     return tuple(dict.fromkeys(names))
+
+
+def _validate_missing_parameters(named_order: Sequence[str], parameters: Mapping[str, Any]) -> None:
+    """Validate that all required parameters are present in parameters mapping.
+
+    Args:
+        named_order: Expected parameter names in order.
+        parameters: Parameter mapping to validate.
+
+    Raises:
+        SQLSpecError: If any required parameters are missing.
+    """
+    missing = [name for name in named_order if name not in parameters]
+    if missing:
+        msg = f"Missing required parameters: {missing}"
+        raise SQLSpecError(msg)

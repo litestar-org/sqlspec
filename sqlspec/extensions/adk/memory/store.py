@@ -163,24 +163,6 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
             statements.extend(self._drop_sql_for_table(cand))
         return unique_statements(statements)
 
-    def _require_enabled(self) -> None:
-        if not self._enabled:
-            msg = "ADK memory store is disabled for this database configuration"
-            raise RuntimeError(msg)
-
-    def _effective_limit(self, limit: int | None) -> int:
-        return limit if limit is not None else self._max_results
-
-    def _log_operation(self, event: str, **kwargs: Any) -> None:
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            event,
-            table_name=self._memory_table,
-            db_system=resolve_db_system(type(self).__name__),
-            **kwargs,
-        )
-
 
 class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     """Base class for async SQLSpec-backed ADK memory stores.

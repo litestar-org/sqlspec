@@ -20,7 +20,6 @@ from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import _coerce_column, _resolve_dialect, extract_sql_object_expression
 from sqlspec.builder._select import is_explicitly_quoted
-from sqlspec.core import SQLResult
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.serializers import to_json
@@ -667,15 +666,6 @@ class Merge(
 
         if target_table:
             self.into(target_table)
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult]":
-        """Return the expected result type for this builder.
-
-        Returns:
-            The SQLResult type for MERGE statements.
-        """
-        return SQLResult
 
     def _create_base_expression(self) -> "exp.Merge":
         """Create a base MERGE expression.

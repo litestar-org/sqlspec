@@ -1001,6 +1001,13 @@ class FiltersView:
 
     Provides zero-copy access to filters with methods for querying,
     iteration, and canonical representation generation.
+
+    Note:
+        `FiltersView` and its `to_canonical` method operate on lightweight
+        `Filter` records (field_name, operation, value) for cache key generation.
+        This is distinct from `StatementFilter` canonicalization in
+        `sqlspec.core.filters.canonicalize_filters`, which handles full SQL
+        AST statement filter objects.
     """
 
     __slots__ = ("_filters_ref",)
@@ -1055,7 +1062,6 @@ class FiltersView:
         Returns:
             Canonical tuple representation of filters
         """
-        # Convert to Filter objects if needed, then canonicalize
         filter_objects = []
         for f in self._filters_ref:
             if isinstance(f, Filter):

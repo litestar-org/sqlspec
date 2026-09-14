@@ -10,6 +10,7 @@ from typing import Any, Final, Literal, TypeAlias
 from mypy_extensions import mypyc_attr
 
 __all__ = (
+    "_EXPANDING_POSITIONAL_STYLES",
     "ConvertedParameters",
     "DriverParameterProfile",
     "NamedParameterOutput",
@@ -162,6 +163,11 @@ _POSITIONAL_STYLES: Final[frozenset["ParameterStyle"]] = frozenset({
 })
 _NAMED_STYLE_VALUES: Final[frozenset[str]] = frozenset(style.value for style in _NAMED_STYLES)
 _POSITIONAL_STYLE_VALUES: Final[frozenset[str]] = frozenset(style.value for style in _POSITIONAL_STYLES)
+_EXPANDING_POSITIONAL_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
+    ParameterStyle.QMARK,
+    ParameterStyle.POSITIONAL_PYFORMAT,
+    ParameterStyle.POSITIONAL_COLON,
+})
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

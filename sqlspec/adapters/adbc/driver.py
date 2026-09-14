@@ -544,19 +544,13 @@ class AdbcDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        # Use ADBC cursor for native Arrow
         with self.with_cursor(self.connection) as cursor, exc_handler:
             if cursor is None:
                 msg = "Failed to create cursor"
                 raise DatabaseConnectionError(msg)
 
-            # Get compiled SQL and parameters
             sql, driver_params = self._compiled_sql(prepared_statement, config)
-
-            # Execute query
             cursor.execute(sql, driver_params or ())
-
-            # Fetch as Arrow table (zero-copy!)
             arrow_table = cursor.fetch_arrow_table()
 
             arrow_result = build_arrow_result_from_table(
@@ -594,7 +588,6 @@ class AdbcDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Stream query results to storage via the Arrow fast path."""
 
-        _ = kwargs
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()

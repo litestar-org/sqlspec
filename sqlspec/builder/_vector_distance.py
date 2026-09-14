@@ -26,6 +26,24 @@ __all__ = (
 )
 
 _VECTOR_DISTANCE_META_KEY: Final[str] = "sqlspec_vector_distance_metric"
+_POSTGRES_OPERATOR_MAP: Final[dict[str, str]] = {"euclidean": "<->", "cosine": "<=>", "inner_product": "<#>"}
+_MYSQL_METRIC_MAP: Final[dict[str, str]] = {"euclidean": "EUCLIDEAN", "cosine": "COSINE", "inner_product": "DOT"}
+_ORACLE_METRIC_MAP: Final[dict[str, str]] = {
+    "euclidean": "EUCLIDEAN",
+    "cosine": "COSINE",
+    "inner_product": "DOT",
+    "euclidean_squared": "EUCLIDEAN_SQUARED",
+}
+_BIGQUERY_FUNCTION_MAP: Final[dict[str, str]] = {
+    "euclidean": "EUCLIDEAN_DISTANCE",
+    "cosine": "COSINE_DISTANCE",
+    "inner_product": "DOT_PRODUCT",
+}
+_DUCKDB_FUNCTION_MAP: Final[dict[str, str]] = {
+    "euclidean": "array_distance",
+    "cosine": "array_cosine_distance",
+    "inner_product": "array_negative_inner_product",
+}
 _OperatorTransform = Callable[[Any, exp.Operator], str]
 _SQLGLOT_VECTOR_DISTANCE_REGISTERED = False
 _BASE_OPERATOR_TRANSFORM: _OperatorTransform | None = None
@@ -90,9 +108,7 @@ def VectorDistance(*, this: exp.Expr, expression: exp.Expr, metric: Any = "eucli
 
 def render_vector_distance_postgres(left: str, right: str, metric: str) -> str:
     """Render PostgreSQL pgvector operator syntax."""
-    operator_map = {"euclidean": "<->", "cosine": "<=>", "inner_product": "<#>"}
-
-    operator = operator_map.get(metric)
+    operator = _POSTGRES_OPERATOR_MAP.get(metric)
     if operator:
         return f"{left} {operator} {right}"
 
@@ -101,9 +117,7 @@ def render_vector_distance_postgres(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_mysql(left: str, right: str, metric: str) -> str:
     """Render MySQL DISTANCE function syntax."""
-    metric_map = {"euclidean": "EUCLIDEAN", "cosine": "COSINE", "inner_product": "DOT"}
-
-    mysql_metric = metric_map.get(metric, "EUCLIDEAN")
+    mysql_metric = _MYSQL_METRIC_MAP.get(metric, "EUCLIDEAN")
 
     if ("ARRAY" in right or "[" in right) and "STRING_TO_VECTOR" not in right:
         right = f"STRING_TO_VECTOR({right})"
@@ -113,14 +127,7 @@ def render_vector_distance_mysql(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_oracle(left: str, right: str, metric: str) -> str:
     """Render Oracle VECTOR_DISTANCE function syntax."""
-    metric_map = {
-        "euclidean": "EUCLIDEAN",
-        "cosine": "COSINE",
-        "inner_product": "DOT",
-        "euclidean_squared": "EUCLIDEAN_SQUARED",
-    }
-
-    oracle_metric = metric_map.get(metric, "EUCLIDEAN")
+    oracle_metric = _ORACLE_METRIC_MAP.get(metric, "EUCLIDEAN")
 
     if ("[" in right or "ARRAY" in right) and "TO_VECTOR" not in right:
         right = f"TO_VECTOR({right})"
@@ -130,9 +137,7 @@ def render_vector_distance_oracle(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_bigquery(left: str, right: str, metric: str) -> str:
     """Render BigQuery vector distance function syntax."""
-    function_map = {"euclidean": "EUCLIDEAN_DISTANCE", "cosine": "COSINE_DISTANCE", "inner_product": "DOT_PRODUCT"}
-
-    function_name = function_map.get(metric)
+    function_name = _BIGQUERY_FUNCTION_MAP.get(metric)
     if function_name:
         return f"{function_name}({left}, {right})"
 
@@ -141,12 +146,7 @@ def render_vector_distance_bigquery(left: str, right: str, metric: str) -> str:
 
 def render_vector_distance_duckdb(left: str, right: str, metric: str, *, dimension: int | None = None) -> str:
     """Render DuckDB VSS extension function syntax."""
-    function_map = {
-        "euclidean": "array_distance",
-        "cosine": "array_cosine_distance",
-        "inner_product": "array_negative_inner_product",
-    }
-    function_name = function_map.get(metric)
+    function_name = _DUCKDB_FUNCTION_MAP.get(metric)
     if function_name:
         target_type = f"DOUBLE[{dimension}]" if dimension is not None else "DOUBLE[]"
         return f"{function_name}({left}, CAST({right} AS {target_type}))"

@@ -10,6 +10,7 @@ This package intentionally avoids importing the dialect modules eagerly so
 ``import sqlspec`` does not pay the sqlglot dialect-machinery cost.
 """
 
+import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -32,6 +33,5 @@ def __getattr__(name: str) -> Any:
     if module_name is None:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
-    import importlib
 
     return getattr(importlib.import_module(module_name), name)

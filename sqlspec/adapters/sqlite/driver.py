@@ -183,14 +183,13 @@ class SqliteDriver(SyncDriverAdapterBase):
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
-        last_cursor = cursor
 
         for stmt in statements:
             cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
             successful_count += 1
 
         return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
     def execute_many(
@@ -414,12 +413,12 @@ class SqliteDriver(SyncDriverAdapterBase):
         returns_rows = cached.operation_profile.returns_rows
         self._invalidate_rowid_target_cache(cached.operation_type)
         try:
-            if not returns_rows:
-                try:
-                    cursor = self.connection.execute(cached.compiled_sql, params)
-                except sqlite3.Error as exc:
-                    raise create_mapped_exception(exc) from exc
+            try:
+                cursor = self.connection.execute(cached.compiled_sql, params)
+            except sqlite3.Error as exc:
+                raise create_mapped_exception(exc) from exc
 
+            if not returns_rows:
                 rowcount = cursor.rowcount
                 affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
                 last_inserted_id = resolve_lastrowid(
@@ -431,11 +430,6 @@ class SqliteDriver(SyncDriverAdapterBase):
                     self._rowid_target_cache,
                 )
                 return DMLResult(cached.operation_type, affected_rows, last_inserted_id)
-
-            try:
-                cursor = self.connection.execute(cached.compiled_sql, params)
-            except sqlite3.Error as exc:
-                raise create_mapped_exception(exc) from exc
 
             fetched_data = cursor.fetchall()
             affected_rows = resolve_rowcount(cursor)

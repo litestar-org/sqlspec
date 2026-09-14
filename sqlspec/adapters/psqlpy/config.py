@@ -6,18 +6,16 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyCursor, PsqlpySessionContext
-from sqlspec.adapters.psqlpy.core import (
-    apply_driver_features,
-    build_connection_config,
+from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
+from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,
-    default_statement_config,
     is_postgres_extension_active,
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
-from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
-from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config

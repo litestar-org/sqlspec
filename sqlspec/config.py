@@ -273,6 +273,23 @@ _TEMPLATE_FRAGMENT_KEYS: "dict[str, frozenset[str]]" = {
 }
 
 
+def validate_migration_config_keys(migration_config: "Mapping[str, Any]") -> None:
+    """Reject migration configuration keys that SQLSpec does not read.
+
+    Args:
+        migration_config: Migration configuration mapping to check.
+
+    Raises:
+        ImproperConfigurationError: If the mapping contains an unrecognized key.
+    """
+    lines = _report_unknown_keys(migration_config, MIGRATION_CONFIG_KEYS, "", "")
+    templates = migration_config.get("templates")
+    if templates is not None:
+        lines.extend(_report_template_keys(templates))
+    if lines:
+        raise ImproperConfigurationError(" ".join(lines))
+
+
 def _report_unknown_keys(
     mapping: "Mapping[str, Any]", valid_keys: "frozenset[str]", prefix: str, scope: str
 ) -> "list[str]":
@@ -323,23 +340,6 @@ def _report_template_keys(templates: Any) -> "list[str]":
             continue
         lines.extend(_report_unknown_keys(overrides, fragment_keys, f"{path}.", f"'{path}' "))
     return lines
-
-
-def validate_migration_config_keys(migration_config: "Mapping[str, Any]") -> None:
-    """Reject migration configuration keys that SQLSpec does not read.
-
-    Args:
-        migration_config: Migration configuration mapping to check.
-
-    Raises:
-        ImproperConfigurationError: If the mapping contains an unrecognized key.
-    """
-    lines = _report_unknown_keys(migration_config, MIGRATION_CONFIG_KEYS, "", "")
-    templates = migration_config.get("templates")
-    if templates is not None:
-        lines.extend(_report_template_keys(templates))
-    if lines:
-        raise ImproperConfigurationError(" ".join(lines))
 
 
 class FlaskConfig(TypedDict):

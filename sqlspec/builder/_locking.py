@@ -3,7 +3,7 @@
 from collections.abc import Callable, MutableMapping
 from typing import TYPE_CHECKING, ClassVar, Protocol, cast
 
-from sqlglot import exp
+from sqlglot import Dialect, exp
 from sqlglot.generator import Generator
 
 from sqlspec.builder._generation import invalidate_generator_dispatch
@@ -65,8 +65,6 @@ def _lock_sql(generator: "Generator", expression: exp.Lock) -> str:
 def _generator_class_for_dialect(dialect: "DialectType | str | None") -> "type[_GeneratorClass]":
     if dialect is None:
         return cast("type[_GeneratorClass]", Generator)
-
-    from sqlglot import Dialect
 
     dialect_class: type[Dialect]
     if isinstance(dialect, str):

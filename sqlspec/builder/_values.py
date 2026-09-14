@@ -12,7 +12,6 @@ from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
-from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_sql
 
@@ -56,11 +55,6 @@ class Values(QueryBuilder):
     def _create_base_expression(self) -> exp.Values:
         """Create initial empty VALUES expression."""
         return exp.Values()
-
-    @property
-    def _expected_result_type(self) -> type[SQLResult]:
-        """Return expected result type for VALUES queries."""
-        return SQLResult
 
     @property
     def alias_name(self) -> str | None:

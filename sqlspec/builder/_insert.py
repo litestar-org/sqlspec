@@ -10,11 +10,9 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
-from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin
+from sqlspec.builder._dml import InsertFromSelectMixin, InsertIntoClauseMixin, InsertValuesMixin, ReturningClauseMixin
 from sqlspec.builder._explain import ExplainMixin
 from sqlspec.builder._parsing_utils import extract_sql_object_expression
-from sqlspec.builder._select import ReturningClauseMixin
-from sqlspec.core import SQLResult
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.serializers import schema_dump, serialize_collection
 from sqlspec.utils.type_guards import has_expression_and_sql
@@ -66,15 +64,6 @@ class Insert(
             A new sqlglot Insert expression.
         """
         return exp.Insert()
-
-    @property
-    def _expected_result_type(self) -> "type[SQLResult]":
-        """Specifies the expected result type for an INSERT query.
-
-        Returns:
-            The type of result expected for INSERT operations.
-        """
-        return SQLResult
 
     def _insert_expression(self) -> exp.Insert:
         """Safely gets and casts the internal expression to exp.Insert.

@@ -84,18 +84,6 @@ DIALECT_ALIASES: Final = {
 }
 
 
-def _parse_parameter_declaration(param_match: "re.Match[str]") -> ParameterDeclaration:
-    """Build a parameter declaration from a matched ``-- param:`` line."""
-    description = param_match.group("desc")
-    required = param_match.group("optional") != "?"
-    if description is not None and PARAM_OPTIONAL_DESCRIPTION_PATTERN.search(description):
-        required = False
-        description = PARAM_OPTIONAL_DESCRIPTION_PATTERN.sub("", description).strip() or None
-    return ParameterDeclaration(
-        name=param_match.group("name"), type_str=param_match.group("type"), description=description, required=required
-    )
-
-
 class SlotDeclaration:
     """A fill point declared by a ``/* slot: name */`` marker.
 
@@ -221,6 +209,18 @@ class SQLFileCacheEntry:
         self.statement_names = tuple(parsed_statements.keys())
 
 
+def _parse_parameter_declaration(param_match: "re.Match[str]") -> ParameterDeclaration:
+    """Build a parameter declaration from a matched ``-- param:`` line."""
+    description = param_match.group("desc")
+    required = param_match.group("optional") != "?"
+    if description is not None and PARAM_OPTIONAL_DESCRIPTION_PATTERN.search(description):
+        required = False
+        description = PARAM_OPTIONAL_DESCRIPTION_PATTERN.sub("", description).strip() or None
+    return ParameterDeclaration(
+        name=param_match.group("name"), type_str=param_match.group("type"), description=description, required=required
+    )
+
+
 class SQLFileLoader:
     """Loads and parses SQL files with named SQL queries.
 
@@ -277,450 +277,6 @@ class SQLFileLoader:
 
         self._runtime = runtime
 
-    def _raise_file_not_found(self, path: str) -> None:
-        """Raise SQLFileNotFoundError for nonexistent file.
-
-        Args:
-            path: File path that was not found.
-
-        Raises:
-            SQLFileNotFoundError: Always raised.
-        """
-        raise SQLFileNotFoundError(path)
-
-    def _raise_statement_not_found(self, name: str, normalized_name: str) -> None:
-        """Raise SQLStatementNotFoundError for nonexistent statements.
-
-        Args:
-            name: Name requested by the caller.
-            normalized_name: Normalized statement name used for lookup.
-
-        Raises:
-            SQLStatementNotFoundError: Always raised.
-        """
-        raise SQLStatementNotFoundError(name=name, normalized_name=normalized_name, query_count=len(self._queries))
-
-    def _file_cache_key(self, path: str | Path) -> str:
-        """Generate cache key for a file path.
-
-        Args:
-            path: File path to generate key for.
-
-        Returns:
-            Cache key string for the file.
-        """
-        path_str = str(path)
-        path_hash = hashlib.md5(path_str.encode(), usedforsecurity=False).hexdigest()
-        return f"file:{path_hash[:16]}"
-
-    @staticmethod
-    def _compute_checksum(content: str) -> str:
-        """Compute MD5 checksum from already-read file content."""
-        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
-
-    def _calculate_file_checksum(self, path: str | Path) -> str:
-        """Calculate checksum for file content validation.
-
-        Args:
-            path: File path to calculate checksum for.
-
-        Returns:
-            MD5 checksum of file content.
-
-        Raises:
-            SQLFileParseError: If file cannot be read.
-        """
-        try:
-            return self._compute_checksum(self._read_file_content(path))
-        except Exception as e:
-            raise SQLFileParseError(str(path), str(path), e) from e
-
-    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFile) -> bool:
-        """Check if file has changed since caching.
-
-        Args:
-            path: File path to check.
-            cached_file: Cached file data.
-
-        Returns:
-            True if file is unchanged, False otherwise.
-        """
-        try:
-            current_checksum = self._calculate_file_checksum(path)
-        except Exception:
-            return False
-        else:
-            return current_checksum == cached_file.checksum
-
-    def _reload_changed_files(self) -> "list[str]":
-        """Reload tracked SQL files whose content checksum changed.
-
-        Every changed file's queries and fragments are removed before any changed
-        file is loaded again, so names may move between changed files.
-
-        Returns:
-            Paths of files that were reloaded.
-        """
-        pending_reloads: list[tuple[str, str | None]] = []
-        for path, sql_file in list(self._files.items()):
-            if self._is_file_unchanged(path, sql_file):
-                if self._runtime is not None:
-                    self._runtime.increment_metric("loader.reload.skipped")
-                continue
-
-            query_names = [name for name, source in self._query_to_file.items() if source == path]
-            fragment_names = [name for name, source in self._fragment_to_file.items() if source == path]
-            namespaces = {
-                name[: -(len(statement.name) + 1)]
-                for name in query_names
-                if (statement := self._queries.get(name)) is not None and name.endswith(f".{statement.name}")
-            }
-            namespaces.update(
-                name[: -(len(fragment.name) + 1)]
-                for name in fragment_names
-                if (fragment := self._fragments.get(name)) is not None and name.endswith(f".{fragment.name}")
-            )
-            namespace = next(iter(namespaces)) if len(namespaces) == 1 else None
-            for name in query_names:
-                self._queries.pop(name, None)
-                self._query_to_file.pop(name, None)
-                self._compiled_statements.pop(name, None)
-            for name in fragment_names:
-                self._fragments.pop(name, None)
-                self._fragment_to_file.pop(name, None)
-            self._files.pop(path, None)
-            pending_reloads.append((path, namespace))
-
-        if pending_reloads:
-            self._invalidate_resolved()
-        changed_paths: list[str] = []
-        for path, namespace in pending_reloads:
-            self._load_single_file(path, namespace)
-            changed_paths.append(path)
-            if self._runtime is not None:
-                self._runtime.increment_metric("loader.reload.changed")
-        return changed_paths
-
-    def _content_matches_cache(self, content: str, cached_file: SQLFileCacheEntry) -> bool:
-        """Check if already-read file content matches cached checksum."""
-        return self._compute_checksum(content) == cached_file.sql_file.checksum
-
-    def _read_file_content(self, path: str | Path) -> str:
-        """Read file content using storage backend.
-
-        Args:
-            path: File path (can be local path or URI).
-
-        Returns:
-            File content as string.
-
-        Raises:
-            SQLFileNotFoundError: If file does not exist.
-            SQLFileParseError: If file cannot be read or parsed.
-        """
-        path_str = str(path)
-
-        try:
-            backend = self.storage_registry.get(path)
-
-            # If path_str contains a '/', we check if the first part is a registered alias.
-            # This is specifically for when a path is provided relative to an alias.
-            parts = path_str.split("/", 1)
-            if len(parts) > 1 and self.storage_registry.is_alias_registered(parts[0]):
-                return backend.read_text_sync(parts[1], encoding=self.encoding)
-
-            if path_str.startswith("file://"):
-                parsed = urlparse(path_str)
-                file_path = unquote(parsed.path)
-                if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
-                    file_path = file_path[1:]
-                return backend.read_text_sync(Path(file_path).name, encoding=self.encoding)
-
-            if isinstance(path, Path) or is_local_path(path_str):
-                return backend.read_text_sync(Path(path_str).name, encoding=self.encoding)
-
-            return backend.read_text_sync(path_str, encoding=self.encoding)
-        except KeyError as e:
-            raise SQLFileNotFoundError(path_str) from e
-        except FileNotFoundInStorageError as e:
-            raise SQLFileNotFoundError(path_str) from e
-        except FileNotFoundError as e:
-            raise SQLFileNotFoundError(path_str) from e
-        except StorageOperationFailedError as e:
-            raise SQLFileParseError(path_str, path_str, e) from e
-        except Exception as e:
-            raise SQLFileParseError(path_str, path_str, e) from e
-
-    @staticmethod
-    def _strip_leading_comments(sql_text: str) -> str:
-        """Remove leading comment lines from a SQL string."""
-        lines = sql_text.strip().split("\n")
-        first_sql_line_index = -1
-        for i, line in enumerate(lines):
-            if line.strip() and not line.strip().startswith("--"):
-                first_sql_line_index = i
-                break
-        if first_sql_line_index == -1:
-            return ""
-        return "\n".join(lines[first_sql_line_index:]).strip()
-
-    @staticmethod
-    def _parse_directive_block(
-        statement_section: str, file_path: str, strict: bool, base_line: int = 0
-    ) -> "tuple[str | None, tuple[ParameterDeclaration, ...], str, tuple[SlotDeclaration, ...]]":
-        """Scan a section's leading comment block for ``dialect``/``param``/``slot`` directives.
-
-        Args:
-            statement_section: The statement body including any leading directive lines.
-            file_path: File path for error reporting.
-            strict: When True, a malformed ``-- param:`` line raises instead of warning.
-            base_line: 0-based line offset of ``statement_section`` within the file.
-
-        Returns:
-            The resolved dialect, the declared parameters, the SQL body with the
-            leading directive/comment lines removed, and the declared slots.
-
-        Raises:
-            SQLFileParseError: If ``strict`` and a ``-- param:`` line is malformed, or a
-                ``-- slot:`` line is malformed, duplicated, or placed after the SQL body begins.
-        """
-        dialect: str | None = None
-        params: list[ParameterDeclaration] = []
-        slots: list[SlotDeclaration] = []
-        raw_lines = statement_section.split("\n")
-        body_start = len(raw_lines)
-        for idx, raw in enumerate(raw_lines):
-            stripped = raw.strip()
-            if not stripped:
-                continue
-            if not stripped.startswith("--"):
-                body_start = idx
-                break
-            dialect_match = DIALECT_PATTERN.match(stripped)
-            if dialect_match:
-                dialect = _normalize_dialect(dialect_match.group("dialect").lower())
-                continue
-            param_match = PARAM_PATTERN.match(stripped)
-            if param_match:
-                params.append(_parse_parameter_declaration(param_match))
-                continue
-            slot_match = SLOT_DIRECTIVE_PATTERN.match(stripped)
-            if slot_match:
-                slot_name = slot_match.group("name")
-                if any(slot.name == slot_name for slot in slots):
-                    raise SQLFileParseError(
-                        file_path,
-                        file_path,
-                        ValueError(f"Duplicate -- slot: directive for slot '{slot_name}'"),
-                        line=base_line + idx + 1,
-                    )
-                slots.append(SlotDeclaration(slot_name, slot_match.group("default")))
-                continue
-            if SLOT_COMMENT_PATTERN.match(stripped):
-                raise SQLFileParseError(
-                    file_path,
-                    file_path,
-                    ValueError(f"Malformed -- slot: directive: {stripped}"),
-                    line=base_line + idx + 1,
-                )
-            if PARAM_PREFIX_PATTERN.match(stripped):
-                line_number = base_line + idx + 1
-                if strict:
-                    raise SQLFileParseError(
-                        file_path, file_path, ValueError(f"Malformed -- param: directive: {stripped}"), line=line_number
-                    )
-                log_with_context(
-                    logger,
-                    logging.WARNING,
-                    f"sql.parse.param: malformed parameter directive in {file_path} at line {line_number}: {stripped}",
-                    file_path=file_path,
-                    line_number=line_number,
-                    directive=stripped,
-                    status="malformed",
-                )
-        body_text = "\n".join(raw_lines[body_start:])
-        if SLOT_COMMENT_PATTERN.search(body_text) is not None:
-            for start, end, is_block in _scan_sql_comments(body_text):
-                if is_block or SLOT_COMMENT_PATTERN.match(body_text, start) is None:
-                    continue
-                line_start = body_text.rfind("\n", 0, start) + 1
-                if body_text[line_start:start].strip():
-                    continue
-                raise SQLFileParseError(
-                    file_path,
-                    file_path,
-                    ValueError(
-                        f"-- slot: directive must appear in the leading directive block: {body_text[start:end].strip()}"
-                    ),
-                    line=base_line + body_start + body_text.count("\n", 0, start) + 1,
-                )
-        return dialect, tuple(params), body_text, tuple(slots)
-
-    @staticmethod
-    def _check_declared_parameters(
-        clean_sql: str,
-        declared: "tuple[ParameterDeclaration, ...]",
-        statement_name: str,
-        file_path: str,
-        start_line: "int | None" = None,
-    ) -> None:
-        """Validate declared parameters against the query's actual placeholders.
-
-        For named binding, every declared name must appear among the SQL placeholders
-        (declared names may be a subset; filters and undeclared params are allowed). For
-        positional binding, the declared count must equal the placeholder count.
-
-        Args:
-            clean_sql: The SQL body with directives/comments stripped.
-            declared: Declared parameters for the query.
-            statement_name: Raw query name for error messages.
-            file_path: File path for error reporting.
-            start_line: Optional 0-based line of the statement within the file.
-
-        Raises:
-            SQLFileParseError: On name drift (named) or count mismatch (positional).
-        """
-        if not declared:
-            return
-        error_line = start_line + 1 if start_line is not None else None
-        infos = ParameterValidator().extract_parameters(clean_sql)
-        named = {info.name for info in infos if info.name and not info.name.isdigit()}
-        if named:
-            for decl in declared:
-                if decl.name not in named:
-                    raise SQLFileParseError(
-                        file_path,
-                        file_path,
-                        ValueError(
-                            f"Declared parameter '{decl.name}' for query '{statement_name}' is not present in the "
-                            f"SQL placeholders {sorted(named)}"
-                        ),
-                        line=error_line,
-                    )
-        elif len(declared) != len(infos):
-            raise SQLFileParseError(
-                file_path,
-                file_path,
-                ValueError(
-                    f"Query '{statement_name}' declares {len(declared)} parameter(s) but the SQL has "
-                    f"{len(infos)} positional placeholder(s)"
-                ),
-                line=error_line,
-            )
-
-    @staticmethod
-    def _parse_statements(
-        content: str, file_path: str, strict_parameter_annotations: bool = False
-    ) -> "tuple[dict[str, NamedStatement], dict[str, SQLFragment]]":
-        """Parse SQL content and extract named statements and fragments.
-
-        A section starts at a ``-- name:`` or ``-- fragment:`` marker and ends at the
-        next marker of either kind. Files without any markers are gracefully skipped
-        by returning empty dictionaries. The caller is responsible for handling empty
-        results appropriately.
-
-        Args:
-            content: Raw SQL file content to parse.
-            file_path: File path for error reporting.
-            strict_parameter_annotations: Raise on malformed parameter declarations instead of skipping them.
-
-        Returns:
-            Dictionaries mapping normalized names to NamedStatement and SQLFragment
-            objects. Both are empty if no markers are found in the content.
-
-        Raises:
-            SQLFileParseError: If sections are malformed (duplicate names, directives
-                on fragments, invalid slot directives, or no content after parsing).
-        """
-        statements: dict[str, NamedStatement] = {}
-        fragments: dict[str, SQLFragment] = {}
-
-        section_matches = list(SECTION_MARKER_PATTERN.finditer(content))
-        if not section_matches:
-            return {}, {}
-
-        for i, match in enumerate(section_matches):
-            fragment_name = match.group("fragment")
-            is_fragment = fragment_name is not None
-            raw_statement_name = (fragment_name if is_fragment else match.group("name")).strip()
-            statement_start_line = content[: match.start()].count("\n")
-
-            start_pos = match.end()
-            end_pos = section_matches[i + 1].start() if i + 1 < len(section_matches) else len(content)
-
-            section_raw = content[start_pos:end_pos]
-            statement_section = section_raw.strip()
-            if not raw_statement_name or not statement_section:
-                continue
-
-            section_lead = len(section_raw) - len(section_raw.lstrip())
-            section_start_line = content[:start_pos].count("\n") + section_raw[:section_lead].count("\n")
-
-            dialect, declared_params, statement_sql, declared_slots = SQLFileLoader._parse_directive_block(
-                statement_section, file_path, strict_parameter_annotations or is_fragment, base_line=section_start_line
-            )
-
-            clean_sql = SQLFileLoader._strip_leading_comments(statement_sql)
-            if not clean_sql:
-                continue
-            normalized_name = _normalize_query_name(raw_statement_name)
-
-            if is_fragment:
-                if dialect is not None or declared_params or declared_slots:
-                    raise SQLFileParseError(
-                        file_path,
-                        file_path,
-                        ValueError(
-                            f"Fragment '{raw_statement_name}' cannot declare -- dialect:, -- param:, or -- slot: "
-                            "directives"
-                        ),
-                        line=statement_start_line + 1,
-                    )
-                if normalized_name in fragments:
-                    raise SQLFileParseError(
-                        file_path,
-                        file_path,
-                        ValueError(f"Duplicate fragment name: {raw_statement_name}"),
-                        line=statement_start_line + 1,
-                    )
-                fragments[normalized_name] = SQLFragment(
-                    name=normalized_name, sql=clean_sql, start_line=statement_start_line
-                )
-                continue
-
-            if normalized_name in statements:
-                raise SQLFileParseError(
-                    file_path,
-                    file_path,
-                    ValueError(f"Duplicate statement name: {raw_statement_name}"),
-                    line=statement_start_line + 1,
-                )
-
-            slots = _merge_slot_markers(declared_slots, clean_sql)
-            has_includes = bool(_include_markers(clean_sql))
-            if not slots and not has_includes:
-                SQLFileLoader._check_declared_parameters(
-                    clean_sql, declared_params, raw_statement_name, file_path, start_line=statement_start_line
-                )
-
-            statements[normalized_name] = NamedStatement(
-                name=normalized_name,
-                sql=clean_sql,
-                dialect=dialect,
-                start_line=statement_start_line,
-                parameters=declared_params,
-                slots=slots,
-                has_includes=has_includes,
-            )
-            log_with_context(
-                logger, logging.DEBUG, "sql.parse", file_path=file_path, query_name=normalized_name, dialect=dialect
-            )
-
-        if not statements and not fragments:
-            raise SQLFileParseError(file_path, file_path, ValueError("No valid SQL statements found after parsing"))
-
-        return statements, fragments
-
     def load_sql(self, *paths: str | Path) -> None:
         """Load SQL files and parse named queries.
 
@@ -744,7 +300,6 @@ class SQLFileLoader:
         try:
             for path in paths:
                 path_str = str(path)
-                # If it looks like a URI or a potential alias (contains no path separators, or is in registry)
                 if "://" in path_str or self.storage_registry.is_alias_registered(path_str.split("/", maxsplit=1)[0]):
                     self._load_single_file(path, None)
                     continue
@@ -769,190 +324,6 @@ class SQLFileLoader:
                 runtime.increment_metric("loader.load.duration_ms", duration_ms)
                 runtime.end_span(span, error=error)
             CorrelationContext.set(previous_correlation_id)
-
-    def _load_directory(self, dir_path: Path) -> None:
-        """Load all SQL files from a directory.
-
-        Args:
-            dir_path: Directory path to load SQL files from.
-        """
-        runtime = self._runtime
-        if runtime is not None:
-            runtime.increment_metric("loader.directories.scanned")
-
-        sql_files = list(dir_path.rglob("*.sql"))
-        if not sql_files:
-            return
-
-        for file_path in sql_files:
-            relative_path = file_path.relative_to(dir_path)
-            namespace_parts = relative_path.parent.parts
-            self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None)
-
-    def _load_single_file(self, file_path: str | Path, namespace: str | None) -> bool:
-        """Load a single SQL file with optional namespace.
-
-        Args:
-            file_path: Path to the SQL file.
-            namespace: Optional namespace prefix for queries.
-
-        Returns:
-            True if file was newly loaded, False if already cached.
-        """
-        path_str = str(file_path)
-        runtime = self._runtime
-        if runtime is not None:
-            runtime.increment_metric("loader.files.considered")
-
-        if path_str in self._files:
-            if runtime is not None:
-                runtime.increment_metric("loader.cache.hit")
-            return False
-
-        cache_config = get_cache_config()
-        if not cache_config.compiled_cache_enabled:
-            self._load_uncached_file(file_path, namespace)
-            if runtime is not None:
-                runtime.increment_metric("loader.cache.miss")
-            return True
-
-        cache_key_str = self._file_cache_key(file_path)
-        cache = get_cache()
-        cached_file = cache.get_file(cache_key_str)
-
-        if cached_file is not None and isinstance(cached_file, SQLFileCacheEntry):
-            try:
-                file_content = self._read_file_content(file_path)
-            except Exception:
-                file_content = None
-
-            if file_content is not None and self._content_matches_cache(file_content, cached_file):
-                self._files[path_str] = cached_file.sql_file
-                for name, statement in cached_file.parsed_statements.items():
-                    namespaced_name = f"{namespace}.{name}" if namespace else name
-                    if namespaced_name in self._queries:
-                        existing_file = self._query_to_file.get(namespaced_name, "unknown")
-                        if existing_file != path_str:
-                            raise SQLFileParseError(
-                                path_str,
-                                path_str,
-                                ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
-                                line=statement.start_line + 1,
-                            )
-                    self._queries[namespaced_name] = statement
-                    self._query_to_file[namespaced_name] = path_str
-                self._register_fragments(cached_file.parsed_fragments, path_str, namespace)
-                if runtime is not None:
-                    runtime.increment_metric("loader.cache.hit")
-                return True
-
-            loaded_statements, loaded_fragments = self._load_uncached_file(file_path, namespace, content=file_content)
-        else:
-            loaded_statements, loaded_fragments = self._load_uncached_file(file_path, namespace)
-
-        if path_str in self._files:
-            sql_file = self._files[path_str]
-            cached_file_data = SQLFileCacheEntry(
-                sql_file=sql_file, parsed_statements=loaded_statements, parsed_fragments=loaded_fragments
-            )
-            cache.put_file(cache_key_str, cached_file_data)
-            if runtime is not None:
-                runtime.increment_metric("loader.cache.miss")
-                runtime.increment_metric("loader.files.loaded")
-                runtime.increment_metric("loader.statements.loaded", len(loaded_statements))
-
-        return True
-
-    def _load_uncached_file(
-        self, file_path: str | Path, namespace: "str | None", content: "str | None" = None
-    ) -> "tuple[dict[str, NamedStatement], dict[str, SQLFragment]]":
-        """Load a single SQL file without using cache.
-
-        Args:
-            file_path: Path to the SQL file.
-            namespace: Optional namespace prefix for queries and fragments.
-            content: Pre-read file content. If provided, skips the disk read.
-
-        Returns:
-            The file's parsed statements and fragments keyed by un-namespaced name;
-            both are empty when the file contains no named sections.
-        """
-        path_str = str(file_path)
-        runtime = self._runtime
-        if content is None:
-            content = self._read_file_content(file_path)
-        statements, fragments = self._parse_statements(content, path_str, self.strict_parameter_annotations)
-
-        if not statements and not fragments:
-            log_with_context(
-                logger, logging.DEBUG, "sql.load", file_path=path_str, status="skipped", reason="no_named_statements"
-            )
-            return {}, {}
-
-        sql_file = SQLFile(content=content, path=path_str)
-        self._files[path_str] = sql_file
-
-        for name, statement in statements.items():
-            namespaced_name = f"{namespace}.{name}" if namespace else name
-            if namespaced_name in self._queries:
-                existing_file = self._query_to_file.get(namespaced_name, "unknown")
-                if existing_file != path_str:
-                    raise SQLFileParseError(
-                        path_str,
-                        path_str,
-                        ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
-                        line=statement.start_line + 1,
-                    )
-            self._queries[namespaced_name] = statement
-            self._query_to_file[namespaced_name] = path_str
-        self._register_fragments(fragments, path_str, namespace)
-        log_with_context(
-            logger, logging.DEBUG, "sql.load", file_path=path_str, statement_count=len(statements), status="loaded"
-        )
-        if runtime is not None:
-            runtime.increment_metric("loader.files.loaded")
-            runtime.increment_metric("loader.statements.loaded", len(statements))
-        return statements, fragments
-
-    def _register_fragments(self, fragments: "dict[str, SQLFragment]", path_str: str, namespace: "str | None") -> None:
-        """Register a file's fragments under their namespaced names.
-
-        Registering any fragment invalidates include-resolved statement text.
-
-        Args:
-            fragments: Fragments keyed by un-namespaced name.
-            path_str: Source file path.
-            namespace: Optional namespace prefix for the fragment names.
-
-        Raises:
-            SQLFileParseError: If a fragment name is already registered from another file.
-        """
-        if not fragments:
-            return
-        for name, fragment in fragments.items():
-            namespaced_name = f"{namespace}.{name}" if namespace else name
-            existing_file = self._fragment_to_file.get(namespaced_name)
-            if existing_file is not None and existing_file != path_str:
-                raise SQLFileParseError(
-                    path_str,
-                    path_str,
-                    ValueError(f"Fragment name '{namespaced_name}' already exists in file: {existing_file}"),
-                    line=fragment.start_line + 1,
-                )
-            self._fragments[namespaced_name] = fragment
-            self._fragment_to_file[namespaced_name] = path_str
-        self._invalidate_resolved()
-
-    def _invalidate_resolved(self) -> None:
-        """Drop include-resolved text and compiled statements that depend on fragments."""
-        self._resolved_text.clear()
-        stale_names = [
-            name
-            for name in self._compiled_statements
-            if (statement := self._queries.get(name)) is not None and statement.has_includes
-        ]
-        for name in stale_names:
-            del self._compiled_statements[name]
 
     def add_named_sql(
         self,
@@ -1270,6 +641,632 @@ class SQLFileLoader:
         if not slots:
             self._compiled_statements[safe_name] = sql
         return sql
+
+    def _raise_file_not_found(self, path: str) -> None:
+        """Raise SQLFileNotFoundError for nonexistent file.
+
+        Args:
+            path: File path that was not found.
+
+        Raises:
+            SQLFileNotFoundError: Always raised.
+        """
+        raise SQLFileNotFoundError(path)
+
+    def _raise_statement_not_found(self, name: str, normalized_name: str) -> None:
+        """Raise SQLStatementNotFoundError for nonexistent statements.
+
+        Args:
+            name: Name requested by the caller.
+            normalized_name: Normalized statement name used for lookup.
+
+        Raises:
+            SQLStatementNotFoundError: Always raised.
+        """
+        raise SQLStatementNotFoundError(name=name, normalized_name=normalized_name, query_count=len(self._queries))
+
+    def _file_cache_key(self, path: str | Path) -> str:
+        """Generate cache key for a file path.
+
+        Args:
+            path: File path to generate key for.
+
+        Returns:
+            Cache key string for the file.
+        """
+        path_str = str(path)
+        path_hash = hashlib.md5(path_str.encode(), usedforsecurity=False).hexdigest()
+        return f"file:{path_hash[:16]}"
+
+    @staticmethod
+    def _compute_checksum(content: str) -> str:
+        """Compute MD5 checksum from already-read file content."""
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
+
+    def _calculate_file_checksum(self, path: str | Path) -> str:
+        """Calculate checksum for file content validation.
+
+        Args:
+            path: File path to calculate checksum for.
+
+        Returns:
+            MD5 checksum of file content.
+
+        Raises:
+            SQLFileParseError: If file cannot be read.
+        """
+        try:
+            return self._compute_checksum(self._read_file_content(path))
+        except Exception as e:
+            raise SQLFileParseError(str(path), str(path), e) from e
+
+    def _is_file_unchanged(self, path: str | Path, cached_file: SQLFile) -> bool:
+        """Check if file has changed since caching.
+
+        Args:
+            path: File path to check.
+            cached_file: Cached file data.
+
+        Returns:
+            True if file is unchanged, False otherwise.
+        """
+        try:
+            current_checksum = self._calculate_file_checksum(path)
+        except Exception:
+            return False
+        else:
+            return current_checksum == cached_file.checksum
+
+    def _reload_changed_files(self) -> "list[str]":
+        """Reload tracked SQL files whose content checksum changed.
+
+        Every changed file's queries and fragments are removed before any changed
+        file is loaded again, so names may move between changed files.
+
+        Returns:
+            Paths of files that were reloaded.
+        """
+        pending_reloads: list[tuple[str, str | None]] = []
+        for path, sql_file in list(self._files.items()):
+            if self._is_file_unchanged(path, sql_file):
+                if self._runtime is not None:
+                    self._runtime.increment_metric("loader.reload.skipped")
+                continue
+
+            query_names = [name for name, source in self._query_to_file.items() if source == path]
+            fragment_names = [name for name, source in self._fragment_to_file.items() if source == path]
+            namespaces = {
+                name[: -(len(statement.name) + 1)]
+                for name in query_names
+                if (statement := self._queries.get(name)) is not None and name.endswith(f".{statement.name}")
+            }
+            namespaces.update(
+                name[: -(len(fragment.name) + 1)]
+                for name in fragment_names
+                if (fragment := self._fragments.get(name)) is not None and name.endswith(f".{fragment.name}")
+            )
+            namespace = next(iter(namespaces)) if len(namespaces) == 1 else None
+            for name in query_names:
+                self._queries.pop(name, None)
+                self._query_to_file.pop(name, None)
+                self._compiled_statements.pop(name, None)
+            for name in fragment_names:
+                self._fragments.pop(name, None)
+                self._fragment_to_file.pop(name, None)
+            self._files.pop(path, None)
+            pending_reloads.append((path, namespace))
+
+        if pending_reloads:
+            self._invalidate_resolved()
+        changed_paths: list[str] = []
+        for path, namespace in pending_reloads:
+            self._load_single_file(path, namespace)
+            changed_paths.append(path)
+            if self._runtime is not None:
+                self._runtime.increment_metric("loader.reload.changed")
+        return changed_paths
+
+    def _content_matches_cache(self, content: str, cached_file: SQLFileCacheEntry) -> bool:
+        """Check if already-read file content matches cached checksum."""
+        return self._compute_checksum(content) == cached_file.sql_file.checksum
+
+    def _read_file_content(self, path: str | Path) -> str:
+        """Read file content using storage backend.
+
+        Args:
+            path: File path (can be local path or URI).
+
+        Returns:
+            File content as string.
+
+        Raises:
+            SQLFileNotFoundError: If file does not exist.
+            SQLFileParseError: If file cannot be read or parsed.
+        """
+        path_str = str(path)
+
+        try:
+            backend = self.storage_registry.get(path)
+
+            parts = path_str.split("/", 1)
+            if len(parts) > 1 and self.storage_registry.is_alias_registered(parts[0]):
+                return backend.read_text_sync(parts[1], encoding=self.encoding)
+
+            if path_str.startswith("file://"):
+                parsed = urlparse(path_str)
+                file_path = unquote(parsed.path)
+                if file_path and len(file_path) > 2 and file_path[2] == ":":  # noqa: PLR2004
+                    file_path = file_path[1:]
+                return backend.read_text_sync(Path(file_path).name, encoding=self.encoding)
+
+            if isinstance(path, Path) or is_local_path(path_str):
+                return backend.read_text_sync(Path(path_str).name, encoding=self.encoding)
+
+            return backend.read_text_sync(path_str, encoding=self.encoding)
+        except KeyError as e:
+            raise SQLFileNotFoundError(path_str) from e
+        except FileNotFoundInStorageError as e:
+            raise SQLFileNotFoundError(path_str) from e
+        except FileNotFoundError as e:
+            raise SQLFileNotFoundError(path_str) from e
+        except StorageOperationFailedError as e:
+            raise SQLFileParseError(path_str, path_str, e) from e
+        except Exception as e:
+            raise SQLFileParseError(path_str, path_str, e) from e
+
+    @staticmethod
+    def _strip_leading_comments(sql_text: str) -> str:
+        """Remove leading comment lines from a SQL string."""
+        lines = sql_text.strip().split("\n")
+        first_sql_line_index = -1
+        for i, line in enumerate(lines):
+            if line.strip() and not line.strip().startswith("--"):
+                first_sql_line_index = i
+                break
+        if first_sql_line_index == -1:
+            return ""
+        return "\n".join(lines[first_sql_line_index:]).strip()
+
+    @staticmethod
+    def _parse_directive_block(
+        statement_section: str, file_path: str, strict: bool, base_line: int = 0
+    ) -> "tuple[str | None, tuple[ParameterDeclaration, ...], str, tuple[SlotDeclaration, ...]]":
+        """Scan a section's leading comment block for ``dialect``/``param``/``slot`` directives.
+
+        Args:
+            statement_section: The statement body including any leading directive lines.
+            file_path: File path for error reporting.
+            strict: When True, a malformed ``-- param:`` line raises instead of warning.
+            base_line: 0-based line offset of ``statement_section`` within the file.
+
+        Returns:
+            The resolved dialect, the declared parameters, the SQL body with the
+            leading directive/comment lines removed, and the declared slots.
+
+        Raises:
+            SQLFileParseError: If ``strict`` and a ``-- param:`` line is malformed, or a
+                ``-- slot:`` line is malformed, duplicated, or placed after the SQL body begins.
+        """
+        dialect: str | None = None
+        params: list[ParameterDeclaration] = []
+        slots: list[SlotDeclaration] = []
+        raw_lines = statement_section.split("\n")
+        body_start = len(raw_lines)
+        for idx, raw in enumerate(raw_lines):
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            if not stripped.startswith("--"):
+                body_start = idx
+                break
+            dialect_match = DIALECT_PATTERN.match(stripped)
+            if dialect_match:
+                dialect = _normalize_dialect(dialect_match.group("dialect").lower())
+                continue
+            param_match = PARAM_PATTERN.match(stripped)
+            if param_match:
+                params.append(_parse_parameter_declaration(param_match))
+                continue
+            slot_match = SLOT_DIRECTIVE_PATTERN.match(stripped)
+            if slot_match:
+                slot_name = slot_match.group("name")
+                if any(slot.name == slot_name for slot in slots):
+                    raise SQLFileParseError(
+                        file_path,
+                        file_path,
+                        ValueError(f"Duplicate -- slot: directive for slot '{slot_name}'"),
+                        line=base_line + idx + 1,
+                    )
+                slots.append(SlotDeclaration(slot_name, slot_match.group("default")))
+                continue
+            if SLOT_COMMENT_PATTERN.match(stripped):
+                raise SQLFileParseError(
+                    file_path,
+                    file_path,
+                    ValueError(f"Malformed -- slot: directive: {stripped}"),
+                    line=base_line + idx + 1,
+                )
+            if PARAM_PREFIX_PATTERN.match(stripped):
+                line_number = base_line + idx + 1
+                if strict:
+                    raise SQLFileParseError(
+                        file_path, file_path, ValueError(f"Malformed -- param: directive: {stripped}"), line=line_number
+                    )
+                log_with_context(
+                    logger,
+                    logging.WARNING,
+                    f"sql.parse.param: malformed parameter directive in {file_path} at line {line_number}: {stripped}",
+                    file_path=file_path,
+                    line_number=line_number,
+                    directive=stripped,
+                    status="malformed",
+                )
+        body_text = "\n".join(raw_lines[body_start:])
+        if SLOT_COMMENT_PATTERN.search(body_text) is not None:
+            for start, end, is_block in _scan_sql_comments(body_text):
+                if is_block or SLOT_COMMENT_PATTERN.match(body_text, start) is None:
+                    continue
+                line_start = body_text.rfind("\n", 0, start) + 1
+                if body_text[line_start:start].strip():
+                    continue
+                raise SQLFileParseError(
+                    file_path,
+                    file_path,
+                    ValueError(
+                        f"-- slot: directive must appear in the leading directive block: {body_text[start:end].strip()}"
+                    ),
+                    line=base_line + body_start + body_text.count("\n", 0, start) + 1,
+                )
+        return dialect, tuple(params), body_text, tuple(slots)
+
+    @staticmethod
+    def _check_declared_parameters(
+        clean_sql: str,
+        declared: "tuple[ParameterDeclaration, ...]",
+        statement_name: str,
+        file_path: str,
+        start_line: "int | None" = None,
+    ) -> None:
+        """Validate declared parameters against the query's actual placeholders.
+
+        For named binding, every declared name must appear among the SQL placeholders
+        (declared names may be a subset; filters and undeclared params are allowed). For
+        positional binding, the declared count must equal the placeholder count.
+
+        Args:
+            clean_sql: The SQL body with directives/comments stripped.
+            declared: Declared parameters for the query.
+            statement_name: Raw query name for error messages.
+            file_path: File path for error reporting.
+            start_line: Optional 0-based line of the statement within the file.
+
+        Raises:
+            SQLFileParseError: On name drift (named) or count mismatch (positional).
+        """
+        if not declared:
+            return
+        error_line = start_line + 1 if start_line is not None else None
+        infos = ParameterValidator().extract_parameters(clean_sql)
+        named = {info.name for info in infos if info.name and not info.name.isdigit()}
+        if named:
+            for decl in declared:
+                if decl.name not in named:
+                    raise SQLFileParseError(
+                        file_path,
+                        file_path,
+                        ValueError(
+                            f"Declared parameter '{decl.name}' for query '{statement_name}' is not present in the "
+                            f"SQL placeholders {sorted(named)}"
+                        ),
+                        line=error_line,
+                    )
+        elif len(declared) != len(infos):
+            raise SQLFileParseError(
+                file_path,
+                file_path,
+                ValueError(
+                    f"Query '{statement_name}' declares {len(declared)} parameter(s) but the SQL has "
+                    f"{len(infos)} positional placeholder(s)"
+                ),
+                line=error_line,
+            )
+
+    @staticmethod
+    def _parse_statements(
+        content: str, file_path: str, strict_parameter_annotations: bool = False
+    ) -> "tuple[dict[str, NamedStatement], dict[str, SQLFragment]]":
+        """Parse SQL content and extract named statements and fragments.
+
+        A section starts at a ``-- name:`` or ``-- fragment:`` marker and ends at the
+        next marker of either kind. Files without any markers are gracefully skipped
+        by returning empty dictionaries. The caller is responsible for handling empty
+        results appropriately.
+
+        Args:
+            content: Raw SQL file content to parse.
+            file_path: File path for error reporting.
+            strict_parameter_annotations: Raise on malformed parameter declarations instead of skipping them.
+
+        Returns:
+            Dictionaries mapping normalized names to NamedStatement and SQLFragment
+            objects. Both are empty if no markers are found in the content.
+
+        Raises:
+            SQLFileParseError: If sections are malformed (duplicate names, directives
+                on fragments, invalid slot directives, or no content after parsing).
+        """
+        statements: dict[str, NamedStatement] = {}
+        fragments: dict[str, SQLFragment] = {}
+
+        section_matches = list(SECTION_MARKER_PATTERN.finditer(content))
+        if not section_matches:
+            return {}, {}
+
+        for i, match in enumerate(section_matches):
+            fragment_name = match.group("fragment")
+            is_fragment = fragment_name is not None
+            raw_statement_name = (fragment_name if is_fragment else match.group("name")).strip()
+            statement_start_line = content[: match.start()].count("\n")
+
+            start_pos = match.end()
+            end_pos = section_matches[i + 1].start() if i + 1 < len(section_matches) else len(content)
+
+            section_raw = content[start_pos:end_pos]
+            statement_section = section_raw.strip()
+            if not raw_statement_name or not statement_section:
+                continue
+
+            section_lead = len(section_raw) - len(section_raw.lstrip())
+            section_start_line = content[:start_pos].count("\n") + section_raw[:section_lead].count("\n")
+
+            dialect, declared_params, statement_sql, declared_slots = SQLFileLoader._parse_directive_block(
+                statement_section, file_path, strict_parameter_annotations or is_fragment, base_line=section_start_line
+            )
+
+            clean_sql = SQLFileLoader._strip_leading_comments(statement_sql)
+            if not clean_sql:
+                continue
+            normalized_name = _normalize_query_name(raw_statement_name)
+
+            if is_fragment:
+                if dialect is not None or declared_params or declared_slots:
+                    raise SQLFileParseError(
+                        file_path,
+                        file_path,
+                        ValueError(
+                            f"Fragment '{raw_statement_name}' cannot declare -- dialect:, -- param:, or -- slot: "
+                            "directives"
+                        ),
+                        line=statement_start_line + 1,
+                    )
+                if normalized_name in fragments:
+                    raise SQLFileParseError(
+                        file_path,
+                        file_path,
+                        ValueError(f"Duplicate fragment name: {raw_statement_name}"),
+                        line=statement_start_line + 1,
+                    )
+                fragments[normalized_name] = SQLFragment(
+                    name=normalized_name, sql=clean_sql, start_line=statement_start_line
+                )
+                continue
+
+            if normalized_name in statements:
+                raise SQLFileParseError(
+                    file_path,
+                    file_path,
+                    ValueError(f"Duplicate statement name: {raw_statement_name}"),
+                    line=statement_start_line + 1,
+                )
+
+            slots = _merge_slot_markers(declared_slots, clean_sql)
+            has_includes = bool(_include_markers(clean_sql))
+            if not slots and not has_includes:
+                SQLFileLoader._check_declared_parameters(
+                    clean_sql, declared_params, raw_statement_name, file_path, start_line=statement_start_line
+                )
+
+            statements[normalized_name] = NamedStatement(
+                name=normalized_name,
+                sql=clean_sql,
+                dialect=dialect,
+                start_line=statement_start_line,
+                parameters=declared_params,
+                slots=slots,
+                has_includes=has_includes,
+            )
+            log_with_context(
+                logger, logging.DEBUG, "sql.parse", file_path=file_path, query_name=normalized_name, dialect=dialect
+            )
+
+        if not statements and not fragments:
+            raise SQLFileParseError(file_path, file_path, ValueError("No valid SQL statements found after parsing"))
+
+        return statements, fragments
+
+    def _load_directory(self, dir_path: Path) -> None:
+        """Load all SQL files from a directory.
+
+        Args:
+            dir_path: Directory path to load SQL files from.
+        """
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.increment_metric("loader.directories.scanned")
+
+        sql_files = list(dir_path.rglob("*.sql"))
+        if not sql_files:
+            return
+
+        for file_path in sql_files:
+            relative_path = file_path.relative_to(dir_path)
+            namespace_parts = relative_path.parent.parts
+            self._load_single_file(file_path, ".".join(namespace_parts) if namespace_parts else None)
+
+    def _load_single_file(self, file_path: str | Path, namespace: str | None) -> bool:
+        """Load a single SQL file with optional namespace.
+
+        Args:
+            file_path: Path to the SQL file.
+            namespace: Optional namespace prefix for queries.
+
+        Returns:
+            True if file was newly loaded, False if already cached.
+        """
+        path_str = str(file_path)
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.increment_metric("loader.files.considered")
+
+        if path_str in self._files:
+            if runtime is not None:
+                runtime.increment_metric("loader.cache.hit")
+            return False
+
+        cache_config = get_cache_config()
+        if not cache_config.compiled_cache_enabled:
+            self._load_uncached_file(file_path, namespace)
+            if runtime is not None:
+                runtime.increment_metric("loader.cache.miss")
+            return True
+
+        cache_key_str = self._file_cache_key(file_path)
+        cache = get_cache()
+        cached_file = cache.get_file(cache_key_str)
+
+        if cached_file is not None and isinstance(cached_file, SQLFileCacheEntry):
+            try:
+                file_content = self._read_file_content(file_path)
+            except Exception:
+                file_content = None
+
+            if file_content is not None and self._content_matches_cache(file_content, cached_file):
+                self._files[path_str] = cached_file.sql_file
+                for name, statement in cached_file.parsed_statements.items():
+                    namespaced_name = f"{namespace}.{name}" if namespace else name
+                    if namespaced_name in self._queries:
+                        existing_file = self._query_to_file.get(namespaced_name, "unknown")
+                        if existing_file != path_str:
+                            raise SQLFileParseError(
+                                path_str,
+                                path_str,
+                                ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
+                                line=statement.start_line + 1,
+                            )
+                    self._queries[namespaced_name] = statement
+                    self._query_to_file[namespaced_name] = path_str
+                self._register_fragments(cached_file.parsed_fragments, path_str, namespace)
+                if runtime is not None:
+                    runtime.increment_metric("loader.cache.hit")
+                return True
+
+            loaded_statements, loaded_fragments = self._load_uncached_file(file_path, namespace, content=file_content)
+        else:
+            loaded_statements, loaded_fragments = self._load_uncached_file(file_path, namespace)
+
+        if path_str in self._files:
+            sql_file = self._files[path_str]
+            cached_file_data = SQLFileCacheEntry(
+                sql_file=sql_file, parsed_statements=loaded_statements, parsed_fragments=loaded_fragments
+            )
+            cache.put_file(cache_key_str, cached_file_data)
+            if runtime is not None:
+                runtime.increment_metric("loader.cache.miss")
+                runtime.increment_metric("loader.files.loaded")
+                runtime.increment_metric("loader.statements.loaded", len(loaded_statements))
+
+        return True
+
+    def _load_uncached_file(
+        self, file_path: str | Path, namespace: "str | None", content: "str | None" = None
+    ) -> "tuple[dict[str, NamedStatement], dict[str, SQLFragment]]":
+        """Load a single SQL file without using cache.
+
+        Args:
+            file_path: Path to the SQL file.
+            namespace: Optional namespace prefix for queries and fragments.
+            content: Pre-read file content. If provided, skips the disk read.
+
+        Returns:
+            The file's parsed statements and fragments keyed by un-namespaced name;
+            both are empty when the file contains no named sections.
+        """
+        path_str = str(file_path)
+        runtime = self._runtime
+        if content is None:
+            content = self._read_file_content(file_path)
+        statements, fragments = self._parse_statements(content, path_str, self.strict_parameter_annotations)
+
+        if not statements and not fragments:
+            log_with_context(
+                logger, logging.DEBUG, "sql.load", file_path=path_str, status="skipped", reason="no_named_statements"
+            )
+            return {}, {}
+
+        sql_file = SQLFile(content=content, path=path_str)
+        self._files[path_str] = sql_file
+
+        for name, statement in statements.items():
+            namespaced_name = f"{namespace}.{name}" if namespace else name
+            if namespaced_name in self._queries:
+                existing_file = self._query_to_file.get(namespaced_name, "unknown")
+                if existing_file != path_str:
+                    raise SQLFileParseError(
+                        path_str,
+                        path_str,
+                        ValueError(f"Query name '{namespaced_name}' already exists in file: {existing_file}"),
+                        line=statement.start_line + 1,
+                    )
+            self._queries[namespaced_name] = statement
+            self._query_to_file[namespaced_name] = path_str
+        self._register_fragments(fragments, path_str, namespace)
+        log_with_context(
+            logger, logging.DEBUG, "sql.load", file_path=path_str, statement_count=len(statements), status="loaded"
+        )
+        if runtime is not None:
+            runtime.increment_metric("loader.files.loaded")
+            runtime.increment_metric("loader.statements.loaded", len(statements))
+        return statements, fragments
+
+    def _register_fragments(self, fragments: "dict[str, SQLFragment]", path_str: str, namespace: "str | None") -> None:
+        """Register a file's fragments under their namespaced names.
+
+        Registering any fragment invalidates include-resolved statement text.
+
+        Args:
+            fragments: Fragments keyed by un-namespaced name.
+            path_str: Source file path.
+            namespace: Optional namespace prefix for the fragment names.
+
+        Raises:
+            SQLFileParseError: If a fragment name is already registered from another file.
+        """
+        if not fragments:
+            return
+        for name, fragment in fragments.items():
+            namespaced_name = f"{namespace}.{name}" if namespace else name
+            existing_file = self._fragment_to_file.get(namespaced_name)
+            if existing_file is not None and existing_file != path_str:
+                raise SQLFileParseError(
+                    path_str,
+                    path_str,
+                    ValueError(f"Fragment name '{namespaced_name}' already exists in file: {existing_file}"),
+                    line=fragment.start_line + 1,
+                )
+            self._fragments[namespaced_name] = fragment
+            self._fragment_to_file[namespaced_name] = path_str
+        self._invalidate_resolved()
+
+    def _invalidate_resolved(self) -> None:
+        """Drop include-resolved text and compiled statements that depend on fragments."""
+        self._resolved_text.clear()
+        stale_names = [
+            name
+            for name in self._compiled_statements
+            if (statement := self._queries.get(name)) is not None and statement.has_includes
+        ]
+        for name in stale_names:
+            del self._compiled_statements[name]
 
     def _fill_slots(
         self, safe_name: str, resolved_text: str, provided: "dict[str, Any]", dialect: "str | None"

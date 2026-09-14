@@ -19,17 +19,19 @@ from sqlspec.adapters.asyncpg._typing import (
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
     build_connection_config,
-    build_postgres_extension_probe_names,
     default_statement_config,
-    is_postgres_extension_active,
     register_json_codecs,
     register_pgvector_support,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
 )
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core.config_runtime import (
+    build_postgres_extension_probe_names,
+    is_postgres_extension_active,
+    resolve_postgres_extension_state,
+    resolve_runtime_statement_config,
+)
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints

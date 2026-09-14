@@ -818,7 +818,7 @@ class SQL:
                 validator_cache_max_size=0,
             )
         processor = self._rebind_processor
-        rebound_params = processor._transform_cached_parameters(  # pyright: ignore[reportPrivateUsage]
+        rebound_params = processor.transform_cached_parameters(
             params,
             state.parameter_profile,
             self._statement_config.parameter_config,
