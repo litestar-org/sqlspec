@@ -71,7 +71,7 @@ _AsyncResultT = TypeVar("_AsyncResultT")
 _AsyncDriverT = TypeVar("_AsyncDriverT", bound="AsyncDriverAdapterBase")
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class AsyncPoolConnectionContext:
     """Base async connection context using pool acquire/release pattern.
 
@@ -103,7 +103,7 @@ class AsyncPoolConnectionContext:
         return None
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class AsyncPoolSessionFactory:
     """Base async session factory using pool acquire/release pattern.
 
@@ -1939,7 +1939,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         return table, telemetry
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
     """Base class for asynchronous data dictionary implementations.
 

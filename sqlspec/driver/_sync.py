@@ -66,7 +66,7 @@ logger = get_logger(_LOGGER_NAME)
 _SyncDriverT = TypeVar("_SyncDriverT", bound="SyncDriverAdapterBase")
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SyncPoolConnectionContext:
     """Generic sync connection context using pool.get_connection() pattern.
 
@@ -92,7 +92,7 @@ class SyncPoolConnectionContext:
         return None
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SyncPoolSessionFactory:
     """Generic sync session factory using pool.get_connection() pattern.
 
@@ -1819,7 +1819,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         return table, telemetry
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
     """Base class for synchronous data dictionary implementations.
 

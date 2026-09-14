@@ -67,7 +67,7 @@ T = TypeVar("T")
 FilterTypeT = TypeVar("FilterTypeT", bound="StatementFilter")
 
 
-@mypyc_attr(allow_interpreted_subclasses=True)
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class StatementFilter:
     """Abstract base class for filters that can be appended to a statement."""
 

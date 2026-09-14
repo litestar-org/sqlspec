@@ -9,15 +9,20 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.63.1 - Service class subclassing and slotscheck compatibility
-----------------------------------------------------------------
+v0.63.1 - Base class interpreted subclassing and slotscheck compatibility
+-------------------------------------------------------------------------
 
 **Fixed:**
 
-* Update :class:`~sqlspec.service.SQLSpecAsyncService` and :class:`~sqlspec.service.SQLSpecSyncService`
-  ``@mypyc_attr`` decorators to include ``native_class=False``, allowing downstream applications
-  and frameworks to define interpreted subclasses and dynamic attributes across the compiled C boundary
-  without native class memory layout restrictions.
+* Add ``native_class=False`` to ``@mypyc_attr(allow_interpreted_subclasses=True)`` decorators across
+  service classes (:class:`~sqlspec.service.SQLSpecAsyncService`, :class:`~sqlspec.service.SQLSpecSyncService`),
+  core filters (:class:`~sqlspec.core.filters.StatementFilter`), driver connection contexts and session factories
+  (:class:`~sqlspec.driver.AsyncPoolConnectionContext`, :class:`~sqlspec.driver.AsyncPoolSessionFactory`,
+  :class:`~sqlspec.driver.SyncPoolConnectionContext`, :class:`~sqlspec.driver.SyncPoolSessionFactory`),
+  exception handlers (:class:`~sqlspec.driver.BaseAsyncExceptionHandler`, :class:`~sqlspec.driver.BaseSyncExceptionHandler`),
+  and data dictionary bases (:class:`~sqlspec.driver.AsyncDataDictionaryBase`, :class:`~sqlspec.driver.SyncDataDictionaryBase`).
+  This allows downstream applications and framework adapters to define interpreted subclasses and dynamic attributes
+  across the compiled C boundary without native type memory layout restrictions.
 
 v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
 ---------------------------------------------------------------------------------------------------
