@@ -267,7 +267,7 @@ include = [
   "sqlspec/storage/backends/local.py",             # Local storage backend
   "sqlspec/storage/backends/obstore.py",           # obstore backend import surface
   "sqlspec/storage/_utils.py",                     # Storage optional dependency import helpers
-  "sqlspec/_service.py",                           # Compiled query and transaction helpers for Python service bases
+  "sqlspec/service/_core.py",                       # Compiled query and transaction helpers for Python service bases
   "sqlspec/data_dictionary/**/*.py",               # Data dictionary registry, loader, and dialect helpers
   "sqlspec/extensions/prometheus/_observer.py",    # Prometheus statement observer
   "sqlspec/extensions/fastapi/providers.py",       # FastAPI filter provider helpers

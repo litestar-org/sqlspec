@@ -636,10 +636,10 @@ def _check_adapter_config_construction() -> dict[str, Any]:
 def _check_service_subclasses(*, require_compiled: bool = False) -> dict[str, Any]:
     """Exercise Python service subclasses against the compiled query and transaction runtime."""
     result = _new_smoke_result(
-        name="service_subclasses", module="sqlspec._service", attribute=None, compiled_required=require_compiled
+        name="service_subclasses", module="sqlspec.service._core", attribute=None, compiled_required=require_compiled
     )
     try:
-        service_module = importlib.import_module("sqlspec._service")
+        service_module = importlib.import_module("sqlspec.service._core")
         importlib.import_module("aiosqlite")
     except ModuleNotFoundError as exc:
         if _is_missing_optional_dependency(exc.name or "", "aiosqlite"):
@@ -668,9 +668,9 @@ from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 if sys.argv[1] == "compiled":
     from importlib.machinery import EXTENSION_SUFFIXES
-    import sqlspec._service
+    import sqlspec.service._core
 
-    assert sqlspec._service.__file__.endswith(tuple(EXTENSION_SUFFIXES))
+    assert sqlspec.service._core.__file__.endswith(tuple(EXTENSION_SUFFIXES))
 
 
 class AppSyncService(SQLSpecSyncService[SqliteDriver]):

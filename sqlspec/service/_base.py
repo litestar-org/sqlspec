@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
 from typing_extensions import TypeVar
 
-from sqlspec._service import (
+from sqlspec.core import OffsetPagination
+from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.service._core import (
     _async_exists,
     _async_get_one,
     _async_paginate,
@@ -17,10 +21,6 @@ from sqlspec._service import (
     _transaction_session,
     _TransactionState,
 )
-from sqlspec.core import OffsetPagination
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import SchemaT
 
 if TYPE_CHECKING:
