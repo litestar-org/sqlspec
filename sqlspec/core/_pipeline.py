@@ -191,7 +191,7 @@ class _PipelineMetrics:
     __slots__ = ("_values",)
 
     def __init__(self) -> None:
-        self._values = dict.fromkeys(_METRIC_KEYS, 0)
+        self._values: dict[str, int] = dict.fromkeys(_METRIC_KEYS, 0)
 
     def update(self, stats: "dict[str, int]") -> None:
         values = self._values
