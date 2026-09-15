@@ -511,26 +511,6 @@ async def build_async_pipeline_execution_result(
     )
 
 
-def _create_postgres_error(
-    error: Any, code: "str | None", error_class: type[SQLSpecError], description: str
-) -> SQLSpecError:
-    """Create a SQLSpec exception from a psycopg error.
-
-    Args:
-        error: The original psycopg exception
-        code: PostgreSQL SQLSTATE error code
-        error_class: The SQLSpec exception class to instantiate
-        description: Human-readable description of the error type
-
-    Returns:
-        A new SQLSpec exception instance with the original as its cause
-    """
-    msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
-
-
 _EXCEPTION_MAPPING: Final[dict[type[Any], tuple[str, type[SQLSpecError], str]]] = {}
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[Any], tuple[str, type[SQLSpecError], str]]] = {}
 
@@ -559,19 +539,6 @@ def _register_exception_mappings() -> None:
     cannot_connect_now = getattr(pg_errors, "CannotConnectNow", None)
     if isinstance(cannot_connect_now, type):
         _EXCEPTION_MAPPING[cannot_connect_now] = ("57P03", ConnectionTimeoutError, "cannot connect now")
-
-
-def _resolve_exception_mapping(error_type: type[Any]) -> "tuple[str, type[SQLSpecError], str] | None":
-    mapped_error = _EXCEPTION_MAPPING_CACHE.get(error_type)
-    if mapped_error is not None:
-        return mapped_error
-
-    for base_type in error_type.__mro__[1:]:
-        mapped_error = _EXCEPTION_MAPPING.get(base_type)
-        if mapped_error is not None:
-            _EXCEPTION_MAPPING_CACHE[error_type] = mapped_error
-            return mapped_error
-    return None
 
 
 _register_exception_mappings()
@@ -675,3 +642,36 @@ def _parameter_config(
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+def _create_postgres_error(
+    error: Any, code: "str | None", error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a SQLSpec exception from a psycopg error.
+
+    Args:
+        error: The original psycopg exception
+        code: PostgreSQL SQLSTATE error code
+        error_class: The SQLSpec exception class to instantiate
+        description: Human-readable description of the error type
+
+    Returns:
+        A new SQLSpec exception instance with the original as its cause
+    """
+    msg = f"PostgreSQL {description} [{code}]: {error}" if code else f"PostgreSQL {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc
+
+
+def _resolve_exception_mapping(error_type: type[Any]) -> "tuple[str, type[SQLSpecError], str] | None":
+    mapped_error = _EXCEPTION_MAPPING_CACHE.get(error_type)
+    if mapped_error is not None:
+        return mapped_error
+
+    for base_type in error_type.__mro__[1:]:
+        mapped_error = _EXCEPTION_MAPPING.get(base_type)
+        if mapped_error is not None:
+            _EXCEPTION_MAPPING_CACHE[error_type] = mapped_error
+            return mapped_error
+    return None

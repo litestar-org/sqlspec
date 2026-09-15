@@ -169,46 +169,6 @@ class PsycopgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
 
 
-def _make_alloydb_connection_class(
-    *,
-    connector: Any,
-    instance_uri: str,
-    enable_iam_auth: bool,
-    ip_type: str,
-    user: str | None,
-    password: str | None,
-    database: str | None,
-) -> "type[PsycopgConnection[Any]]":
-    """Build a psycopg connection class backed by the AlloyDB connector."""
-
-    class _AlloyDBPsycopgConnection(PsycopgConnection[Any]):
-        @classmethod
-        def connect(
-            cls,
-            conninfo: str = "",
-            *,
-            autocommit: bool = False,
-            prepare_threshold: int | None = 5,
-            context: "AdaptContext | None" = None,
-            row_factory: "RowFactory[Any] | None" = None,
-            cursor_factory: "type[Cursor[Any]] | None" = None,
-            **kwargs: str | int | None,
-        ) -> Self:
-            _ = (cls, conninfo, autocommit, prepare_threshold, context, row_factory, cursor_factory)
-            connector_kwargs = dict(kwargs)
-            connector_kwargs["enable_iam_auth"] = enable_iam_auth
-            connector_kwargs["ip_type"] = ip_type
-            if user is not None:
-                connector_kwargs["user"] = user
-            if password is not None:
-                connector_kwargs["password"] = password
-            if database is not None:
-                connector_kwargs["db"] = database
-            return cast("Self", connector.connect(instance_uri, "psycopg", **connector_kwargs))
-
-    return _AlloyDBPsycopgConnection
-
-
 class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Psycopg connections."""
 
@@ -843,3 +803,43 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Return polling defaults for PostgreSQL queue fallback."""
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+
+def _make_alloydb_connection_class(
+    *,
+    connector: Any,
+    instance_uri: str,
+    enable_iam_auth: bool,
+    ip_type: str,
+    user: str | None,
+    password: str | None,
+    database: str | None,
+) -> "type[PsycopgConnection[Any]]":
+    """Build a psycopg connection class backed by the AlloyDB connector."""
+
+    class _AlloyDBPsycopgConnection(PsycopgConnection[Any]):
+        @classmethod
+        def connect(
+            cls,
+            conninfo: str = "",
+            *,
+            autocommit: bool = False,
+            prepare_threshold: int | None = 5,
+            context: "AdaptContext | None" = None,
+            row_factory: "RowFactory[Any] | None" = None,
+            cursor_factory: "type[Cursor[Any]] | None" = None,
+            **kwargs: str | int | None,
+        ) -> Self:
+            _ = (cls, conninfo, autocommit, prepare_threshold, context, row_factory, cursor_factory)
+            connector_kwargs = dict(kwargs)
+            connector_kwargs["enable_iam_auth"] = enable_iam_auth
+            connector_kwargs["ip_type"] = ip_type
+            if user is not None:
+                connector_kwargs["user"] = user
+            if password is not None:
+                connector_kwargs["password"] = password
+            if database is not None:
+                connector_kwargs["db"] = database
+            return cast("Self", connector.connect(instance_uri, "psycopg", **connector_kwargs))
+
+    return _AlloyDBPsycopgConnection

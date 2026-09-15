@@ -99,10 +99,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         self._data_dictionary: SqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
@@ -223,10 +219,6 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def begin(self) -> None:
         """Begin a database transaction.
 
@@ -289,10 +281,6 @@ class SqliteDriver(SyncDriverAdapterBase):
             Exception handler with deferred exception pattern for mypyc compatibility.
         """
         return SqliteExceptionHandler()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -374,10 +362,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "SqliteDataDictionary":
         """Get the data dictionary for this driver.
@@ -388,10 +372,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = SqliteDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect SQLite rows for the direct execution path."""

@@ -51,37 +51,6 @@ _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
 _JSON_OBJECT_TYPE: "type[Any] | None" = None
 
 
-def _get_param_types() -> "SpannerParamTypesProtocol":
-    global _SPANNER_PARAM_TYPES
-    if _SPANNER_PARAM_TYPES is None:
-        from google.cloud.spanner_v1 import param_types
-
-        _SPANNER_PARAM_TYPES = cast("SpannerParamTypesProtocol", param_types)
-    return _SPANNER_PARAM_TYPES
-
-
-def _get_json_object_type() -> "type[Any]":
-    global _JSON_OBJECT_TYPE
-    if _JSON_OBJECT_TYPE is None:
-        from google.cloud.spanner_v1 import JsonObject
-
-        _JSON_OBJECT_TYPE = JsonObject
-    return _JSON_OBJECT_TYPE
-
-
-def _json_param_type() -> Any:
-    """Get Spanner JSON param type with fallback to STRING.
-
-    Returns:
-        JSON param type or STRING as fallback.
-    """
-    param_types = _get_param_types()
-    try:
-        return param_types.JSON
-    except AttributeError:
-        return param_types.STRING
-
-
 def bytes_to_spanner(value: "bytes | None") -> "bytes | None":
     """Convert Python bytes to Spanner BYTES format.
 
@@ -280,3 +249,34 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             elif isinstance(first, bool):
                 types[key] = param_types.Array(param_types.BOOL)
     return types
+
+
+def _get_param_types() -> "SpannerParamTypesProtocol":
+    global _SPANNER_PARAM_TYPES
+    if _SPANNER_PARAM_TYPES is None:
+        from google.cloud.spanner_v1 import param_types
+
+        _SPANNER_PARAM_TYPES = cast("SpannerParamTypesProtocol", param_types)
+    return _SPANNER_PARAM_TYPES
+
+
+def _get_json_object_type() -> "type[Any]":
+    global _JSON_OBJECT_TYPE
+    if _JSON_OBJECT_TYPE is None:
+        from google.cloud.spanner_v1 import JsonObject
+
+        _JSON_OBJECT_TYPE = JsonObject
+    return _JSON_OBJECT_TYPE
+
+
+def _json_param_type() -> Any:
+    """Get Spanner JSON param type with fallback to STRING.
+
+    Returns:
+        JSON param type or STRING as fallback.
+    """
+    param_types = _get_param_types()
+    try:
+        return param_types.JSON
+    except AttributeError:
+        return param_types.STRING

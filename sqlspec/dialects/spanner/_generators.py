@@ -145,11 +145,6 @@ def _row_deletion_components(expression: exp.Property) -> "tuple[exp.Expr, exp.E
     return None
 
 
-# ---------------------------------------------------------------------------
-# Spanner property rendering (GoogleSQL, BigQuery-based)
-# ---------------------------------------------------------------------------
-
-
 def _spanner_property_sql(self: Any, expression: exp.Property) -> str:
     """Render Spanner GoogleSQL properties (INTERLEAVE, ROW DELETION POLICY)."""
     interleave_sql = _render_interleave_sql(self, expression)
@@ -202,11 +197,6 @@ def _spanner_properties_sql(self: Any, expression: exp.Properties) -> str:
     return f"{rendered}, {spanner_block}" if rendered else f", {spanner_block}"
 
 
-# ---------------------------------------------------------------------------
-# Spangres property rendering (PostgreSQL-based)
-# ---------------------------------------------------------------------------
-
-
 def _spangres_property_sql(self: Any, expression: exp.Property) -> str:
     """Render Spangres properties (INTERLEAVE, TTL) in PostgreSQL-dialect form."""
     interleave_sql = _render_interleave_sql(self, expression)
@@ -238,10 +228,6 @@ def _spangres_properties_sql(self: Any, expression: exp.Properties) -> str:
     )
     return " ".join(parts)
 
-
-# ---------------------------------------------------------------------------
-# TRANSFORMS wiring (single code path for sqlglot and sqlglot[c])
-# ---------------------------------------------------------------------------
 
 # BigQuery / Spanner
 _original_bq_property_transform = BigQueryGenerator.TRANSFORMS.get(exp.Property)

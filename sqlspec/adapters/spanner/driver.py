@@ -109,10 +109,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._pending_execute_options: _PerCallExecuteOptions | None = None
         self._row_plan_cache: dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]] = {}
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS - The Execution Engine
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def dispatch_execute(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
         params = cast("dict[str, Any] | None", params)
@@ -233,10 +229,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.create_execution_result(
             cursor, statement_count=count, successful_statements=count, is_script_result=True
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def begin(self) -> None:
         return None
@@ -408,14 +400,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         finally:
             self._pending_execute_options = previous_options
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def select_to_storage(
         self,
         statement: "SQL | str",
@@ -492,19 +476,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "SpannerDataDictionary":
         if self._data_dictionary is None:
             self._data_dictionary = SpannerDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: "SpannerConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Spanner rows for the direct execution path.

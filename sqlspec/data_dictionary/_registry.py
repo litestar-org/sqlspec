@@ -63,15 +63,6 @@ def normalize_dialect_mode(dialect: str, mode: str | None) -> str | None:
     return DIALECT_MODE_ALIASES.get((normalized_dialect, normalized_mode), normalized_mode)
 
 
-def _load_default_dialects() -> None:
-    """Load built-in dialect configurations."""
-    global _DIALECTS_LOADED
-    if _DIALECTS_LOADED:
-        return
-    importlib.import_module("sqlspec.data_dictionary.dialects")
-    _DIALECTS_LOADED = True
-
-
 def register_dialect(config: "DialectConfig") -> None:
     """Register a dialect configuration.
 
@@ -109,3 +100,12 @@ def list_registered_dialects() -> "list[str]":
     """
     _load_default_dialects()
     return sorted(_DIALECT_CONFIGS.keys())
+
+
+def _load_default_dialects() -> None:
+    """Load built-in dialect configurations."""
+    global _DIALECTS_LOADED
+    if _DIALECTS_LOADED:
+        return
+    importlib.import_module("sqlspec.data_dictionary.dialects")
+    _DIALECTS_LOADED = True

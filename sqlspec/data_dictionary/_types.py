@@ -694,35 +694,6 @@ _SENSITIVE_NAME_FRAGMENTS = {
 }
 
 
-def _normalize_redaction_key(key: str) -> str:
-    return key.strip().lower().replace("-", "_")
-
-
-def _is_sensitive_name(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    normalized = _normalize_redaction_key(value)
-    return any(fragment in normalized for fragment in _SENSITIVE_NAME_FRAGMENTS)
-
-
-def _row_setting_name(row: "Mapping[str, object]") -> object | None:
-    for key, value in row.items():
-        if _normalize_redaction_key(str(key)) in _SETTING_NAME_FIELDS:
-            return value
-    return None
-
-
-def _looks_like_connection_string(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    lowered = value.lower()
-    if "://" in value and ("@" in value or "password" in lowered or "token" in lowered):
-        return True
-    if "password=" in lowered or "pwd=" in lowered:
-        return True
-    return "user id=" in lowered and ("server=" in lowered or "host=" in lowered)
-
-
 class SystemMetadataRedactionPolicy:
     """Redaction policy for system and performance metadata rows.
 
@@ -1593,3 +1564,32 @@ def _serialize_metadata_item(item: object) -> object:
 
 def _hashable_mapping(value: "dict[str, object]") -> "tuple[tuple[str, str], ...]":
     return tuple(sorted((key, repr(item)) for key, item in value.items()))
+
+
+def _normalize_redaction_key(key: str) -> str:
+    return key.strip().lower().replace("-", "_")
+
+
+def _is_sensitive_name(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = _normalize_redaction_key(value)
+    return any(fragment in normalized for fragment in _SENSITIVE_NAME_FRAGMENTS)
+
+
+def _row_setting_name(row: "Mapping[str, object]") -> object | None:
+    for key, value in row.items():
+        if _normalize_redaction_key(str(key)) in _SETTING_NAME_FIELDS:
+            return value
+    return None
+
+
+def _looks_like_connection_string(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    lowered = value.lower()
+    if "://" in value and ("@" in value or "password" in lowered or "token" in lowered):
+        return True
+    if "password=" in lowered or "pwd=" in lowered:
+        return True
+    return "user id=" in lowered and ("server=" in lowered or "host=" in lowered)

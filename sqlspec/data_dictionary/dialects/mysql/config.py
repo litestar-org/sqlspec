@@ -253,6 +253,38 @@ def make_mysql_ddl_result(
     )
 
 
+def build_mysql_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    """Build system metadata capability disclosures for MySQL-family adapters."""
+    if domain in {"performance_schema_tables", "sys_schema_table_statistics", "table_statistics"}:
+        return SystemMetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+            redaction_fields=("user", "host", "setting", "sql_text"),
+            warnings=("Sensitive system metadata requires explicit opt-in.",),
+        )
+    return SystemMetadataCapability.unsupported(domain, source=MetadataSource.SYSTEM_VIEW)
+
+
+def mysql_system_metadata_query_name(domain: str) -> str | None:
+    """Map public MySQL system metadata domains to query-pack names."""
+    if domain in {"table_statistics", "sys_schema_table_statistics"}:
+        return "sys_schema_table_statistics"
+    if domain == "performance_schema_tables":
+        return "performance_schema_tables"
+    return None
+
+
+def resolve_mysql_json_type(version_info: "VersionInfo | None") -> str:
+    """Resolve the best MySQL JSON storage type for a database version."""
+    json_version = MYSQL_CONFIG.get_feature_version("supports_json")
+    if version_info and json_version and version_info >= json_version:
+        return "JSON"
+    return "TEXT"
+
+
 def _extract_show_create_text(ddl_row: "dict[str, object]", object_type: str) -> str | None:
     expected_key = f"Create {object_type.title()}"
     value = ddl_row.get(expected_key)
@@ -304,35 +336,3 @@ def _mysql_metadata_capability(domain: str) -> MetadataCapability:
             warnings=("Sensitive system metadata requires explicit opt-in.",),
         )
     return MetadataCapability.unsupported(domain)
-
-
-def build_mysql_system_metadata_capability(domain: str) -> SystemMetadataCapability:
-    """Build system metadata capability disclosures for MySQL-family adapters."""
-    if domain in {"performance_schema_tables", "sys_schema_table_statistics", "table_statistics"}:
-        return SystemMetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.PARTIAL,
-            source=MetadataSource.SYSTEM_VIEW,
-            risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
-            redaction_fields=("user", "host", "setting", "sql_text"),
-            warnings=("Sensitive system metadata requires explicit opt-in.",),
-        )
-    return SystemMetadataCapability.unsupported(domain, source=MetadataSource.SYSTEM_VIEW)
-
-
-def mysql_system_metadata_query_name(domain: str) -> str | None:
-    """Map public MySQL system metadata domains to query-pack names."""
-    if domain in {"table_statistics", "sys_schema_table_statistics"}:
-        return "sys_schema_table_statistics"
-    if domain == "performance_schema_tables":
-        return "performance_schema_tables"
-    return None
-
-
-def resolve_mysql_json_type(version_info: "VersionInfo | None") -> str:
-    """Resolve the best MySQL JSON storage type for a database version."""
-    json_version = MYSQL_CONFIG.get_feature_version("supports_json")
-    if version_info and json_version and version_info >= json_version:
-        return "JSON"
-    return "TEXT"

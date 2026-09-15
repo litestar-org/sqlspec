@@ -95,10 +95,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         self._data_dictionary: PsqlpyDataDictionary | None = None
         self._transaction_active = False
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
 
@@ -194,10 +190,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def begin(self) -> None:
         """Begin a database transaction."""
 
@@ -281,10 +273,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Exception handler context manager
         """
         return PsqlpyExceptionHandler()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -382,10 +370,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def prepare_driver_parameters(
         self,
         parameters: Any,
@@ -434,10 +418,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = PsqlpyDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: "PsqlpyConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psqlpy rows for the direct execution path.

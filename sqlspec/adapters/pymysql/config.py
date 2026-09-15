@@ -160,14 +160,6 @@ _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
 ))
 
 
-def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize PyMySQL local-infile aliases to the native connection flag."""
-    config = dict(connection_config)
-    allow_local_infile = bool(config.pop("allow_local_infile", False))
-    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
-    return config
-
-
 class _PyMysqlCloudSqlConnector:
     __slots__ = ("_config", "_database", "_driver_kwargs", "_password", "_user")
 
@@ -367,3 +359,11 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+
+def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize PyMySQL local-infile aliases to the native connection flag."""
+    config = dict(connection_config)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
+    return config

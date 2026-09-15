@@ -25,74 +25,6 @@ SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
 SQLITE_MEMORY_CACHE_SIZE: Final = -16000
 
 
-def _dict_row_factory(cursor: Any, row: "tuple[Any, ...]") -> "dict[str, Any]":
-    return {column[0]: row[index] for index, column in enumerate(cursor.description)}
-
-
-def _resolve_row_factory(row_factory: Any) -> Any:
-    if row_factory == "row":
-        return sqlite3.Row
-    if row_factory == "dict":
-        return _dict_row_factory
-    if row_factory == "tuple":
-        return None
-    return row_factory
-
-
-def _load_extensions(connection: SqliteConnection, extensions: "list[str]") -> None:
-    connection.enable_load_extension(True)
-    try:
-        for extension_path in extensions:
-            connection.load_extension(extension_path)
-    finally:
-        connection.enable_load_extension(False)
-
-
-def _apply_runtime_setup(connection: SqliteConnection, runtime_setup: "dict[str, Any]") -> None:
-    pragmas = runtime_setup.get("pragmas", ())
-    if pragmas:
-        pragma_script = "\n".join(f"PRAGMA {pragma_name} = {pragma_value};" for pragma_name, pragma_value in pragmas)
-        connection.executescript(pragma_script)
-
-    extensions = runtime_setup.get("extensions")
-    if extensions:
-        _load_extensions(connection, list(extensions))
-
-    for function_config in runtime_setup.get("custom_functions", ()):
-        connection.create_function(
-            function_config["name"],
-            function_config["narg"],
-            function_config["func"],
-            deterministic=function_config.get("deterministic", False),
-        )
-
-    for aggregate_config in runtime_setup.get("custom_aggregates", ()):
-        connection.create_aggregate(
-            aggregate_config["name"], aggregate_config["narg"], aggregate_config["aggregate_class"]
-        )
-
-    for collation_config in runtime_setup.get("custom_collations", ()):
-        connection.create_collation(collation_config["name"], collation_config["func"])
-
-    authorizer_callback = runtime_setup.get("authorizer_callback")
-    if authorizer_callback is not None:
-        connection.set_authorizer(authorizer_callback)
-
-    trace_callback = runtime_setup.get("trace_callback")
-    if trace_callback is not None:
-        connection.set_trace_callback(trace_callback)
-
-    progress_handler = runtime_setup.get("progress_handler")
-    if progress_handler is not None:
-        connection.set_progress_handler(progress_handler, runtime_setup.get("progress_handler_interval", 1000))
-
-    if "row_factory" in runtime_setup:
-        connection.row_factory = _resolve_row_factory(runtime_setup["row_factory"])
-
-    if "text_factory" in runtime_setup:
-        connection.text_factory = runtime_setup["text_factory"]
-
-
 class SqliteConnectionPool:
     """Thread-local connection manager for SQLite.
 
@@ -314,3 +246,71 @@ class SqliteConnectionPool:
     def checked_out(self) -> int:
         """Get number of checked out connections (always 0)."""
         return 0
+
+
+def _dict_row_factory(cursor: Any, row: "tuple[Any, ...]") -> "dict[str, Any]":
+    return {column[0]: row[index] for index, column in enumerate(cursor.description)}
+
+
+def _resolve_row_factory(row_factory: Any) -> Any:
+    if row_factory == "row":
+        return sqlite3.Row
+    if row_factory == "dict":
+        return _dict_row_factory
+    if row_factory == "tuple":
+        return None
+    return row_factory
+
+
+def _load_extensions(connection: SqliteConnection, extensions: "list[str]") -> None:
+    connection.enable_load_extension(True)
+    try:
+        for extension_path in extensions:
+            connection.load_extension(extension_path)
+    finally:
+        connection.enable_load_extension(False)
+
+
+def _apply_runtime_setup(connection: SqliteConnection, runtime_setup: "dict[str, Any]") -> None:
+    pragmas = runtime_setup.get("pragmas", ())
+    if pragmas:
+        pragma_script = "\n".join(f"PRAGMA {pragma_name} = {pragma_value};" for pragma_name, pragma_value in pragmas)
+        connection.executescript(pragma_script)
+
+    extensions = runtime_setup.get("extensions")
+    if extensions:
+        _load_extensions(connection, list(extensions))
+
+    for function_config in runtime_setup.get("custom_functions", ()):
+        connection.create_function(
+            function_config["name"],
+            function_config["narg"],
+            function_config["func"],
+            deterministic=function_config.get("deterministic", False),
+        )
+
+    for aggregate_config in runtime_setup.get("custom_aggregates", ()):
+        connection.create_aggregate(
+            aggregate_config["name"], aggregate_config["narg"], aggregate_config["aggregate_class"]
+        )
+
+    for collation_config in runtime_setup.get("custom_collations", ()):
+        connection.create_collation(collation_config["name"], collation_config["func"])
+
+    authorizer_callback = runtime_setup.get("authorizer_callback")
+    if authorizer_callback is not None:
+        connection.set_authorizer(authorizer_callback)
+
+    trace_callback = runtime_setup.get("trace_callback")
+    if trace_callback is not None:
+        connection.set_trace_callback(trace_callback)
+
+    progress_handler = runtime_setup.get("progress_handler")
+    if progress_handler is not None:
+        connection.set_progress_handler(progress_handler, runtime_setup.get("progress_handler_interval", 1000))
+
+    if "row_factory" in runtime_setup:
+        connection.row_factory = _resolve_row_factory(runtime_setup["row_factory"])
+
+    if "text_factory" in runtime_setup:
+        connection.text_factory = runtime_setup["text_factory"]
