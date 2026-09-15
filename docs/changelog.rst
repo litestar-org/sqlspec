@@ -9,6 +9,24 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.63.1 - Slotted service subclass compatibility
+------------------------------------------------
+
+**Fixed:**
+
+* Keep :class:`~sqlspec.service.SQLSpecAsyncService` and :class:`~sqlspec.service.SQLSpecSyncService`
+  as ordinary slotted Python classes in compiled wheels. Application subclasses preserve generic typing
+  and ``__slots__`` without downstream slotscheck exclusions. Query execution and transaction management
+  remain mypyc-compiled in a private runtime module.
+
+**Changed:**
+
+* Expand compiled-wheel smoke checks to cover multi-level, slotted subclasses of
+  :class:`~sqlspec.service.SQLSpecAsyncService` and :class:`~sqlspec.service.SQLSpecSyncService`,
+  including inherited queries, transaction contexts, overridden session acquisition, and queries inside
+  a caller's exception handler.
+* Update slotscheck and the Codecov action pin.
+
 v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
 ---------------------------------------------------------------------------------------------------
 

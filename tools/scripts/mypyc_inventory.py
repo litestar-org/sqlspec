@@ -29,6 +29,14 @@ CANDIDATE_CLASSIFICATIONS = {"candidate", "compile_now", "helper_split_first", "
 SURFACE_ORDER = ("compiled", "candidate", "hard_block", "keep_interpreted", "interpreted")
 
 HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
+    "sqlspec/service/_base.py": {
+        "classification": "keep_interpreted",
+        "reason": "Public generic service bases preserve Python slots and subclassing; runtime helpers compile separately.",
+    },
+    "sqlspec/service/_core.py": {
+        "classification": "compile_now",
+        "reason": "Query execution and transaction ownership runtime behind the Python service bases.",
+    },
     "sqlspec/config.py": {
         "classification": "helper_split_first",
         "reason": "Owns runtime hooks, migration setup, and observability/bootstrap orchestration.",

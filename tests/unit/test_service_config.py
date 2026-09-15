@@ -20,7 +20,8 @@ from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLSpecError
 from sqlspec.loader import SQLFileLoader
-from sqlspec.service import _TRANSACTIONS, SQLSpecAsyncService, SQLSpecSyncService
+from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+from sqlspec.service._core import _TRANSACTIONS
 
 pytestmark = pytest.mark.anyio
 

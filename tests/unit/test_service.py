@@ -1,74 +1,67 @@
-"""Transaction-context semantics for the SQLSpec service base classes.
-
-These tests lock in the commit-on-success / rollback-on-error behavior of
-``begin_transaction`` for both the sync and async service bases, and assert that
-neither context manager suppresses exceptions raised inside the ``with`` body.
-The non-suppression guarantee is what lets callers ``return`` from inside the
-block without a trailing unreachable ``raise`` to satisfy type checkers.
-"""
+"""Service transaction hooks commit on success and roll back without suppressing errors."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 pytestmark = pytest.mark.anyio
 
 
-async def test_async_begin_transaction_commits_on_success() -> None:
-    session = AsyncMock()
-    session._transaction_depth = 0
-    session._connection_in_transaction = MagicMock(return_value=False)
-    service: SQLSpecAsyncService = SQLSpecAsyncService(session)
-
-    async with service.begin_transaction() as bound:
-        assert bound is session
-
-    session.begin.assert_awaited_once()
-    session.commit.assert_awaited_once()
-    session.rollback.assert_not_awaited()
-
-
-async def test_async_begin_transaction_rolls_back_and_propagates() -> None:
-    session = AsyncMock()
-    session._transaction_depth = 0
-    session._connection_in_transaction = MagicMock(return_value=False)
-    service: SQLSpecAsyncService = SQLSpecAsyncService(session)
-
-    with pytest.raises(ValueError, match="boom"):
-        async with service.begin_transaction():
-            raise ValueError("boom")
-
-    session.begin.assert_awaited_once()
-    session.rollback.assert_awaited_once()
-    session.commit.assert_not_awaited()
-
-
-def test_sync_begin_transaction_commits_on_success() -> None:
-    session = MagicMock()
-    session._transaction_depth = 0
-    session._connection_in_transaction.return_value = False
-    service: SQLSpecSyncService = SQLSpecSyncService(session)
-
-    with service.begin_transaction() as bound:
-        assert bound is session
-
-    session.begin.assert_called_once()
-    session.commit.assert_called_once()
-    session.rollback.assert_not_called()
+@pytest.mark.parametrize("fail", [False, True])
+async def test_async_begin_transaction_hooks(monkeypatch: pytest.MonkeyPatch, fail: bool) -> None:
+    begin, commit, rollback = AsyncMock(), AsyncMock(), AsyncMock()
+    monkeypatch.setattr(AiosqliteDriver, "begin", begin)
+    monkeypatch.setattr(AiosqliteDriver, "commit", commit)
+    monkeypatch.setattr(AiosqliteDriver, "rollback", rollback)
+    config = AiosqliteConfig()
+    try:
+        async with config.provide_session() as session:
+            service = SQLSpecAsyncService(session)
+            if fail:
+                with pytest.raises(ValueError, match="boom"):
+                    async with service.begin_transaction() as bound:
+                        assert bound is session
+                        raise ValueError("boom")
+                rollback.assert_awaited_once()
+                commit.assert_not_awaited()
+            else:
+                async with service.begin_transaction() as bound:
+                    assert bound is session
+                commit.assert_awaited_once()
+                rollback.assert_not_awaited()
+            begin.assert_awaited_once()
+            assert session._transaction_depth == 0
+    finally:
+        await config.close_pool()
 
 
-def test_sync_begin_transaction_rolls_back_and_propagates() -> None:
-    session = MagicMock()
-    session._transaction_depth = 0
-    session._connection_in_transaction.return_value = False
-    service: SQLSpecSyncService = SQLSpecSyncService(session)
-
-    with pytest.raises(ValueError, match="boom"):
-        with service.begin_transaction():
-            raise ValueError("boom")
-
-    session.begin.assert_called_once()
-    session.rollback.assert_called_once()
-    session.commit.assert_not_called()
+@pytest.mark.parametrize("fail", [False, True])
+def test_sync_begin_transaction_hooks(monkeypatch: pytest.MonkeyPatch, fail: bool) -> None:
+    begin, commit, rollback = MagicMock(), MagicMock(), MagicMock()
+    monkeypatch.setattr(SqliteDriver, "begin", begin)
+    monkeypatch.setattr(SqliteDriver, "commit", commit)
+    monkeypatch.setattr(SqliteDriver, "rollback", rollback)
+    config = SqliteConfig()
+    try:
+        with config.provide_session() as session:
+            service = SQLSpecSyncService(session)
+            if fail:
+                with pytest.raises(ValueError, match="boom"):
+                    with service.begin_transaction() as bound:
+                        assert bound is session
+                        raise ValueError("boom")
+                rollback.assert_called_once()
+                commit.assert_not_called()
+            else:
+                with service.begin_transaction() as bound:
+                    assert bound is session
+                commit.assert_called_once()
+                rollback.assert_not_called()
+            begin.assert_called_once()
+            assert session._transaction_depth == 0
+    finally:
+        config.close_pool()
