@@ -849,7 +849,7 @@ def _validate_adapter_event_settings(settings: "dict[str, Any]", adapter_name: "
         return
     allowed = BaseEventQueueStore.extension_config_options
     for name in getattr(module, "__all__", ()):
-        store_type = getattr(module, name)
+        store_type = cast("type[BaseEventQueueStore[Any]]", getattr(module, name))
         if (
             isinstance(store_type, type)
             and issubclass(store_type, BaseEventQueueStore)
