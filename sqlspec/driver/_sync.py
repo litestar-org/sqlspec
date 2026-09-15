@@ -1819,7 +1819,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         return table, telemetry
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
     """Base class for synchronous data dictionary implementations.
 

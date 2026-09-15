@@ -1939,7 +1939,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         return table, telemetry
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
     """Base class for asynchronous data dictionary implementations.
 
