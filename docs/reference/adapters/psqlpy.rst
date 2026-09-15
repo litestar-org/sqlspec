@@ -59,3 +59,17 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.psqlpy.data_dictionary.PsqlpyDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these adapter-specific types inside ``extension_config["litestar"]``
+and ``extension_config["events"]``.
+
+.. autoclass:: sqlspec.adapters.psqlpy.litestar.PsqlpyLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.psqlpy.events.PsqlpyEventsConfig
+   :members:
+   :show-inheritance:

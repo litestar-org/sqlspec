@@ -92,3 +92,17 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.psycopg.data_dictionary.PsycopgAsyncDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these adapter-specific types inside ``extension_config["litestar"]``
+and ``extension_config["events"]``.
+
+.. autoclass:: sqlspec.adapters.psycopg.litestar.PsycopgLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.psycopg.events.PsycopgEventsConfig
+   :members:
+   :show-inheritance:

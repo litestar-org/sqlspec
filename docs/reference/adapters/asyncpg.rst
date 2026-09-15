@@ -63,3 +63,17 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.asyncpg.data_dictionary.AsyncpgDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these adapter-specific types inside ``extension_config["litestar"]``
+and ``extension_config["events"]``.
+
+.. autoclass:: sqlspec.adapters.asyncpg.litestar.AsyncpgLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.asyncpg.events.AsyncpgEventsConfig
+   :members:
+   :show-inheritance:

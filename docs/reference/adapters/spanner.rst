@@ -115,3 +115,12 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.spanner.data_dictionary.SpannerDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these adapter-specific types inside ``extension_config["litestar"]``.
+
+.. autoclass:: sqlspec.adapters.spanner.litestar.SpannerLitestarConfig
+   :members:
+   :show-inheritance:

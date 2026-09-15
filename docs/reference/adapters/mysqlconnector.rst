@@ -78,3 +78,12 @@ Async Data Dictionary
 .. autoclass:: sqlspec.adapters.mysqlconnector.data_dictionary.MysqlConnectorAsyncDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these adapter-specific types inside ``extension_config["litestar"]``.
+
+.. autoclass:: sqlspec.adapters.mysqlconnector.litestar.MysqlConnectorLitestarConfig
+   :members:
+   :show-inheritance:

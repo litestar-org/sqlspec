@@ -51,3 +51,12 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.asyncmy.data_dictionary.AsyncmyDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these adapter-specific types inside ``extension_config["litestar"]``.
+
+.. autoclass:: sqlspec.adapters.asyncmy.litestar.AsyncmyLitestarConfig
+   :members:
+   :show-inheritance:
