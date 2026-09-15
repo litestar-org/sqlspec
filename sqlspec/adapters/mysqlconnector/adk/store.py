@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+import mysql.connector
 from typing_extensions import NotRequired
 
 from sqlspec.config import ADKConfig
@@ -218,7 +219,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        import mysql.connector
 
         try:
             async with self._config.provide_connection() as conn:
@@ -284,8 +284,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         sql, params = _session_list_query(
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
-
-        import mysql.connector
 
         try:
             async with self._config.provide_connection() as conn:
@@ -395,7 +393,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
-        import mysql.connector
 
         if limit == 0:
             return []
@@ -457,7 +454,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         )
 
     async def get_metadata(self, key: str) -> "str | None":
-        import mysql.connector
 
         sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
         try:
@@ -574,7 +570,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get session by ID."""
-        import mysql.connector
 
         try:
             with self._config.provide_connection() as conn:
@@ -641,8 +636,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         sql, params = _session_list_query(
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
-
-        import mysql.connector
 
         try:
             with self._config.provide_connection() as conn:
@@ -756,7 +749,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
         """Get events for a session."""
-        import mysql.connector
 
         if limit == 0:
             return []
@@ -824,7 +816,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        import mysql.connector
 
         sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
         try:
@@ -1406,7 +1397,6 @@ async def _async_delete_before(
     threshold: "datetime",
     app_name: "str | None" = None,
 ) -> int:
-    import mysql.connector
 
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
     params: list[Any] = [threshold]
@@ -1433,7 +1423,6 @@ async def _async_delete_before(
 async def _async_state(
     store: MysqlConnectorAsyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
-    import mysql.connector
 
     sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
     try:
@@ -1468,7 +1457,6 @@ def _sync_delete_before(
     threshold: "datetime",
     app_name: "str | None" = None,
 ) -> int:
-    import mysql.connector
 
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
     params: list[Any] = [threshold]
@@ -1495,7 +1483,6 @@ def _sync_delete_before(
 def _sync_state(
     store: MysqlConnectorSyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
-    import mysql.connector
 
     sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
     try:

@@ -66,6 +66,38 @@ def uuid_converter_out(value: bytes | None) -> "uuid.UUID | bytes | None":
         return value
 
 
+def uuid_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    """Public input type handler for UUID values."""
+    return _input_type_handler(cursor, value, arraysize)
+
+
+def uuid_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Public output type handler for RAW(16) UUID values."""
+    return _output_type_handler(cursor, metadata)
+
+
+def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
+    """Register UUID type handlers with chaining support.
+
+    Chains to existing type handlers to avoid conflicts.
+    Works for both sync and async connections.
+
+    Args:
+        connection: Oracle connection (sync or async).
+    """
+    try:
+        existing_input = connection.inputtypehandler
+    except AttributeError:
+        existing_input = None
+    try:
+        existing_output = connection.outputtypehandler
+    except AttributeError:
+        existing_output = None
+
+    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
+    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
+
+
 def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
     """Oracle input type handler for UUID objects.
 
@@ -101,35 +133,3 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
     if type_code is DB_TYPE_RAW and internal_size == UUID_BINARY_SIZE:
         return cursor.var(type_code, arraysize=cursor.arraysize, outconverter=uuid_converter_out)
     return None
-
-
-def uuid_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-    """Public input type handler for UUID values."""
-    return _input_type_handler(cursor, value, arraysize)
-
-
-def uuid_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-    """Public output type handler for RAW(16) UUID values."""
-    return _output_type_handler(cursor, metadata)
-
-
-def register_uuid_handlers(connection: "Connection | AsyncConnection") -> None:
-    """Register UUID type handlers with chaining support.
-
-    Chains to existing type handlers to avoid conflicts.
-    Works for both sync and async connections.
-
-    Args:
-        connection: Oracle connection (sync or async).
-    """
-    try:
-        existing_input = connection.inputtypehandler
-    except AttributeError:
-        existing_input = None
-    try:
-        existing_output = connection.outputtypehandler
-    except AttributeError:
-        existing_output = None
-
-    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
-    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)

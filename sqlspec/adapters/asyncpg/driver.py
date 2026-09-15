@@ -112,10 +112,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         self._data_dictionary: AsyncpgDataDictionary | None = None
         self._prepared_statements: OrderedDict[str, AsyncpgPreparedStatement] = OrderedDict()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def dispatch_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
@@ -212,10 +208,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         return None
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def begin(self) -> None:
         """Begin a database transaction."""
 
@@ -284,10 +276,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
@@ -297,10 +285,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -437,10 +421,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "AsyncpgDataDictionary":
         """Get the data dictionary for this driver.
@@ -451,10 +431,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AsyncpgDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: "AsyncpgConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncpg rows for the direct execution path."""

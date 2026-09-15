@@ -54,6 +54,224 @@ _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
 
 
+def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
+    """Collect DuckDB rows and column names.
+
+    Returns raw data without dict conversion. The row format is detected
+    by the driver and passed to ``create_execution_result`` so that
+    ``SQLResult`` can handle lazy dict materialisation.
+
+    Args:
+        fetched_data: Rows returned from cursor.fetchall().
+        description: Cursor description metadata.
+
+    Returns:
+        Tuple of (rows, column_names).
+    """
+    if not description:
+        return [], []
+    column_names = [col[0] for col in description]
+    if not fetched_data:
+        return [], column_names
+    return fetched_data, column_names
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build connection configuration for pool creation.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Dictionary with connection parameters.
+    """
+    pool_only_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "health_check_interval"}
+    connect_parameters: dict[str, Any] = {}
+    duckdb_config: dict[str, Any] = {}
+
+    nested_config = connection_config.get("config")
+    if isinstance(nested_config, dict):
+        duckdb_config.update({key: value for key, value in nested_config.items() if value is not None})
+
+    for key, value in connection_config.items():
+        if value is None or key in pool_only_keys or key in {"config", "extra"}:
+            continue
+        if key in {"database", "read_only"}:
+            connect_parameters[key] = value
+        else:
+            duckdb_config[key] = value
+
+    extra = connection_config.get("extra")
+    if isinstance(extra, dict):
+        duckdb_config.update({key: value for key, value in extra.items() if value is not None})
+
+    if duckdb_config:
+        connect_parameters["config"] = duckdb_config
+
+    return connect_parameters
+
+
+def normalize_execute_parameters(parameters: Any) -> Any:
+    """Normalize parameters for DuckDB execute calls.
+
+    Args:
+        parameters: Prepared parameters payload.
+
+    Returns:
+        Normalized parameters payload.
+    """
+    return parameters or ()
+
+
+def resolve_rowcount(cursor: Any) -> int:
+    """Resolve rowcount from DuckDB cursor results.
+
+    Args:
+        cursor: DuckDB cursor object.
+
+    Returns:
+        Rowcount value derived from cursor output.
+    """
+    try:
+        result = cursor.fetchone()
+        if result and isinstance(result, tuple) and len(result) == 1:
+            return int(result[0])
+    except Exception:
+        if has_rowcount(cursor):
+            return max(cursor.rowcount, 0)
+        return 0
+    return 0
+
+
+def build_profile() -> "DriverParameterProfile":
+    """Create the DuckDB driver parameter profile."""
+
+    return DriverParameterProfile(
+        name="DuckDB",
+        default_style=ParameterStyle.QMARK,
+        supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
+        default_execution_style=ParameterStyle.QMARK,
+        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
+        has_native_list_expansion=True,
+        preserve_parameter_format=True,
+        needs_static_script_compilation=False,
+        allow_mixed_parameter_styles=False,
+        preserve_original_params_for_many=False,
+        json_serializer_strategy="helper",
+        custom_type_coercions={
+            bool: _bool_to_int,
+            datetime: _TIME_TO_ISO,
+            date: _TIME_TO_ISO,
+            Decimal: _DECIMAL_TO_STRING,
+            **build_uuid_coercions(),
+        },
+        default_dialect="duckdb",
+    )
+
+
+def apply_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
+    """Apply DuckDB-specific driver features to statement configuration."""
+    features: dict[str, Any] = dict(driver_features) if driver_features else {}
+
+    param_config = statement_config.parameter_config
+    json_serializer = features.get("json_serializer")
+    if json_serializer:
+        param_config = param_config.with_json_serializers(
+            cast("Callable[[Any], str]", json_serializer), tuple_strategy="tuple"
+        )
+
+    if not features.get("enable_uuid_conversion", True):
+        type_coercion_map = dict(param_config.type_coercion_map)
+        for uuid_type in build_uuid_coercions():
+            type_coercion_map.pop(uuid_type, None)
+        param_config = param_config.replace(type_coercion_map=type_coercion_map)
+
+    if param_config is statement_config.parameter_config:
+        return statement_config, features
+    return statement_config.replace(parameter_config=param_config), features
+
+
+_EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
+_EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
+_CONSTRAINT_EXCEPTION_TYPE: type[BaseException] | None = None
+_TRANSACTION_EXCEPTION_TYPE: type[BaseException] | None = None
+
+
+def create_mapped_exception(error: "BaseException", *, logger: Any | None = None) -> SQLSpecError:
+    """Map DuckDB exceptions to SQLSpec exceptions.
+
+    This is a factory function that returns an exception instance rather than
+    raising. This pattern is more robust for use in __exit__ handlers and
+    avoids issues with exception control flow in different Python versions.
+
+    Mapping priority:
+        1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
+        2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
+        3. Type-name substring fallback (for environments without duckdb importable)
+        4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
+        5. Default SQLSpecError fallback
+
+    Args:
+        error: The DuckDB exception to map
+        logger: Optional logger accepted for adapter signature parity.
+
+    Returns:
+        A SQLSpec exception that wraps the original error
+    """
+    del logger
+    exc_type = type(error)
+    if _CONSTRAINT_EXCEPTION_TYPE is not None and isinstance(error, _CONSTRAINT_EXCEPTION_TYPE):
+        return _classify_duckdb_constraint(error)
+    if _TRANSACTION_EXCEPTION_TYPE is not None and isinstance(error, _TRANSACTION_EXCEPTION_TYPE):
+        return _map_transaction_exception(error)
+
+    mapped = _resolve_duckdb_exception_mapping(exc_type)
+    if mapped is not None:
+        error_class, description = mapped
+        return _create_duckdb_error(error, error_class, description)
+
+    exc_name = exc_type.__name__.lower()
+    if "constraintexception" in exc_name:
+        return _classify_duckdb_constraint(error)
+    if "transactionexception" in exc_name:
+        return _map_transaction_exception(error)
+    if "catalogexception" in exc_name:
+        return _create_duckdb_error(error, NotFoundError, "catalog error")
+    if "parserexception" in exc_name or "binderexception" in exc_name:
+        return _create_duckdb_error(error, SQLParsingError, "SQL parsing error")
+    if "permissionexception" in exc_name:
+        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
+    if "interruptexception" in exc_name:
+        return _create_duckdb_error(error, OperationCancelledError, "query interrupted")
+    if "ioexception" in exc_name:
+        return _create_duckdb_error(error, OperationalError, "operational error")
+    if "conversionexception" in exc_name:
+        return _create_duckdb_error(error, DataError, "data error")
+
+    error_msg = str(error).lower()
+    if "permission denied" in error_msg or "access denied" in error_msg:
+        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
+    if "interrupt" in error_msg or "cancel" in error_msg:
+        return _create_duckdb_error(error, OperationCancelledError, "query canceled")
+    if "type mismatch" in error_msg:
+        return _create_duckdb_error(error, DataError, "data error")
+    if "conflict on update" in error_msg:
+        return _create_duckdb_error(error, SerializationConflictError, "serialization conflict")
+
+    return _create_duckdb_error(error, SQLSpecError, "database error")
+
+
+def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
+    """Construct the DuckDB statement configuration with optional JSON serializer."""
+    serializer = json_serializer or to_json
+    profile = driver_profile
+    return build_statement_config_from_profile(
+        profile, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
+    )
+
+
 def _build_storage_copy_sql(sql: str, file_format: str) -> str | None:
     """Wrap one compiled query in COPY with a separately bound filename."""
     if file_format not in {"parquet", "csv"}:
@@ -337,145 +555,6 @@ def _azure_storage_options_match(options: "Mapping[str, Any]", native: "Mapping[
     )
 
 
-def collect_rows(fetched_data: "list[Any] | None", description: "list[Any] | None") -> "tuple[list[Any], list[str]]":
-    """Collect DuckDB rows and column names.
-
-    Returns raw data without dict conversion. The row format is detected
-    by the driver and passed to ``create_execution_result`` so that
-    ``SQLResult`` can handle lazy dict materialisation.
-
-    Args:
-        fetched_data: Rows returned from cursor.fetchall().
-        description: Cursor description metadata.
-
-    Returns:
-        Tuple of (rows, column_names).
-    """
-    if not description:
-        return [], []
-    column_names = [col[0] for col in description]
-    if not fetched_data:
-        return [], column_names
-    return fetched_data, column_names
-
-
-def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build connection configuration for pool creation.
-
-    Args:
-        connection_config: Raw connection configuration mapping.
-
-    Returns:
-        Dictionary with connection parameters.
-    """
-    pool_only_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "health_check_interval"}
-    connect_parameters: dict[str, Any] = {}
-    duckdb_config: dict[str, Any] = {}
-
-    nested_config = connection_config.get("config")
-    if isinstance(nested_config, dict):
-        duckdb_config.update({key: value for key, value in nested_config.items() if value is not None})
-
-    for key, value in connection_config.items():
-        if value is None or key in pool_only_keys or key in {"config", "extra"}:
-            continue
-        if key in {"database", "read_only"}:
-            connect_parameters[key] = value
-        else:
-            duckdb_config[key] = value
-
-    extra = connection_config.get("extra")
-    if isinstance(extra, dict):
-        duckdb_config.update({key: value for key, value in extra.items() if value is not None})
-
-    if duckdb_config:
-        connect_parameters["config"] = duckdb_config
-
-    return connect_parameters
-
-
-def normalize_execute_parameters(parameters: Any) -> Any:
-    """Normalize parameters for DuckDB execute calls.
-
-    Args:
-        parameters: Prepared parameters payload.
-
-    Returns:
-        Normalized parameters payload.
-    """
-    return parameters or ()
-
-
-def resolve_rowcount(cursor: Any) -> int:
-    """Resolve rowcount from DuckDB cursor results.
-
-    Args:
-        cursor: DuckDB cursor object.
-
-    Returns:
-        Rowcount value derived from cursor output.
-    """
-    try:
-        result = cursor.fetchone()
-        if result and isinstance(result, tuple) and len(result) == 1:
-            return int(result[0])
-    except Exception:
-        if has_rowcount(cursor):
-            return max(cursor.rowcount, 0)
-        return 0
-    return 0
-
-
-def build_profile() -> "DriverParameterProfile":
-    """Create the DuckDB driver parameter profile."""
-
-    return DriverParameterProfile(
-        name="DuckDB",
-        default_style=ParameterStyle.QMARK,
-        supported_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR},
-        default_execution_style=ParameterStyle.QMARK,
-        supported_execution_styles={ParameterStyle.QMARK, ParameterStyle.NUMERIC},
-        has_native_list_expansion=True,
-        preserve_parameter_format=True,
-        needs_static_script_compilation=False,
-        allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=False,
-        json_serializer_strategy="helper",
-        custom_type_coercions={
-            bool: _bool_to_int,
-            datetime: _TIME_TO_ISO,
-            date: _TIME_TO_ISO,
-            Decimal: _DECIMAL_TO_STRING,
-            **build_uuid_coercions(),
-        },
-        default_dialect="duckdb",
-    )
-
-
-def apply_driver_features(
-    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
-) -> "tuple[StatementConfig, dict[str, Any]]":
-    """Apply DuckDB-specific driver features to statement configuration."""
-    features: dict[str, Any] = dict(driver_features) if driver_features else {}
-
-    param_config = statement_config.parameter_config
-    json_serializer = features.get("json_serializer")
-    if json_serializer:
-        param_config = param_config.with_json_serializers(
-            cast("Callable[[Any], str]", json_serializer), tuple_strategy="tuple"
-        )
-
-    if not features.get("enable_uuid_conversion", True):
-        type_coercion_map = dict(param_config.type_coercion_map)
-        for uuid_type in build_uuid_coercions():
-            type_coercion_map.pop(uuid_type, None)
-        param_config = param_config.replace(type_coercion_map=type_coercion_map)
-
-    if param_config is statement_config.parameter_config:
-        return statement_config, features
-    return statement_config.replace(parameter_config=param_config), features
-
-
 def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
     """Create a SQLSpec exception from a DuckDB error.
 
@@ -491,12 +570,6 @@ def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], descriptio
     exc = error_class(msg)
     exc.__cause__ = error
     return exc
-
-
-_EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
-_EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
-_CONSTRAINT_EXCEPTION_TYPE: type[BaseException] | None = None
-_TRANSACTION_EXCEPTION_TYPE: type[BaseException] | None = None
 
 
 def _register_duckdb_exception_mappings() -> None:
@@ -569,82 +642,6 @@ def _map_transaction_exception(error: "BaseException") -> SQLSpecError:
     return _create_duckdb_error(error, OperationalError, "transaction error")
 
 
-_register_duckdb_exception_mappings()
-
-
-def create_mapped_exception(error: "BaseException", *, logger: Any | None = None) -> SQLSpecError:
-    """Map DuckDB exceptions to SQLSpec exceptions.
-
-    This is a factory function that returns an exception instance rather than
-    raising. This pattern is more robust for use in __exit__ handlers and
-    avoids issues with exception control flow in different Python versions.
-
-    Mapping priority:
-        1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
-        2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
-        3. Type-name substring fallback (for environments without duckdb importable)
-        4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
-        5. Default SQLSpecError fallback
-
-    Args:
-        error: The DuckDB exception to map
-        logger: Optional logger accepted for adapter signature parity.
-
-    Returns:
-        A SQLSpec exception that wraps the original error
-    """
-    del logger
-    exc_type = type(error)
-    if _CONSTRAINT_EXCEPTION_TYPE is not None and isinstance(error, _CONSTRAINT_EXCEPTION_TYPE):
-        return _classify_duckdb_constraint(error)
-    if _TRANSACTION_EXCEPTION_TYPE is not None and isinstance(error, _TRANSACTION_EXCEPTION_TYPE):
-        return _map_transaction_exception(error)
-
-    mapped = _resolve_duckdb_exception_mapping(exc_type)
-    if mapped is not None:
-        error_class, description = mapped
-        return _create_duckdb_error(error, error_class, description)
-
-    exc_name = exc_type.__name__.lower()
-    if "constraintexception" in exc_name:
-        return _classify_duckdb_constraint(error)
-    if "transactionexception" in exc_name:
-        return _map_transaction_exception(error)
-    if "catalogexception" in exc_name:
-        return _create_duckdb_error(error, NotFoundError, "catalog error")
-    if "parserexception" in exc_name or "binderexception" in exc_name:
-        return _create_duckdb_error(error, SQLParsingError, "SQL parsing error")
-    if "permissionexception" in exc_name:
-        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
-    if "interruptexception" in exc_name:
-        return _create_duckdb_error(error, OperationCancelledError, "query interrupted")
-    if "ioexception" in exc_name:
-        return _create_duckdb_error(error, OperationalError, "operational error")
-    if "conversionexception" in exc_name:
-        return _create_duckdb_error(error, DataError, "data error")
-
-    error_msg = str(error).lower()
-    if "permission denied" in error_msg or "access denied" in error_msg:
-        return _create_duckdb_error(error, PermissionDeniedError, "permission denied")
-    if "interrupt" in error_msg or "cancel" in error_msg:
-        return _create_duckdb_error(error, OperationCancelledError, "query canceled")
-    if "type mismatch" in error_msg:
-        return _create_duckdb_error(error, DataError, "data error")
-    if "conflict on update" in error_msg:
-        return _create_duckdb_error(error, SerializationConflictError, "serialization conflict")
-
-    return _create_duckdb_error(error, SQLSpecError, "database error")
-
-
-def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> StatementConfig:
-    """Construct the DuckDB statement configuration with optional JSON serializer."""
-    serializer = json_serializer or to_json
-    profile = driver_profile
-    return build_statement_config_from_profile(
-        profile, statement_overrides={"dialect": "duckdb"}, json_serializer=serializer
-    )
-
-
 def _bool_to_int(value: bool) -> int:
     return int(value)
 
@@ -704,6 +701,8 @@ def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] 
             if isinstance(value, str):
                 row[column] = uuid_from_string(value)
 
+
+_register_duckdb_exception_mappings()
 
 driver_profile = build_profile()
 

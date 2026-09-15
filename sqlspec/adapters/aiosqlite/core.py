@@ -355,7 +355,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
-    # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
     # SQLITE_BUSY means another process has the database locked
     # SQLITE_LOCKED means another connection has the table/rows locked
     if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":

@@ -349,10 +349,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
@@ -486,10 +482,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def begin(self) -> None:
         """Begin a database transaction.
@@ -630,10 +622,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleSyncExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -720,10 +708,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             arrow_schema=arrow_schema,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack using Oracle's pipeline when available."""
         if not isinstance(stack, StatementStack) or not stack:
@@ -739,10 +723,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             return super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -824,10 +804,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "OracledbSyncDataDictionary":
         """Get the data dictionary for this driver.
@@ -838,10 +814,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracledbSyncDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle sync rows for the direct execution path."""
@@ -1066,10 +1038,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
@@ -1205,10 +1173,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def begin(self) -> None:
         """Begin a database transaction.
@@ -1352,10 +1316,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleAsyncExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -1442,10 +1402,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             arrow_schema=arrow_schema,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
@@ -1463,10 +1419,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -1550,10 +1502,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "OracledbAsyncDataDictionary":
         """Get the data dictionary for this driver.
@@ -1564,10 +1512,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracledbAsyncDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle async rows for the direct execution path.

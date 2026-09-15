@@ -4,6 +4,8 @@ import contextlib
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from asyncmy.cursors import SSCursor
+
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
@@ -221,7 +223,6 @@ class AsyncmyStreamSource:
         self._driver._check_pending_exception(handler)
 
     async def _start(self) -> None:
-        from asyncmy.cursors import SSCursor
 
         cursor = self._driver.connection.cursor(SSCursor)
         self._cursor = cursor

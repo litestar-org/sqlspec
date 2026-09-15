@@ -157,28 +157,6 @@ class AsyncmySessionContext:
         return None
 
 
-class _AsyncmyLocalInfileResult(_AsyncmyResult):
-    """Normalize the upstream filename handoff while retaining its native sender."""
-
-    __slots__ = ("_filename",)
-
-    def __init__(self, connection: Any, filename: str) -> None:
-        super().__init__(connection)
-        self._filename = filename
-
-    async def _read_load_local_packet(self, first_packet: Any) -> None:
-        request = _LoadLocalPacketWrapper(first_packet).filename
-        if not self.connection._local_infile or os.fsdecode(request) != self._filename:
-            msg = "MySQL requested an unexpected LOCAL INFILE payload."
-            raise SQLSpecError(msg)
-        await _LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
-        packet = await self.connection.read_packet()
-        if not packet.is_ok_packet():
-            msg = "MySQL did not acknowledge the LOCAL INFILE payload."
-            raise SQLSpecError(msg)
-        self._read_ok_packet(packet)  # type: ignore[attr-defined]
-
-
 @contextlib.contextmanager
 def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Iterator[None]":
     """Scope the asyncmy 0.2.13/0.2.14 filename handoff fix to one native load.
@@ -224,3 +202,25 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
             del raw._read_query_result
         else:
             raw._read_query_result = previous
+
+
+class _AsyncmyLocalInfileResult(_AsyncmyResult):
+    """Normalize the upstream filename handoff while retaining its native sender."""
+
+    __slots__ = ("_filename",)
+
+    def __init__(self, connection: Any, filename: str) -> None:
+        super().__init__(connection)
+        self._filename = filename
+
+    async def _read_load_local_packet(self, first_packet: Any) -> None:
+        request = _LoadLocalPacketWrapper(first_packet).filename
+        if not self.connection._local_infile or os.fsdecode(request) != self._filename:
+            msg = "MySQL requested an unexpected LOCAL INFILE payload."
+            raise SQLSpecError(msg)
+        await _LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
+        packet = await self.connection.read_packet()
+        if not packet.is_ok_packet():
+            msg = "MySQL did not acknowledge the LOCAL INFILE payload."
+            raise SQLSpecError(msg)
+        self._read_ok_packet(packet)  # type: ignore[attr-defined]

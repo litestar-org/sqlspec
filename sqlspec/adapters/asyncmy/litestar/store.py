@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import asyncmy
+
 from sqlspec.adapters.asyncmy.core import resolve_rowcount
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -69,7 +71,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        import asyncmy
 
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -144,7 +145,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        import asyncmy
 
         sql = f"DELETE FROM {self._table_name}"
 
@@ -168,7 +168,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         Returns:
             True if the session exists and is not expired.
         """
-        import asyncmy
 
         sql = f"""
         SELECT 1 FROM {self._table_name}

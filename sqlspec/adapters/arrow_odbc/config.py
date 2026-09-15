@@ -72,18 +72,6 @@ class ArrowOdbcDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[[ArrowOdbcConnection], None]]"
 
 
-def _apply_json_serializer_override(statement_config: "StatementConfig", features: dict[str, Any]) -> "StatementConfig":
-    serializer = cast("Callable[[Any], str] | None", features.get("json_serializer"))
-    deserializer = cast("Callable[[str], Any] | None", features.get("json_deserializer"))
-    if serializer is to_json and deserializer is from_json:
-        return statement_config
-    return statement_config.replace(
-        parameter_config=statement_config.parameter_config.with_json_serializers(
-            serializer or to_json, deserializer=deserializer
-        )
-    )
-
-
 class ArrowOdbcConnectionContext(SyncPoolConnectionContext):
     """Context manager for arrow-odbc connections."""
 
@@ -238,6 +226,18 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return polling defaults suitable for generic ODBC sources."""
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
+
+
+def _apply_json_serializer_override(statement_config: "StatementConfig", features: dict[str, Any]) -> "StatementConfig":
+    serializer = cast("Callable[[Any], str] | None", features.get("json_serializer"))
+    deserializer = cast("Callable[[str], Any] | None", features.get("json_deserializer"))
+    if serializer is to_json and deserializer is from_json:
+        return statement_config
+    return statement_config.replace(
+        parameter_config=statement_config.parameter_config.with_json_serializers(
+            serializer or to_json, deserializer=deserializer
+        )
+    )
 
 
 def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:

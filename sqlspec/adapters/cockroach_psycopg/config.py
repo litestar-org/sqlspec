@@ -46,23 +46,6 @@ __all__ = (
 default_statement_config = build_statement_config()
 
 
-def _validate_driver_features(driver_features: "CockroachPsycopgDriverFeatures | dict[str, Any] | None") -> None:
-    if driver_features and "prefer_uuid_keys" in driver_features:
-        msg = "CockroachDB psycopg driver_features no longer supports unused 'prefer_uuid_keys'."
-        raise ImproperConfigurationError(msg)
-
-
-def _validate_native_storage_autocommit(connection_config: "dict[str, Any]", driver_features: "dict[str, Any]") -> None:
-    if not driver_features.get("enable_native_storage"):
-        return
-    autocommit = connection_config.get("autocommit")
-    if autocommit is None:
-        autocommit = connection_config.get("kwargs", {}).get("autocommit")
-    if autocommit is not True:
-        msg = "enable_native_storage requires connection_config autocommit=True."
-        raise ImproperConfigurationError(msg)
-
-
 class CockroachPsycopgConnectionConfig(TypedDict):
     """CockroachDB connection parameters."""
 
@@ -115,23 +98,6 @@ class _NativeStorageCSVOptions(TypedDict):
     nullas: NotRequired[str]
     nullif: NotRequired[str]
     skip: NotRequired[int]
-
-
-def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
-    if "native_storage_csv_options" not in driver_features:
-        return
-    options = driver_features["native_storage_csv_options"]
-    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
-        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
-        raise ImproperConfigurationError(msg)
-    for key in ("nullas", "nullif"):
-        if key in options and not isinstance(options[key], str):
-            msg = "native_storage_csv_options nullas and nullif must be strings."
-            raise ImproperConfigurationError(msg)
-    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
-        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
-        raise ImproperConfigurationError(msg)
-    driver_features["native_storage_csv_options"] = dict(options)
 
 
 class CockroachPsycopgDriverFeatures(TypedDict):
@@ -261,8 +227,6 @@ class CockroachPsycopgSyncConfig(
         _validate_native_storage_options(driver_features)
         _validate_native_storage_autocommit(connection_config, driver_features)
         driver_features.setdefault("enable_auto_retry", True)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[CockroachSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
@@ -476,8 +440,6 @@ class CockroachPsycopgAsyncConfig(
         _validate_native_storage_options(driver_features)
         _validate_native_storage_autocommit(connection_config, driver_features)
         driver_features.setdefault("enable_auto_retry", True)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[CockroachAsyncConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -600,3 +562,37 @@ class CockroachPsycopgAsyncConfig(
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+
+def _validate_driver_features(driver_features: "CockroachPsycopgDriverFeatures | dict[str, Any] | None") -> None:
+    if driver_features and "prefer_uuid_keys" in driver_features:
+        msg = "CockroachDB psycopg driver_features no longer supports unused 'prefer_uuid_keys'."
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_native_storage_autocommit(connection_config: "dict[str, Any]", driver_features: "dict[str, Any]") -> None:
+    if not driver_features.get("enable_native_storage"):
+        return
+    autocommit = connection_config.get("autocommit")
+    if autocommit is None:
+        autocommit = connection_config.get("kwargs", {}).get("autocommit")
+    if autocommit is not True:
+        msg = "enable_native_storage requires connection_config autocommit=True."
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
+    if "native_storage_csv_options" not in driver_features:
+        return
+    options = driver_features["native_storage_csv_options"]
+    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
+        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
+        raise ImproperConfigurationError(msg)
+    for key in ("nullas", "nullif"):
+        if key in options and not isinstance(options[key], str):
+            msg = "native_storage_csv_options nullas and nullif must be strings."
+            raise ImproperConfigurationError(msg)
+    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
+        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
+        raise ImproperConfigurationError(msg)
+    driver_features["native_storage_csv_options"] = dict(options)

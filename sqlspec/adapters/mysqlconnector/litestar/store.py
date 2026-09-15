@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import mysql.connector
+
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -42,7 +44,6 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        import mysql.connector
 
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -121,7 +122,6 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             await conn.commit()
 
     async def delete_all(self) -> None:
-        import mysql.connector
 
         sql = f"DELETE FROM {self._table_name}"
 
@@ -141,7 +141,6 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             raise
 
     async def exists(self, key: str) -> bool:
-        import mysql.connector
 
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -290,7 +289,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        import mysql.connector
 
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -369,7 +367,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             conn.commit()
 
     def _delete_all(self) -> None:
-        import mysql.connector
 
         sql = f"DELETE FROM {self._table_name}"
 
@@ -389,7 +386,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             raise
 
     def _exists(self, key: str) -> bool:
-        import mysql.connector
 
         sql = f"""
         SELECT 1 FROM {self._table_name}

@@ -91,20 +91,6 @@ class MssqlPythonPoolParams(MssqlPythonConnectionParams):
     pool_enabled: NotRequired[bool]
 
 
-def _apply_json_serializer_override(statement_config: Any, features_dict: dict[str, Any]) -> Any:
-    serializer = cast("Callable[[Any], str] | None", features_dict.get("json_serializer"))
-    deserializer = cast("Callable[[str], Any] | None", features_dict.get("json_deserializer"))
-    if statement_config is not default_statement_config:
-        return statement_config
-    if serializer is to_json and deserializer is from_json:
-        return statement_config
-    return statement_config.replace(
-        parameter_config=statement_config.parameter_config.with_json_serializers(
-            serializer or to_json, deserializer=deserializer
-        )
-    )
-
-
 class MssqlPythonDriverFeatures(TypedDict):
     """mssql-python driver feature flags."""
 
@@ -240,6 +226,20 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
             self.connection_instance.close()
+
+
+def _apply_json_serializer_override(statement_config: Any, features_dict: dict[str, Any]) -> Any:
+    serializer = cast("Callable[[Any], str] | None", features_dict.get("json_serializer"))
+    deserializer = cast("Callable[[str], Any] | None", features_dict.get("json_deserializer"))
+    if statement_config is not default_statement_config:
+        return statement_config
+    if serializer is to_json and deserializer is from_json:
+        return statement_config
+    return statement_config.replace(
+        parameter_config=statement_config.parameter_config.with_json_serializers(
+            serializer or to_json, deserializer=deserializer
+        )
+    )
 
 
 def _create_mssql_python_pool(

@@ -726,7 +726,7 @@ class AiosqliteConnectionPool:
             if connection.idle_since is not None:
                 idle_time = time.time() - connection.idle_since
                 if idle_time <= self._health_check_interval and connection.is_healthy:
-                    connection.idle_since = None  # mark_as_in_use inline
+                    connection.idle_since = None
                     return connection
             # Fall back to full health check for older connections
             if await self._claim_if_healthy(connection):
@@ -788,7 +788,7 @@ class AiosqliteConnectionPool:
             if _has_active_transaction(connection.connection):
                 with suppress(Exception):
                     await connection.connection.rollback()
-            connection.idle_since = time.time()  # mark_as_idle inline
+            connection.idle_since = time.time()
             self._queue.put_nowait(connection)
         except Exception as e:
             log_with_context(

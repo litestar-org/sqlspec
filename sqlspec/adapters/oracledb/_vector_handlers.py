@@ -114,6 +114,29 @@ def numpy_converter_out(value: "array.array[Any]") -> Any:
     return np.array(value, copy=True, dtype=value.typecode)
 
 
+def numpy_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    """Public input type handler for vector payloads."""
+    return _input_type_handler(cursor, value, arraysize)
+
+
+def numpy_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Public output type handler for VECTOR columns."""
+    return _output_type_handler(cursor, metadata)
+
+
+def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
+    """Register vector type handlers on an Oracle connection.
+
+    Enables automatic conversion between Python sequence types and Oracle
+    VECTOR columns. Works for both sync and async connections.
+
+    Args:
+        connection: Oracle connection (sync or async).
+    """
+    connection.inputtypehandler = numpy_input_type_handler
+    connection.outputtypehandler = numpy_output_type_handler
+
+
 def _is_vector_payload(value: Any) -> bool:
     """Return True if the value should be claimed by the vector input handler.
 
@@ -215,26 +238,3 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
 
     msg = f"Invalid vector_return_format: {fmt!r}; expected one of {sorted(_VECTOR_RETURN_FORMATS)}"
     raise ValueError(msg)
-
-
-def numpy_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-    """Public input type handler for vector payloads."""
-    return _input_type_handler(cursor, value, arraysize)
-
-
-def numpy_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-    """Public output type handler for VECTOR columns."""
-    return _output_type_handler(cursor, metadata)
-
-
-def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
-    """Register vector type handlers on an Oracle connection.
-
-    Enables automatic conversion between Python sequence types and Oracle
-    VECTOR columns. Works for both sync and async connections.
-
-    Args:
-        connection: Oracle connection (sync or async).
-    """
-    connection.inputtypehandler = numpy_input_type_handler
-    connection.outputtypehandler = numpy_output_type_handler

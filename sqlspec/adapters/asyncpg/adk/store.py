@@ -687,8 +687,6 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         if not query and embedding is None:
             return []
 
-        from typing import cast
-
         limit_value = limit or self._max_results
         if scope_filter == "all":
             where_scope = "app_name = $1 AND ((scope = 'user' AND user_id = $2) OR scope = 'app')"
