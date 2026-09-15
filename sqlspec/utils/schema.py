@@ -52,11 +52,6 @@ _NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = Non
 _NULLABLE_UNION_ARGUMENT_COUNT: Final = 2
 
 
-# =============================================================================
-# Dict Key Transformation
-# =============================================================================
-
-
 def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]) -> dict | list | Any:
     """Transform dictionary keys using the provided converter function.
 
@@ -77,6 +72,118 @@ def transform_dict_keys(data: dict | list | Any, converter: Callable[[str], str]
     if isinstance(data, list):
         return _transform_list(data, converter)
     return data
+
+
+@overload
+def to_schema(data: "list[DataT]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
+@overload
+def to_schema(data: "list[DataT]", *, schema_type: None = None) -> "list[DataT]": ...
+@overload
+def to_schema(data: "DataT", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
+@overload
+def to_schema(data: "DataT", *, schema_type: None = None) -> "DataT": ...
+
+
+def to_schema(data: Any, *, schema_type: Any = None) -> Any:
+    """Convert data to a specified schema type.
+
+    Supports transformation to various schema types including:
+        - TypedDict
+        - dataclasses
+        - msgspec Structs
+        - Pydantic models
+        - attrs classes
+
+    Args:
+        data: Input data to convert (dict, list of dicts, or other)
+        schema_type: Target schema type for conversion. If None, returns data unchanged.
+
+    Returns:
+        Converted data in the specified schema type, or original data if schema_type is None
+
+    Raises:
+        SQLSpecError: If schema_type is not a supported type
+    """
+    if schema_type is None:
+        return data
+
+    conv = _get_schema_converter(schema_type)
+    if conv is None:
+        msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
+        raise SQLSpecError(msg)
+
+    return conv(data, schema_type)
+
+
+def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
+    """Convert a database value to the specified Python type.
+
+    This function handles type conversion for common database return values,
+    providing runtime type safety for scalar queries. When the value is already
+    the correct type, it is returned as-is without conversion overhead. Strict
+    type identity check handles subclass gotchas (bool is subclass of int,
+    datetime is subclass of date).
+
+    Also supports schema types (Pydantic models, dataclasses, msgspec Structs,
+    attrs classes, and TypedDict). For schema types, JSON strings are automatically
+    parsed before conversion.
+
+    Args:
+        value: The value to convert.
+        value_type: The target Python type. Supported types include:
+
+            - Primitives: int, float, str, bool
+            - Temporal: datetime, date, time
+            - Numeric: Decimal
+            - Identifiers: UUID, Path
+            - Collections: dict, list (for JSON/JSONB columns)
+            - Schema types: Pydantic models, dataclasses, msgspec Structs,
+              attrs classes, TypedDict (for JSONB columns)
+
+    Returns:
+        The converted value of the specified type.
+
+    Raises:
+        TypeError: If the value cannot be converted to the specified type.
+    """
+    if type(value) is value_type:
+        return value
+
+    if value_type is int:
+        return cast("ValueT", _convert_to_int(value))
+    if value_type is str:
+        return cast("ValueT", str(value))
+    if value_type is float:
+        return cast("ValueT", _convert_to_float(value))
+    if value_type is bool:
+        return cast("ValueT", _convert_to_bool(value))
+    if value_type is datetime.datetime:
+        return cast("ValueT", _convert_to_datetime(value))
+    if value_type is datetime.date:
+        return cast("ValueT", _convert_to_date(value))
+    if value_type is datetime.time:
+        return cast("ValueT", _convert_to_time(value))
+    if value_type is Decimal:
+        return cast("ValueT", _convert_to_decimal(value))
+    if value_type is UUID:
+        return cast("ValueT", _convert_to_uuid(value))
+    if value_type is Path:
+        return cast("ValueT", _convert_to_path(value))
+    if value_type is dict:
+        return cast("ValueT", _convert_to_dict(value))
+    if value_type is list:
+        return cast("ValueT", _convert_to_list(value))
+
+    schema_converter = _get_schema_converter(value_type)
+    if schema_converter is not None:
+        parsed = _ensure_json_parsed(value)
+        return cast("ValueT", schema_converter(parsed, value_type))
+
+    try:
+        return value_type(value)  # type: ignore[call-arg]
+    except (TypeError, ValueError) as e:
+        msg = f"Cannot convert {type(value).__name__} to {value_type.__name__}"
+        raise TypeError(msg) from e
 
 
 def _safe_convert_key(key: Any, converter: Callable[[str], str]) -> Any:
@@ -129,52 +236,6 @@ def _transform_list(data: list, converter: Callable[[str], str]) -> list:
         List with recursively transformed elements.
     """
     return [transform_dict_keys(item, converter) for item in data]
-
-
-# =============================================================================
-# Schema Type Detection
-# =============================================================================
-
-
-@overload
-def to_schema(data: "list[DataT]", *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
-@overload
-def to_schema(data: "list[DataT]", *, schema_type: None = None) -> "list[DataT]": ...
-@overload
-def to_schema(data: "DataT", *, schema_type: "type[SchemaT]") -> "SchemaT": ...
-@overload
-def to_schema(data: "DataT", *, schema_type: None = None) -> "DataT": ...
-
-
-def to_schema(data: Any, *, schema_type: Any = None) -> Any:
-    """Convert data to a specified schema type.
-
-    Supports transformation to various schema types including:
-        - TypedDict
-        - dataclasses
-        - msgspec Structs
-        - Pydantic models
-        - attrs classes
-
-    Args:
-        data: Input data to convert (dict, list of dicts, or other)
-        schema_type: Target schema type for conversion. If None, returns data unchanged.
-
-    Returns:
-        Converted data in the specified schema type, or original data if schema_type is None
-
-    Raises:
-        SQLSpecError: If schema_type is not a supported type
-    """
-    if schema_type is None:
-        return data
-
-    conv = _get_schema_converter(schema_type)
-    if conv is None:
-        msg = "`schema_type` should be a valid Dataclass, Pydantic model, Msgspec struct, Attrs class, or TypedDict"
-        raise SQLSpecError(msg)
-
-    return conv(data, schema_type)
 
 
 def _is_list_type_target(target_type: Any) -> "TypeGuard[list[object]]":
@@ -561,82 +622,6 @@ def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | Non
             conv = None
         _SCHEMA_CONVERTER_CACHE[schema_type] = conv  # pyright: ignore[reportArgumentType]
         return conv
-
-
-# =============================================================================
-# Scalar Type Conversion
-# =============================================================================
-
-
-def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
-    """Convert a database value to the specified Python type.
-
-    This function handles type conversion for common database return values,
-    providing runtime type safety for scalar queries. When the value is already
-    the correct type, it is returned as-is without conversion overhead. Strict
-    type identity check handles subclass gotchas (bool is subclass of int,
-    datetime is subclass of date).
-
-    Also supports schema types (Pydantic models, dataclasses, msgspec Structs,
-    attrs classes, and TypedDict). For schema types, JSON strings are automatically
-    parsed before conversion.
-
-    Args:
-        value: The value to convert.
-        value_type: The target Python type. Supported types include:
-
-            - Primitives: int, float, str, bool
-            - Temporal: datetime, date, time
-            - Numeric: Decimal
-            - Identifiers: UUID, Path
-            - Collections: dict, list (for JSON/JSONB columns)
-            - Schema types: Pydantic models, dataclasses, msgspec Structs,
-              attrs classes, TypedDict (for JSONB columns)
-
-    Returns:
-        The converted value of the specified type.
-
-    Raises:
-        TypeError: If the value cannot be converted to the specified type.
-    """
-    if type(value) is value_type:
-        return value
-
-    if value_type is int:
-        return cast("ValueT", _convert_to_int(value))
-    if value_type is str:
-        return cast("ValueT", str(value))
-    if value_type is float:
-        return cast("ValueT", _convert_to_float(value))
-    if value_type is bool:
-        return cast("ValueT", _convert_to_bool(value))
-    if value_type is datetime.datetime:
-        return cast("ValueT", _convert_to_datetime(value))
-    if value_type is datetime.date:
-        return cast("ValueT", _convert_to_date(value))
-    if value_type is datetime.time:
-        return cast("ValueT", _convert_to_time(value))
-    if value_type is Decimal:
-        return cast("ValueT", _convert_to_decimal(value))
-    if value_type is UUID:
-        return cast("ValueT", _convert_to_uuid(value))
-    if value_type is Path:
-        return cast("ValueT", _convert_to_path(value))
-    if value_type is dict:
-        return cast("ValueT", _convert_to_dict(value))
-    if value_type is list:
-        return cast("ValueT", _convert_to_list(value))
-
-    schema_converter = _get_schema_converter(value_type)
-    if schema_converter is not None:
-        parsed = _ensure_json_parsed(value)
-        return cast("ValueT", schema_converter(parsed, value_type))
-
-    try:
-        return value_type(value)  # type: ignore[call-arg]
-    except (TypeError, ValueError) as e:
-        msg = f"Cannot convert {type(value).__name__} to {value_type.__name__}"
-        raise TypeError(msg) from e
 
 
 def _ensure_json_parsed(value: Any) -> Any:
