@@ -16,11 +16,10 @@ v0.63.1 - Base class interpreted subclassing and slotscheck compatibility
 
 * Add ``native_class=False`` to ``@mypyc_attr(allow_interpreted_subclasses=True)`` decorators across
   service classes (:class:`~sqlspec.service.SQLSpecAsyncService`, :class:`~sqlspec.service.SQLSpecSyncService`),
-  core filters (:class:`~sqlspec.core.filters.StatementFilter`), driver connection contexts and session factories
-  (:class:`~sqlspec.driver.AsyncPoolConnectionContext`, :class:`~sqlspec.driver.AsyncPoolSessionFactory`,
-  :class:`~sqlspec.driver.SyncPoolConnectionContext`, :class:`~sqlspec.driver.SyncPoolSessionFactory`),
-  exception handlers (:class:`~sqlspec.driver.BaseAsyncExceptionHandler`, :class:`~sqlspec.driver.BaseSyncExceptionHandler`),
-  and data dictionary bases (:class:`~sqlspec.driver.AsyncDataDictionaryBase`, :class:`~sqlspec.driver.SyncDataDictionaryBase`).
+  driver connection contexts and session factories (:class:`~sqlspec.driver.AsyncPoolConnectionContext`,
+  :class:`~sqlspec.driver.AsyncPoolSessionFactory`, :class:`~sqlspec.driver.SyncPoolConnectionContext`,
+  :class:`~sqlspec.driver.SyncPoolSessionFactory`), and exception handlers
+  (:class:`~sqlspec.driver.BaseAsyncExceptionHandler`, :class:`~sqlspec.driver.BaseSyncExceptionHandler`).
   This allows downstream applications and framework adapters to define interpreted subclasses and dynamic attributes
   across the compiled C boundary without native type memory layout restrictions.
 
