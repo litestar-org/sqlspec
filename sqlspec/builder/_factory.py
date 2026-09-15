@@ -154,34 +154,6 @@ class SQLFactory:
 
     __slots__ = ("dialect",)
 
-    @staticmethod
-    def _detect_type_from_expression(parsed_expr: exp.Expr) -> str:
-        if parsed_expr.key:
-            return parsed_expr.key.upper()
-        command_type = type(parsed_expr).__name__.upper()
-        if command_type == "COMMAND" and parsed_expr.this:
-            return str(parsed_expr.this).upper()
-        return command_type
-
-    @staticmethod
-    def _parse_sql_expression(sql: str, dialect: DialectType | None) -> "exp.Expr | None":
-        try:
-            return sqlglot.parse_one(sql, read=dialect)
-        except SQLGlotParseError:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Failed to parse SQL for type detection",
-                    extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
-                )
-        except (ValueError, TypeError, AttributeError):
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Unexpected error during SQL type detection",
-                    exc_info=True,
-                    extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
-                )
-        return None
-
     def __init__(self, dialect: DialectType = None) -> None:
         """Initialize the SQL factory.
 
@@ -619,81 +591,6 @@ class SQLFactory:
 
         target_value = cast("str", target)
         return self.copy_to(table, target_value, columns=columns, options=options, dialect=dialect)
-
-    @staticmethod
-    def _looks_like_sql(candidate: str, expected_type: str | None = None) -> bool:
-        """Determine if a string looks like SQL.
-
-        Args:
-            candidate: String to check
-            expected_type: Expected SQL statement type (SELECT, INSERT, etc.)
-
-        Returns:
-            True if the string appears to be SQL
-        """
-        if not candidate or len(candidate.strip()) < MIN_SQL_LIKE_STRING_LENGTH:
-            return False
-
-        candidate_upper = candidate.strip().upper()
-
-        if expected_type:
-            return candidate_upper.startswith(expected_type.upper())
-
-        if any(candidate_upper.startswith(starter) for starter in SQL_STARTERS):
-            return " " in candidate
-
-        return False
-
-    def _populate_builder_from_sql(
-        self, builder: BuilderT, sql_string: str, expected_type: type[exp.Expr], parsed_expr: "exp.Expr | None" = None
-    ) -> BuilderT:
-        """Parse SQL string and populate a builder using SQLGlot directly."""
-        builder_name = expected_type.__name__.lower()
-        try:
-            if parsed_expr is None:
-                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
-
-            if expected_type is exp.Select and isinstance(parsed_expr, exp.With):
-                base_expression = parsed_expr.this
-                if isinstance(builder, Select) and isinstance(base_expression, exp.Select):
-                    builder.set_expression(base_expression)
-                    builder.load_ctes(list(parsed_expr.expressions))
-                    return builder
-
-            if isinstance(parsed_expr, expected_type):
-                builder.set_expression(parsed_expr)
-                return builder
-
-            if expected_type is exp.Insert and isinstance(parsed_expr, exp.Select):
-                logger.debug(
-                    "Detected SELECT statement for INSERT; builder requires explicit target table",
-                    extra={"builder": "insert"},
-                )
-                return builder
-
-            logger.debug(
-                "Cannot create %s from parsed statement type",
-                builder_name.upper(),
-                extra={"builder": builder_name, "parsed_type": type(parsed_expr).__name__},
-            )
-
-        except Exception:
-            logger.debug(
-                "Failed to parse %s SQL; falling back to traditional mode",
-                builder_name.upper(),
-                exc_info=True,
-                extra={"builder": builder_name},
-            )
-        return builder
-
-    def _detect_or_raise(
-        self, sql_string: str, dialect: DialectType, expected_types: set[str], error_message: str
-    ) -> exp.Expr | None:
-        parsed_expr = self._parse_sql_expression(sql_string, dialect)
-        detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
-        if detected not in expected_types:
-            raise SQLBuilderError(error_message.format(detected=detected, detected_lower=detected.lower()))
-        return parsed_expr
 
     def column(self, name: str, table: str | None = None) -> Column:
         """Create a column reference.
@@ -1483,6 +1380,109 @@ class SQLFactory:
         if default is not None:
             func_args.append(exp.convert(default))
         return self._create_window_function("LEAD", func_args, partition_by, order_by)
+
+    @staticmethod
+    def _detect_type_from_expression(parsed_expr: exp.Expr) -> str:
+        if parsed_expr.key:
+            return parsed_expr.key.upper()
+        command_type = type(parsed_expr).__name__.upper()
+        if command_type == "COMMAND" and parsed_expr.this:
+            return str(parsed_expr.this).upper()
+        return command_type
+
+    @staticmethod
+    def _parse_sql_expression(sql: str, dialect: DialectType | None) -> "exp.Expr | None":
+        try:
+            return sqlglot.parse_one(sql, read=dialect)
+        except SQLGlotParseError:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Failed to parse SQL for type detection",
+                    extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
+                )
+        except (ValueError, TypeError, AttributeError):
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Unexpected error during SQL type detection",
+                    exc_info=True,
+                    extra={"sql_length": len(sql), "sql_hash": _fingerprint_sql(sql)},
+                )
+        return None
+
+    @staticmethod
+    def _looks_like_sql(candidate: str, expected_type: str | None = None) -> bool:
+        """Determine if a string looks like SQL.
+
+        Args:
+            candidate: String to check
+            expected_type: Expected SQL statement type (SELECT, INSERT, etc.)
+
+        Returns:
+            True if the string appears to be SQL
+        """
+        if not candidate or len(candidate.strip()) < MIN_SQL_LIKE_STRING_LENGTH:
+            return False
+
+        candidate_upper = candidate.strip().upper()
+
+        if expected_type:
+            return candidate_upper.startswith(expected_type.upper())
+
+        if any(candidate_upper.startswith(starter) for starter in SQL_STARTERS):
+            return " " in candidate
+
+        return False
+
+    def _populate_builder_from_sql(
+        self, builder: BuilderT, sql_string: str, expected_type: type[exp.Expr], parsed_expr: "exp.Expr | None" = None
+    ) -> BuilderT:
+        """Parse SQL string and populate a builder using SQLGlot directly."""
+        builder_name = expected_type.__name__.lower()
+        try:
+            if parsed_expr is None:
+                parsed_expr = exp.maybe_parse(sql_string, dialect=self.dialect)
+
+            if expected_type is exp.Select and isinstance(parsed_expr, exp.With):
+                base_expression = parsed_expr.this
+                if isinstance(builder, Select) and isinstance(base_expression, exp.Select):
+                    builder.set_expression(base_expression)
+                    builder.load_ctes(list(parsed_expr.expressions))
+                    return builder
+
+            if isinstance(parsed_expr, expected_type):
+                builder.set_expression(parsed_expr)
+                return builder
+
+            if expected_type is exp.Insert and isinstance(parsed_expr, exp.Select):
+                logger.debug(
+                    "Detected SELECT statement for INSERT; builder requires explicit target table",
+                    extra={"builder": "insert"},
+                )
+                return builder
+
+            logger.debug(
+                "Cannot create %s from parsed statement type",
+                builder_name.upper(),
+                extra={"builder": builder_name, "parsed_type": type(parsed_expr).__name__},
+            )
+
+        except Exception:
+            logger.debug(
+                "Failed to parse %s SQL; falling back to traditional mode",
+                builder_name.upper(),
+                exc_info=True,
+                extra={"builder": builder_name},
+            )
+        return builder
+
+    def _detect_or_raise(
+        self, sql_string: str, dialect: DialectType, expected_types: set[str], error_message: str
+    ) -> exp.Expr | None:
+        parsed_expr = self._parse_sql_expression(sql_string, dialect)
+        detected = "COMMAND" if parsed_expr is None else self._detect_type_from_expression(parsed_expr)
+        if detected not in expected_types:
+            raise SQLBuilderError(error_message.format(detected=detected, detected_lower=detected.lower()))
+        return parsed_expr
 
     @staticmethod
     def _create_window_function(
