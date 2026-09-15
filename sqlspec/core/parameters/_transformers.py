@@ -34,6 +34,113 @@ __all__ = (
 _MISSING_PARAMETER: Final = object()
 
 
+def build_null_pruning_transform(
+    *, dialect: str = "postgres"
+) -> "Callable[[Any, ParameterPayload, ParameterProfile, bool], tuple[Any, ConvertedParameters]]":
+    """Return a callable that prunes NULL placeholders from an expression."""
+    return _NullPruningTransform(dialect)
+
+
+def build_literal_inlining_transform(
+    *, json_serializer: "Callable[[Any], str]"
+) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, object]]":
+    """Return a callable that replaces placeholders with SQL literals."""
+    return _LiteralInliningTransform(json_serializer)
+
+
+def replace_null_parameters_with_literals(
+    expression: Any,
+    parameters: "ParameterPayload",
+    *,
+    dialect: str = "postgres",
+    parameter_profile: "ParameterProfile | None" = None,
+    is_many: bool = False,
+) -> "tuple[Any, ConvertedParameters]":
+    """Rewrite placeholders representing ``NULL`` values and prune parameters.
+
+    Args:
+        expression: SQLGlot expression tree to transform.
+        parameters: Parameter payload provided by the caller.
+        dialect: SQLGlot dialect for serializing the expression.
+        parameter_profile: Parameter profile to reuse for validation.
+        is_many: Whether the payload is a batch of parameter sets.
+
+    Returns:
+        Tuple containing the transformed expression and updated parameters.
+    """
+    if not parameters:
+        if parameters is None:
+            return expression, None
+        if isinstance(parameters, dict):
+            return expression, parameters
+        if isinstance(parameters, (list, tuple)):
+            return expression, _as_concrete_payload(parameters)
+        return expression, None
+
+    if is_many:
+        if isinstance(parameters, (dict, list, tuple)):
+            return expression, _as_concrete_payload(parameters)
+        return expression, None
+
+    if parameter_profile is None:
+        msg = "replace_null_parameters_with_literals() requires parameter_profile for non-empty parameters"
+        raise sqlspec.exceptions.SQLSpecError(msg)
+    validate_parameter_alignment(parameter_profile, parameters, is_many=is_many)
+
+    null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
+    if not null_positions:
+        return expression, _as_concrete_payload(parameters)
+
+    null_names: set[str] = set()
+    positional_null_positions: set[int] = set()
+    for parameter in parameter_profile.parameters:
+        if parameter.ordinal not in null_positions:
+            continue
+        if parameter.style in _NAMED_STYLES and parameter.name:
+            null_names.add(parameter.name)
+        if parameter.style in _POSITIONAL_STYLES:
+            positional_null_positions.add(parameter.ordinal)
+
+    sorted_null_positions = sorted(positional_null_positions)
+
+    transformer = _NullPlaceholderTransformer(positional_null_positions, sorted_null_positions, null_names)
+    transformed_expression = expression.transform(transformer)
+
+    cleaned_parameters: ConvertedParameters
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+        cleaned_list = [value for index, value in enumerate(parameters) if index not in null_positions]
+        cleaned_parameters = tuple(cleaned_list) if isinstance(parameters, tuple) else cleaned_list
+    elif isinstance(parameters, Mapping):
+        cleaned_dict: dict[str, Any] = {}
+        next_numeric_index = 1
+
+        for key, value in parameters.items():
+            if value is None:
+                continue
+            key_kind, normalized_key = normalize_parameter_key(key)
+            if key_kind == "index" and isinstance(normalized_key, int):
+                cleaned_dict[str(next_numeric_index)] = value
+                next_numeric_index += 1
+            else:
+                cleaned_dict[str(normalized_key)] = value
+        cleaned_parameters = cleaned_dict
+    else:
+        cleaned_parameters = None
+
+    return transformed_expression, cleaned_parameters
+
+
+def replace_placeholders_with_literals(
+    expression: Any, parameters: "ParameterPayload", *, json_serializer: "Callable[[Any], str]"
+) -> Any:
+    """Replace placeholders in an expression tree with literal values."""
+    if not parameters:
+        return expression
+
+    transformer = _PlaceholderLiteralTransformer(parameters, json_serializer)
+    return expression.transform(transformer)
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class _NullPruningTransform:
     __slots__ = ("_dialect",)
@@ -127,16 +234,6 @@ class _PlaceholderLiteralTransformer:
         self._is_mapping = isinstance(parameters, Mapping)
         self._is_sequence = isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray))
 
-    def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object:
-        candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
-        for candidate in candidate_names:
-            if candidate in payload:
-                return cast("object", get_value_attribute(payload[candidate]))
-        normalized = param_name.lstrip("@:$")
-        if normalized in payload:
-            return cast("object", get_value_attribute(payload[normalized]))
-        return _MISSING_PARAMETER
-
     def __call__(self, node: Any) -> Any:
         parameters = self._parameters
         if isinstance(node, _exp.Placeholder) and self._is_sequence:
@@ -177,19 +274,15 @@ class _PlaceholderLiteralTransformer:
 
         return node
 
-
-def build_null_pruning_transform(
-    *, dialect: str = "postgres"
-) -> "Callable[[Any, ParameterPayload, ParameterProfile, bool], tuple[Any, ConvertedParameters]]":
-    """Return a callable that prunes NULL placeholders from an expression."""
-    return _NullPruningTransform(dialect)
-
-
-def build_literal_inlining_transform(
-    *, json_serializer: "Callable[[Any], str]"
-) -> "Callable[[Any, ParameterPayload, ParameterProfile], tuple[Any, object]]":
-    """Return a callable that replaces placeholders with SQL literals."""
-    return _LiteralInliningTransform(json_serializer)
+    def _resolve_mapping_value(self, param_name: str, payload: "ParameterMapping") -> object:
+        candidate_names = (param_name, f"@{param_name}", f":{param_name}", f"${param_name}", f"param_{param_name}")
+        for candidate in candidate_names:
+            if candidate in payload:
+                return cast("object", get_value_attribute(payload[candidate]))
+        normalized = param_name.lstrip("@:$")
+        if normalized in payload:
+            return cast("object", get_value_attribute(payload[normalized]))
+        return _MISSING_PARAMETER
 
 
 def _as_concrete_payload(parameters: "ParameterPayload") -> "ConvertedParameters":
@@ -204,88 +297,6 @@ def _as_concrete_payload(parameters: "ParameterPayload") -> "ConvertedParameters
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
         return list(parameters)
     return None
-
-
-def replace_null_parameters_with_literals(
-    expression: Any,
-    parameters: "ParameterPayload",
-    *,
-    dialect: str = "postgres",
-    parameter_profile: "ParameterProfile | None" = None,
-    is_many: bool = False,
-) -> "tuple[Any, ConvertedParameters]":
-    """Rewrite placeholders representing ``NULL`` values and prune parameters.
-
-    Args:
-        expression: SQLGlot expression tree to transform.
-        parameters: Parameter payload provided by the caller.
-        dialect: SQLGlot dialect for serializing the expression.
-        parameter_profile: Parameter profile to reuse for validation.
-        is_many: Whether the payload is a batch of parameter sets.
-
-    Returns:
-        Tuple containing the transformed expression and updated parameters.
-    """
-    if not parameters:
-        if parameters is None:
-            return expression, None
-        if isinstance(parameters, dict):
-            return expression, parameters
-        if isinstance(parameters, (list, tuple)):
-            return expression, _as_concrete_payload(parameters)
-        return expression, None
-
-    if is_many:
-        if isinstance(parameters, (dict, list, tuple)):
-            return expression, _as_concrete_payload(parameters)
-        return expression, None
-
-    if parameter_profile is None:
-        msg = "replace_null_parameters_with_literals() requires parameter_profile for non-empty parameters"
-        raise sqlspec.exceptions.SQLSpecError(msg)
-    validate_parameter_alignment(parameter_profile, parameters, is_many=is_many)
-
-    null_positions = collect_null_parameter_ordinals(parameters, parameter_profile)
-    if not null_positions:
-        return expression, _as_concrete_payload(parameters)
-
-    null_names: set[str] = set()
-    positional_null_positions: set[int] = set()
-    for parameter in parameter_profile.parameters:
-        if parameter.ordinal not in null_positions:
-            continue
-        if parameter.style in _NAMED_STYLES and parameter.name:
-            null_names.add(parameter.name)
-        if parameter.style in _POSITIONAL_STYLES:
-            positional_null_positions.add(parameter.ordinal)
-
-    sorted_null_positions = sorted(positional_null_positions)
-
-    transformer = _NullPlaceholderTransformer(positional_null_positions, sorted_null_positions, null_names)
-    transformed_expression = expression.transform(transformer)
-
-    cleaned_parameters: ConvertedParameters
-    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
-        cleaned_list = [value for index, value in enumerate(parameters) if index not in null_positions]
-        cleaned_parameters = tuple(cleaned_list) if isinstance(parameters, tuple) else cleaned_list
-    elif isinstance(parameters, Mapping):
-        cleaned_dict: dict[str, Any] = {}
-        next_numeric_index = 1
-
-        for key, value in parameters.items():
-            if value is None:
-                continue
-            key_kind, normalized_key = normalize_parameter_key(key)
-            if key_kind == "index" and isinstance(normalized_key, int):
-                cleaned_dict[str(next_numeric_index)] = value
-                next_numeric_index += 1
-            else:
-                cleaned_dict[str(normalized_key)] = value
-        cleaned_parameters = cleaned_dict
-    else:
-        cleaned_parameters = None
-
-    return transformed_expression, cleaned_parameters
 
 
 def _create_literal_expression(value: Any, json_serializer: "Callable[[Any], str]") -> Any:
@@ -305,14 +316,3 @@ def _create_literal_expression(value: Any, json_serializer: "Callable[[Any], str
         json_value = json_serializer(value)
         return _exp.Literal.string(json_value)
     return _exp.Literal.string(str(value))
-
-
-def replace_placeholders_with_literals(
-    expression: Any, parameters: "ParameterPayload", *, json_serializer: "Callable[[Any], str]"
-) -> Any:
-    """Replace placeholders in an expression tree with literal values."""
-    if not parameters:
-        return expression
-
-    transformer = _PlaceholderLiteralTransformer(parameters, json_serializer)
-    return expression.transform(transformer)
