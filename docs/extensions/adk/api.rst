@@ -210,6 +210,18 @@ Configuration
    :show-inheritance:
    :no-index:
 
+Use these types to set up search on PostgreSQL:
+
+.. autoclass:: sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: sqlspec.adapters.psycopg.adk.PsycopgADKConfig
+   :members:
+   :show-inheritance:
+   :no-index:
+
 Session Converters
 ==================
 

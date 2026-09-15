@@ -6,6 +6,44 @@ Pub/sub event channel system with database-backed queue support. Provides
 both sync and async channels with listener management and native backend
 integration for databases that support LISTEN/NOTIFY.
 
+Adapter-specific configuration
+==============================
+
+Use ``sqlspec.config.EventsConfig`` for shared queue and transport settings.
+Storage tuning belongs to the adapter's exported Events configuration type,
+inside the same ``extension_config["events"]`` dictionary:
+
+.. code-block:: python
+
+   from sqlspec.adapters.asyncpg import AsyncpgConfig
+   from sqlspec.adapters.asyncpg.events import AsyncpgEventsConfig
+
+   events = AsyncpgEventsConfig(
+       backend="notify_queue",
+       fillfactor=80,
+       listener_queue_capacity=256,
+   )
+   config = AsyncpgConfig(extension_config={"events": events})
+
+``AsyncpgEventsConfig`` and ``PsycopgEventsConfig`` support PostgreSQL storage
+tuning and native listener capacity. ``PsqlpyEventsConfig`` supports the storage
+tuning fields; its listener does not consume ``listener_queue_capacity``.
+``AiosqliteEventsConfig`` and ``SqliteEventsConfig`` expose the SQLite PRAGMA
+profile and overrides. Import each from its adapter's ``events`` package.
+
+``BigQueryEventsConfig.partitioning`` is a boolean switch for partitioning by
+``DATE(available_at)``; partition expiration and required-filter settings also
+enable partitioning. ``OracleEventsConfig`` instead accepts structured
+``OracleEventsPartitionConfig`` and ``OracleEventsCompressionConfig`` values,
+along with Oracle storage and AQ options. Oracle visibility accepts a native
+integer or an available ``AQMSG_VISIBLE``/``AQMSG_INVISIBLE`` name.
+
+Stores and channels reject settings the selected adapter cannot consume,
+including native notification and AQ channels. Ordinary dictionaries remain
+supported. ``run_migrations`` is not an Events setting: automatic additive
+reconciliation uses ``manage_schema`` and ``create_schema``; execute versioned
+migrations explicitly through the migration commands.
+
 Transport selection
 ===================
 

@@ -7,7 +7,9 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from psycopg.rows import dict_row
+from typing_extensions import NotRequired
 
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -15,7 +17,23 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 
 
-__all__ = ("PsycopgAsyncStore", "PsycopgSyncStore")
+__all__ = ("PsycopgAsyncStore", "PsycopgLitestarConfig", "PsycopgSyncStore")
+
+
+class PsycopgLitestarConfig(LitestarConfig):
+    """Psycopg-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    fillfactor: NotRequired[int]
+    """Table fillfactor. Default: 80."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Table autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Table autovacuum analyze scale factor."""
 
 
 class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):

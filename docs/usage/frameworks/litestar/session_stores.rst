@@ -69,6 +69,14 @@ the schema settings. SQLSpec validates that mapping for the selected adapter.
 Unknown keys and options from another database family raise
 ``ImproperConfigurationError`` instead of being silently ignored.
 
+For typed settings, use a type from the adapter's ``litestar`` package, such as
+``AsyncpgLitestarConfig`` or ``SqliteLitestarConfig``. Each type adds the table
+options that the adapter can use to the shared ``LitestarConfig`` fields.
+You can still pass a plain dict. Sync and async stores share the same type.
+Oracle provides ``OracleLitestarCompressionConfig`` and
+``OracleLitestarPartitionConfig`` for its nested settings; BigQuery's
+``partitioning`` setting is a boolean switch.
+
 The available options are:
 
 * PostgreSQL (``asyncpg``, ``psycopg``, and ``psqlpy``): ``fillfactor``,
@@ -99,15 +107,16 @@ the application:
 .. code-block:: python
 
    from sqlspec.adapters.sqlite import SqliteConfig
+   from sqlspec.adapters.sqlite.litestar import SqliteLitestarConfig
+
+   session_settings: SqliteLitestarConfig = {
+       "pragma_profile": True,
+       "pragma_overrides": {"busy_timeout": 10_000},
+   }
 
    config = SqliteConfig(
        connection_config={"database": "sessions.db"},
-       extension_config={
-           "litestar": {
-               "pragma_profile": True,
-               "pragma_overrides": {"busy_timeout": 10_000},
-           }
-       },
+       extension_config={"litestar": session_settings},
    )
 
 Session Expiry

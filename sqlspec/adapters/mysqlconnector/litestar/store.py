@@ -4,7 +4,9 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import mysql.connector
+from typing_extensions import NotRequired
 
+from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -13,12 +15,25 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
 
-__all__ = ("MysqlConnectorAsyncStore", "MysqlConnectorSyncStore")
+__all__ = ("MysqlConnectorAsyncStore", "MysqlConnectorLitestarConfig", "MysqlConnectorSyncStore")
 
 logger = get_logger("sqlspec.adapters.mysqlconnector.litestar.store")
 
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+
+
+class MysqlConnectorLitestarConfig(LitestarConfig):
+    """MysqlConnector-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    table_options: NotRequired[str]
+    """Table DDL options."""
+
+    index_options: NotRequired[str]
+    """Index DDL options."""
 
 
 class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):

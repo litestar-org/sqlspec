@@ -6,10 +6,11 @@ from typing import get_args, get_type_hints
 
 import pytest
 
+from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import EventsConfig
 from sqlspec.exceptions import ImproperConfigurationError
-from sqlspec.extensions.events import SyncEventChannel
+from sqlspec.extensions.events import AsyncEventChannel
 
 
 def test_events_backend_literal_uses_canonical_transport_names() -> None:
@@ -23,17 +24,16 @@ def test_events_backend_literal_uses_canonical_transport_names() -> None:
 
 
 @pytest.mark.parametrize("capacity", [True, False, 0, -1, 1.5, "1", []])
-def test_listener_queue_capacity_rejects_non_positive_integers(tmp_path: Path, capacity: object) -> None:
-    config = SqliteConfig(
-        connection_config={"database": str(tmp_path / "events-capacity.db")},
-        extension_config={"events": {"listener_queue_capacity": capacity}},  # type: ignore[typeddict-item]
+def test_listener_queue_capacity_rejects_non_positive_integers(capacity: object) -> None:
+    config = AsyncpgConfig(
+        extension_config={"events": {"listener_queue_capacity": capacity}}  # type: ignore[typeddict-item]
     )
 
     with pytest.raises(ImproperConfigurationError, match="listener_queue_capacity must be a positive integer"):
-        SyncEventChannel(config)
+        AsyncEventChannel(config)
 
 
-def test_listener_queue_capacity_is_accepted_by_poll_queue_store(tmp_path: Path) -> None:
+def test_listener_queue_capacity_is_rejected_by_sqlite_store(tmp_path: Path) -> None:
     from sqlspec.adapters.sqlite.events.store import SqliteEventQueueStore
 
     config = SqliteConfig(
@@ -41,7 +41,8 @@ def test_listener_queue_capacity_is_accepted_by_poll_queue_store(tmp_path: Path)
         extension_config={"events": {"listener_queue_capacity": 4}},
     )
 
-    assert SqliteEventQueueStore(config).settings["listener_queue_capacity"] == 4
+    with pytest.raises(ImproperConfigurationError, match=r"Unsupported events configuration.*listener_queue_capacity"):
+        SqliteEventQueueStore(config)
 
 
 _POSTGRES_DRIVER_FEATURES = (

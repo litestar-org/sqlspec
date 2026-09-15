@@ -1,15 +1,34 @@
 """CockroachDB session store for Litestar integration using asyncpg."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
 if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_asyncpg.config import CockroachAsyncpgConfig
 
 
-__all__ = ("CockroachAsyncpgStore",)
+__all__ = ("CockroachAsyncpgLitestarConfig", "CockroachAsyncpgStore")
+
+
+class CockroachAsyncpgLitestarConfig(LitestarConfig):
+    """CockroachAsyncpg-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    enable_hash_sharded_indexes: NotRequired[bool]
+    """Enable hash-sharded session indexes."""
+
+    hash_shard_bucket_count: NotRequired[int]
+    """Number of hash index buckets."""
+
+    ttl_expiration_expression: NotRequired[Literal[False, "expires_at"]]
+    """Enable row-level TTL using expires_at, or disable it with False."""
 
 
 class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):

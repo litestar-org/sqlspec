@@ -416,54 +416,6 @@ class LitestarConfig(TypedDict):
     create_schema: NotRequired[bool]
     """Create a missing session table during managed reconciliation. Default: True."""
 
-    run_migrations: NotRequired[bool]
-    """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
-
-    in_memory: NotRequired[bool]
-    """Enable Oracle Database In-Memory storage when licensed and available."""
-
-    shard_count: NotRequired[int]
-    """Set the Spanner session-table hash shard count."""
-
-    table_options: NotRequired[str]
-    """Set adapter-specific session-table options where supported."""
-
-    index_options: NotRequired[str]
-    """Set adapter-specific session expiry-index options where supported."""
-
-    partitioning: NotRequired[dict[str, Any]]
-    """Configure adapter-specific session-table partitioning where supported."""
-
-    partition_expiration_days: NotRequired[int]
-    """Set BigQuery partition expiration in days."""
-
-    require_partition_filter: NotRequired[bool]
-    """Require partition filters for BigQuery session queries."""
-
-    enable_hash_sharded_indexes: NotRequired[bool]
-    """Enable CockroachDB hash-sharded session indexes."""
-
-    hash_shard_bucket_count: NotRequired[int]
-    """Set the CockroachDB hash-shard bucket count."""
-
-    ttl_expiration_expression: NotRequired[Literal[False, "expires_at"]]
-    """Enable CockroachDB row-level TTL using the session ``expires_at`` column."""
-
-    fillfactor: NotRequired[int]
-    """Set PostgreSQL-family session-table fillfactor. Default: 80."""
-
-    autovacuum_vacuum_scale_factor: NotRequired[float]
-    """Set the PostgreSQL-family autovacuum vacuum scale factor."""
-
-    autovacuum_analyze_scale_factor: NotRequired[float]
-    """Set the PostgreSQL-family autovacuum analyze scale factor."""
-
-    pragma_profile: NotRequired[bool]
-    """Apply the SQLite extension-store PRAGMA profile. Default: False."""
-
-    pragma_overrides: NotRequired[dict[str, str | int | bool]]
-    """Apply validated SQLite PRAGMA overrides after the optional profile."""
-
 
 class StarletteConfig(TypedDict):
     """Configuration options for Starlette SQLSpec extension.
@@ -605,9 +557,6 @@ class ADKConfig(TypedDict):
     create_schema: NotRequired[bool]
     """Create missing ADK tables during managed reconciliation. Default: True."""
 
-    run_migrations: NotRequired[bool]
-    """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
-
     enable_sessions: NotRequired[bool]
     """Enable the session store at runtime and in packaged migrations. Default: True.
 
@@ -695,21 +644,6 @@ class ADKConfig(TypedDict):
         - Plain columns without FK (just extra column storage)
     """
 
-    vector_index_type: NotRequired[Literal["hnsw", "ivfflat", "scann"]]
-    """Vector index algorithm for memory embeddings ('hnsw', 'ivfflat', 'scann'). Default: 'hnsw'."""
-
-    vector_dimensions: NotRequired[int]
-    """Dimensionality of embedding vectors (e.g. 768 for gemini-embedding-001 with MRL). Default: 768."""
-
-    enable_bm25: NotRequired[bool]
-    """Enable native BM25 full-text indexing. Requires the pg_textsearch extension. Default: False."""
-
-    scann_num_leaves: NotRequired[int]
-    """Number of partition leaves (clusters) for ScaNN tree quantization. Default: 100."""
-
-    scann_quantizer: NotRequired[str]
-    """Quantization method for ScaNN index ('SQ8', 'FP32'). Default: 'SQ8'."""
-
 
 class EventsConfig(TypedDict):
     """Configuration options for the events extension.
@@ -729,9 +663,6 @@ class EventsConfig(TypedDict):
 
     create_schema: NotRequired[bool]
     """Create the queue table during managed reconciliation. Default: True."""
-
-    run_migrations: NotRequired[bool]
-    """Run packaged versioned migrations when an integration supplies a runner. Default: False."""
 
     backend: NotRequired[Literal["notify", "notify_queue", "poll_queue", "aq", "txeventq"]]
     """Backend implementation. PostgreSQL adapters default to 'notify', others to 'poll_queue'.
@@ -758,45 +689,11 @@ class EventsConfig(TypedDict):
     event_poll_interval: NotRequired[float]
     """Durable event reconciliation interval in seconds. Takes precedence over poll_interval."""
 
-    listener_queue_capacity: NotRequired[int]
-    """Maximum pending notifications per PostgreSQL listener consumer. Defaults to unbounded."""
-
     select_for_update: NotRequired[bool]
     """Use SELECT FOR UPDATE locking when claiming events. Defaults to False."""
 
     skip_locked: NotRequired[bool]
     """Use SKIP LOCKED for non-blocking event claims. Defaults to False."""
-
-    in_memory: NotRequired[bool]
-    """Enable Oracle INMEMORY storage for the queue table when available.
-
-    Note: To skip events migrations, use
-    ``migration_config={"exclude_extensions": ["events"]}``.
-    """
-
-    partitioning: NotRequired[dict[str, Any]]
-    """Configure adapter-specific queue-table partitioning where supported."""
-
-    partition_expiration_days: NotRequired[int]
-    """Set BigQuery queue partition expiration in days."""
-
-    require_partition_filter: NotRequired[bool]
-    """Require partition filters for BigQuery queue queries."""
-
-    fillfactor: NotRequired[int]
-    """Set PostgreSQL-family queue-table fillfactor."""
-
-    autovacuum_vacuum_scale_factor: NotRequired[float]
-    """Set the PostgreSQL-family queue-table autovacuum vacuum scale factor."""
-
-    autovacuum_analyze_scale_factor: NotRequired[float]
-    """Set the PostgreSQL-family queue-table autovacuum analyze scale factor."""
-
-    pragma_profile: NotRequired[bool]
-    """Apply the SQLite extension-store PRAGMA profile. Default: False."""
-
-    pragma_overrides: NotRequired[dict[str, str | int | bool]]
-    """Apply validated SQLite PRAGMA overrides after the optional profile."""
 
 
 class OpenTelemetryConfig(TypedDict):

@@ -12,10 +12,26 @@ Configuration:
     }
 """
 
+from typing_extensions import NotRequired
+
 from sqlspec.adapters.bigquery.config import BigQueryConfig
+from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("BigQueryEventQueueStore",)
+__all__ = ("BigQueryEventQueueStore", "BigQueryEventsConfig")
+
+
+class BigQueryEventsConfig(EventsConfig):
+    """BigQuery events settings for queue storage and supported native transports."""
+
+    partitioning: NotRequired[bool]
+    """Enable BigQuery DATE(available_at) partitioning. Default: False."""
+
+    partition_expiration_days: NotRequired[int]
+    """BigQuery partition retention in days; setting it also enables partitioning."""
+
+    require_partition_filter: NotRequired[bool]
+    """Require a BigQuery partition filter; also enables partitioning. Default: False."""
 
 
 class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):

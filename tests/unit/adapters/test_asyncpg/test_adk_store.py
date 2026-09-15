@@ -1,14 +1,14 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for asyncpg ADK store extension configuration."""
 
-from typing import Any, cast, get_args, get_origin
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired, Self
+from typing_extensions import Self
 
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKConfig, AsyncpgADKMemoryStore, AsyncpgADKStore
-from sqlspec.config import ADKConfig
+from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -18,22 +18,18 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
     return config
 
 
-def test_asyncpg_adk_config_types_adapter_local_optimizations() -> None:
-    """Asyncpg ADK optimizations are typed on the adapter-local extension config."""
+async def test_asyncpg_typed_memory_tuning_reaches_schema() -> None:
+    settings = AsyncpgADKConfig(
+        vector_index_type="scann", vector_dimensions=256, enable_bm25=True, scann_num_leaves=32, scann_quantizer="FP32"
+    )
+    config = AsyncpgConfig(extension_config={"adk": settings})
+    store = AsyncpgADKMemoryStore(config)
 
-    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", AsyncpgADKConfig).__optional_keys__
-    assert cast("Any", AsyncpgADKConfig).__optional_keys__ - cast("Any", ADKConfig).__optional_keys__ == {
-        "autovacuum_analyze_scale_factor",
-        "autovacuum_vacuum_scale_factor",
-        "enable_event_generated_columns",
-        "enable_covering_indexes",
-        "fillfactor",
-    }
+    ddl = await store._memory_table_ddl()
 
-    for feature_name in ("enable_event_generated_columns", "enable_covering_indexes"):
-        annotation = cast("Any", AsyncpgADKConfig.__annotations__[feature_name])
-        assert get_origin(annotation) is NotRequired
-        assert get_args(annotation) == (bool,)
+    assert "embedding VECTOR(256)" in ddl
+    assert "USING bm25 (content_text)" in ddl
+    assert "USING scann (embedding) WITH (num_leaves = 32, quantizer = 'FP32')" in ddl
 
 
 async def test_asyncpg_adk_events_table_uses_plain_schema_by_default() -> None:

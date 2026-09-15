@@ -46,15 +46,14 @@ Control this behavior under ``extension_config["adk"]``:
            "adk": {
                "manage_schema": True,
                "create_schema": True,
-               "run_migrations": False,
            }
        },
    )
 
 ``manage_schema=False`` turns off all automatic table changes.
 ``create_schema=False`` lets the store add columns to current tables. It will
-not create a missing table. ``run_migrations`` is for tools that supply a
-versioned migration runner. That work stays separate from automatic checks.
+not create a missing table. Run versioned migrations through the migration
+commands and ``migration_config``; automatic checks do not run them.
 
 For a release that only adds columns, update the adapter store DDL. You do not
 need a schema seed or a numbered migration. Write a migration for renamed or

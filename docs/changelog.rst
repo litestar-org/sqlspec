@@ -9,6 +9,20 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+----------
+
+**Changed:**
+
+* Use the types in each adapter's Litestar and Events package to tune its tables.
+  Shared settings stay in ``sqlspec.config``. The ``extension_config`` layout stays
+  the same. ADK vector, BM25, and ScaNN keys move to the asyncpg and psycopg ADK types.
+  BigQuery uses a boolean for ``partitioning``; Oracle uses a mapping.
+* Extension stores and event channels reject keys they cannot use. Remove the unused
+  ``run_migrations`` key from extension settings. Run migrations with the commands
+  and ``migration_config``. The Events ``listener_queue_capacity`` key is for
+  asyncpg and psycopg.
+
 v0.63.1 - Slotted service subclass compatibility
 ------------------------------------------------
 
@@ -886,8 +900,8 @@ v0.56.0
 * New ``SchemaTarget`` and ``SchemaEnsureResult`` types plus sync and async
   schema checks can create missing tables and add columns. Use
   ``ensure_schema_sync()`` or ``ensure_schema_async()`` for each driver mode.
-  ADK, Litestar session, and durable event stores expose ``manage_schema``,
-  ``create_schema``, and ``run_migrations`` controls for this lifecycle.
+  Stores use ``manage_schema`` and ``create_schema`` for these checks.
+  Run migrations as a separate step.
 * Oracle ADK, durable event, and Litestar session tables now share opt-in
   compression, partitioning, In-Memory, and table-option configuration.
 * BigQuery session and queue partition options and CockroachDB session hash

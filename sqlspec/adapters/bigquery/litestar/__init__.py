@@ -1,5 +1,5 @@
 """BigQuery Litestar integration."""
 
-from sqlspec.adapters.bigquery.litestar.store import BigQueryStore
+from sqlspec.adapters.bigquery.litestar.store import BigQueryLitestarConfig, BigQueryStore
 
-__all__ = ("BigQueryStore",)
+__all__ = ("BigQueryLitestarConfig", "BigQueryStore")

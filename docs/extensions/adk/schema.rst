@@ -427,6 +427,11 @@ Table and Extension Configuration
 
 All table names and extension settings are configured through ``extension_config["adk"]``:
 
+``sqlspec.config.ADKConfig`` describes shared settings. Use
+``sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig`` or
+``sqlspec.adapters.psycopg.adk.PsycopgADKConfig`` when typing PostgreSQL vector,
+BM25, or ScaNN options. These options are rejected by other adapters.
+
 .. code-block:: python
 
    config = AsyncpgConfig(

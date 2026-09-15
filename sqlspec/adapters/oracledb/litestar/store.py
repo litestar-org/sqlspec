@@ -1,9 +1,12 @@
 """Oracle session store for Litestar integration."""
 
 from datetime import timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
+
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 from sqlspec.utils.type_guards import is_async_readable, is_readable
@@ -11,10 +14,70 @@ from sqlspec.utils.type_guards import is_async_readable, is_readable
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 
-__all__ = ("OracleAsyncStore", "OracleSyncStore")
+__all__ = (
+    "OracleAsyncStore",
+    "OracleLitestarCompressionConfig",
+    "OracleLitestarConfig",
+    "OracleLitestarPartitionConfig",
+    "OracleSyncStore",
+)
 
 
 ORACLE_SMALL_BLOB_LIMIT = 32000
+
+
+class OracleLitestarCompressionConfig(TypedDict):
+    """Oracle session table compression settings."""
+
+    enabled: NotRequired[bool]
+    """Enable table compression."""
+
+    algorithm: NotRequired[str]
+    """Oracle compression algorithm key."""
+
+
+class OracleLitestarPartitionConfig(TypedDict):
+    """Oracle session table partition settings."""
+
+    strategy: NotRequired[str]
+    """Partition strategy: hash or range."""
+
+    partition_count: NotRequired[int]
+    """Hash partition count."""
+
+    partitions: NotRequired[int]
+    """Alternative name for partition_count."""
+
+    interval: NotRequired[str]
+    """Range partition interval key."""
+
+    initial_less_than: NotRequired[str]
+    """Initial range partition upper bound expression."""
+
+    partition_key: NotRequired[str]
+    """Partition key column."""
+
+    session_partition_key: NotRequired[str]
+    """Session-specific partition key override."""
+
+
+class OracleLitestarConfig(LitestarConfig):
+    """Oracle-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    in_memory: NotRequired[bool]
+    """Enable Oracle INMEMORY table storage."""
+
+    compression: NotRequired[OracleLitestarCompressionConfig]
+    """Session table compression settings."""
+
+    partitioning: NotRequired[OracleLitestarPartitionConfig]
+    """Session table partition settings."""
+
+    table_options: NotRequired[str]
+    """Additional session table DDL options."""
 
 
 class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):

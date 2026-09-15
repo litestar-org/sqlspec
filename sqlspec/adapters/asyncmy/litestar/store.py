@@ -4,8 +4,10 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import asyncmy
+from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncmy.core import resolve_rowcount
+from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -13,12 +15,25 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 
-__all__ = ("AsyncmyStore",)
+__all__ = ("AsyncmyLitestarConfig", "AsyncmyStore")
 
 logger = get_logger("sqlspec.adapters.asyncmy.litestar.store")
 
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+
+
+class AsyncmyLitestarConfig(LitestarConfig):
+    """Asyncmy-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    table_options: NotRequired[str]
+    """Table DDL options."""
+
+    index_options: NotRequired[str]
+    """Index DDL options."""
 
 
 class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
