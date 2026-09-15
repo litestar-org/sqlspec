@@ -73,9 +73,9 @@ For typed settings, use a type from the adapter's ``litestar`` package, such as
 ``AsyncpgLitestarConfig`` or ``SqliteLitestarConfig``. Each type adds the table
 options that the adapter can use to the shared ``LitestarConfig`` fields.
 You can still pass a plain dict. Sync and async stores share the same type.
-Oracle provides ``OracleLitestarCompressionConfig`` and
-``OracleLitestarPartitionConfig`` for its nested settings; BigQuery's
-``partitioning`` setting is a boolean switch.
+For Oracle, use ``OracleLitestarCompressionConfig`` and
+``OracleLitestarPartitionConfig`` to type each map. For BigQuery, set
+``partitioning`` to ``True`` or ``False``.
 
 The available options are:
 
