@@ -9,19 +9,23 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.63.1 - Base class interpreted subclassing and slotscheck compatibility
--------------------------------------------------------------------------
+v0.63.1 - Slotted service subclass compatibility
+-----------------------------------------------
 
 **Fixed:**
 
-* Add ``native_class=False`` to ``@mypyc_attr(allow_interpreted_subclasses=True)`` decorators across
-  service classes (:class:`~sqlspec.service.SQLSpecAsyncService`, :class:`~sqlspec.service.SQLSpecSyncService`),
-  driver connection contexts and session factories (:class:`~sqlspec.driver.AsyncPoolConnectionContext`,
-  :class:`~sqlspec.driver.AsyncPoolSessionFactory`, :class:`~sqlspec.driver.SyncPoolConnectionContext`,
-  :class:`~sqlspec.driver.SyncPoolSessionFactory`), and exception handlers
-  (:class:`~sqlspec.driver.BaseAsyncExceptionHandler`, :class:`~sqlspec.driver.BaseSyncExceptionHandler`).
-  This allows downstream applications and framework adapters to define interpreted subclasses and dynamic attributes
-  across the compiled C boundary without native type memory layout restrictions.
+* Keep :class:`~sqlspec.service.SQLSpecAsyncService` and :class:`~sqlspec.service.SQLSpecSyncService`
+  as ordinary slotted Python classes in compiled wheels. Application subclasses preserve generic typing
+  and ``__slots__`` without downstream slotscheck exclusions. Query execution and transaction management
+  remain mypyc-compiled in a private runtime module.
+
+**Changed:**
+
+* Expand compiled-wheel smoke checks to cover multi-level, slotted subclasses of
+  :class:`~sqlspec.service.SQLSpecAsyncService` and :class:`~sqlspec.service.SQLSpecSyncService`,
+  including inherited queries, transaction contexts, overridden session acquisition, and queries inside
+  a caller's exception handler.
+* Update slotscheck and the Codecov action pin.
 
 v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
 ---------------------------------------------------------------------------------------------------

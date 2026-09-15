@@ -71,7 +71,7 @@ _AsyncResultT = TypeVar("_AsyncResultT")
 _AsyncDriverT = TypeVar("_AsyncDriverT", bound="AsyncDriverAdapterBase")
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncPoolConnectionContext:
     """Base async connection context using pool acquire/release pattern.
 
@@ -103,7 +103,7 @@ class AsyncPoolConnectionContext:
         return None
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AsyncPoolSessionFactory:
     """Base async session factory using pool acquire/release pattern.
 

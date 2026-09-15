@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from sqlspec import sql
+from sqlspec._service import _TRANSACTIONS
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.duckdb import DuckDBConfig
@@ -20,7 +21,7 @@ from sqlspec.adapters.mysqlconnector import MysqlConnectorAsyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError, SQLSpecError
 from sqlspec.loader import SQLFileLoader
-from sqlspec.service import _TRANSACTIONS, SQLSpecAsyncService, SQLSpecSyncService
+from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 pytestmark = pytest.mark.anyio
 

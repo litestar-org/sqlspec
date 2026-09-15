@@ -80,7 +80,7 @@ async def _run_with_async_exception_handler(
     return None
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BaseAsyncExceptionHandler:
     """Base async exception handler using the deferred exception pattern."""
 
@@ -114,7 +114,7 @@ class BaseAsyncExceptionHandler:
         return False
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+@mypyc_attr(allow_interpreted_subclasses=True)
 class BaseSyncExceptionHandler:
     """Base sync exception handler using the deferred exception pattern."""
 

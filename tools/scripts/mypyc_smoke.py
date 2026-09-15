@@ -633,6 +633,144 @@ def _check_adapter_config_construction() -> dict[str, Any]:
     return result
 
 
+def _check_service_subclasses(*, require_compiled: bool = False) -> dict[str, Any]:
+    """Exercise Python service subclasses against the compiled query and transaction runtime."""
+    result = _new_smoke_result(
+        name="service_subclasses", module="sqlspec._service", attribute=None, compiled_required=require_compiled
+    )
+    try:
+        service_module = importlib.import_module("sqlspec._service")
+        importlib.import_module("aiosqlite")
+    except ModuleNotFoundError as exc:
+        if _is_missing_optional_dependency(exc.name or "", "aiosqlite"):
+            result["skipped"] = True
+            result["skip_reason"] = "optional dependency missing: aiosqlite"
+            return result
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    result["imported"] = True
+    result["compiled"] = is_compiled_module(service_module)
+    if require_compiled and not result["compiled"]:
+        result["error"] = "module was imported from Python source, not a compiled extension"
+        return result
+
+    child_script = """
+import asyncio
+import sys
+
+from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
+
+if sys.argv[1] == "compiled":
+    from importlib.machinery import EXTENSION_SUFFIXES
+    import sqlspec._service
+
+    assert sqlspec._service.__file__.endswith(tuple(EXTENSION_SUFFIXES))
+
+
+class AppSyncService(SQLSpecSyncService[SqliteDriver]):
+    __slots__ = ("calls",)
+
+    def __init__(self, config):
+        super().__init__(config=config)
+        self.calls = 0
+
+    def provide_session(self, session=None):
+        self.calls += 1
+        return super().provide_session(session)
+
+
+class SyncService(AppSyncService):
+    __slots__ = ()
+
+
+class AppAsyncService(SQLSpecAsyncService[AiosqliteDriver]):
+    __slots__ = ("calls",)
+
+    def __init__(self, config):
+        super().__init__(config=config)
+        self.calls = 0
+
+    def provide_session(self, session=None):
+        self.calls += 1
+        return super().provide_session(session)
+
+
+class AsyncService(AppAsyncService):
+    __slots__ = ()
+
+
+for base in (SQLSpecAsyncService, SQLSpecSyncService, SyncService, AsyncService):
+    assert base.__dictoffset__ == 0, base
+    assert "__slots__" in vars(base), base
+
+
+config = SqliteConfig()
+try:
+    service = SyncService(config)
+    assert service.get_one("SELECT 1 AS value") == {"value": 1}
+    assert service.calls == 1
+    with service.begin_transaction() as session:
+        assert service.session is session
+        assert service.get_one("SELECT 2 AS value") == {"value": 2}
+    assert service.calls == 3
+    try:
+        raise ValueError("caller error")
+    except ValueError:
+        assert service.exists("SELECT 1")
+        assert service.paginate("SELECT value FROM (SELECT 1 AS value) AS source").items == [{"value": 1}]
+        assert service.get_one("SELECT 1 AS value") == {"value": 1}
+finally:
+    config.close_pool()
+
+
+async def main():
+    config = AiosqliteConfig()
+    try:
+        service = AsyncService(config)
+        assert await service.get_one("SELECT 1 AS value") == {"value": 1}
+        assert service.calls == 1
+        async with service.begin_transaction() as session:
+            assert service.session is session
+            assert await service.get_one("SELECT 2 AS value") == {"value": 2}
+        assert service.calls == 3
+        try:
+            raise ValueError("caller error")
+        except ValueError:
+            assert await service.exists("SELECT 1")
+            assert (await service.paginate("SELECT value FROM (SELECT 1 AS value) AS source")).items == [{"value": 1}]
+            assert await service.get_one("SELECT 1 AS value") == {"value": 1}
+    finally:
+        await config.close_pool()
+
+
+asyncio.run(main())
+print("service-subclasses:ok")
+"""
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", child_script, "compiled" if require_compiled else "source"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        result["error"] = "service subclass subprocess timed out"
+        return result
+    if completed.returncode != 0 or "service-subclasses:ok" not in completed.stdout:
+        result["error"] = (
+            f"service subclass subprocess failed with return code {completed.returncode}; "
+            f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
+        )
+    return result
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
@@ -640,6 +778,7 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
         _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),
         _check_statement_cache_rebind(require_compiled=require_compiled),
+        _check_service_subclasses(require_compiled=require_compiled),
         _check_aiosqlite_ambient_exception(require_compiled=require_compiled),
         _check_aiosqlite_exception_mapping(require_compiled=require_compiled),
         _check_fastapi_filter_construction(require_compiled=require_compiled),
