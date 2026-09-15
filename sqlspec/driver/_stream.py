@@ -59,28 +59,6 @@ class AsyncRowSource(Protocol):
     async def close(self) -> None: ...
 
 
-def _close_sync_source(source: SyncRowSource, error: bool) -> None:
-    """Close a source while preserving the original no-argument contract."""
-    close = source.close
-    try:
-        inspect.signature(close).bind(error=error)
-    except (TypeError, ValueError):
-        close()
-        return
-    cast("Any", close)(error=error)
-
-
-async def _close_async_source(source: AsyncRowSource, error: bool) -> None:
-    """Close an async source while preserving the original no-argument contract."""
-    close = source.close
-    try:
-        inspect.signature(close).bind(error=error)
-    except (TypeError, ValueError):
-        await close()
-        return
-    await cast("Any", close)(error=error)
-
-
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
     """Zip positional rows with column names into dict rows."""
     if not column_names:
@@ -319,3 +297,25 @@ class _LazyEagerAsyncRowSource:
 
     async def close(self, error: bool = False) -> None:
         self._rows = []
+
+
+def _close_sync_source(source: SyncRowSource, error: bool) -> None:
+    """Close a source while preserving the original no-argument contract."""
+    close = source.close
+    try:
+        inspect.signature(close).bind(error=error)
+    except (TypeError, ValueError):
+        close()
+        return
+    cast("Any", close)(error=error)
+
+
+async def _close_async_source(source: AsyncRowSource, error: bool) -> None:
+    """Close an async source while preserving the original no-argument contract."""
+    close = source.close
+    try:
+        inspect.signature(close).bind(error=error)
+    except (TypeError, ValueError):
+        await close()
+        return
+    await cast("Any", close)(error=error)

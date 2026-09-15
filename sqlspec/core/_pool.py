@@ -40,18 +40,6 @@ class ObjectPool(Generic[T]):
             self._pool.append(obj)
 
 
-def _create_sql() -> "SQL":
-    from sqlspec.core.statement import SQL
-
-    return SQL("")
-
-
-def _create_processed_state() -> "ProcessedState":
-    from sqlspec.core.statement import ProcessedState
-
-    return ProcessedState("", [], None, "COMMAND")
-
-
 def get_sql_pool() -> "ObjectPool[SQL]":
     pool = getattr(_thread_local, "sql_pool", None)
     if pool is None:
@@ -70,3 +58,15 @@ def get_processed_state_pool() -> "ObjectPool[ProcessedState]":
         pool = ObjectPool(factory=_create_processed_state, resetter=ProcessedState.reset)
         _thread_local.processed_state_pool = pool
     return pool
+
+
+def _create_sql() -> "SQL":
+    from sqlspec.core.statement import SQL
+
+    return SQL("")
+
+
+def _create_processed_state() -> "ProcessedState":
+    from sqlspec.core.statement import ProcessedState
+
+    return ProcessedState("", [], None, "COMMAND")

@@ -81,25 +81,6 @@ def vector_distance_metric(expression: object) -> str:
     return str(operator).lower() if operator is not None else "euclidean"
 
 
-def _normalize_metric(metric: Any) -> str:
-    """Normalize vector metrics to a lowercase string."""
-    if isinstance(metric, exp.Literal):
-        return str(metric.this).lower()
-    if isinstance(metric, exp.Identifier):
-        identifier = metric.this
-        return identifier.lower() if isinstance(identifier, str) else "euclidean"
-    if isinstance(metric, str):
-        return metric.lower()
-    return "euclidean"
-
-
-def _build_vector_distance(this: exp.Expr, expression: exp.Expr, metric: Any = "euclidean") -> exp.Operator:
-    normalized_metric = _normalize_metric(metric)
-    node = exp.Operator(this=this, expression=expression, operator=normalized_metric)
-    node.meta[_VECTOR_DISTANCE_META_KEY] = normalized_metric
-    return node
-
-
 def VectorDistance(*, this: exp.Expr, expression: exp.Expr, metric: Any = "euclidean") -> exp.Operator:
     """Build a SQLSpec vector-distance expression."""
     _register_with_sqlglot()
@@ -278,3 +259,22 @@ def _register_with_sqlglot() -> None:
     )
 
     _SQLGLOT_VECTOR_DISTANCE_REGISTERED = True
+
+
+def _normalize_metric(metric: Any) -> str:
+    """Normalize vector metrics to a lowercase string."""
+    if isinstance(metric, exp.Literal):
+        return str(metric.this).lower()
+    if isinstance(metric, exp.Identifier):
+        identifier = metric.this
+        return identifier.lower() if isinstance(identifier, str) else "euclidean"
+    if isinstance(metric, str):
+        return metric.lower()
+    return "euclidean"
+
+
+def _build_vector_distance(this: exp.Expr, expression: exp.Expr, metric: Any = "euclidean") -> exp.Operator:
+    normalized_metric = _normalize_metric(metric)
+    node = exp.Operator(this=this, expression=expression, operator=normalized_metric)
+    node.meta[_VECTOR_DISTANCE_META_KEY] = normalized_metric
+    return node

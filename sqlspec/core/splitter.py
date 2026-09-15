@@ -79,21 +79,6 @@ _STRING_WRITER_TYPE: "type[Any] | None" = None
 _STRING_WRITER_RESOLVED = False
 
 
-def _librt_string_writer_type() -> "type[Any] | None":
-    """Return librt's StringWriter when the optional performance helper exists."""
-    global _STRING_WRITER_RESOLVED, _STRING_WRITER_TYPE
-    if _STRING_WRITER_RESOLVED:
-        return _STRING_WRITER_TYPE
-    try:
-        from librt.strings import StringWriter
-    except ImportError:
-        _STRING_WRITER_TYPE = None
-    else:
-        _STRING_WRITER_TYPE = StringWriter
-    _STRING_WRITER_RESOLVED = True
-    return _STRING_WRITER_TYPE
-
-
 class TokenType(Enum):
     """Types of tokens recognized by the SQL lexer."""
 
@@ -570,44 +555,6 @@ _warned_unknown_dialects: set[str] = set()
 _splitter_cache: dict[tuple[str, bool], "StatementSplitter"] = {}
 
 
-def _get_pattern_cache() -> LRUCache:
-    """Get or create the global pattern compilation cache.
-
-    Returns:
-        The pattern cache instance
-    """
-    global _pattern_cache
-    if _pattern_cache is None:
-        with _cache_lock:
-            if _pattern_cache is None:
-                _pattern_cache = LRUCache(max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
-    return _pattern_cache
-
-
-def _get_result_cache() -> LRUCache:
-    """Get or create the global result cache.
-
-    Returns:
-        The result cache instance
-    """
-    global _result_cache
-    if _result_cache is None:
-        with _cache_lock:
-            if _result_cache is None:
-                _result_cache = LRUCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
-    return _result_cache
-
-
-def _warn_unknown_dialect_once(dialect: "str | None") -> None:
-    """Emit the generic splitter fallback warning once per dialect."""
-    key = "<none>" if dialect is None else dialect.lower()
-    with _unknown_dialect_warning_lock:
-        if key in _warned_unknown_dialects:
-            return
-        _warned_unknown_dialects.add(key)
-    logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class StatementSplitter:
     """SQL script splitter with caching and dialect support."""
@@ -919,3 +866,56 @@ def clear_splitter_caches() -> None:
         _splitter_cache.clear()
     with _unknown_dialect_warning_lock:
         _warned_unknown_dialects.clear()
+
+
+def _librt_string_writer_type() -> "type[Any] | None":
+    """Return librt's StringWriter when the optional performance helper exists."""
+    global _STRING_WRITER_RESOLVED, _STRING_WRITER_TYPE
+    if _STRING_WRITER_RESOLVED:
+        return _STRING_WRITER_TYPE
+    try:
+        from librt.strings import StringWriter
+    except ImportError:
+        _STRING_WRITER_TYPE = None
+    else:
+        _STRING_WRITER_TYPE = StringWriter
+    _STRING_WRITER_RESOLVED = True
+    return _STRING_WRITER_TYPE
+
+
+def _get_pattern_cache() -> LRUCache:
+    """Get or create the global pattern compilation cache.
+
+    Returns:
+        The pattern cache instance
+    """
+    global _pattern_cache
+    if _pattern_cache is None:
+        with _cache_lock:
+            if _pattern_cache is None:
+                _pattern_cache = LRUCache(max_size=DEFAULT_PATTERN_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
+    return _pattern_cache
+
+
+def _get_result_cache() -> LRUCache:
+    """Get or create the global result cache.
+
+    Returns:
+        The result cache instance
+    """
+    global _result_cache
+    if _result_cache is None:
+        with _cache_lock:
+            if _result_cache is None:
+                _result_cache = LRUCache(max_size=DEFAULT_RESULT_CACHE_SIZE, ttl_seconds=DEFAULT_CACHE_TTL)
+    return _result_cache
+
+
+def _warn_unknown_dialect_once(dialect: "str | None") -> None:
+    """Emit the generic splitter fallback warning once per dialect."""
+    key = "<none>" if dialect is None else dialect.lower()
+    with _unknown_dialect_warning_lock:
+        if key in _warned_unknown_dialects:
+            return
+        _warned_unknown_dialects.add(key)
+    logger.warning("Unknown dialect '%s', using generic SQL splitter", dialect)

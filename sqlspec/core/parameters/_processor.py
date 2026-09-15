@@ -56,7 +56,7 @@ def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False
     if parameters is None:
         return None
 
-    # Fast type dispatch: check concrete types first (2-4x faster than ABC isinstance)
+    # Fast type dispatch: check concrete types first
     param_type = type(parameters)
 
     # Handle dict (most common Mapping type) - fast path
@@ -874,36 +874,6 @@ class ParameterProcessor:
         return processed_sql, processed_parameters, converted_param_info
 
 
-def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
-    """Generate fingerprint for execute_many parameters.
-
-    Extracted to reduce code duplication and allow inlining of the common single-execution path.
-    """
-    first = parameters[0]
-    first_type = type(first)
-
-    # Fast type dispatch for first element
-    if first_type is dict:
-        keys = tuple(first.keys())
-        type_sig = tuple(type(v) for v in first.values())
-        return ("many_dict", keys, type_sig)
-
-    if first_type is list or first_type is tuple:
-        return ("many_seq", tuple(type(v) for v in first))
-
-    # Fallback to ABC checks
-    if isinstance(first, Mapping):
-        keys = tuple(first.keys())
-        type_sig = tuple(type(v) for v in first.values())
-        return ("many_dict", keys, type_sig)
-
-    if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
-        return ("many_seq", tuple(type(v) for v in first))
-
-    # Scalar values in sequence for execute_many
-    return ("many_scalar", first_type)
-
-
 def type_coercion_dispatcher(
     fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> "TypeDispatcher[Callable[[Any], Any]]":
@@ -968,7 +938,7 @@ def _coerce_parameter_value(
         return value
 
     value_type = type(value)
-    # Fast path: check TypedParameter by type identity (2-4x faster than isinstance)
+    # Fast path: check TypedParameter by type identity
     if value_type is TypedParameter:
         typed_param = cast("TypedParameter", value)
         wrapped_value: object = typed_param.value
@@ -1136,3 +1106,33 @@ def _validate_missing_parameters(named_order: Sequence[str], parameters: Mapping
     if missing:
         msg = f"Missing required parameters: {missing}"
         raise SQLSpecError(msg)
+
+
+def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
+    """Generate fingerprint for execute_many parameters.
+
+    Extracted to reduce code duplication and allow inlining of the common single-execution path.
+    """
+    first = parameters[0]
+    first_type = type(first)
+
+    # Fast type dispatch for first element
+    if first_type is dict:
+        keys = tuple(first.keys())
+        type_sig = tuple(type(v) for v in first.values())
+        return ("many_dict", keys, type_sig)
+
+    if first_type is list or first_type is tuple:
+        return ("many_seq", tuple(type(v) for v in first))
+
+    # Fallback to ABC checks
+    if isinstance(first, Mapping):
+        keys = tuple(first.keys())
+        type_sig = tuple(type(v) for v in first.values())
+        return ("many_dict", keys, type_sig)
+
+    if isinstance(first, Sequence) and not isinstance(first, (str, bytes)):
+        return ("many_seq", tuple(type(v) for v in first))
+
+    # Scalar values in sequence for execute_many
+    return ("many_scalar", first_type)

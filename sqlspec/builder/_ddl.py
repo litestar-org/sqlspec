@@ -76,18 +76,6 @@ CURRENT_DATE_KEYWORD = "CURRENT_DATE"
 CURRENT_TIME_KEYWORD = "CURRENT_TIME"
 
 
-def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | None") -> exp.DataType:
-    target_dialect = dialect
-    norm_dialect = _normalize_dialect(dialect) if dialect else None
-    if norm_dialect in ("tsql", "mssql") and dtype.strip().upper().startswith("TIMESTAMP"):
-        target_dialect = None
-    try:
-        return exp.DataType.build(dtype, dialect=target_dialect)
-    except ParseError as exc:
-        msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
-        raise SQLBuilderError(msg) from exc
-
-
 def build_column_expression(col: "ColumnDefinition", dialect: "DialectType | None" = None) -> "exp.Expr":
     """Build SQLGlot expression for a column definition."""
     col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=_parse_column_type(col.name, col.dtype, dialect))
@@ -1655,3 +1643,15 @@ def _build_optional_column_schema(columns: list[str]) -> exp.Schema | None:
 
 def _wrap_properties(properties: list[exp.Property]) -> exp.Properties | None:
     return exp.Properties(expressions=properties) if properties else None
+
+
+def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | None") -> exp.DataType:
+    target_dialect = dialect
+    norm_dialect = _normalize_dialect(dialect) if dialect else None
+    if norm_dialect in ("tsql", "mssql") and dtype.strip().upper().startswith("TIMESTAMP"):
+        target_dialect = None
+    try:
+        return exp.DataType.build(dtype, dialect=target_dialect)
+    except ParseError as exc:
+        msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
+        raise SQLBuilderError(msg) from exc

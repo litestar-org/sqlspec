@@ -207,10 +207,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         return True
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS - The Execution Engine
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @staticmethod
     def _check_pending_exception(exc_handler: AsyncExceptionHandler) -> None:
         """Raise any pending mapped exception after context manager exit."""
@@ -498,10 +494,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         finally:
             self._release_pooled_statement(statement)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT - Required Abstract Methods
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @abstractmethod
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
@@ -569,10 +561,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             The handler stores mapped exceptions in pending_exception rather than
             raising from __aexit__ to avoid ABI boundary violations.
         """
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PUBLIC API - Core Execution Methods
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def execute(
         self,
@@ -689,10 +677,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         config = statement_config or self.statement_config
         sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PUBLIC API - Query Methods (select/fetch variants)
-    # ─────────────────────────────────────────────────────────────────────────────
 
     @overload
     async def select(
@@ -1283,10 +1267,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             **kwargs,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -1378,10 +1358,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             arrow_schema=arrow_schema,
             **kwargs,
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ROW STREAMING API
-    # ─────────────────────────────────────────────────────────────────────────────
 
     @overload
     def select_stream(
@@ -1499,10 +1475,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (statement, chunk_size)
         return None
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
@@ -1568,10 +1540,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 raise
 
         return tuple(results)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -1678,10 +1646,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         arrow_table = self._records_to_arrow_table(prepared_records, columns)
         return await self.load_from_arrow(table, arrow_table, overwrite=overwrite)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def convert_to_dialect(
         self, statement: "Statement", to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
     ) -> str:
@@ -1696,10 +1660,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQL string in target dialect.
         """
         return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def _connection_in_transaction(self) -> bool:
         """Check if the connection is inside a transaction.
