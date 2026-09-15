@@ -148,7 +148,6 @@ class SQLSpecPlugin:
             if not config_state.disable_di:
                 self._add_middleware(app, config_state)
 
-        # Add correlation middleware if any config enables it (only add once)
         self._add_correlation_middleware(app)
         self._add_sqlcommenter_middleware(app)
 
@@ -200,7 +199,6 @@ class SQLSpecPlugin:
         if self._correlation_middleware_added:
             return
 
-        # Find first config that enables correlation middleware
         for config_state in self._config_states:
             if config_state.enable_correlation_middleware:
                 app.add_middleware(

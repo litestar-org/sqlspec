@@ -108,20 +108,6 @@ def normalize_choice_field_types(choices: list[Any] | tuple[Any, ...] | type[Enu
     return cast("Any", typing.Literal).__getitem__(tuple(choices))
 
 
-class _SortFieldResolution(NamedTuple):
-    default_field: str
-    default_query_value: str
-    allowed_fields: frozenset[str]
-    inbound_aliases: dict[str, str]
-    field_display_names: dict[str, str]
-    allowed_display_names: tuple[str, ...]
-
-    def normalize(self, value: str | None) -> str | None:
-        if value is None:
-            return self.default_field
-        return self.inbound_aliases.get(value)
-
-
 # Keep FilterConfig field unions and provider signatures in sync with sqlspec.extensions.fastapi.providers.
 class FilterConfig(TypedDict):
     """Configuration for generated Litestar filter dependencies.
@@ -202,6 +188,20 @@ def create_filter_dependencies(
     deps = _create_statement_filters(config, dep_defaults)
     dep_cache.add_dependencies(cache_key, deps)
     return deps
+
+
+class _SortFieldResolution(NamedTuple):
+    default_field: str
+    default_query_value: str
+    allowed_fields: frozenset[str]
+    inbound_aliases: dict[str, str]
+    field_display_names: dict[str, str]
+    allowed_display_names: tuple[str, ...]
+
+    def normalize(self, value: str | None) -> str | None:
+        if value is None:
+            return self.default_field
+        return self.inbound_aliases.get(value)
 
 
 def _create_statement_filters(

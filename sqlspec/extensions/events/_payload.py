@@ -33,25 +33,6 @@ def coerce_optional_dict(value: Any) -> "dict[str, Any] | None":
     return value if value is None or isinstance(value, dict) else {"value": value}
 
 
-def _serialize_notify_envelope(
-    event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None", published_at: "datetime"
-) -> bytes:
-    """Serialize a native notification envelope to UTF-8 JSON bytes.
-
-    The publication timestamp is normalized to UTC with microsecond precision so
-    the encoded envelope width is independent of the clock reading.
-    """
-    return to_json(
-        {
-            "event_id": event_id,
-            "payload": payload,
-            "metadata": metadata,
-            "published_at": published_at.astimezone(timezone.utc).isoformat(timespec="microseconds"),
-        },
-        as_bytes=True,
-    )
-
-
 def encode_notify_payload(event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None") -> str:
     """Encode event data as JSON for NOTIFY payload.
 
@@ -121,3 +102,22 @@ def parse_event_timestamp(value: Any) -> "datetime":
             parsed = datetime.fromisoformat(value)
             return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc)
+
+
+def _serialize_notify_envelope(
+    event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None", published_at: "datetime"
+) -> bytes:
+    """Serialize a native notification envelope to UTF-8 JSON bytes.
+
+    The publication timestamp is normalized to UTC with microsecond precision so
+    the encoded envelope width is independent of the clock reading.
+    """
+    return to_json(
+        {
+            "event_id": event_id,
+            "payload": payload,
+            "metadata": metadata,
+            "published_at": published_at.astimezone(timezone.utc).isoformat(timespec="microseconds"),
+        },
+        as_bytes=True,
+    )
