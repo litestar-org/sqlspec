@@ -105,7 +105,6 @@ def parse_pyproject_config(pyproject_path: "Path") -> str | None:
         msg = f"Failed to parse {pyproject_path}: {e}"
         raise ValueError(msg) from e
 
-    # Navigate to [tool.sqlspec] section
     tool_section = data.get("tool", {})
     if not isinstance(tool_section, dict):
         return None
@@ -114,49 +113,21 @@ def parse_pyproject_config(pyproject_path: "Path") -> str | None:
     if not isinstance(sqlspec_section, dict):
         return None
 
-    # Extract config value
     config = sqlspec_section.get("config")
     if config is None:
         return None
 
-    # Handle string config
     if isinstance(config, str):
         return config
 
-    # Handle list config (convert to comma-separated)
     if isinstance(config, list):
         if not all(isinstance(item, str) for item in config):
             msg = f"Invalid [tool.sqlspec].config in {pyproject_path}: list items must be strings"
             raise ValueError(msg)
         return ",".join(config)
 
-    # Invalid type
     msg = f"Invalid [tool.sqlspec].config in {pyproject_path}: must be string or list of strings, got {type(config).__name__}"
     raise ValueError(msg)
-
-
-def _normalize_config_path(config_path: str) -> str:
-    """Normalize supported config resolver path syntax to a dotted path.
-
-    Args:
-        config_path: Dotted ``module.attribute`` or ``module:attribute`` path.
-
-    Returns:
-        A dotted path accepted by :func:`import_string`.
-
-    Raises:
-        ConfigResolverError: If the path uses ``:`` but is not ``module:attribute``.
-    """
-    module_path, separator, attribute_path = config_path.partition(":")
-    if not separator:
-        return config_path
-    if not module_path or not attribute_path or ":" in attribute_path:
-        msg = (
-            f"Config path '{config_path}' is not a valid reference. "
-            "Use 'module:attribute' with a single ':', or dotted 'module.attribute'."
-        )
-        raise ConfigResolverError(msg)
-    return f"{module_path}.{attribute_path}"
 
 
 async def resolve_config_async(
@@ -226,6 +197,61 @@ def resolve_config_sync(
         raise ConfigResolverError(msg) from e
 
     return _validate_config_result(result, config_path)
+
+
+def normalize_connection_config(
+    connection_config: "Mapping[str, Any] | None", *, extra_key: str = "extra"
+) -> "dict[str, Any]":
+    """Normalize an adapter connection_config dictionary.
+
+    This function:
+        - Copies the provided mapping into a new dict.
+        - Merges any nested dict stored under ``extra_key`` into the top-level config.
+        - Ensures the extra mapping is a dictionary (or None).
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+        extra_key: Key holding additional keyword arguments to merge.
+
+    Returns:
+        Normalized connection configuration.
+
+    Raises:
+        ImproperConfigurationError: If ``extra_key`` exists but is not a dictionary.
+    """
+    normalized: dict[str, Any] = dict(connection_config) if connection_config else {}
+    extras = normalized.pop(extra_key, {})
+    if extras is None:
+        return normalized
+    if not isinstance(extras, dict):
+        msg = f"The '{extra_key}' field in connection_config must be a dictionary."
+        raise ImproperConfigurationError(msg)
+    normalized.update(extras)
+    return normalized
+
+
+def _normalize_config_path(config_path: str) -> str:
+    """Normalize supported config resolver path syntax to a dotted path.
+
+    Args:
+        config_path: Dotted ``module.attribute`` or ``module:attribute`` path.
+
+    Returns:
+        A dotted path accepted by :func:`import_string`.
+
+    Raises:
+        ConfigResolverError: If the path uses ``:`` but is not ``module:attribute``.
+    """
+    module_path, separator, attribute_path = config_path.partition(":")
+    if not separator:
+        return config_path
+    if not module_path or not attribute_path or ":" in attribute_path:
+        msg = (
+            f"Config path '{config_path}' is not a valid reference. "
+            "Use 'module:attribute' with a single ':', or dotted 'module.attribute'."
+        )
+        raise ConfigResolverError(msg)
+    return f"{module_path}.{attribute_path}"
 
 
 def _validate_config_result(
@@ -366,34 +392,3 @@ def _is_valid_config(config: Any) -> bool:
             return True
 
     return False
-
-
-def normalize_connection_config(
-    connection_config: "Mapping[str, Any] | None", *, extra_key: str = "extra"
-) -> "dict[str, Any]":
-    """Normalize an adapter connection_config dictionary.
-
-    This function:
-        - Copies the provided mapping into a new dict.
-        - Merges any nested dict stored under ``extra_key`` into the top-level config.
-        - Ensures the extra mapping is a dictionary (or None).
-
-    Args:
-        connection_config: Raw connection configuration mapping.
-        extra_key: Key holding additional keyword arguments to merge.
-
-    Returns:
-        Normalized connection configuration.
-
-    Raises:
-        ImproperConfigurationError: If ``extra_key`` exists but is not a dictionary.
-    """
-    normalized: dict[str, Any] = dict(connection_config) if connection_config else {}
-    extras = normalized.pop(extra_key, {})
-    if extras is None:
-        return normalized
-    if not isinstance(extras, dict):
-        msg = f"The '{extra_key}' field in connection_config must be a dictionary."
-        raise ImproperConfigurationError(msg)
-    normalized.update(extras)
-    return normalized

@@ -45,81 +45,6 @@ _SIGNABLE_PROTOCOLS: Final[frozenset[str]] = frozenset({"s3", "gs", "gcs", "az",
 __all__ = ("ObStoreBackend",)
 
 
-class _ObStoreFileProxy:
-    """Complete obstore's seekable reader interface for PyArrow."""
-
-    __slots__ = ("_closed", "_reader")
-
-    def __init__(self, reader: Any) -> None:
-        self._reader = reader
-        self._closed = False
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    def readable(self) -> bool:
-        return not self._closed
-
-    def seekable(self) -> bool:
-        return not self._closed and bool(self._reader.seekable())
-
-    def writable(self) -> bool:
-        return False
-
-    def read(self, size: int = -1) -> bytes:
-        if size < 0:
-            return cast("bytes", self._reader.readall())
-        return cast("bytes", self._reader.read(size))
-
-    def readinto(self, buffer: Any) -> int:
-        data = self.read(len(buffer))
-        buffer[: len(data)] = data
-        return len(data)
-
-    def seek(self, offset: int, whence: int = 0) -> int:
-        return cast("int", self._reader.seek(offset, whence))
-
-    def tell(self) -> int:
-        return cast("int", self._reader.tell())
-
-    def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            self._reader.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *_: Any) -> None:
-        self.close()
-
-
-class _ObstoreSink:
-    """Adapt an obstore writer to the file-like surface ``pyarrow.PythonFile`` expects.
-
-    obstore exposes ``closed`` as a method; pyarrow reads it as an attribute.
-    """
-
-    __slots__ = ("_writer",)
-
-    def __init__(self, writer: Any) -> None:
-        self._writer = writer
-
-    @property
-    def closed(self) -> bool:
-        return bool(self._writer.closed())
-
-    def write(self, data: Any) -> int:
-        return int(self._writer.write(data))
-
-    def flush(self) -> None:
-        self._writer.flush()
-
-    def close(self) -> None:
-        self._writer.close()
-
-
 @mypyc_attr(allow_interpreted_subclasses=True)
 class ObStoreBackend:
     """Object storage backend using obstore.
@@ -1030,3 +955,78 @@ def _read_obstore_bytes(store: Any, resolved_path: str) -> bytes:
     """Read bytes via obstore."""
     result = store.get(resolved_path)
     return cast("bytes", result.bytes().to_bytes())
+
+
+class _ObStoreFileProxy:
+    """Complete obstore's seekable reader interface for PyArrow."""
+
+    __slots__ = ("_closed", "_reader")
+
+    def __init__(self, reader: Any) -> None:
+        self._reader = reader
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def readable(self) -> bool:
+        return not self._closed
+
+    def seekable(self) -> bool:
+        return not self._closed and bool(self._reader.seekable())
+
+    def writable(self) -> bool:
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            return cast("bytes", self._reader.readall())
+        return cast("bytes", self._reader.read(size))
+
+    def readinto(self, buffer: Any) -> int:
+        data = self.read(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return cast("int", self._reader.seek(offset, whence))
+
+    def tell(self) -> int:
+        return cast("int", self._reader.tell())
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._reader.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+
+class _ObstoreSink:
+    """Adapt an obstore writer to the file-like surface ``pyarrow.PythonFile`` expects.
+
+    obstore exposes ``closed`` as a method; pyarrow reads it as an attribute.
+    """
+
+    __slots__ = ("_writer",)
+
+    def __init__(self, writer: Any) -> None:
+        self._writer = writer
+
+    @property
+    def closed(self) -> bool:
+        return bool(self._writer.closed())
+
+    def write(self, data: Any) -> int:
+        return int(self._writer.write(data))
+
+    def flush(self) -> None:
+        self._writer.flush()
+
+    def close(self) -> None:
+        self._writer.close()

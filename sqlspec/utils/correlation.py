@@ -116,6 +116,12 @@ def correlation_context(correlation_id: "str | None" = None) -> "Generator[str, 
         yield cid
 
 
+def get_correlation_adapter(logger: Logger | LoggerAdapter) -> LoggerAdapter:  # pyright: ignore
+    """Get a logger adapter that automatically includes correlation ID."""
+
+    return _CorrelationAdapter(logger, {})
+
+
 @mypyc_attr(allow_interpreted_subclasses=True)
 class _CorrelationAdapter(LoggerAdapter):  # pyright: ignore
     """Logger adapter that adds correlation ID to all logs."""
@@ -130,9 +136,3 @@ class _CorrelationAdapter(LoggerAdapter):  # pyright: ignore
 
         kwargs["extra"] = extra
         return msg, dict(kwargs)
-
-
-def get_correlation_adapter(logger: Logger | LoggerAdapter) -> LoggerAdapter:  # pyright: ignore
-    """Get a logger adapter that automatically includes correlation ID."""
-
-    return _CorrelationAdapter(logger, {})

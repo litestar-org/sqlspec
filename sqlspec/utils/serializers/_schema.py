@@ -120,6 +120,98 @@ _SERIALIZER_METRICS = _SerializerCacheMetrics()
 _DATACLASS_FIELDS_CACHE: "dict[type[Any], tuple[Field[Any], ...]]" = {}
 
 
+def get_collection_serializer(
+    sample: Any, *, exclude_unset: bool = True, wire_format: bool = False
+) -> "SchemaSerializer":
+    """Return cached serializer pipeline for the provided sample object."""
+    key = _make_serializer_key(sample, exclude_unset, wire_format)
+    pipeline = _SCHEMA_SERIALIZERS.get(key)
+    if pipeline is not None:
+        try:
+            _SCHEMA_SERIALIZERS.move_to_end(key)
+        except KeyError:
+            pipeline = None
+        else:
+            _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
+            return pipeline
+
+    with _SERIALIZER_LOCK:
+        pipeline = _SCHEMA_SERIALIZERS.get(key)
+        if pipeline is not None:
+            _SCHEMA_SERIALIZERS.move_to_end(key)
+            _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
+            return pipeline
+
+        dump = _dump_function(sample, exclude_unset, wire_format)
+        pipeline = SchemaSerializer(key, dump)
+        _SCHEMA_SERIALIZERS[key] = pipeline
+        if len(_SCHEMA_SERIALIZERS) > _SCHEMA_SERIALIZER_CACHE_MAX_SIZE:
+            _SCHEMA_SERIALIZERS.popitem(last=False)
+        _SERIALIZER_METRICS.record_miss(len(_SCHEMA_SERIALIZERS))
+        return pipeline
+
+
+def serialize_collection(
+    items: "Iterable[Any]", *, exclude_unset: bool = True, wire_format: bool = False
+) -> "list[Any]":
+    """Serialize a collection using cached pipelines keyed by item type."""
+    serialized: list[Any] = []
+    cache: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
+
+    for item in items:
+        if type(item) in _PRIMITIVE_TYPES_SET or item is None or isinstance(item, dict):
+            serialized.append(item)
+            continue
+
+        key = _make_serializer_key(item, exclude_unset, wire_format)
+        pipeline = cache.get(key)
+        if pipeline is None:
+            pipeline = get_collection_serializer(item, exclude_unset=exclude_unset, wire_format=wire_format)
+            cache[key] = pipeline
+        serialized.append(pipeline.dump_one(item))
+    return serialized
+
+
+def reset_serializer_cache() -> None:
+    """Clear cached serializer pipelines."""
+    with _SERIALIZER_LOCK:
+        _SCHEMA_SERIALIZERS.clear()
+        _DATACLASS_FIELDS_CACHE.clear()
+        _SERIALIZER_METRICS.reset()
+
+
+def get_serializer_metrics() -> "dict[str, int]":
+    """Return cache metrics aligned with the core pipeline counters."""
+    with _SERIALIZER_LOCK:
+        metrics = _SERIALIZER_METRICS.snapshot()
+        metrics["size"] = len(_SCHEMA_SERIALIZERS)
+        return metrics
+
+
+def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = False) -> Any:
+    """Dump a schema model or dict to a plain representation.
+
+    Args:
+        data: A schema instance (msgspec.Struct, Pydantic BaseModel, dataclass, attrs class)
+            or plain dict / primitive.
+        exclude_unset: If True, exclude fields that were never set (msgspec UNSET, Pydantic
+            model_fields_set semantics). No-op for attrs (attrs has no unset concept).
+        wire_format: msgspec-only knob. Default ``False`` emits Python attribute names
+            (``field.name``) for cross-library consistency — keys match Pydantic, dataclass,
+            and attrs output regardless of the Struct's ``rename=`` meta. Pass
+            ``wire_format=True`` to emit ``field.encode_name`` (honours ``rename=`` on the
+            Struct) for wire-aligned JSON / API payloads. Pydantic, dataclass, and attrs
+            branches always use Python attribute names regardless of this flag.
+    """
+    if is_dict(data):
+        return data
+    if type(data) in _PRIMITIVE_TYPES_SET or data is None:
+        return data
+
+    serializer = get_collection_serializer(data, exclude_unset=exclude_unset, wire_format=wire_format)
+    return serializer.dump_one(data)
+
+
 def _make_serializer_key(sample: Any, exclude_unset: bool, wire_format: bool) -> "tuple[type[Any] | None, bool, bool]":
     if sample is None or isinstance(sample, dict):
         return (None, exclude_unset, wire_format)
@@ -216,95 +308,3 @@ def _dump_function(sample: Any, exclude_unset: bool, wire_format: bool) -> "Call
     if has_dict_attribute(sample):
         return _dump_dict_attr
     return _dump_mapping
-
-
-def get_collection_serializer(
-    sample: Any, *, exclude_unset: bool = True, wire_format: bool = False
-) -> "SchemaSerializer":
-    """Return cached serializer pipeline for the provided sample object."""
-    key = _make_serializer_key(sample, exclude_unset, wire_format)
-    pipeline = _SCHEMA_SERIALIZERS.get(key)
-    if pipeline is not None:
-        try:
-            _SCHEMA_SERIALIZERS.move_to_end(key)
-        except KeyError:
-            pipeline = None
-        else:
-            _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
-            return pipeline
-
-    with _SERIALIZER_LOCK:
-        pipeline = _SCHEMA_SERIALIZERS.get(key)
-        if pipeline is not None:
-            _SCHEMA_SERIALIZERS.move_to_end(key)
-            _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
-            return pipeline
-
-        dump = _dump_function(sample, exclude_unset, wire_format)
-        pipeline = SchemaSerializer(key, dump)
-        _SCHEMA_SERIALIZERS[key] = pipeline
-        if len(_SCHEMA_SERIALIZERS) > _SCHEMA_SERIALIZER_CACHE_MAX_SIZE:
-            _SCHEMA_SERIALIZERS.popitem(last=False)
-        _SERIALIZER_METRICS.record_miss(len(_SCHEMA_SERIALIZERS))
-        return pipeline
-
-
-def serialize_collection(
-    items: "Iterable[Any]", *, exclude_unset: bool = True, wire_format: bool = False
-) -> "list[Any]":
-    """Serialize a collection using cached pipelines keyed by item type."""
-    serialized: list[Any] = []
-    cache: dict[tuple[type[Any] | None, bool, bool], SchemaSerializer] = {}
-
-    for item in items:
-        if type(item) in _PRIMITIVE_TYPES_SET or item is None or isinstance(item, dict):
-            serialized.append(item)
-            continue
-
-        key = _make_serializer_key(item, exclude_unset, wire_format)
-        pipeline = cache.get(key)
-        if pipeline is None:
-            pipeline = get_collection_serializer(item, exclude_unset=exclude_unset, wire_format=wire_format)
-            cache[key] = pipeline
-        serialized.append(pipeline.dump_one(item))
-    return serialized
-
-
-def reset_serializer_cache() -> None:
-    """Clear cached serializer pipelines."""
-    with _SERIALIZER_LOCK:
-        _SCHEMA_SERIALIZERS.clear()
-        _DATACLASS_FIELDS_CACHE.clear()
-        _SERIALIZER_METRICS.reset()
-
-
-def get_serializer_metrics() -> "dict[str, int]":
-    """Return cache metrics aligned with the core pipeline counters."""
-    with _SERIALIZER_LOCK:
-        metrics = _SERIALIZER_METRICS.snapshot()
-        metrics["size"] = len(_SCHEMA_SERIALIZERS)
-        return metrics
-
-
-def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = False) -> Any:
-    """Dump a schema model or dict to a plain representation.
-
-    Args:
-        data: A schema instance (msgspec.Struct, Pydantic BaseModel, dataclass, attrs class)
-            or plain dict / primitive.
-        exclude_unset: If True, exclude fields that were never set (msgspec UNSET, Pydantic
-            model_fields_set semantics). No-op for attrs (attrs has no unset concept).
-        wire_format: msgspec-only knob. Default ``False`` emits Python attribute names
-            (``field.name``) for cross-library consistency — keys match Pydantic, dataclass,
-            and attrs output regardless of the Struct's ``rename=`` meta. Pass
-            ``wire_format=True`` to emit ``field.encode_name`` (honours ``rename=`` on the
-            Struct) for wire-aligned JSON / API payloads. Pydantic, dataclass, and attrs
-            branches always use Python attribute names regardless of this flag.
-    """
-    if is_dict(data):
-        return data
-    if type(data) in _PRIMITIVE_TYPES_SET or data is None:
-        return data
-
-    serializer = get_collection_serializer(data, exclude_unset=exclude_unset, wire_format=wire_format)
-    return serializer.dump_one(data)

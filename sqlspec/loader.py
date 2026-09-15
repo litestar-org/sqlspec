@@ -209,18 +209,6 @@ class SQLFileCacheEntry:
         self.statement_names = tuple(parsed_statements.keys())
 
 
-def _parse_parameter_declaration(param_match: "re.Match[str]") -> ParameterDeclaration:
-    """Build a parameter declaration from a matched ``-- param:`` line."""
-    description = param_match.group("desc")
-    required = param_match.group("optional") != "?"
-    if description is not None and PARAM_OPTIONAL_DESCRIPTION_PATTERN.search(description):
-        required = False
-        description = PARAM_OPTIONAL_DESCRIPTION_PATTERN.sub("", description).strip() or None
-    return ParameterDeclaration(
-        name=param_match.group("name"), type_str=param_match.group("type"), description=description, required=required
-    )
-
-
 class SQLFileLoader:
     """Loads and parses SQL files with named SQL queries.
 
@@ -1644,3 +1632,15 @@ def _same_parameter_value(first: Any, second: Any) -> bool:
         return bool(first == second)
     except Exception:
         return False
+
+
+def _parse_parameter_declaration(param_match: "re.Match[str]") -> ParameterDeclaration:
+    """Build a parameter declaration from a matched ``-- param:`` line."""
+    description = param_match.group("desc")
+    required = param_match.group("optional") != "?"
+    if description is not None and PARAM_OPTIONAL_DESCRIPTION_PATTERN.search(description):
+        required = False
+        description = PARAM_OPTIONAL_DESCRIPTION_PATTERN.sub("", description).strip() or None
+    return ParameterDeclaration(
+        name=param_match.group("name"), type_str=param_match.group("type"), description=description, required=required
+    )

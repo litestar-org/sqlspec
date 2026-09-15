@@ -703,34 +703,6 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     return all(field.name != field_name for field in fields)
 
 
-def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
-    """Detect the rename pattern by comparing field name transformations.
-
-    Args:
-        field_name: Original field name
-        encode_name: Encoded field name
-
-    Returns:
-        The detected rename pattern ("camel", "kebab", "pascal") or None
-    """
-    key = (field_name, encode_name)
-    if key in _MSGSPEC_RENAME_PATTERN_CACHE:
-        return _MSGSPEC_RENAME_PATTERN_CACHE[key]
-
-    result: str | None
-    if encode_name == camelize(field_name) and encode_name != field_name:
-        result = "camel"
-    elif encode_name == kebabize(field_name) and encode_name != field_name:
-        result = "kebab"
-    elif encode_name == pascalize(field_name) and encode_name != field_name:
-        result = "pascal"
-    else:
-        result = None
-
-    _MSGSPEC_RENAME_PATTERN_CACHE[key] = result
-    return result
-
-
 _MSGSPEC_RENAME_CONFIG_CACHE: "dict[object, str | None]" = {}
 _MSGSPEC_RENAME_PATTERN_CACHE: "dict[tuple[str, str], str | None]" = {}
 
@@ -1463,3 +1435,31 @@ def has_migration_config(obj: Any) -> "TypeGuard[HasMigrationConfigProtocol]":
         True if the object has a migration_config attribute.
     """
     return isinstance(obj, HasMigrationConfigProtocol)
+
+
+def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
+    """Detect the rename pattern by comparing field name transformations.
+
+    Args:
+        field_name: Original field name
+        encode_name: Encoded field name
+
+    Returns:
+        The detected rename pattern ("camel", "kebab", "pascal") or None
+    """
+    key = (field_name, encode_name)
+    if key in _MSGSPEC_RENAME_PATTERN_CACHE:
+        return _MSGSPEC_RENAME_PATTERN_CACHE[key]
+
+    result: str | None
+    if encode_name == camelize(field_name) and encode_name != field_name:
+        result = "camel"
+    elif encode_name == kebabize(field_name) and encode_name != field_name:
+        result = "kebab"
+    elif encode_name == pascalize(field_name) and encode_name != field_name:
+        result = "pascal"
+    else:
+        result = None
+
+    _MSGSPEC_RENAME_PATTERN_CACHE[key] = result
+    return result

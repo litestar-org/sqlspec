@@ -125,27 +125,6 @@ _ARROW_WRITE_FORMATS = frozenset({"parquet", "arrow-ipc", "csv"})
 _ROW_WRITE_FORMATS = frozenset({"json", "jsonl"})
 
 
-def _storage_options(default_options: "dict[str, Any]", storage_options: "dict[str, Any] | None") -> "dict[str, Any]":
-    return default_options if storage_options is None else storage_options
-
-
-def _csv_write_options_from_kwargs(storage_options: "dict[str, Any]") -> "dict[str, Any] | None":
-    return cast("dict[str, Any] | None", storage_options.get("write_options"))
-
-
-def _csv_write_options(
-    format_choice: StorageFormat,
-    resolved_options: "dict[str, Any]",
-    default_options: "dict[str, Any]",
-    default_write_options: "dict[str, Any] | None",
-) -> "dict[str, Any] | None":
-    if format_choice != "csv":
-        return None
-    if resolved_options is default_options:
-        return default_write_options
-    return _csv_write_options_from_kwargs(resolved_options)
-
-
 def get_storage_bridge_metrics() -> "dict[str, int]":
     """Return aggregated storage bridge metrics."""
 
@@ -192,121 +171,6 @@ def get_storage_bridge_diagnostics() -> "StorageDiagnostics":
     for key, value in serializer_metrics.items():
         diagnostics[f"serializer.{key}"] = float(value)
     return diagnostics
-
-
-def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
-    if format_hint == "json":
-        return to_json(rows, as_bytes=True)
-    buffer = bytearray()
-    for row in rows:
-        buffer.extend(to_json(row, as_bytes=True))
-        buffer.extend(b"\n")
-    return bytes(buffer)
-
-
-def _validate_arrow_write_format(format_choice: StorageFormat) -> None:
-    """Reject Arrow-table writes for formats that cannot carry an Arrow payload.
-
-    Args:
-        format_choice: Requested storage format.
-
-    Raises:
-        StorageCapabilityError: If the format is not an Arrow write format.
-    """
-    if format_choice not in _ARROW_WRITE_FORMATS:
-        msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
-        raise StorageCapabilityError(
-            msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
-        )
-
-
-def _validate_row_write_format(format_choice: StorageFormat) -> None:
-    """Reject row writes for formats that cannot carry a row payload.
-
-    Args:
-        format_choice: Requested storage format.
-
-    Raises:
-        StorageCapabilityError: If the format is not a row write format.
-    """
-    if format_choice not in _ROW_WRITE_FORMATS:
-        msg = "Row storage writes support only JSON and JSONL formats"
-        raise StorageCapabilityError(
-            msg, capability="row_write", remediation="Write Arrow tables with the Arrow storage APIs instead."
-        )
-
-
-def _encode_arrow_payload(
-    table: "ArrowTable",
-    format_choice: StorageFormat,
-    *,
-    compression: str | None,
-    write_options: "dict[str, Any] | None" = None,
-) -> bytes:
-    return encode_arrow_payload(table, format_choice, compression=compression, write_options=write_options)
-
-
-def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
-    execute_sync_storage_operation(
-        partial(backend.write_bytes_sync, path, payload), backend=backend_name, operation="write_bytes", path=path
-    )
-
-
-def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> bytes:
-    return execute_sync_storage_operation(
-        partial(backend.read_bytes_sync, path), backend=backend_name, operation="read_bytes", path=path
-    )
-
-
-def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "ArrowTable":
-    return decode_arrow_payload(payload, format_choice)
-
-
-def _resolve_alias_destination(
-    registry: StorageRegistry, destination: str, backend_options: "dict[str, Any]"
-) -> "tuple[ObjectStoreProtocol, str, str] | None":
-    if not destination.startswith("alias://"):
-        return None
-    payload = destination.removeprefix("alias://")
-    alias_name, _, relative_path = payload.partition("/")
-    alias = alias_name.strip()
-    if not alias:
-        msg = "Alias destinations must include a registry alias before the path component"
-        raise ImproperConfigurationError(msg)
-    path_segment = relative_path.strip()
-    if not path_segment:
-        msg = "Alias destinations must include an object path after the alias name"
-        raise ImproperConfigurationError(msg)
-    backend = registry.get(alias, **backend_options)
-    return backend, path_segment.lstrip("/"), backend.backend_type
-
-
-def _backend_path(destination: str) -> str:
-    if destination.startswith("file://"):
-        return destination.removeprefix("file://")
-    if "://" in destination:
-        _, remainder = destination.split("://", 1)
-        return remainder.lstrip("/")
-    return destination
-
-
-def _storage_backend(
-    registry: StorageRegistry, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-) -> "tuple[ObjectStoreProtocol, str, str]":
-    destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
-    options = _EMPTY_STORAGE_OPTIONS if backend_options is None else backend_options
-    alias_resolution = _resolve_alias_destination(registry, destination_str, options)
-    if alias_resolution is not None:
-        return alias_resolution
-    backend = registry.get(destination_str, **options)
-    normalized_path = _backend_path(destination_str)
-    return backend, normalized_path, backend.backend_type
-
-
-def _backend_cache_key(destination: StorageDestination, backend_options: "dict[str, Any] | None") -> "str | None":
-    if backend_options:
-        return None
-    return destination.as_posix() if isinstance(destination, Path) else str(destination)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -590,3 +454,139 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         """Stream bytes from an artifact asynchronously."""
         backend, path, _backend_name = self._backend(source, storage_options)
         return await backend.stream_read_async(path, chunk_size=chunk_size)
+
+
+def _storage_options(default_options: "dict[str, Any]", storage_options: "dict[str, Any] | None") -> "dict[str, Any]":
+    return default_options if storage_options is None else storage_options
+
+
+def _csv_write_options_from_kwargs(storage_options: "dict[str, Any]") -> "dict[str, Any] | None":
+    return cast("dict[str, Any] | None", storage_options.get("write_options"))
+
+
+def _csv_write_options(
+    format_choice: StorageFormat,
+    resolved_options: "dict[str, Any]",
+    default_options: "dict[str, Any]",
+    default_write_options: "dict[str, Any] | None",
+) -> "dict[str, Any] | None":
+    if format_choice != "csv":
+        return None
+    if resolved_options is default_options:
+        return default_write_options
+    return _csv_write_options_from_kwargs(resolved_options)
+
+
+def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
+    if format_hint == "json":
+        return to_json(rows, as_bytes=True)
+    buffer = bytearray()
+    for row in rows:
+        buffer.extend(to_json(row, as_bytes=True))
+        buffer.extend(b"\n")
+    return bytes(buffer)
+
+
+def _validate_arrow_write_format(format_choice: StorageFormat) -> None:
+    """Reject Arrow-table writes for formats that cannot carry an Arrow payload.
+
+    Args:
+        format_choice: Requested storage format.
+
+    Raises:
+        StorageCapabilityError: If the format is not an Arrow write format.
+    """
+    if format_choice not in _ARROW_WRITE_FORMATS:
+        msg = "Arrow storage writes support only Parquet, Arrow IPC, and CSV formats"
+        raise StorageCapabilityError(
+            msg, capability="arrow_write", remediation="Write row payloads with the row storage APIs instead."
+        )
+
+
+def _validate_row_write_format(format_choice: StorageFormat) -> None:
+    """Reject row writes for formats that cannot carry a row payload.
+
+    Args:
+        format_choice: Requested storage format.
+
+    Raises:
+        StorageCapabilityError: If the format is not a row write format.
+    """
+    if format_choice not in _ROW_WRITE_FORMATS:
+        msg = "Row storage writes support only JSON and JSONL formats"
+        raise StorageCapabilityError(
+            msg, capability="row_write", remediation="Write Arrow tables with the Arrow storage APIs instead."
+        )
+
+
+def _encode_arrow_payload(
+    table: "ArrowTable",
+    format_choice: StorageFormat,
+    *,
+    compression: str | None,
+    write_options: "dict[str, Any] | None" = None,
+) -> bytes:
+    return encode_arrow_payload(table, format_choice, compression=compression, write_options=write_options)
+
+
+def _write_backend_sync(backend: "ObjectStoreProtocol", path: str, payload: bytes, *, backend_name: str) -> None:
+    execute_sync_storage_operation(
+        partial(backend.write_bytes_sync, path, payload), backend=backend_name, operation="write_bytes", path=path
+    )
+
+
+def _read_backend_sync(backend: "ObjectStoreProtocol", path: str, *, backend_name: str) -> bytes:
+    return execute_sync_storage_operation(
+        partial(backend.read_bytes_sync, path), backend=backend_name, operation="read_bytes", path=path
+    )
+
+
+def _decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "ArrowTable":
+    return decode_arrow_payload(payload, format_choice)
+
+
+def _resolve_alias_destination(
+    registry: StorageRegistry, destination: str, backend_options: "dict[str, Any]"
+) -> "tuple[ObjectStoreProtocol, str, str] | None":
+    if not destination.startswith("alias://"):
+        return None
+    payload = destination.removeprefix("alias://")
+    alias_name, _, relative_path = payload.partition("/")
+    alias = alias_name.strip()
+    if not alias:
+        msg = "Alias destinations must include a registry alias before the path component"
+        raise ImproperConfigurationError(msg)
+    path_segment = relative_path.strip()
+    if not path_segment:
+        msg = "Alias destinations must include an object path after the alias name"
+        raise ImproperConfigurationError(msg)
+    backend = registry.get(alias, **backend_options)
+    return backend, path_segment.lstrip("/"), backend.backend_type
+
+
+def _backend_path(destination: str) -> str:
+    if destination.startswith("file://"):
+        return destination.removeprefix("file://")
+    if "://" in destination:
+        _, remainder = destination.split("://", 1)
+        return remainder.lstrip("/")
+    return destination
+
+
+def _storage_backend(
+    registry: StorageRegistry, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+) -> "tuple[ObjectStoreProtocol, str, str]":
+    destination_str = destination.as_posix() if isinstance(destination, Path) else str(destination)
+    options = _EMPTY_STORAGE_OPTIONS if backend_options is None else backend_options
+    alias_resolution = _resolve_alias_destination(registry, destination_str, options)
+    if alias_resolution is not None:
+        return alias_resolution
+    backend = registry.get(destination_str, **options)
+    normalized_path = _backend_path(destination_str)
+    return backend, normalized_path, backend.backend_type
+
+
+def _backend_cache_key(destination: StorageDestination, backend_options: "dict[str, Any] | None") -> "str | None":
+    if backend_options:
+        return None
+    return destination.as_posix() if isinstance(destination, Path) else str(destination)

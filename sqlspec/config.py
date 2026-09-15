@@ -290,58 +290,6 @@ def validate_migration_config_keys(migration_config: "Mapping[str, Any]") -> Non
         raise ImproperConfigurationError(" ".join(lines))
 
 
-def _report_unknown_keys(
-    mapping: "Mapping[str, Any]", valid_keys: "frozenset[str]", prefix: str, scope: str
-) -> "list[str]":
-    """Describe keys a configuration scope does not declare.
-
-    Args:
-        mapping: Mapping to check.
-        valid_keys: Keys the scope accepts.
-        prefix: Dotted path prepended to each reported key.
-        scope: Scope name used in the valid-key summary, empty for the top level.
-
-    Returns:
-        Report lines, empty when every key is recognized.
-    """
-    unknown = sorted(key for key in mapping if key not in valid_keys)
-    if not unknown:
-        return []
-
-    lines = []
-    for key in unknown:
-        suggestions = get_close_matches(key, valid_keys, n=1, cutoff=0.6)
-        hint = f" Did you mean {suggestions[0]!r}?" if suggestions else ""
-        lines.append(f"Unknown migration_config key {f'{prefix}{key}'!r}.{hint}")
-    lines.append(f"Valid {scope}keys: {', '.join(sorted(valid_keys))}.")
-    return lines
-
-
-def _report_template_keys(templates: Any) -> "list[str]":
-    """Describe unrecognized keys nested under ``templates``.
-
-    Args:
-        templates: Value configured for the ``templates`` key.
-
-    Returns:
-        Report lines, empty when the overrides are recognized.
-    """
-    if not isinstance(templates, Mapping):
-        return [f"migration_config key 'templates' must be a mapping, got {type(templates).__name__}."]
-
-    lines = _report_unknown_keys(templates, MIGRATION_TEMPLATES_KEYS, "templates.", "'templates' ")
-    for section, fragment_keys in _TEMPLATE_FRAGMENT_KEYS.items():
-        overrides = templates.get(section)
-        if overrides is None:
-            continue
-        path = f"templates.{section}"
-        if not isinstance(overrides, Mapping):
-            lines.append(f"migration_config key '{path}' must be a mapping, got {type(overrides).__name__}.")
-            continue
-        lines.extend(_report_unknown_keys(overrides, fragment_keys, f"{path}.", f"'{path}' "))
-    return lines
-
-
 class FlaskConfig(TypedDict):
     """Configuration options for Flask SQLSpec extension.
 
@@ -2044,3 +1992,55 @@ class _DriverFeatureHookWrapper:
             self._callback(context)
             return
         self._callback(context.get(self._context_key))
+
+
+def _report_unknown_keys(
+    mapping: "Mapping[str, Any]", valid_keys: "frozenset[str]", prefix: str, scope: str
+) -> "list[str]":
+    """Describe keys a configuration scope does not declare.
+
+    Args:
+        mapping: Mapping to check.
+        valid_keys: Keys the scope accepts.
+        prefix: Dotted path prepended to each reported key.
+        scope: Scope name used in the valid-key summary, empty for the top level.
+
+    Returns:
+        Report lines, empty when every key is recognized.
+    """
+    unknown = sorted(key for key in mapping if key not in valid_keys)
+    if not unknown:
+        return []
+
+    lines = []
+    for key in unknown:
+        suggestions = get_close_matches(key, valid_keys, n=1, cutoff=0.6)
+        hint = f" Did you mean {suggestions[0]!r}?" if suggestions else ""
+        lines.append(f"Unknown migration_config key {f'{prefix}{key}'!r}.{hint}")
+    lines.append(f"Valid {scope}keys: {', '.join(sorted(valid_keys))}.")
+    return lines
+
+
+def _report_template_keys(templates: Any) -> "list[str]":
+    """Describe unrecognized keys nested under ``templates``.
+
+    Args:
+        templates: Value configured for the ``templates`` key.
+
+    Returns:
+        Report lines, empty when the overrides are recognized.
+    """
+    if not isinstance(templates, Mapping):
+        return [f"migration_config key 'templates' must be a mapping, got {type(templates).__name__}."]
+
+    lines = _report_unknown_keys(templates, MIGRATION_TEMPLATES_KEYS, "templates.", "'templates' ")
+    for section, fragment_keys in _TEMPLATE_FRAGMENT_KEYS.items():
+        overrides = templates.get(section)
+        if overrides is None:
+            continue
+        path = f"templates.{section}"
+        if not isinstance(overrides, Mapping):
+            lines.append(f"migration_config key '{path}' must be a mapping, got {type(overrides).__name__}.")
+            continue
+        lines.extend(_report_unknown_keys(overrides, fragment_keys, f"{path}.", f"'{path}' "))
+    return lines

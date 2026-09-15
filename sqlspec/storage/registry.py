@@ -109,7 +109,6 @@ class StorageRegistry:
         path_str = str(uri_or_alias)
         scheme = self._scheme(path_str)
 
-        # 1. Resolve to a base URI
         base_uri = path_str
         is_alias = False
 
@@ -135,13 +134,11 @@ class StorageRegistry:
             msg = f"Unknown storage alias or invalid URI: '{uri_or_alias}'"
             raise ImproperConfigurationError(msg)
 
-        # 2. Check instance cache using the BASE URI
         cache_key = (base_uri, self._make_hashable(cache_params)) if cache_params else base_uri
         if cache_key in self._instances:
             log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=True)
             return self._instances[cache_key]
 
-        # 3. Create new instance if not cached
         if not is_alias:
             instance = self._backend_from_uri(base_uri, backend_override=backend, **kwargs)
         else:
