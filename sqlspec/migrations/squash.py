@@ -162,7 +162,6 @@ class MigrationSquasher:
         Returns:
             List of SquashPlan objects with details of planned operations.
         """
-        # Get all migrations from runner
         all_migrations = self.runner.get_migration_files()
         source_migrations = validate_squash_range(all_migrations, start_version, end_version, allow_gaps=allow_gaps)
 
@@ -171,7 +170,6 @@ class MigrationSquasher:
 
         groups = [("py", source_migrations)] if output_format == "py" else group_migrations_by_type(source_migrations)
 
-        # Build plans for each group
         plans: list[SquashPlan] = []
         version_counter = int(start_version)
 
@@ -253,7 +251,6 @@ class MigrationSquasher:
         """
         lines: list[str] = []
 
-        # Header section
         title = "SQLSpec Migration"
         if self.template_settings and self.template_settings.profile:
             title = self.template_settings.profile.title
@@ -269,7 +266,6 @@ class MigrationSquasher:
         lines.extend(statement.rstrip() for statement in up_sql)
         lines.append("")
 
-        # DOWN section (only if there are statements)
         if down_sql:
             lines.append(f"-- name: migrate-{plan.target_version}-down")
             lines.extend(statement.rstrip() for statement in down_sql)
@@ -293,7 +289,6 @@ class MigrationSquasher:
         """
         lines: list[str] = []
 
-        # Module docstring
         title = "SQLSpec Migration"
         if self.template_settings and self.template_settings.profile:
             title = self.template_settings.profile.title
@@ -308,12 +303,10 @@ class MigrationSquasher:
             "",
         ])
 
-        # Generate up() function
         lines.extend(["def up() -> list[str]:", '    """Return UP migration SQL statements."""', "    return ["])
         lines.extend(f"        {statement!r}," for statement in up_sql)
         lines.extend(["    ]", ""])
 
-        # Generate down() function
         lines.extend(["def down() -> list[str] | None:", '    """Return DOWN migration SQL statements."""'])
         if down_sql:
             lines.append("    return [")
@@ -359,23 +352,19 @@ class MigrationSquasher:
 
         try:
             for plan in ready_plans:
-                # Extract SQL from source migrations
                 up_sql, down_sql = self.extract_sql(plan.source_migrations)
 
-                # Generate squashed content based on target file type
                 if plan.target_path.suffix == ".py":
                     content = self.generate_python_squash(plan, up_sql, down_sql)
                 else:
                     content = self.generate_squashed_content(plan, up_sql, down_sql)
 
-                # Write the squashed file
                 plan.target_path.write_text(content, encoding="utf-8")
                 logger.debug("Wrote squashed migration to %s", plan.target_path)
 
             # Collect all source paths to delete (avoid duplicates across plans)
             all_source_paths = {source_path for plan in ready_plans for _, source_path in plan.source_migrations}
 
-            # Delete all source migration files
             for source_path in all_source_paths:
                 if source_path.exists():
                     source_path.unlink()

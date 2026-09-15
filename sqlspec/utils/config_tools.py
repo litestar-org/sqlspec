@@ -43,11 +43,6 @@ __all__ = (
 )
 
 
-# =============================================================================
-# pyproject.toml Discovery
-# =============================================================================
-
-
 def discover_config_from_pyproject() -> str | None:
     """Find and parse pyproject.toml for SQLSpec config.
 
@@ -138,11 +133,6 @@ def parse_pyproject_config(pyproject_path: "Path") -> str | None:
     # Invalid type
     msg = f"Invalid [tool.sqlspec].config in {pyproject_path}: must be string or list of strings, got {type(config).__name__}"
     raise ValueError(msg)
-
-
-# =============================================================================
-# Config Resolution
-# =============================================================================
 
 
 def _normalize_config_path(config_path: str) -> str:
@@ -376,11 +366,6 @@ def _is_valid_config(config: Any) -> bool:
             return True
 
     return False
-
-
-# =============================================================================
-# Connection Config Normalization
-# =============================================================================
 
 
 def normalize_connection_config(

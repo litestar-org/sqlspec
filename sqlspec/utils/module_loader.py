@@ -44,10 +44,6 @@ __all__ = (
 )
 
 
-# =============================================================================
-# Dependency Availability Checking
-# =============================================================================
-
 _dependency_cache: "dict[str, bool]" = {}
 _optional_module_cache: "dict[str, ModuleType | None]" = {}
 T = TypeVar("T")
@@ -200,11 +196,6 @@ def dependency_flag(module_name: str) -> "OptionalDependencyFlag":
     """
 
     return OptionalDependencyFlag(module_name)
-
-
-# =============================================================================
-# Module Loading and Import Utilities
-# =============================================================================
 
 
 def _require_dependency(
