@@ -83,3 +83,12 @@ Extensions
 .. autoclass:: sqlspec.adapters.pymssql.adk.PymssqlADKMemoryStore
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these types inside ``extension_config["adk"]``.
+
+.. autoclass:: sqlspec.adapters.pymssql.adk.PymssqlADKConfig
+   :members:
+   :show-inheritance:

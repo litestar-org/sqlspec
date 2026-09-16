@@ -67,13 +67,17 @@ Data Dictionary
 Extension Settings
 ==================
 
-Use these adapter-specific types inside ``extension_config["litestar"]``
-and ``extension_config["events"]``.
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
 
 .. autoclass:: sqlspec.adapters.asyncpg.litestar.AsyncpgLitestarConfig
    :members:
    :show-inheritance:
 
 .. autoclass:: sqlspec.adapters.asyncpg.events.AsyncpgEventsConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig
    :members:
    :show-inheritance:

@@ -82,3 +82,12 @@ ordering, nullability, and SQL type names from the Arrow reader schema.
 Arrow-derived type names are approximations (for example ``VARCHAR`` for any
 string column); ``mssql_python`` and other ODBC adapters without native
 metadata APIs remain SQL-only.
+
+Extension Settings
+==================
+
+Use these types inside ``extension_config["adk"]``.
+
+.. autoclass:: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKConfig
+   :members:
+   :show-inheritance:

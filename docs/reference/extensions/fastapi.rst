@@ -5,6 +5,17 @@ FastAPI
 FastAPI integration with dependency injection helpers for FastAPI's ``Depends()``
 system, including filter dependency builders.
 
+Configuration
+=============
+
+Use ``sqlspec.config.FastAPIConfig`` in ``extension_config["fastapi"]``.
+These settings apply across adapters; no adapter-specific subtype is needed.
+
+.. autoclass:: sqlspec.config.FastAPIConfig
+   :members:
+   :show-inheritance:
+   :no-index:
+
 Plugin
 ======
 

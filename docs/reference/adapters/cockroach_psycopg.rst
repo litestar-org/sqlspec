@@ -244,8 +244,13 @@ move both the probe counts and the spans.
 Extension Settings
 ==================
 
-Use these adapter-specific types inside ``extension_config["litestar"]``.
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
 
 .. autoclass:: sqlspec.adapters.cockroach_psycopg.litestar.CockroachPsycopgLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgADKConfig
    :members:
    :show-inheritance:

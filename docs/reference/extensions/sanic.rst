@@ -6,6 +6,17 @@ Sanic extension providing app/request context integration, request-scoped
 session management, transaction handling, correlation IDs, SQLCommenter, and
 connection pool lifecycle management.
 
+Configuration
+=============
+
+Use ``sqlspec.config.SanicConfig`` in ``extension_config["sanic"]``.
+These settings apply across adapters; no adapter-specific subtype is needed.
+
+.. autoclass:: sqlspec.config.SanicConfig
+   :members:
+   :show-inheritance:
+   :no-index:
+
 Plugin
 ======
 

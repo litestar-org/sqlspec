@@ -49,8 +49,13 @@ Data Dictionary
 Extension Settings
 ==================
 
-Use these adapter-specific types inside ``extension_config["litestar"]``.
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
 
 .. autoclass:: sqlspec.adapters.aiomysql.litestar.AiomysqlLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.aiomysql.adk.AiomysqlADKConfig
    :members:
    :show-inheritance:

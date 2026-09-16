@@ -63,13 +63,17 @@ Data Dictionary
 Extension Settings
 ==================
 
-Use these adapter-specific types inside ``extension_config["litestar"]``
-and ``extension_config["events"]``.
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
 
 .. autoclass:: sqlspec.adapters.psqlpy.litestar.PsqlpyLitestarConfig
    :members:
    :show-inheritance:
 
 .. autoclass:: sqlspec.adapters.psqlpy.events.PsqlpyEventsConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.psqlpy.adk.PsqlpyADKConfig
    :members:
    :show-inheritance:

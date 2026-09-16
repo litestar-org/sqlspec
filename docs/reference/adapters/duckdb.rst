@@ -246,3 +246,16 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.duckdb.data_dictionary.DuckDBDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use these types inside ``extension_config["adk"]``.
+
+.. autoclass:: sqlspec.adapters.duckdb.adk.DuckdbADKConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.duckdb.adk.DuckdbADKFTSOptions
+   :members:
+   :show-inheritance:

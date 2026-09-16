@@ -338,8 +338,8 @@ Data Dictionary
 Extension Settings
 ==================
 
-Use these adapter-specific types inside ``extension_config["litestar"]``
-and ``extension_config["events"]``.
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
 
 .. autoclass:: sqlspec.adapters.oracledb.litestar.OracleLitestarCompressionConfig
    :members:
@@ -362,5 +362,17 @@ and ``extension_config["events"]``.
    :show-inheritance:
 
 .. autoclass:: sqlspec.adapters.oracledb.events.OracleEventsPartitionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.adk.OracleADKCompressionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.adk.OracleADKConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.adk.OracleADKPartitionConfig
    :members:
    :show-inheritance:

@@ -29,9 +29,51 @@ Pooling and Connections
 Extension Settings
 ------------------
 
-Use ``extension_config`` to pass framework- or extension-specific settings. Each
-extension documents its available keys. Example keys include session key names,
-commit mode, correlation middleware, and migrations toggles.
+Use ``extension_config`` to give each extension its own settings map. Shared
+types live in ``sqlspec.config``. Import an adapter's Litestar, Events, or ADK
+type when you need options that are specific to its tables or native transport.
+Each adapter's :doc:`reference page </reference/adapters/index>` lists those types.
+Plain dictionaries use the same keys.
+
+.. list-table:: Extension settings
+   :header-rows: 1
+
+   * - Map key
+     - Shared type
+     - Guide
+   * - ``litestar``
+     - ``LitestarConfig``
+     - :doc:`/reference/extensions/litestar`
+   * - ``fastapi``
+     - ``FastAPIConfig``
+     - :doc:`/reference/extensions/fastapi`
+   * - ``starlette``
+     - ``StarletteConfig``
+     - :doc:`/reference/extensions/starlette`
+   * - ``flask``
+     - ``FlaskConfig``
+     - :doc:`/reference/extensions/flask`
+   * - ``sanic``
+     - ``SanicConfig``
+     - :doc:`/reference/extensions/sanic`
+   * - ``adk``
+     - ``ADKConfig``
+     - :doc:`/extensions/adk/schema`
+   * - ``events``
+     - ``EventsConfig``
+     - :doc:`/reference/extensions/events`
+   * - ``otel``
+     - ``OpenTelemetryConfig``
+     - :doc:`/reference/extensions/otel`
+   * - ``prometheus``
+     - ``PrometheusConfig``
+     - :doc:`/reference/extensions/prometheus`
+
+The other web frameworks, tracing, and metrics use shared settings.
+Keep Litestar, Events, and ADK table tuning in the extension map.
+Use ``manage_schema`` and
+``create_schema`` for automatic table checks. Run versioned migrations through
+the migration commands and ``migration_config``.
 
 Multiple Databases
 ------------------
