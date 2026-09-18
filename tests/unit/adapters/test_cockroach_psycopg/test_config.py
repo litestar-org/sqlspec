@@ -277,7 +277,7 @@ def test_cockroach_psycopg_sync_session_context_resolves_callable_statement_conf
 
     ctx = CockroachPsycopgSyncSessionContext(
         acquire_connection=lambda: connection,
-        release_connection=lambda _connection: None,
+        release_connection=lambda _connection, **_kwargs: None,
         statement_config=statement_config_factory,
         driver_features={},
         prepare_driver=lambda driver: driver,
@@ -369,7 +369,7 @@ async def test_cockroach_psycopg_async_session_context_resolves_callable_stateme
     async def acquire_connection() -> object:
         return connection
 
-    async def release_connection(_connection: object) -> None:
+    async def release_connection(_connection: object, **_kwargs: object) -> None:
         return None
 
     ctx = CockroachPsycopgAsyncSessionContext(

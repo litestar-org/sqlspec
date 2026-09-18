@@ -113,7 +113,7 @@ class SyncPoolSessionFactory:
     def release_connection(self, _conn: Any, **kwargs: Any) -> None:
         if self._ctx is None:
             return
-        self._ctx.__exit__(None, None, None)
+        self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
         self._ctx = None
 
 

@@ -205,7 +205,7 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 

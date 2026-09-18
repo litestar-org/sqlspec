@@ -171,7 +171,7 @@ class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
     def release_connection(self, _conn: "CockroachSyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            self._ctx.__exit__(None, None, None)
+            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
             return
         if self._conn is not None:
@@ -388,7 +388,7 @@ class _CockroachPsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "CockroachAsyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 

@@ -1,5 +1,7 @@
 """Unit tests for the driver lifecycle (pooling / connection-hook) contract wiring."""
 
+from pathlib import Path
+
 import pytest
 
 from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_case
@@ -57,3 +59,16 @@ def test_lifecycle_flags_require_config_factory() -> None:
             assert case.config_factory_fixture is not None, (
                 f"{case.id} declares a config-factory feature without a config_factory_fixture"
             )
+
+
+def test_session_contexts_forward_exception_info_to_release() -> None:
+    """Every adapter session context must hand its exception triple to connection release."""
+    offenders = [
+        f"{path.parent.name}:{number}"
+        for path in sorted(Path("sqlspec/adapters").glob("*/_typing.py"))
+        for number, line in enumerate(path.read_text().splitlines(), start=1)
+        if line.strip()
+        in {"self._release_connection(self._connection)", "await self._release_connection(self._connection)"}
+    ]
+
+    assert offenders == []
