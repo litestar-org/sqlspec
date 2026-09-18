@@ -79,7 +79,7 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     1105: (OperationalError, "operational error"),
     102: (SQLParsingError, "syntax error"),
 }
-_ARROW_ODBC_SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b([0-9A-Z]{2}[0-9A-Z]{3})\b")
+_ARROW_ODBC_SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"State:\s*([0-9A-Z]{5})")
 _SQLSTATE_CLASS_CODE_LEN: Final[int] = 2
 _SQLSTATE_CLASS_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "08": (DatabaseConnectionError, "connection error"),

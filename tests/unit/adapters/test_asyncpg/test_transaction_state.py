@@ -1,8 +1,10 @@
 """asyncpg transaction control uses the native transaction handle."""
 
+import inspect
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import asyncpg
 import pytest
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
@@ -115,3 +117,24 @@ async def test_create_connection_consumes_no_pool_slot(monkeypatch: pytest.Monke
     assert config.connection_instance is None
     assert "min_size" not in connect.call_args.kwargs
     assert "max_size" not in connect.call_args.kwargs
+
+
+async def test_create_connection_drops_every_pool_only_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """asyncpg.connect() takes no **kwargs, so a pool-only setting reaching it is a TypeError."""
+    connect = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr("sqlspec.adapters.asyncpg.config.asyncpg_connect", connect)
+    monkeypatch.setattr(AsyncpgConfig, "_init_connection", AsyncMock())
+    config = AsyncpgConfig(
+        connection_config={
+            "host": "localhost",
+            "min_size": 1,
+            "max_size": 2,
+            "reset": AsyncMock(),
+            "setup": AsyncMock(),
+        }
+    )
+
+    await config.create_connection()
+
+    accepted = set(inspect.signature(asyncpg.connect).parameters)
+    assert set(connect.call_args.kwargs) <= accepted

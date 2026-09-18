@@ -36,6 +36,7 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "max_queries",
     "max_size",
     "min_size",
+    "reset",
     "setup",
 })
 
@@ -301,7 +302,8 @@ class CockroachAsyncpgConfig(
         config = build_connection_config(self.connection_config)
         for key in _POOL_ONLY_CONFIG_KEYS:
             config.pop(key, None)
-        connection = await asyncpg_connect(**config)
+        connect = config.pop("connect", None)
+        connection = await connect() if connect is not None else await asyncpg_connect(**config)
         init = self.connection_config.get("init", self._init_connection)
         await init(connection)
         return cast("CockroachAsyncpgConnection", connection)

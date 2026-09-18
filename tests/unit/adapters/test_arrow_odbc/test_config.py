@@ -10,7 +10,7 @@ from arrow_odbc import TextEncoding
 
 import sqlspec.adapters.arrow_odbc.config as arrow_odbc_config
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver, build_connection_config
-from sqlspec.adapters.arrow_odbc.core import create_mapped_exception
+from sqlspec.adapters.arrow_odbc.core import _extract_sqlstate, create_mapped_exception
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
@@ -167,3 +167,11 @@ def test_sqlstate_classes_map_to_sqlspec_exceptions(sqlstate: str, expected: typ
     mapped = create_mapped_exception(Exception(f"State: {sqlstate}, Message: driver reported a failure"))
 
     assert isinstance(mapped, expected)
+
+
+@pytest.mark.parametrize(
+    "message", ["Constraint failed: duplicate key value is (40001).", "Column 'TOTAL' has a size of 53000 bytes"]
+)
+def test_a_five_character_token_in_prose_is_not_read_as_a_sqlstate(message: str) -> None:
+    """Only the driver's own State field carries a SQLSTATE, so prose must not be mined for one."""
+    assert _extract_sqlstate(message) is None

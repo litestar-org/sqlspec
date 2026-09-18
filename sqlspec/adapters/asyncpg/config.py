@@ -68,6 +68,7 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "max_queries",
     "max_size",
     "min_size",
+    "reset",
     "setup",
 })
 
