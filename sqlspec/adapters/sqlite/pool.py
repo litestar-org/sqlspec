@@ -3,13 +3,13 @@
 import contextlib
 import logging
 import sqlite3
-import sys
 import threading
 import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
+from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -26,11 +26,8 @@ SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
 SQLITE_MEMORY_CACHE_SIZE: Final = -16000
 
 
-_CONNECT_SUPPORTS_AUTOCOMMIT: Final[bool] = sys.version_info >= (3, 12)
-
-
 def _end_transaction(
-    connection: SqliteConnection, *, commit: bool, supports_autocommit: bool = _CONNECT_SUPPORTS_AUTOCOMMIT
+    connection: SqliteConnection, *, commit: bool, supports_autocommit: bool = SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
 ) -> None:
     """End an open transaction on a connection.
 

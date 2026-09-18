@@ -63,7 +63,7 @@ def test_provide_session_accepts_spanner_execution_overrides(monkeypatch: pytest
 
 
 def test_close_pool_closes_the_database() -> None:
-    """Database.close() releases the session manager and its background tasks."""
+    """Sessions go back before Database.close() releases the manager that owns them."""
     calls: list[str] = []
 
     class _Database:
@@ -80,7 +80,7 @@ def test_close_pool_closes_the_database() -> None:
 
     config.close_pool()
 
-    assert calls == ["database", "pool"]
+    assert calls == ["pool", "database"]
     assert config._database is None
 
 

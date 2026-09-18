@@ -410,9 +410,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         }
 
     def _close_pool(self) -> None:
-        if self._database is not None and supports_close(self._database):
-            with contextlib.suppress(Exception):
-                self._database.close()
+        """Release sessions before the database that manages them is torn down."""
         pool = self.connection_instance
         if pool is not None:
             clear = getattr(pool, "clear", None)
@@ -421,6 +419,9 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                     clear()
             elif supports_close(pool):
                 pool.close()
+        if self._database is not None and supports_close(self._database):
+            with contextlib.suppress(Exception):
+                self._database.close()
         if self._client and supports_close(self._client):
             self._client.close()
         self._client = None
