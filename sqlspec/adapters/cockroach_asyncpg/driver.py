@@ -1,7 +1,6 @@
 """CockroachDB AsyncPG driver implementation."""
 
 import asyncio
-import contextlib
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
@@ -185,7 +184,13 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         await self._apply_follower_reads()
 
     async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
-        """Execute a full CockroachDB transaction callback with serialization retries."""
+        """Execute a full CockroachDB transaction callback with serialization retries.
+
+        A rollback that itself fails leaves the transaction aborted, and every
+        statement on it would then fail with a non-retryable error that hides the
+        real conflict. The original exception is raised instead of retrying, so
+        the rollback failure never replaces the transaction's outcome.
+        """
         if not self._enable_retry or self._connection_in_transaction():
             return await operation()
 
@@ -196,8 +201,10 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
                 result = await operation()
                 await self.commit()
             except Exception as exc:
-                with contextlib.suppress(Exception):
+                try:
                     await self.rollback()
+                except Exception:
+                    raise exc from None
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
                     raise
             else:
