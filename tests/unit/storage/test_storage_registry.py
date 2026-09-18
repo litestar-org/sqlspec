@@ -275,13 +275,15 @@ def test_alias_named_like_a_scheme_does_not_capture_scheme_uris(tmp_path: Path) 
 
 
 @pytest.mark.skipif(not OBSTORE_INSTALLED, reason="obstore missing")
-def test_alias_does_not_match_partial_path_segment(tmp_path: Path) -> None:
+def test_alias_does_not_match_partial_path_segment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    alias_target = tmp_path / "db_store"
     registry = StorageRegistry()
-    registry.register_alias("db", f"file://{tmp_path}")
+    registry.register_alias("db", f"file://{alias_target}")
 
     via_alias = registry.get("db/queries.sql")
     not_alias = registry.get("db_backup/queries.sql")
 
-    assert via_alias.store_uri == f"file://{tmp_path}"
+    assert via_alias.store_uri == f"file://{alias_target}"
     assert not_alias.store_uri.endswith("/db_backup")
-    assert str(tmp_path) not in not_alias.store_uri
+    assert str(alias_target) not in not_alias.store_uri

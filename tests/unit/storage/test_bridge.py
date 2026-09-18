@@ -814,93 +814,75 @@ class _CsvTestBackend:
         return self.payloads[path]
 
 
-def test_write_arrow_csv_default_options(monkeypatch: pytest.MonkeyPatch) -> None:
+class _CsvTestRegistry:
+    """Minimal registry mapping all destination paths to a test backend."""
+
+    def __init__(self, backend: _CsvTestBackend) -> None:
+        self.backend = backend
+
+    def get(self, destination: str, **options: Any) -> _CsvTestBackend:
+        return self.backend
+
+
+def test_write_arrow_csv_default_options() -> None:
     """Write an Arrow table as CSV with default options and verify header + content."""
     backend = _CsvTestBackend()
-    pipeline = SyncStoragePipeline()
-
-    def _fake_resolve(
-        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str, str]":
-        return backend, "data/output.csv", backend.backend_type
-
-    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
+    pipeline = SyncStoragePipeline(registry=cast(Any, _CsvTestRegistry(backend)))
 
     table = pa.table({"id": [1, 2], "name": ["alice", "bob"]})
-    telemetry = pipeline.write_arrow(table, "data/output.csv", format_hint="csv")
+    telemetry = pipeline.write_arrow(table, "output.csv", format_hint="csv")
 
     assert telemetry["format"] == "csv"
     assert telemetry["rows_processed"] == 2
-    payload = backend.payloads["data/output.csv"]
+    payload = backend.payloads["output.csv"]
     text = payload.decode()
     lines = text.strip().split("\n")
     assert lines[0] == '"id","name"'
-    assert len(lines) == 3  # header + 2 data rows
+    assert len(lines) == 3
 
 
-def test_write_arrow_csv_custom_delimiter(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_arrow_csv_custom_delimiter() -> None:
     """Write an Arrow table as CSV with pipe delimiter."""
     backend = _CsvTestBackend()
-    pipeline = SyncStoragePipeline()
-
-    def _fake_resolve(
-        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str, str]":
-        return backend, "data/output.csv", backend.backend_type
-
-    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
+    pipeline = SyncStoragePipeline(registry=cast(Any, _CsvTestRegistry(backend)))
 
     table = pa.table({"x": [10], "y": [20]})
-    pipeline.write_arrow(
-        table, "data/output.csv", format_hint="csv", storage_options={"write_options": {"delimiter": "|"}}
-    )
+    pipeline.write_arrow(table, "output.csv", format_hint="csv", storage_options={"write_options": {"delimiter": "|"}})
 
-    payload = backend.payloads["data/output.csv"]
+    payload = backend.payloads["output.csv"]
     text = payload.decode()
     assert "|" in text.split("\n")[0]
 
 
-def test_write_arrow_csv_uses_pipeline_storage_options(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_arrow_csv_uses_pipeline_storage_options() -> None:
     """Write an Arrow table using storage options bound at pipeline construction."""
     backend = _CsvTestBackend()
-    pipeline = SyncStoragePipeline(storage_options={"write_options": {"delimiter": "|"}})
-
-    def _fake_resolve(
-        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str, str]":
-        return backend, "data/output.csv", backend.backend_type
-
-    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
+    pipeline = SyncStoragePipeline(
+        registry=cast(Any, _CsvTestRegistry(backend)), storage_options={"write_options": {"delimiter": "|"}}
+    )
 
     table = pa.table({"x": [10], "y": [20]})
-    pipeline.write_arrow(table, "data/output.csv", format_hint="csv")
+    pipeline.write_arrow(table, "output.csv", format_hint="csv")
 
-    payload = backend.payloads["data/output.csv"]
+    payload = backend.payloads["output.csv"]
     text = payload.decode()
     assert "|" in text.split("\n")[0]
 
 
-def test_write_arrow_csv_no_header(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_arrow_csv_no_header() -> None:
     """Write an Arrow table as CSV without header row."""
     backend = _CsvTestBackend()
-    pipeline = SyncStoragePipeline()
-
-    def _fake_resolve(
-        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str, str]":
-        return backend, "data/output.csv", backend.backend_type
-
-    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
+    pipeline = SyncStoragePipeline(registry=cast(Any, _CsvTestRegistry(backend)))
 
     table = pa.table({"val": [42, 99]})
     pipeline.write_arrow(
-        table, "data/output.csv", format_hint="csv", storage_options={"write_options": {"include_header": False}}
+        table, "output.csv", format_hint="csv", storage_options={"write_options": {"include_header": False}}
     )
 
-    payload = backend.payloads["data/output.csv"]
+    payload = backend.payloads["output.csv"]
     text = payload.decode()
     lines = [line for line in text.strip().split("\n") if line]
-    assert len(lines) == 2  # no header, just 2 data rows
+    assert len(lines) == 2
 
 
 def test_csv_roundtrip_encode_decode() -> None:
@@ -916,25 +898,18 @@ def test_csv_roundtrip_encode_decode() -> None:
     assert restored.to_pylist() == original.to_pylist()
 
 
-def test_read_arrow_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_arrow_csv() -> None:
     """Read a CSV artifact back into an Arrow table via SyncStoragePipeline.read_arrow()."""
     from sqlspec.storage.pipeline import _encode_arrow_payload
 
     backend = _CsvTestBackend()
     original = pa.table({"a": [1, 2], "b": ["x", "y"]})
     csv_bytes = _encode_arrow_payload(original, "csv", compression=None)
-    backend.payloads["data/input.csv"] = csv_bytes
+    backend.payloads["input.csv"] = csv_bytes
 
-    pipeline = SyncStoragePipeline()
+    pipeline = SyncStoragePipeline(registry=cast(Any, _CsvTestRegistry(backend)))
 
-    def _fake_resolve(
-        self: SyncStoragePipeline, destination: "StorageDestination", backend_options: "dict[str, Any] | None"
-    ) -> "tuple[_CsvTestBackend, str, str]":
-        return backend, "data/input.csv", backend.backend_type
-
-    monkeypatch.setattr(SyncStoragePipeline, "_backend", _fake_resolve)
-
-    table, telemetry = pipeline.read_arrow("data/input.csv", file_format="csv")
+    table, telemetry = pipeline.read_arrow("input.csv", file_format="csv")
     assert table.num_rows == 2
     assert table.column_names == ["a", "b"]
     assert telemetry["format"] == "csv"
