@@ -55,7 +55,6 @@ Transaction
    :members:
    :show-inheritance:
 
-.. autoclass:: TransactionRetryError
    :members:
    :show-inheritance:
 
@@ -226,7 +225,6 @@ Inheritance Tree
    |   +-- ConnectionTimeoutError
    +-- TransactionError
    |   +-- SerializationConflictError
-   |   +-- TransactionRetryError
    |   +-- DeadlockError
    +-- RepositoryError
    |   +-- NotFoundError

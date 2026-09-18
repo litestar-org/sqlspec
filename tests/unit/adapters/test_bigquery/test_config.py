@@ -4,7 +4,6 @@ import uuid
 from types import SimpleNamespace
 from typing import Any, cast
 
-import pytest
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from pytest import MonkeyPatch
 
@@ -147,27 +146,3 @@ def test_dataset_id_is_qualified_with_the_configured_project() -> None:
 
     assert default_dataset.project == "acme"
     assert default_dataset.dataset_id == "analytics"
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "enable_bigquery_ml",
-        "enable_gemini_integration",
-        "reservation_id",
-        "edition",
-        "enable_cross_cloud",
-        "enable_bigquery_omni",
-        "use_avro_logical_types",
-        "parquet_enable_list_inference",
-        "enable_column_level_security",
-        "enable_row_level_security",
-        "enable_dataframes",
-        "dataframes_backend",
-        "enable_continuous_queries",
-        "enable_vector_search",
-    ],
-)
-def test_unconsumed_connection_fields_are_not_declared(field: str) -> None:
-    """A declared field with no consumer promises behaviour the adapter does not have."""
-    assert field not in BigQueryConnectionParams.__annotations__

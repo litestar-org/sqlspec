@@ -211,6 +211,11 @@ Pool Parameters
 Driver Features
 ===============
 
+``extension_flags`` values are folded into the database startup configuration.
+DuckDB rejects these settings once the database is running, so an unrecognized
+flag fails at connect time rather than being ignored.
+
+
 .. autoclass:: sqlspec.adapters.duckdb.DuckDBDriverFeatures
    :members:
    :show-inheritance:

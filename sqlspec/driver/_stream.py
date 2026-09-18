@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast, overloa
 
 from typing_extensions import Self
 
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
@@ -59,13 +60,26 @@ class AsyncRowSource(Protocol):
 
 
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
-    """Return dict rows unchanged and zip positional rows with column names."""
+    """Return dict rows unchanged and zip positional rows with column names.
+
+    Args:
+        rows: Rows fetched from the cursor.
+        column_names: Column names from the cursor description.
+
+    Returns:
+        Rows as dictionaries.
+
+    Raises:
+        SQLSpecError: If positional rows arrive without column metadata, which
+            would otherwise be indistinguishable from the end of the stream.
+    """
     if not rows:
         return []
     if isinstance(rows[0], dict):
         return list(rows)
     if not column_names:
-        return []
+        msg = "Cannot map positional rows to dictionaries without column metadata."
+        raise SQLSpecError(msg)
     return [dict(zip(column_names, row, strict=False)) for row in rows]
 
 

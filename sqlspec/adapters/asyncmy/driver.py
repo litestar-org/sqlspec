@@ -229,8 +229,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             SQLSpecError: If transaction initialization fails
         """
         try:
-            async with AsyncmyCursor(self.connection) as cursor:
-                await cursor.execute("BEGIN")
+            await self.connection.begin()
         except AsyncmyMySQLError as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e

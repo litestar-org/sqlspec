@@ -139,7 +139,6 @@ __all__ = (
     "has_type_code",
     "has_typecode",
     "has_typecode_and_len",
-    "has_value_attribute",
     "has_with_method",
     "is_async_readable",
     "is_attrs_instance",
@@ -338,11 +337,6 @@ def has_sqlstate(obj: Any) -> "TypeGuard[HasSqlStateProtocol]":
 def has_sqlite_error(obj: Any) -> "TypeGuard[HasSqliteErrorProtocol]":
     """Check if an exception exposes sqlite error details."""
     return hasattr(obj, "sqlite_errorcode")
-
-
-def has_value_attribute(obj: Any) -> "TypeGuard[HasValueProtocol]":
-    """Check if an object exposes a value attribute."""
-    return hasattr(obj, "value")
 
 
 def has_errors(obj: Any) -> "TypeGuard[HasErrorsProtocol]":

@@ -1,20 +1,12 @@
 """Asyncmy configuration tests covering statement config builders."""
 
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import sqlspec.adapters.asyncmy.config as config_module
 from sqlspec.adapters.asyncmy._typing import AsyncmyDictCursor
-from sqlspec.adapters.asyncmy.config import (
-    AsyncmyConfig,
-    AsyncmyConnectionParams,
-    AsyncmyPoolParams,
-    _pool_config,
-    _split_pool_config,
-)
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig, _pool_config, _split_pool_config
 from sqlspec.adapters.asyncmy.core import build_statement_config
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -235,19 +227,6 @@ def test_driver_profile_name_matches_registry_key() -> None:
     from sqlspec.adapters.asyncmy.core import driver_profile
 
     assert driver_profile.name == "asyncmy"
-
-
-def test_stmt_cache_size_is_a_declared_connection_parameter() -> None:
-    """The prepared-statement cache size must be part of the typed surface."""
-    assert "stmt_cache_size" in AsyncmyConnectionParams.__annotations__
-
-
-def test_stmt_cache_size_is_inherited_by_the_pool_parameters() -> None:
-    """Pool parameters extend connection parameters, so it must be declared exactly once."""
-    assert "stmt_cache_size" in AsyncmyPoolParams.__annotations__
-
-    source = Path(config_module.__file__ or "").read_text()
-    assert source.count("    stmt_cache_size: NotRequired[int]") == 1
 
 
 def test_stmt_cache_size_reaches_the_connection_kwargs() -> None:

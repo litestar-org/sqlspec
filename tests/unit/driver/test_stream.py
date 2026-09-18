@@ -14,6 +14,7 @@ from sqlspec.driver._stream import (
     SyncRowStream,
     rows_to_dicts,
 )
+from sqlspec.exceptions import SQLSpecError
 
 
 def _rows(start: int, stop: int) -> "list[dict[str, Any]]":
@@ -329,8 +330,10 @@ def test_rows_to_dicts_zips_tuple_rows_with_column_names() -> None:
     assert result == [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
 
 
-def test_rows_to_dicts_empty_column_names_returns_empty() -> None:
-    assert rows_to_dicts([(1,), (2,)], []) == []
+def test_rows_to_dicts_rejects_positional_rows_without_column_names() -> None:
+    """Returning an empty list here would look like the end of the stream."""
+    with pytest.raises(SQLSpecError, match="column metadata"):
+        rows_to_dicts([(1,), (2,)], [])
 
 
 def test_rows_to_dicts_preserves_dict_row_values() -> None:

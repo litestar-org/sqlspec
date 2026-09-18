@@ -39,6 +39,7 @@ __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", 
 
 _ASYNCMY_POOL_ONLY_KEYS = frozenset(("minsize", "maxsize", "pool_recycle"))
 _ASYNCMY_POOL_KEYS = _ASYNCMY_POOL_ONLY_KEYS | {"echo"}
+_ASYNCMY_SHARED_POOL_KEYS = frozenset(("echo",))
 asyncmy: "AsyncmyModule" = cast("AsyncmyModule", AsyncmyModule)
 
 
@@ -353,7 +354,8 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         Returns:
             An Asyncmy connection instance.
         """
-        _, connection_kwargs = _split_pool_config(self.connection_config)
+        pool_kwargs, connection_kwargs = _split_pool_config(self.connection_config)
+        connection_kwargs.update({key: value for key, value in pool_kwargs.items() if key in _ASYNCMY_SHARED_POOL_KEYS})
         connection = await asyncmy.connect(**connection_kwargs)
         await self._ensure_connection(connection)
         return connection
