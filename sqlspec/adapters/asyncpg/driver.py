@@ -94,7 +94,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     and caching, and parameter processing with type coercion.
     """
 
-    __slots__ = ("_data_dictionary", "_prepared_statements")
+    __slots__ = ("_data_dictionary", "_prepared_statements", "_transaction")
     dialect = "postgres"
 
     def __init__(
@@ -111,6 +111,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AsyncpgDataDictionary | None = None
         self._prepared_statements: OrderedDict[str, AsyncpgPreparedStatement] = OrderedDict()
+        self._transaction: Any = None
 
     async def dispatch_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -209,28 +210,45 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         return None
 
     async def begin(self) -> None:
-        """Begin a database transaction."""
+        """Begin a database transaction.
 
+        Uses asyncpg's own transaction handle so the driver and the connection
+        agree on transaction state. A second call is a no-op rather than a
+        savepoint, matching the other adapters and leaving nested
+        ``transaction()`` blocks to the savepoint handling in the driver base.
+        """
+        if self._transaction is not None:
+            return
+        transaction = self.connection.transaction()
         try:
-            await self.connection.execute("BEGIN")
+            await transaction.start()
         except AsyncpgPostgresError as e:
             msg = f"Failed to begin async transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction = transaction
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-
+        transaction = self._transaction
+        self._transaction = None
         try:
-            await self.connection.execute("COMMIT")
+            if transaction is not None:
+                await transaction.commit()
+            else:
+                await self.connection.execute("COMMIT")
         except AsyncpgPostgresError as e:
             msg = f"Failed to commit async transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-
+        transaction = self._transaction
+        self._transaction = None
         try:
-            await self.connection.execute("ROLLBACK")
+            if transaction is not None:
+                await transaction.rollback()
+            else:
+                await self.connection.execute("ROLLBACK")
         except AsyncpgPostgresError as e:
             msg = f"Failed to rollback async transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -431,15 +449,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AsyncpgDataDictionary()
         return self._data_dictionary
-
-    def collect_rows(self, cursor: "AsyncpgConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        """Collect asyncpg rows for the direct execution path."""
-        data, column_names = collect_rows(fetched)
-        return data, column_names, len(data)
-
-    def resolve_rowcount(self, cursor: "AsyncpgConnection") -> int:
-        """Resolve rowcount from asyncpg status for the direct execution path."""
-        return parse_status(cursor)
 
     @staticmethod
     def _copy_target(table: str) -> "tuple[str, str | None, str]":
