@@ -294,3 +294,22 @@ def test_close_does_not_leave_other_threads_holding_a_closed_connection(tmp_path
     pool.close()
 
     assert results == ["ok"]
+
+
+def test_a_connection_from_a_retired_generation_is_closed_and_deregistered() -> None:
+    """Dropping the handle without closing it would leak the connection and its file lock."""
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    try:
+        connection = pool.acquire()
+        registry = pool._connection_registry  # pyright: ignore[reportPrivateUsage]
+        assert connection in registry
+
+        pool._generation += 1  # pyright: ignore[reportPrivateUsage]
+        replacement = pool.acquire()
+
+        assert replacement is not connection
+        assert connection not in registry
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+    finally:
+        pool.close()

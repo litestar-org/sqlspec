@@ -107,7 +107,9 @@ class PymssqlConnectionPool:
     def _get_thread_connection(self) -> PymssqlConnection:
         thread_state = self._thread_local.__dict__
         if thread_state.get("generation") != self._generation:
-            thread_state.pop("connection", None)
+            stale = thread_state.pop("connection", None)
+            if stale is not None:
+                self._retire_connection(cast("PymssqlConnection", stale))
             thread_state.pop("created_at", None)
             thread_state.pop("last_used", None)
             self._thread_local.generation = self._generation

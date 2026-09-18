@@ -299,7 +299,9 @@ class DuckDBConnectionPool:
         """
         thread_state = self._thread_local.__dict__
         if thread_state.get("generation") != self._generation:
-            thread_state.pop("connection", None)
+            stale = thread_state.pop("connection", None)
+            if stale is not None:
+                self._retire_connection(cast("DuckDBConnection", stale))
             thread_state.pop("created_at", None)
             thread_state.pop("last_used", None)
             self._thread_local.generation = self._generation
