@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
+    SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT,
     SqliteStreamSource,
     build_insert_statement,
     collect_rows,
@@ -232,6 +233,15 @@ class SqliteDriver(SyncDriverAdapterBase):
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    def _in_autocommit_mode(self) -> bool:
+        """Report whether the connection runs in sqlite3's autocommit mode.
+
+        Under that mode ``Connection.commit`` and ``Connection.rollback`` are
+        no-ops, so a manually started transaction has to be ended with an
+        explicit statement.
+        """
+        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and self.connection.autocommit is True
+
     def commit(self) -> None:
         """Commit the current transaction.
 
@@ -239,6 +249,10 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be committed
         """
         try:
+            if self._in_autocommit_mode():
+                if self.connection.in_transaction:
+                    self.connection.execute("COMMIT")
+                return
             self.connection.commit()
         except sqlite3.Error as e:
             msg = f"Failed to commit transaction: {e}"
@@ -251,6 +265,10 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be rolled back
         """
         try:
+            if self._in_autocommit_mode():
+                if self.connection.in_transaction:
+                    self.connection.execute("ROLLBACK")
+                return
             self.connection.rollback()
         except sqlite3.Error as e:
             msg = f"Failed to rollback transaction: {e}"

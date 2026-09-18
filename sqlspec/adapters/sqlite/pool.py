@@ -35,12 +35,14 @@ class SqliteConnectionPool:
 
     __slots__ = (
         "_connection_parameters",
+        "_connection_registry",
         "_enable_foreign_keys",
         "_enable_optimizations",
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
         "_recycle_seconds",
+        "_registry_lock",
         "_runtime_setup",
         "_thread_local",
     )
@@ -70,6 +72,8 @@ class SqliteConnectionPool:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
+        self._connection_registry: set[SqliteConnection] = set()
+        self._registry_lock = threading.Lock()
         self._enable_optimizations = enable_optimizations
         self._enable_foreign_keys = enable_foreign_keys
         self._recycle_seconds = recycle_seconds
@@ -87,7 +91,21 @@ class SqliteConnectionPool:
         return str(db)
 
     def _create_connection(self) -> SqliteConnection:
-        """Create a new SQLite connection with optimizations."""
+        """Create a pool-owned connection and record it for shutdown."""
+        connection = self.new_connection()
+        with self._registry_lock:
+            self._connection_registry.add(connection)
+        return connection
+
+    def new_connection(self) -> SqliteConnection:
+        """Create a standalone connection configured like a pooled one.
+
+        The result is owned by the caller: it is not thread-local and is not
+        tracked for pool shutdown.
+
+        Returns:
+            SqliteConnection: A newly opened, fully configured connection.
+        """
         connection = sqlite3.connect(**self._connection_parameters)
 
         try:
@@ -156,8 +174,7 @@ class SqliteConnectionPool:
                 recycle_seconds=self._recycle_seconds,
                 reason="exceeded_recycle_time",
             )
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(self._thread_local.connection)
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
             self._thread_local.last_used = time.time()
@@ -175,20 +192,25 @@ class SqliteConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(self._thread_local.connection)
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
 
         self._thread_local.last_used = time.time()
         return cast("SqliteConnection", self._thread_local.connection)
 
+    def _retire_connection(self, connection: SqliteConnection) -> None:
+        """Close a pool-owned connection and drop it from the shutdown registry."""
+        with self._registry_lock:
+            self._connection_registry.discard(connection)
+        with contextlib.suppress(Exception):
+            connection.close()
+
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread."""
         thread_state = self._thread_local.__dict__
         if "connection" in thread_state:
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("SqliteConnection", self._thread_local.connection))
             del self._thread_local.connection
             if "created_at" in thread_state:
                 del self._thread_local.created_at
@@ -216,8 +238,14 @@ class SqliteConnectionPool:
                     connection.commit()
 
     def close(self) -> None:
-        """Close the thread-local connection if it exists."""
+        """Close every connection this pool opened, on any thread."""
         self._close_thread_connection()
+        with self._registry_lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+        for connection in orphaned:
+            with contextlib.suppress(Exception):
+                connection.close()
 
     def acquire(self) -> SqliteConnection:
         """Acquire a thread-local connection.

@@ -263,13 +263,16 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         )
 
     def create_connection(self) -> SqliteConnection:
-        """Get a SQLite connection from the pool.
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same parameters, PRAGMAs, and runtime setup
+        the pool applies, but it is not the pool's thread-local connection, so
+        closing it leaves the pool usable.
 
         Returns:
-            SqliteConnection: A connection from the pool
+            SqliteConnection: A newly opened connection.
         """
-        pool = self.provide_pool()
-        return pool.acquire()
+        return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SQLite types.

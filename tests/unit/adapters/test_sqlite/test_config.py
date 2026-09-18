@@ -240,3 +240,20 @@ def test_runtime_keys_removed_from_driver_features() -> None:
     assert "pragmas" not in config.driver_features
     assert "extensions" not in config.driver_features
     assert config.driver_features["enable_custom_adapters"] is False
+
+
+def test_create_connection_returns_a_caller_owned_connection(tmp_path: Path) -> None:
+    """Closing the connection handed to a caller must leave the pool working."""
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "owned.sqlite")})
+    try:
+        with config.provide_connection() as pooled:
+            standalone = config.create_connection()
+
+            assert standalone is not pooled
+
+            standalone.execute("CREATE TABLE owned (id INTEGER)")
+            standalone.close()
+
+            pooled.execute("SELECT 1")
+    finally:
+        config.close_pool()

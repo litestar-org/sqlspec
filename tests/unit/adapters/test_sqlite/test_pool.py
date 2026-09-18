@@ -1,6 +1,7 @@
 """Unit tests for the SQLite thread-local connection pool."""
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -168,3 +169,46 @@ def test_get_connection_commits_open_transaction_on_clean_exit() -> None:
     assert count == 1
 
     pool.close()
+
+
+def test_close_closes_connections_opened_on_other_threads(tmp_path: Path) -> None:
+    """Connections opened by worker threads must not survive pool shutdown."""
+    pool = SqliteConnectionPool({"database": str(tmp_path / "threads.sqlite")})
+    opened: list[SqliteConnection] = []
+    barrier = threading.Barrier(3)
+
+    def _open() -> None:
+        opened.append(pool.acquire())
+        barrier.wait()
+
+    workers = [threading.Thread(target=_open) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join()
+
+    assert len({id(connection) for connection in opened}) == 2
+
+    pool.close()
+
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+
+
+def test_new_connection_is_independent_of_the_thread_local_connection(tmp_path: Path) -> None:
+    """A standalone connection must not be the one the pool hands out."""
+    pool = SqliteConnectionPool({"database": str(tmp_path / "standalone.sqlite")})
+    try:
+        pooled = pool.acquire()
+        standalone = pool.new_connection()
+
+        assert standalone is not pooled
+
+        standalone.close()
+
+        assert pool.acquire() is pooled
+        pooled.execute("SELECT 1")
+    finally:
+        pool.close()
