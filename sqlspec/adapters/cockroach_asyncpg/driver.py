@@ -204,7 +204,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
                 try:
                     await self.rollback()
                 except Exception:
-                    raise exc from None
+                    raise exc
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
                     raise
             else:

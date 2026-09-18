@@ -9,6 +9,7 @@ from uuid import uuid4
 import duckdb
 import pytest
 
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _secret_sql, _validate_sql_identifier
 
 pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
@@ -523,3 +524,33 @@ def test_clean_exit_commits_an_open_transaction(tmp_path: Path) -> None:
             assert connection.execute("SELECT id FROM items").fetchall() == [(1,)]
     finally:
         pool.close()
+
+
+def test_a_handled_exception_does_not_destroy_an_in_memory_database() -> None:
+    """In-memory data lives in the connection, so a failed session must not close it."""
+    config = DuckDBConfig()
+    with config.provide_session() as db:
+        db.execute("CREATE TABLE survivors (id INTEGER)")
+        db.execute("INSERT INTO survivors VALUES (1)")
+
+    with pytest.raises(RuntimeError):
+        with config.provide_session():
+            raise RuntimeError("application error")
+
+    with config.provide_session() as db:
+        assert db.execute("SELECT id FROM survivors").get_data() == [{"id": 1}]
+
+
+def test_create_connection_leaves_thread_storage_state_intact() -> None:
+    """A standalone connection is caller-owned and must not republish this thread's setup."""
+    config = DuckDBConfig(driver_features={"extensions": [{"name": "json"}]})
+    with config.provide_session() as db:
+        recorded = db.driver_features["_duckdb_storage_extensions"]
+    assert "json" in recorded
+
+    standalone = config.create_connection()
+    try:
+        with config.provide_session() as db:
+            assert db.driver_features["_duckdb_storage_extensions"] == recorded
+    finally:
+        standalone.close()

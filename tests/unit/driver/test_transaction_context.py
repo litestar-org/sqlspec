@@ -423,7 +423,8 @@ def test_failed_sqlite_session_leaves_transaction_uncommitted(sync_config: Sqlit
     assert _committed_ids(sync_config) == []
 
 
-def test_failed_duckdb_session_discards_thread_connection() -> None:
+def test_failed_duckdb_session_keeps_an_in_memory_connection() -> None:
+    """An in-memory database lives in its connection, so a failed session must not discard it."""
     config = DuckDBConfig(connection_config={"database": ":memory:"})
     try:
         with config.provide_session() as session:
@@ -434,6 +435,26 @@ def test_failed_duckdb_session_discards_thread_connection() -> None:
         with pytest.raises(_BoomError), config.provide_session():
             raise _BoomError
 
+        assert pool.size() == 1
+        with config.provide_session() as session:
+            assert session.execute("SELECT id FROM items").get_data() == []
+    finally:
+        config.close_pool()
+
+
+def test_failed_duckdb_session_discards_a_file_connection(tmp_path: Path) -> None:
+    """A file-backed connection holds DuckDB's file lock, which a failed session must release."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "items.duckdb")})
+    try:
+        with config.provide_session() as session:
+            session.execute_script("CREATE TABLE items (id INTEGER)")
+        pool = config.provide_pool()
+
+        with pytest.raises(_BoomError), config.provide_session():
+            raise _BoomError
+
         assert pool.size() == 0
+        with config.provide_session() as session:
+            assert session.execute("SELECT id FROM items").get_data() == []
     finally:
         config.close_pool()

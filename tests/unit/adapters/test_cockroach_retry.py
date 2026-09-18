@@ -27,7 +27,7 @@ class _RetryableError(Exception):
     sqlstate = "40001"
 
 
-@pytest.mark.parametrize("outcome", ["retry", "exhausted", "nonretryable"])
+@pytest.mark.parametrize("outcome", ["retryable", "nonretryable"])
 def test_sync_retry_preserves_outcome_when_rollback_fails(outcome: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed rollback leaves the transaction aborted, so the original error is raised at once."""
     driver_type = CockroachPsycopgSyncDriver
@@ -43,7 +43,7 @@ def test_sync_retry_preserves_outcome_when_rollback_fails(outcome: str, monkeypa
         driver_features={"max_retries": 1, "retry_delay_base_ms": 0, "enable_retry_logging": False},
     )
     original = ValueError("operation failed") if outcome == "nonretryable" else _RetryableError("restart transaction")
-    operation = MagicMock(side_effect=[original, "ok"] if outcome == "retry" else original)
+    operation = MagicMock(side_effect=original)
 
     with pytest.raises(type(original)) as caught:
         driver.run_transaction_with_retry(operation)
@@ -55,7 +55,7 @@ def test_sync_retry_preserves_outcome_when_rollback_fails(outcome: str, monkeypa
 
 
 @pytest.mark.parametrize("driver_type", [CockroachAsyncpgDriver, CockroachPsycopgAsyncDriver])
-@pytest.mark.parametrize("outcome", ["retry", "exhausted", "nonretryable"])
+@pytest.mark.parametrize("outcome", ["retryable", "nonretryable"])
 async def test_async_retry_preserves_outcome_when_rollback_fails(
     driver_type: type[CockroachAsyncpgDriver | CockroachPsycopgAsyncDriver],
     outcome: str,
@@ -74,7 +74,7 @@ async def test_async_retry_preserves_outcome_when_rollback_fails(
         driver_features={"max_retries": 1, "retry_delay_base_ms": 0, "enable_retry_logging": False},
     )
     original = ValueError("operation failed") if outcome == "nonretryable" else _RetryableError("restart transaction")
-    operation = AsyncMock(side_effect=[original, "ok"] if outcome == "retry" else original)
+    operation = AsyncMock(side_effect=original)
 
     with pytest.raises(type(original)) as caught:
         await driver.run_transaction_with_retry(operation)
@@ -254,3 +254,79 @@ def test_sync_retry_still_retries_when_rollback_succeeds(monkeypatch: pytest.Mon
 
     assert driver.run_transaction_with_retry(operation) == "ok"
     assert operation.call_count == 2
+
+
+@pytest.mark.parametrize("is_retryable", [psycopg_is_retryable, asyncpg_is_retryable])
+def test_a_conflict_the_caller_re_raised_as_its_own_error_is_not_retried(is_retryable: Any) -> None:
+    """Translating a conflict into a domain error is a deliberate abort, not a restart request."""
+
+    class DomainError(Exception):
+        """An error the application raised on purpose."""
+
+    try:
+        try:
+            raise SerializationConflictError("write skew")
+        except SerializationConflictError as conflict:
+            raise DomainError("business rule rejected the write") from conflict
+    except DomainError as deliberate:
+        assert is_retryable(deliberate) is False
+
+
+@pytest.mark.parametrize("is_retryable", [psycopg_is_retryable, asyncpg_is_retryable])
+def test_a_conflict_wrapped_by_transaction_control_is_retried(is_retryable: Any) -> None:
+    """CockroachDB reports write skew at COMMIT, where the driver error is wrapped by SQLSpec."""
+    try:
+        try:
+            raise _RetryableError("restart transaction")
+        except _RetryableError as driver_error:
+            raise SQLSpecError("Failed to commit transaction") from driver_error
+    except SQLSpecError as wrapped:
+        assert is_retryable(wrapped) is True
+
+
+def test_a_failed_rollback_keeps_the_original_cause_and_reports_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The escaping error must still carry its SQLSTATE cause, and name why rollback died."""
+    driver_type = CockroachPsycopgSyncDriver
+    monkeypatch.setattr(driver_type, "_connection_in_transaction", lambda _self: False)
+    rollback_failure = RuntimeError("connection is broken")
+    monkeypatch.setattr(driver_type, "begin", MagicMock())
+    monkeypatch.setattr(driver_type, "commit", MagicMock())
+    monkeypatch.setattr(driver_type, "rollback", MagicMock(side_effect=rollback_failure))
+    driver = driver_type(
+        connection=MagicMock(),
+        driver_features={"max_retries": 3, "retry_delay_base_ms": 0, "enable_retry_logging": False},
+    )
+    driver_error = _RetryableError("restart transaction")
+    conflict = SerializationConflictError("Failed to commit transaction")
+    conflict.__cause__ = driver_error
+
+    with pytest.raises(SerializationConflictError) as caught:
+        driver.run_transaction_with_retry(MagicMock(side_effect=conflict))
+
+    assert caught.value.__cause__ is driver_error
+    assert caught.value.__context__ is rollback_failure
+
+
+def test_sync_retry_stops_after_the_configured_attempts_when_rollback_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A conflict that never clears must stop at max_retries rather than loop forever."""
+    driver_type = CockroachPsycopgSyncDriver
+    monkeypatch.setattr(driver_type, "_connection_in_transaction", lambda _self: False)
+    begin = MagicMock()
+    rollback = MagicMock()
+    monkeypatch.setattr(driver_type, "begin", begin)
+    monkeypatch.setattr(driver_type, "commit", MagicMock())
+    monkeypatch.setattr(driver_type, "rollback", rollback)
+    driver = driver_type(
+        connection=MagicMock(),
+        driver_features={"max_retries": 2, "retry_delay_base_ms": 0, "enable_retry_logging": False},
+    )
+    conflict = _RetryableError("restart transaction")
+    operation = MagicMock(side_effect=conflict)
+
+    with pytest.raises(_RetryableError) as caught:
+        driver.run_transaction_with_retry(operation)
+
+    assert caught.value is conflict
+    assert operation.call_count == 3
+    assert begin.call_count == 3
+    assert rollback.call_count == 3

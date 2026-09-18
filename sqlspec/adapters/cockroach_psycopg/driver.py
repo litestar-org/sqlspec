@@ -250,7 +250,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
                 try:
                     self.rollback()
                 except Exception:
-                    raise exc from None
+                    raise exc
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
                     raise
             else:
@@ -464,7 +464,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
                 try:
                     await self.rollback()
                 except Exception:
-                    raise exc from None
+                    raise exc
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
                     raise
             else:

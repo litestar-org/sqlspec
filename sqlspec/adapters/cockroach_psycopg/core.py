@@ -9,7 +9,7 @@ from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
-from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError
+from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
@@ -80,6 +80,9 @@ def is_retryable_error(error: BaseException) -> bool:
     The cause chain is also walked because CockroachDB reports a serialization
     failure at COMMIT for the write-skew case, and transaction control wraps the
     driver error with ``raise ... from e``, which keeps the original reachable.
+    The walk descends only through SQLSpec's own errors, so an exception the
+    caller raised from a conflict is treated as the deliberate abort it is
+    rather than being retried against a database that will never accept it.
 
     Args:
         error: The exception raised by the transaction body or its commit.
@@ -95,6 +98,8 @@ def is_retryable_error(error: BaseException) -> bool:
             return True
         if has_sqlstate(current) and str(current.sqlstate) == "40001":
             return True
+        if not isinstance(current, SQLSpecError):
+            return False
         current = cast("BaseException | None", cast("Any", current).__cause__)
     return False
 

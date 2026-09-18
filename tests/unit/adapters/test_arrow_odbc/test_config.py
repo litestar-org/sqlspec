@@ -11,7 +11,13 @@ from arrow_odbc import TextEncoding
 import sqlspec.adapters.arrow_odbc.config as arrow_odbc_config
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver, build_connection_config
 from sqlspec.adapters.arrow_odbc.core import create_mapped_exception
-from sqlspec.exceptions import DatabaseConnectionError, DataError, IntegrityError, SQLParsingError
+from sqlspec.exceptions import (
+    DatabaseConnectionError,
+    DataError,
+    ImproperConfigurationError,
+    IntegrityError,
+    SQLParsingError,
+)
 
 
 class _RecordingConnection:
@@ -33,7 +39,7 @@ def test_connection_string_keeps_extra_options() -> None:
         "extra": {"ApplicationIntent": "ReadOnly"},
     })
 
-    assert connection_string.startswith("DSN=analytics;")
+    assert "DSN=analytics;" in connection_string
     assert "ApplicationIntent=ReadOnly" in connection_string
 
 
@@ -41,8 +47,35 @@ def test_connection_string_keeps_explicit_odbc_fields() -> None:
     """Individual ODBC fields supplied alongside a connection string must survive."""
     connection_string, _ = build_connection_config({"connection_string": "DSN=analytics", "database": "reporting"})
 
-    assert connection_string.startswith("DSN=analytics;")
+    assert "DSN=analytics" in connection_string
     assert "Database=reporting" in connection_string
+
+
+def test_explicit_field_outranks_the_same_option_inside_the_connection_string() -> None:
+    """ODBC honours a repeated keyword's first occurrence, so the explicit field must lead."""
+    connection_string, _ = build_connection_config({"connection_string": "Database=prod", "database": "staging"})
+
+    assert connection_string.index("Database=staging") < connection_string.index("Database=prod")
+
+
+def test_an_already_braced_value_is_not_quoted_again() -> None:
+    """The braced driver spelling is the usual one and must reach the driver manager intact."""
+    connection_string, _ = build_connection_config({"driver": "{ODBC Driver 18 for SQL Server}", "server": "db"})
+
+    assert "Driver={ODBC Driver 18 for SQL Server};" in connection_string
+
+
+def test_a_value_needing_quotes_is_braced() -> None:
+    """A value carrying ODBC punctuation cannot be read as the start of another keyword."""
+    connection_string, _ = build_connection_config({"driver": "PostgreSQL Unicode(x64)", "server": "db"})
+
+    assert "Driver={PostgreSQL Unicode(x64)};" in connection_string
+
+
+def test_a_value_carrying_a_closing_brace_is_rejected() -> None:
+    """ODBC defines no escape for it, so quoting would silently truncate the value."""
+    with pytest.raises(ImproperConfigurationError, match="closing brace"):
+        build_connection_config({"driver": "d", "pwd": "p{a}}ss}"})
 
 
 def test_connection_string_alone_is_unchanged() -> None:

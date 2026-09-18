@@ -140,7 +140,8 @@ class DuckDBConnectionPool:
         """Open a standalone connection with extensions and secrets applied.
 
         Unless the pool asks it to, the result is owned by the caller: it is not
-        thread-local and is not tracked for pool shutdown.
+        thread-local, is not tracked for pool shutdown, and leaves the storage
+        setup already published for this thread untouched.
 
         Args:
             record_thread_state: Whether to publish storage setup for this thread.
@@ -148,9 +149,6 @@ class DuckDBConnectionPool:
         Returns:
             DuckDBConnection: A newly opened, fully configured connection.
         """
-        self._thread_local.storage_extensions = frozenset()
-        self._thread_local.storage_secrets = ()
-        self._thread_local.storage_protocols = frozenset()
         loaded_extensions: set[str] = set()
         storage_protocols: set[str] = set()
         connect_parameters = {}
@@ -395,7 +393,10 @@ class DuckDBConnectionPool:
         try:
             yield connection
         except Exception:
-            self._close_thread_connection()
+            with suppress(Exception):
+                connection.rollback()
+            if not self._is_memory_db:
+                self._close_thread_connection()
             raise
         else:
             with suppress(Exception):

@@ -194,3 +194,11 @@ def test_typed_non_null_parameter_still_infers_from_its_value() -> None:
     types = infer_spanner_param_types({"value": TypedParameter("alice", str)})
 
     assert types["value"] == param_types.STRING
+
+
+@pytest.mark.parametrize("uuid_value", [UUID("12345678-1234-5678-1234-567812345678"), uuid_utils.uuid4()])
+def test_a_uuid_parameter_declares_string_before_coercion(uuid_value: Any) -> None:
+    """Types are inferred from the raw parameters, so UUID must be recognised there."""
+    types = infer_spanner_param_types({"id": uuid_value})
+
+    assert types["id"] == param_types.STRING

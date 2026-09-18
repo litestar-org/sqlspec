@@ -47,6 +47,8 @@ _uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
 if _uuid_utils_uuid is not None:
     _UUID_TYPES = (UUID, _uuid_utils_uuid)
 
+_STRING_PARAM_TYPES: "tuple[type[Any], ...]" = (str, *_UUID_TYPES)
+
 UUID_BYTE_LENGTH: int = 16
 _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
 _JSON_OBJECT_TYPE: "type[Any] | None" = None
@@ -241,7 +243,7 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             types[key] = param_types.INT64
         elif isinstance(value, float):
             types[key] = param_types.FLOAT64
-        elif isinstance(value, str):
+        elif isinstance(value, _STRING_PARAM_TYPES):
             types[key] = param_types.STRING
         elif isinstance(value, bytes):
             types[key] = param_types.BYTES

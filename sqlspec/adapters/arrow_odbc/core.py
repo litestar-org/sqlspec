@@ -63,6 +63,7 @@ _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("snowflake", ("snowflake",)),
 )
 _ARROW_ODBC_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"Native error:\s*(-?\d+)")
+_ODBC_PUNCTUATION: Final[str] = "[]{}(),;?*=!@"
 _SQL_SERVER_DIAGNOSTIC_MARKERS: Final[tuple[str, ...]] = ("sql server", "msodbcsql")
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     2601: (UniqueViolationError, "unique constraint violation"),
@@ -148,9 +149,10 @@ def apply_driver_features(
 def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Build arrow-odbc connection arguments using the 10.4 keyword names.
 
-    An explicit ``connection_string`` is the prefix of the result; individual
-    ODBC fields and ``extra`` entries are appended after it, so a later field
-    wins over the same option inside the string per ODBC's own last-wins rule.
+    Individual ODBC fields and ``extra`` entries are emitted first and an
+    explicit ``connection_string`` follows them, so a field set on the config
+    wins over the same option written inside the string. ODBC resolves a
+    repeated keyword in favour of its first occurrence.
 
     Args:
         params: Raw connection configuration.
@@ -176,19 +178,19 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         value = config.get(key)
         if value is None:
             continue
-        parts.append(f"{option_name}={_format_connection_value(value)}")
+        parts.append(f"{option_name}={_format_connection_value(option_name, value)}")
         consumed.add(key)
 
     for key, value in config.items():
         if key in consumed or value is None:
             continue
-        parts.append(f"{key}={_format_connection_value(value)}")
+        parts.append(f"{key}={_format_connection_value(key, value)}")
 
     if connection_string is not None:
-        prefix = str(connection_string)
-        if parts and not prefix.rstrip().endswith(";"):
-            prefix += ";"
-        return prefix + ";".join(parts) + (";" if parts else ""), connect_kwargs
+        suffix = str(connection_string)
+        if not parts:
+            return suffix, connect_kwargs
+        return ";".join(parts) + ";" + suffix, connect_kwargs
 
     if not parts:
         msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
@@ -259,25 +261,40 @@ def _is_sql_server_diagnostic(message: str) -> bool:
     return any(marker in lowered for marker in _SQL_SERVER_DIAGNOSTIC_MARKERS)
 
 
-def _format_connection_value(value: Any) -> str:
+def _format_connection_value(option_name: str, value: Any) -> str:
     """Render a value for an ODBC connection string.
 
-    A value containing a delimiter, a brace, or edge whitespace is wrapped in
-    braces so it cannot be read as the start of another keyword, with any
-    closing brace doubled as ODBC requires.
+    A value the caller already brace-quoted is emitted unchanged, since the
+    braced driver spelling is the usual way to write one. Any other value that
+    carries edge whitespace or a character ODBC treats as punctuation is
+    wrapped in braces so it cannot be read as the start of another keyword.
 
     Args:
+        option_name: The connection string keyword this value belongs to.
         value: The configured value.
 
     Returns:
         The value rendered for inclusion in the connection string.
+
+    Raises:
+        ImproperConfigurationError: If the value contains a closing brace that
+            does not terminate an already-quoted value. ODBC defines no escape
+            for one, so quoting it would silently truncate the value.
     """
     if isinstance(value, bool):
         return "yes" if value else "no"
     text = str(value)
-    if text and text == text.strip() and not any(character in text for character in ";={}"):
+    if len(text) > 1 and text.startswith("{") and text.endswith("}") and text.count("}") == 1:
         return text
-    return "{" + text.replace("}", "}}") + "}"
+    if "}" in text:
+        msg = (
+            f"The arrow-odbc value for {option_name!r} contains a closing brace, "
+            "which an ODBC connection string cannot represent."
+        )
+        raise ImproperConfigurationError(msg)
+    if text and text == text.strip() and not any(character in text for character in _ODBC_PUNCTUATION):
+        return text
+    return "{" + text + "}"
 
 
 driver_profile = build_profile()
