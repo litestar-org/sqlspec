@@ -832,12 +832,14 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
+        """Report whether a transaction is open on the connection.
 
-        Oracle does not expose native transaction state through this predicate,
-        so it is tracked via a flag toggled in begin/commit/rollback.
+        Oracle opens a transaction implicitly on the first DML, which the
+        ownership flag alone cannot see, while ``begin()`` sets the flag without
+        issuing SQL, which the native predicate alone cannot see. Both signals
+        are required.
         """
-        return self._transaction_active
+        return self._transaction_active or bool(self.connection.transaction_in_progress)
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
@@ -1537,12 +1539,14 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
+        """Report whether a transaction is open on the connection.
 
-        Oracle does not expose native transaction state through this predicate,
-        so it is tracked via a flag toggled in begin/commit/rollback.
+        Oracle opens a transaction implicitly on the first DML, which the
+        ownership flag alone cannot see, while ``begin()`` sets the flag without
+        issuing SQL, which the native predicate alone cannot see. Both signals
+        are required.
         """
-        return self._transaction_active
+        return self._transaction_active or bool(self.connection.transaction_in_progress)
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION

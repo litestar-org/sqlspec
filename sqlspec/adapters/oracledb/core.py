@@ -630,7 +630,16 @@ def resolve_row_metadata(
 class OracleSyncStreamSource:
     """Compiled chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_fetch_lobs", "_parameters", "_sql")
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_cursor",
+        "_driver",
+        "_fetch_lobs",
+        "_parameters",
+        "_requires_lob_coercion",
+        "_sql",
+    )
 
     def __init__(
         self,
@@ -647,6 +656,7 @@ class OracleSyncStreamSource:
         self._fetch_lobs = fetch_lobs
         self._cursor: OracleSyncRawCursor | None = None
         self._column_names: list[str] | None = None
+        self._requires_lob_coercion: bool | None = None
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -683,9 +693,17 @@ class OracleSyncStreamSource:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names, _ = self._driver._resolve_row_metadata(cursor.description)
+            column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
-        return rows_to_dicts(rows, column_names)
+            self._requires_lob_coercion = requires_lob_coercion
+        coerced_rows, column_names = collect_sync_rows(
+            rows,
+            cursor.description,
+            self._driver.driver_features,
+            column_names=column_names,
+            requires_lob_coercion=self._requires_lob_coercion,
+        )
+        return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -698,7 +716,16 @@ class OracleSyncStreamSource:
 class OracleAsyncStreamSource:
     """Compiled async chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_fetch_lobs", "_parameters", "_sql")
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_cursor",
+        "_driver",
+        "_fetch_lobs",
+        "_parameters",
+        "_requires_lob_coercion",
+        "_sql",
+    )
 
     def __init__(
         self,
@@ -715,6 +742,7 @@ class OracleAsyncStreamSource:
         self._fetch_lobs = fetch_lobs
         self._cursor: OracleAsyncRawCursor | None = None
         self._column_names: list[str] | None = None
+        self._requires_lob_coercion: bool | None = None
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -751,9 +779,17 @@ class OracleAsyncStreamSource:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names, _ = self._driver._resolve_row_metadata(cursor.description)
+            column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
-        return rows_to_dicts(rows, column_names)
+            self._requires_lob_coercion = requires_lob_coercion
+        coerced_rows, column_names = await collect_async_rows(
+            rows,
+            cursor.description,
+            self._driver.driver_features,
+            column_names=column_names,
+            requires_lob_coercion=self._requires_lob_coercion,
+        )
+        return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
 
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor
