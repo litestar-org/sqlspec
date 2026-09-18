@@ -1,6 +1,7 @@
 """Unit tests for row streaming primitives (sqlspec/driver/_stream.py)."""
 
-from typing import Any
+import sqlite3
+from typing import Any, cast
 
 import pytest
 
@@ -176,26 +177,6 @@ def test_sync_close_does_not_retry_when_source_raises_type_error() -> None:
     assert source.close_calls == 1
 
 
-def test_sync_close_supports_legacy_no_argument_source() -> None:
-    class LegacyCloseSource:
-        def __init__(self) -> None:
-            self.close_calls = 0
-
-        def start(self) -> None:
-            pass
-
-        def fetch_chunk(self) -> "list[dict[str, Any]]":
-            return []
-
-        def close(self) -> None:
-            self.close_calls += 1
-
-    source = LegacyCloseSource()
-    _sync_stream(source).close()
-
-    assert source.close_calls == 1
-
-
 # --------------------------------------------------------------------------- #
 # AsyncRowStream
 # --------------------------------------------------------------------------- #
@@ -299,26 +280,6 @@ async def test_async_close_does_not_retry_when_source_raises_type_error() -> Non
     assert source.close_calls == 1
 
 
-async def test_async_close_supports_legacy_no_argument_source() -> None:
-    class LegacyCloseSource:
-        def __init__(self) -> None:
-            self.close_calls = 0
-
-        async def start(self) -> None:
-            pass
-
-        async def fetch_chunk(self) -> "list[dict[str, Any]]":
-            return []
-
-        async def close(self) -> None:
-            self.close_calls += 1
-
-    source = LegacyCloseSource()
-    await _async_stream(source).aclose()
-
-    assert source.close_calls == 1
-
-
 # --------------------------------------------------------------------------- #
 # Eager sources
 # --------------------------------------------------------------------------- #
@@ -370,3 +331,108 @@ def test_rows_to_dicts_zips_tuple_rows_with_column_names() -> None:
 
 def test_rows_to_dicts_empty_column_names_returns_empty() -> None:
     assert rows_to_dicts([(1,), (2,)], []) == []
+
+
+def test_rows_to_dicts_preserves_dict_row_values() -> None:
+    rows = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+    assert rows_to_dicts(rows, ["id", "name"]) == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+
+def test_rows_to_dicts_preserves_dict_rows_without_column_names() -> None:
+    assert rows_to_dicts([{"id": 1}], []) == [{"id": 1}]
+
+
+def test_rows_to_dicts_empty_rows_returns_empty() -> None:
+    assert rows_to_dicts([], []) == []
+
+
+def test_rows_to_dicts_keeps_sqlite_row_on_zip_path() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute("SELECT 1 AS id, 'a' AS name").fetchall()
+    finally:
+        connection.close()
+
+    assert rows_to_dicts(list(rows), ["id", "name"]) == [{"id": 1, "name": "a"}]
+
+
+class _UnintrospectableClose:
+    """Callable whose signature cannot be read, mirroring a mypyc-compiled method."""
+
+    def __init__(self, record: "list[bool]") -> None:
+        self._record = record
+
+    def __call__(self, error: bool = False) -> None:
+        self._record.append(error)
+
+    @property
+    def __signature__(self) -> Any:
+        msg = "no signature found for builtin"
+        raise ValueError(msg)
+
+
+class _UnintrospectableSyncSource:
+    """Sync source whose close cannot be introspected."""
+
+    def __init__(self) -> None:
+        self.close_errors: list[bool] = []
+        self.close = _UnintrospectableClose(self.close_errors)
+
+    def start(self) -> None:
+        return None
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        msg = "boom"
+        raise RuntimeError(msg)
+
+
+class _UnintrospectableAsyncClose:
+    """Awaitable callable whose signature cannot be read."""
+
+    def __init__(self, record: "list[bool]") -> None:
+        self._record = record
+
+    async def __call__(self, error: bool = False) -> None:
+        self._record.append(error)
+
+    @property
+    def __signature__(self) -> Any:
+        msg = "no signature found for builtin"
+        raise ValueError(msg)
+
+
+class _UnintrospectableAsyncSource:
+    """Async source whose close cannot be introspected."""
+
+    def __init__(self) -> None:
+        self.close_errors: list[bool] = []
+        self.close = _UnintrospectableAsyncClose(self.close_errors)
+
+    async def start(self) -> None:
+        return None
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        msg = "boom"
+        raise RuntimeError(msg)
+
+
+def test_sync_close_forwards_error_without_signature_introspection() -> None:
+    source = _UnintrospectableSyncSource()
+    stream = _sync_stream(cast("SyncRowSource", source))
+
+    with pytest.raises(RuntimeError):
+        list(stream)
+
+    assert source.close_errors == [True]
+
+
+async def test_async_close_forwards_error_without_signature_introspection() -> None:
+    source = _UnintrospectableAsyncSource()
+    stream = _async_stream(cast("AsyncRowSource", source))
+
+    with pytest.raises(RuntimeError):
+        [row async for row in stream]
+
+    assert source.close_errors == [True]

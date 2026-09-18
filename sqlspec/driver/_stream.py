@@ -11,7 +11,6 @@ interpreted adapter sources can feed compiled stream classes):
 
 import builtins
 import contextlib
-import inspect
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast, overload
 
 from typing_extensions import Self
@@ -46,7 +45,7 @@ class SyncRowSource(Protocol):
 
     def fetch_chunk(self) -> "list[dict[str, Any]]": ...
 
-    def close(self) -> None: ...
+    def close(self, error: bool = False) -> None: ...
 
 
 class AsyncRowSource(Protocol):
@@ -56,11 +55,15 @@ class AsyncRowSource(Protocol):
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]": ...
 
-    async def close(self) -> None: ...
+    async def close(self, error: bool = False) -> None: ...
 
 
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
-    """Zip positional rows with column names into dict rows."""
+    """Return dict rows unchanged and zip positional rows with column names."""
+    if not rows:
+        return []
+    if isinstance(rows[0], dict):
+        return list(rows)
     if not column_names:
         return []
     return [dict(zip(column_names, row, strict=False)) for row in rows]
@@ -145,7 +148,7 @@ class SyncRowStream(Generic[RowT]):
         self._buffer = []
         self._buffer_index = 0
         with contextlib.suppress(Exception):
-            _close_sync_source(self._source, error)
+            self._source.close(error=error)
 
 
 class AsyncRowStream(Generic[RowT]):
@@ -227,7 +230,7 @@ class AsyncRowStream(Generic[RowT]):
         self._buffer = []
         self._buffer_index = 0
         with contextlib.suppress(Exception):
-            await _close_async_source(self._source, error)
+            await self._source.close(error=error)
 
 
 class EagerSyncRowSource:
@@ -297,25 +300,3 @@ class _LazyEagerAsyncRowSource:
 
     async def close(self, error: bool = False) -> None:
         self._rows = []
-
-
-def _close_sync_source(source: SyncRowSource, error: bool) -> None:
-    """Close a source while preserving the original no-argument contract."""
-    close = source.close
-    try:
-        inspect.signature(close).bind(error=error)
-    except (TypeError, ValueError):
-        close()
-        return
-    cast("Any", close)(error=error)
-
-
-async def _close_async_source(source: AsyncRowSource, error: bool) -> None:
-    """Close an async source while preserving the original no-argument contract."""
-    close = source.close
-    try:
-        inspect.signature(close).bind(error=error)
-    except (TypeError, ValueError):
-        await close()
-        return
-    await cast("Any", close)(error=error)
