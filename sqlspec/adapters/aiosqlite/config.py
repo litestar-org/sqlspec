@@ -351,17 +351,16 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         return namespace
 
     async def create_connection(self) -> "AiosqliteConnection":
-        """Create a single async connection from the pool.
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same parameters, PRAGMAs, and runtime setup
+        the pool applies, consumes no pool slot, and must be closed by the caller.
 
         Returns:
-            An aiosqlite connection instance.
+            A newly opened aiosqlite connection.
         """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        pool_connection = await pool.acquire()
-        return pool_connection.connection
+        pool = await self.provide_pool()
+        return await pool.new_connection()
 
     async def provide_pool(self) -> AiosqliteConnectionPool:
         """Provide async pool instance.
