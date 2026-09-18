@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from sqlspec.core import TypedParameter
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.type_converters import should_json_encode_sequence
 from sqlspec.utils.uuids import uuid_from_bytes
@@ -199,6 +200,17 @@ def coerce_params_for_spanner(
     return coerced if changed else params
 
 
+_NULL_PARAM_TYPE_NAMES: "dict[type[Any], str]" = {
+    bool: "BOOL",
+    int: "INT64",
+    float: "FLOAT64",
+    str: "STRING",
+    bytes: "BYTES",
+    datetime: "TIMESTAMP",
+    date: "DATE",
+}
+
+
 def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
     """Infer Spanner param_types from Python values.
 
@@ -215,8 +227,11 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
     json_object_type = _get_json_object_type()
     types: dict[str, Any] = {}
     json_type = _json_param_type()
-    for key, value in params.items():
-        if isinstance(value, bool):
+    for key, raw_value in params.items():
+        value = raw_value.value if type(raw_value) is TypedParameter else raw_value
+        if value is None:
+            types[key] = _null_param_type(key, raw_value, param_types)
+        elif isinstance(value, bool):
             types[key] = param_types.BOOL
         elif isinstance(value, int):
             types[key] = param_types.INT64
@@ -249,6 +264,34 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             elif isinstance(first, bool):
                 types[key] = param_types.Array(param_types.BOOL)
     return types
+
+
+def _null_param_type(key: str, raw_value: Any, param_types: "SpannerParamTypesProtocol") -> Any:
+    """Resolve the Spanner type for a NULL parameter.
+
+    Spanner rejects an untyped NULL and offers no ANY type, so the declared
+    Python type on a ``TypedParameter`` is the only usable source.
+
+    Args:
+        key: Parameter name, used in the diagnostic.
+        raw_value: The parameter as supplied, before coercion.
+        param_types: The Spanner param_types module.
+
+    Returns:
+        The Spanner param type for the NULL value.
+
+    Raises:
+        SQLSpecError: If the NULL carries no usable declared type.
+    """
+    declared = raw_value.original_type if type(raw_value) is TypedParameter else None
+    resolver = _NULL_PARAM_TYPE_NAMES.get(declared) if declared is not None else None
+    if resolver is None:
+        msg = (
+            f"Spanner requires a type for NULL parameter '{key}'. "
+            "Wrap the value with sqlspec.core.TypedParameter, for example TypedParameter(None, str)."
+        )
+        raise SQLSpecError(msg)
+    return getattr(param_types, resolver)
 
 
 def _get_param_types() -> "SpannerParamTypesProtocol":

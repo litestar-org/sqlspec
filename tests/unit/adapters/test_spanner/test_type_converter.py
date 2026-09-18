@@ -3,11 +3,19 @@ from datetime import date, datetime, timezone
 from typing import Any, cast
 from uuid import UUID
 
+import pytest
 import uuid_utils
+from google.cloud.spanner_v1 import param_types
 from google.cloud.spanner_v1.data_types import JsonObject
 
-from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, spanner_json, spanner_to_uuid
+from sqlspec.adapters.spanner.type_converter import (
+    coerce_params_for_spanner,
+    infer_spanner_param_types,
+    spanner_json,
+    spanner_to_uuid,
+)
 from sqlspec.core import TypedParameter
+from sqlspec.exceptions import SQLSpecError
 
 
 def test_spanner_to_uuid_converts_bytes() -> None:
@@ -139,3 +147,33 @@ def test_spanner_uuid_conversion_disabled() -> None:
     assert coerced is params
     assert coerced["stdlib_id"] is stdlib_uuid
     assert coerced["utils_id"] is utils_uuid
+
+
+def test_typed_null_parameter_is_given_a_spanner_type() -> None:
+    """Spanner rejects an untyped NULL, so a declared type must survive to inference."""
+    types = infer_spanner_param_types({"value": TypedParameter(None, str)})
+
+    assert types["value"] == param_types.STRING
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected_name"),
+    [(bool, "BOOL"), (int, "INT64"), (float, "FLOAT64"), (str, "STRING"), (bytes, "BYTES")],
+)
+def test_typed_null_covers_the_scalar_types(declared: type, expected_name: str) -> None:
+    types = infer_spanner_param_types({"value": TypedParameter(None, declared)})
+
+    assert types["value"] == getattr(param_types, expected_name)
+
+
+def test_bare_null_parameter_raises_a_clear_error() -> None:
+    """The diagnostic must name the remedy rather than leaving Spanner to reject it."""
+    with pytest.raises(SQLSpecError, match="TypedParameter"):
+        infer_spanner_param_types({"value": None})
+
+
+def test_typed_non_null_parameter_still_infers_from_its_value() -> None:
+    """Wrapping a real value must not change the inferred type."""
+    types = infer_spanner_param_types({"value": TypedParameter("alice", str)})
+
+    assert types["value"] == param_types.STRING

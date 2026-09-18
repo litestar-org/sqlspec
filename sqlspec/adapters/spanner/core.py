@@ -8,7 +8,13 @@ from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
-from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.core import (
+    DriverParameterProfile,
+    ParameterStyle,
+    StatementConfig,
+    TypedParameter,
+    build_statement_config_from_profile,
+)
 from sqlspec.exceptions import (
     DeadlockError,
     NotFoundError,
@@ -112,18 +118,27 @@ def infer_param_types(params: "dict[str, Any] | list[Any] | tuple[Any, ...] | No
     return infer_spanner_param_types(params)
 
 
-def build_param_type_signature(params: "dict[str, Any] | None") -> "tuple[tuple[str, type[Any]], ...]":
+def build_param_type_signature(params: "dict[str, Any] | None") -> "tuple[tuple[str, type[Any], Any], ...]":
     """Build a hashable signature for Spanner param type inference caching.
 
+    The declared type is part of the key because every NULL has the same runtime
+    type, so two differently-typed NULLs would otherwise share a cache entry.
+
     Args:
-        params: Coerced parameter mapping.
+        params: Parameter mapping as supplied, before coercion.
 
     Returns:
-        Tuple signature based on parameter keys and value runtime types.
+        Tuple signature of parameter name, runtime type, and declared type.
     """
     if not params:
         return ()
-    return tuple((key, type(value)) for key, value in params.items())
+    signature: list[tuple[str, type[Any], Any]] = []
+    for key, value in params.items():
+        if type(value) is TypedParameter:
+            signature.append((key, type(value.value), value.original_type))
+        else:
+            signature.append((key, type(value), None))
+    return tuple(signature)
 
 
 def resolve_column_names(fields: "Sequence[Any] | None", cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:

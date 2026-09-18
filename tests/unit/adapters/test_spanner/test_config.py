@@ -2,6 +2,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from google.cloud.spanner_v1.database_sessions_manager import TransactionType
 from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
 
 from sqlspec.adapters.spanner.config import (
@@ -366,21 +367,37 @@ def test_provide_connection_batch_and_snapshot() -> None:
         def transaction(self):
             return _Txn()
 
-    class _DB:
-        def session(self):
+    class _SessionsManager:
+        def __init__(self) -> None:
+            self.checked_out = 0
+            self.returned = 0
+
+        def get_session(self, _transaction_type: object) -> "_Session":
+            self.checked_out += 1
             return _Session()
+
+        def put_session(self, _session: object) -> None:
+            self.returned += 1
+
+    class _DB:
+        def __init__(self) -> None:
+            self.sessions_manager = _SessionsManager()
 
         def snapshot(self, multi_use: bool = False):
             return _Ctx(snap_obj)
 
+    database = _DB()
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
-    config.get_database = lambda: _DB()  # type: ignore[assignment]
+    config.get_database = lambda: database  # type: ignore[assignment]
 
     with config.provide_connection(transaction=True) as conn:
         assert isinstance(conn, _Txn)
 
     with config.provide_connection(transaction=False) as conn:
         assert conn is snap_obj
+
+    assert database.sessions_manager.checked_out == 1
+    assert database.sessions_manager.returned == 1
 
 
 def test_transaction_context_commits_mutations_only_transaction() -> None:
@@ -420,12 +437,21 @@ def test_transaction_context_commits_mutations_only_transaction() -> None:
         def transaction(self):
             return self.txn
 
+    class _SessionsManager:
+        def __init__(self, session: "_Session") -> None:
+            self.session = session
+            self.returned = 0
+
+        def get_session(self, _transaction_type: object) -> "_Session":
+            return self.session
+
+        def put_session(self, _session: object) -> None:
+            self.returned += 1
+
     class _DB:
         def __init__(self) -> None:
             self.session_obj = _Session()
-
-        def session(self):
-            return self.session_obj
+            self.sessions_manager = _SessionsManager(self.session_obj)
 
     db = _DB()
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
@@ -474,12 +500,21 @@ def test_transaction_context_does_not_commit_empty_transaction() -> None:
         def transaction(self):
             return self.txn
 
+    class _SessionsManager:
+        def __init__(self, session: "_Session") -> None:
+            self.session = session
+            self.returned = 0
+
+        def get_session(self, _transaction_type: object) -> "_Session":
+            return self.session
+
+        def put_session(self, _session: object) -> None:
+            self.returned += 1
+
     class _DB:
         def __init__(self) -> None:
             self.session_obj = _Session()
-
-        def session(self):
-            return self.session_obj
+            self.sessions_manager = _SessionsManager(self.session_obj)
 
     db = _DB()
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
@@ -527,9 +562,16 @@ def test_provide_session_uses_batch_when_transaction_requested() -> None:
         def __exit__(self, *_):
             return False
 
-    class _DB:
-        def session(self):
+    class _SessionsManager:
+        def get_session(self, _transaction_type: object) -> "_Session":
             return _Session()
+
+        def put_session(self, _session: object) -> None:
+            return None
+
+    class _DB:
+        def __init__(self) -> None:
+            self.sessions_manager = _SessionsManager()
 
         def snapshot(self, multi_use: bool = False):
             return _Ctx()
@@ -576,9 +618,16 @@ def test_provide_write_session_alias() -> None:
         def __exit__(self, *_):
             return False
 
-    class _DB:
-        def session(self):
+    class _SessionsManager:
+        def get_session(self, _transaction_type: object) -> "_Session":
             return _Session()
+
+        def put_session(self, _session: object) -> None:
+            return None
+
+    class _DB:
+        def __init__(self) -> None:
+            self.sessions_manager = _SessionsManager()
 
         def snapshot(self, multi_use: bool = False):
             return _Ctx()
@@ -591,15 +640,31 @@ def test_provide_write_session_alias() -> None:
         assert isinstance(driver.connection, _Txn)
 
 
-def test_create_connection_delegates_to_get_database() -> None:
-    """create_connection should use get_database rather than rebuilding Database."""
+def test_create_connection_checks_out_a_pooled_session() -> None:
+    """create_connection returns an entered snapshot on a pooled session."""
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     sentinel = object()
     get_database_call_count = 0
 
-    class _DB:
-        def snapshot(self):
+    class _Session:
+        def snapshot(self, multi_use: bool = False) -> object:
             return sentinel
+
+    class _SessionsManager:
+        def __init__(self) -> None:
+            self.transaction_types: list[object] = []
+
+        def get_session(self, transaction_type: object) -> _Session:
+            self.transaction_types.append(transaction_type)
+            return _Session()
+
+        def put_session(self, _session: object) -> None:
+            return None
+
+    manager = _SessionsManager()
+
+    class _DB:
+        sessions_manager = manager
 
     def _get_database() -> _DB:
         nonlocal get_database_call_count
@@ -615,6 +680,7 @@ def test_create_connection_delegates_to_get_database() -> None:
 
     assert config.create_connection() is sentinel
     assert get_database_call_count == 1
+    assert manager.transaction_types == [TransactionType.READ_ONLY]
 
     assert config.create_connection() is sentinel
     assert get_database_call_count == 2

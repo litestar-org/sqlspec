@@ -112,8 +112,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def dispatch_execute(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
         params = cast("dict[str, Any] | None", params)
+        param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
-        param_types_map = self._infer_param_types(coerced_params)
 
         if statement.returns_rows():
             reader = cast("_SpannerReadProtocol", cursor)
@@ -153,8 +153,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             return None
         sql, params = self._compiled_sql(statement, self.statement_config)
         params = cast("dict[str, Any] | None", params)
+        param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
-        param_types_map = self._infer_param_types(coerced_params)
         return SyncRowStream(
             _SpannerSelectStreamSource(
                 self, sql, coerced_params, param_types_map, chunk_size, self._execute_kwargs(for_read=True)
@@ -175,19 +175,20 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         _coerce = self._coerce_params
         _infer = self._infer_param_types
         execute_kwargs = self._execute_kwargs()
-        param_types_cache: dict[tuple[tuple[str, type[Any]], ...], dict[str, Any]] = {}
+        param_types_cache: dict[tuple[tuple[str, type[Any], Any], ...], dict[str, Any]] = {}
         empty_param_types: dict[str, Any] = {}
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
         append_batch_arg = batch_args.append
         for params in prepared_parameters:
-            coerced_params = _coerce(cast("dict[str, Any] | None", params))
+            raw_params = cast("dict[str, Any] | None", params)
+            coerced_params = _coerce(raw_params)
             if not coerced_params:
                 append_batch_arg((sql, {}, empty_param_types))
                 continue
-            signature = build_param_type_signature(coerced_params)
+            signature = build_param_type_signature(raw_params)
             param_types = param_types_cache.get(signature)
             if param_types is None:
-                param_types = _infer(coerced_params)
+                param_types = _infer(raw_params)
                 param_types_cache[signature] = param_types
             append_batch_arg((sql, coerced_params, param_types))
 
@@ -205,8 +206,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         count = 0
         script_params = cast("dict[str, Any] | None", params)
+        param_types_map = self._infer_param_types(script_params)
         coerced_params = self._coerce_params(script_params)
-        param_types_map = self._infer_param_types(coerced_params)
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
         for stmt in statements:
