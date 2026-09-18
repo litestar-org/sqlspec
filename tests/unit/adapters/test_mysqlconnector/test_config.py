@@ -1,5 +1,6 @@
 """Unit tests for mysql-connector configuration modernization."""
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -286,3 +287,32 @@ def test_sync_create_connection_passes_local_infile_gate(monkeypatch: pytest.Mon
     MysqlConnectorSyncConfig().create_connection()
 
     assert calls[0]["allow_local_infile"] is False
+
+
+def test_sync_create_connection_applies_autocommit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sync connector exposes autocommit as a property; it must be set directly."""
+    connection = SimpleNamespace(autocommit=None)
+    monkeypatch.setattr("sqlspec.adapters.mysqlconnector.config.mysql.connector.connect", lambda **_kwargs: connection)
+    config = MysqlConnectorSyncConfig(connection_config={"host": "localhost", "autocommit": True})
+
+    assert config.create_connection() is connection
+    assert connection.autocommit is True
+
+
+async def test_async_create_connection_applies_autocommit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The async connector exposes set_autocommit; it must be awaited directly."""
+    recorded: list[bool] = []
+
+    async def _set_autocommit(value: bool) -> None:
+        recorded.append(value)
+
+    connection = SimpleNamespace(set_autocommit=_set_autocommit)
+
+    async def _connect(**_kwargs: object) -> SimpleNamespace:
+        return connection
+
+    monkeypatch.setattr("sqlspec.adapters.mysqlconnector.config.mysqlconnector_aio.connect", _connect)
+    config = MysqlConnectorAsyncConfig(connection_config={"host": "localhost", "autocommit": False})
+
+    assert await config.create_connection() is connection
+    assert recorded == [False]

@@ -1,6 +1,5 @@
 """MysqlConnector database configuration."""
 
-import contextlib
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from weakref import WeakSet
@@ -376,9 +375,8 @@ class MysqlConnectorSyncConfig(
     def create_connection(self) -> MysqlConnectorSyncConnection:
         connection = mysql.connector.connect(**self.connection_config)
         autocommit = self.connection_config.get("autocommit")
-        if autocommit is not None and hasattr(connection, "autocommit"):
-            with contextlib.suppress(Exception):
-                setattr(connection, "autocommit", bool(autocommit))
+        if autocommit is not None:
+            connection.autocommit = bool(autocommit)
         return connection
 
     def get_signature_namespace(self) -> "dict[str, Any]":
@@ -465,9 +463,8 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
     async def create_connection(self) -> MysqlConnectorAsyncConnection:
         connection = await mysqlconnector_aio.connect(**self.connection_config)
         autocommit = self.connection_config.get("autocommit")
-        if autocommit is not None and hasattr(connection, "set_autocommit"):
-            with contextlib.suppress(Exception):
-                await connection.set_autocommit(bool(autocommit))
+        if autocommit is not None:
+            await connection.set_autocommit(bool(autocommit))
 
         # Call user-provided callback after connection setup
         if self._user_connection_hook is not None:
