@@ -25,6 +25,7 @@ from sqlspec.adapters.cockroach_psycopg.core import (
     native_export_telemetry,
     native_import_telemetry,
     normalize_native_export_query,
+    validate_follower_read_staleness,
 )
 from sqlspec.adapters.cockroach_psycopg.data_dictionary import (
     CockroachPsycopgAsyncDataDictionary,
@@ -34,9 +35,7 @@ from sqlspec.adapters.psycopg.core import create_mapped_exception
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
-from sqlspec.exceptions import SerializationConflictError, TransactionRetryError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -67,9 +66,6 @@ class CockroachPsycopgSyncExceptionHandler(BaseSyncExceptionHandler):
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
-            if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
-                self.pending_exception = SerializationConflictError(str(exc_val))
-                return True
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -84,9 +80,6 @@ class CockroachPsycopgAsyncExceptionHandler(BaseAsyncExceptionHandler):
         if exc_type is None:
             return False
         if issubclass(exc_type, psycopg.Error):
-            if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
-                self.pending_exception = SerializationConflictError(str(exc_val))
-                return True
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -223,20 +216,23 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             raise handler.pending_exception
         return rows
 
+    def begin(self) -> None:
+        """Begin a transaction and apply follower-read staleness to it."""
+        super().begin()
+        self._apply_follower_reads()
+
     def run_transaction_with_retry(self, operation: "Callable[[], _T]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries."""
         if not self._enable_retry or self._connection_in_transaction():
             return operation()
 
-        last_error: BaseException | None = None
-
-        for attempt in range(self._retry_config.max_retries + 1):
+        attempt = 0
+        while True:
             try:
                 self.begin()
                 result = operation()
                 self.commit()
             except Exception as exc:
-                last_error = exc
                 with contextlib.suppress(Exception):
                     self.rollback()
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
@@ -247,9 +243,7 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             if self._retry_config.enable_logging:
                 logger.debug("CockroachDB retry %s/%s after %.3fs", attempt + 1, self._retry_config.max_retries, delay)
             time.sleep(delay)
-
-        msg = "CockroachDB transaction retry limit exceeded"
-        raise TransactionRetryError(msg) from last_error
+            attempt += 1
 
     def dispatch_execute(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
         return self._dispatch_execute_impl(cursor, statement)
@@ -270,16 +264,15 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
             self._data_dictionary = CockroachPsycopgSyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgSyncDataDictionary", self._data_dictionary)
 
-    def _apply_follower_reads(self, cursor: "CockroachSyncCursor") -> None:
+    def _apply_follower_reads(self) -> None:
         if not self.driver_features.get("enable_follower_reads", False):
             return
         if not self._follower_staleness:
             return
-        cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
+        staleness = validate_follower_read_staleness(self._follower_staleness)
+        self.connection.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {staleness}")).close()
 
     def _dispatch_execute_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
-        if statement.returns_rows():
-            self._apply_follower_reads(cursor)
         return super().dispatch_execute(cursor, statement)
 
     def _dispatch_execute_many_impl(self, cursor: "CockroachSyncCursor", statement: SQL) -> "ExecutionResult":
@@ -420,20 +413,23 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             raise handler.pending_exception
         return rows
 
+    async def begin(self) -> None:
+        """Begin a transaction and apply follower-read staleness to it."""
+        await super().begin()
+        await self._apply_follower_reads()
+
     async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries."""
         if not self._enable_retry or self._connection_in_transaction():
             return await operation()
 
-        last_error: BaseException | None = None
-
-        for attempt in range(self._retry_config.max_retries + 1):
+        attempt = 0
+        while True:
             try:
                 await self.begin()
                 result = await operation()
                 await self.commit()
             except Exception as exc:
-                last_error = exc
                 with contextlib.suppress(Exception):
                     await self.rollback()
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
@@ -444,9 +440,7 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             if self._retry_config.enable_logging:
                 logger.debug("CockroachDB retry %s/%s after %.3fs", attempt + 1, self._retry_config.max_retries, delay)
             await asyncio.sleep(delay)
-
-        msg = "CockroachDB transaction retry limit exceeded"
-        raise TransactionRetryError(msg) from last_error
+            attempt += 1
 
     async def dispatch_execute(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
         return await self._dispatch_execute_impl(cursor, statement)
@@ -467,16 +461,16 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
             self._data_dictionary = CockroachPsycopgAsyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgAsyncDataDictionary", self._data_dictionary)
 
-    async def _apply_follower_reads(self, cursor: "CockroachAsyncCursor") -> None:
+    async def _apply_follower_reads(self) -> None:
         if not self.driver_features.get("enable_follower_reads", False):
             return
         if not self._follower_staleness:
             return
-        await cursor.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}"))
+        staleness = validate_follower_read_staleness(self._follower_staleness)
+        cursor = await self.connection.execute(cast("Any", f"SET TRANSACTION AS OF SYSTEM TIME {staleness}"))
+        await cursor.close()
 
     async def _dispatch_execute_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":
-        if statement.returns_rows():
-            await self._apply_follower_reads(cursor)
         return await super().dispatch_execute(cursor, statement)
 
     async def _dispatch_execute_many_impl(self, cursor: "CockroachAsyncCursor", statement: SQL) -> "ExecutionResult":

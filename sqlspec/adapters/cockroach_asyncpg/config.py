@@ -18,6 +18,7 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgPool,
     CockroachAsyncpgSessionContext,
 )
+from sqlspec.adapters.cockroach_asyncpg.core import validate_follower_read_staleness
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -98,6 +99,16 @@ class _NativeStorageCSVOptions(TypedDict):
     nullas: NotRequired[str]
     nullif: NotRequired[str]
     skip: NotRequired[int]
+
+
+def _validate_follower_read_features(driver_features: "dict[str, Any]") -> None:
+    staleness = driver_features.get("default_staleness")
+    if staleness is None:
+        return
+    if not isinstance(staleness, str):
+        msg = "default_staleness must be a string."
+        raise ImproperConfigurationError(msg)
+    driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
 
 
 def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
@@ -186,7 +197,7 @@ class CockroachAsyncpgConfig(
 
     driver_type: "ClassVar[type[CockroachAsyncpgDriver]]" = CockroachAsyncpgDriver
     connection_type: "ClassVar[type[CockroachAsyncpgConnection]]" = CockroachAsyncpgConnection  # type: ignore[assignment]
-    supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_transactional_ddl: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -222,6 +233,7 @@ class CockroachAsyncpgConfig(
 
         driver_features.setdefault("enable_native_storage", False)
         _validate_native_storage_options(driver_features)
+        _validate_follower_read_features(driver_features)
         driver_features.setdefault("enable_auto_retry", True)
         features_dict = dict(driver_features)
         self._user_connection_hook: Callable[[CockroachAsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
@@ -284,7 +296,7 @@ class CockroachAsyncpgConfig(
         if follower_reads is not None:
             driver_features["enable_follower_reads"] = follower_reads
         if staleness is not None:
-            driver_features["default_staleness"] = staleness
+            driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
 
         return CockroachAsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,

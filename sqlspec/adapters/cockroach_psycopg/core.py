@@ -1,6 +1,7 @@
 """CockroachDB psycopg adapter compiled helpers."""
 
-import secrets
+import random
+import re
 from typing import TYPE_CHECKING, Any, Final
 
 from mypy_extensions import mypyc_attr
@@ -8,6 +9,7 @@ from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
+from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
@@ -28,6 +30,7 @@ __all__ = (
     "native_export_telemetry",
     "native_import_telemetry",
     "normalize_native_export_query",
+    "validate_follower_read_staleness",
 )
 
 # Retry configuration defaults (module-level for mypyc compatibility)
@@ -68,20 +71,64 @@ class CockroachPsycopgRetryConfig:
 
 
 def is_retryable_error(error: BaseException) -> bool:
-    """Return True when the error should trigger a CockroachDB retry."""
+    """Return True when the error should trigger a CockroachDB retry.
+
+    Translated errors arrive as ``SerializationConflictError`` with no SQLSTATE
+    attribute, so the class check comes first; the SQLSTATE branch covers raw
+    driver errors raised outside the translation seam.
+    """
+    if isinstance(error, SerializationConflictError):
+        return True
     if has_sqlstate(error):
         return str(error.sqlstate) == "40001"
     return False
 
 
 def calculate_backoff_seconds(attempt: int, config: "CockroachPsycopgRetryConfig") -> float:
-    """Calculate exponential backoff delay in seconds."""
-    base: float = config.base_delay_ms * (2**attempt)
-    scale: int = 1000
-    max_jitter: int = max(int(base * scale), 0)
-    jitter: float = secrets.randbelow(max_jitter + 1) / scale if max_jitter else 0.0
-    delay_ms: float = min(base + jitter, config.max_delay_ms)
-    return delay_ms / 1000.0
+    """Calculate exponential backoff delay in seconds.
+
+    The exponential term is capped before jitter is applied so that delays stay
+    spread out once the cap is reached, rather than collapsing onto a single
+    value at the exact moment contention is highest.
+    """
+    capped_ms: float = min(config.base_delay_ms * (2**attempt), config.max_delay_ms)
+    if capped_ms <= 0.0:
+        return 0.0
+    return random.uniform(capped_ms / 2.0, capped_ms) / 1000.0  # noqa: S311
+
+
+_STALENESS_LITERAL: "Final[re.Pattern[str]]" = re.compile(r"'[^'\\;]+'")
+_STALENESS_FUNCTION: "Final[re.Pattern[str]]" = re.compile(
+    r"(?:follower_read_timestamp|with_max_staleness|with_min_timestamp)"
+    r"\(\s*(?:'[^'\\;]*'\s*(?:,\s*(?:'[^'\\;]*'|true|false)\s*)*)?\)",
+    re.IGNORECASE,
+)
+
+
+def validate_follower_read_staleness(staleness: str) -> str:
+    """Validate a follower-read staleness clause.
+
+    ``AS OF SYSTEM TIME`` accepts no placeholders, so the value is interpolated
+    into the statement and must be restricted to the literal and function forms
+    CockroachDB documents.
+
+    Args:
+        staleness: Interval or timestamp literal, or a staleness function call.
+
+    Returns:
+        The trimmed staleness clause.
+
+    Raises:
+        ImproperConfigurationError: If the value matches no accepted form.
+    """
+    candidate = staleness.strip()
+    if _STALENESS_LITERAL.fullmatch(candidate) or _STALENESS_FUNCTION.fullmatch(candidate):
+        return candidate
+    msg = (
+        "default_staleness must be a quoted interval or timestamp literal such as \"'-10s'\", "
+        "or one of follower_read_timestamp(), with_max_staleness(...), with_min_timestamp(...)."
+    )
+    raise ImproperConfigurationError(msg)
 
 
 def build_native_export(

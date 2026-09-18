@@ -16,11 +16,11 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
     native_export_telemetry,
     native_import_telemetry,
     normalize_native_export_query,
+    validate_follower_read_staleness,
 )
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
 from sqlspec.driver import BaseAsyncExceptionHandler
-from sqlspec.exceptions import SerializationConflictError, TransactionRetryError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
@@ -46,9 +46,6 @@ class CockroachAsyncpgExceptionHandler(BaseAsyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         _ = exc_type
         if isinstance(exc_val, CockroachAsyncpgPostgresError) or has_sqlstate(exc_val):
-            if has_sqlstate(exc_val) and str(exc_val.sqlstate) == "40001":
-                self.pending_exception = SerializationConflictError(str(exc_val))
-                return True
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -173,20 +170,23 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             raise handler.pending_exception
         return rows
 
+    async def begin(self) -> None:
+        """Begin a transaction and apply follower-read staleness to it."""
+        await super().begin()
+        await self._apply_follower_reads()
+
     async def run_transaction_with_retry(self, operation: "Callable[[], Awaitable[_T]]") -> _T:
         """Execute a full CockroachDB transaction callback with serialization retries."""
         if not self._enable_retry or self._connection_in_transaction():
             return await operation()
 
-        last_error: BaseException | None = None
-
-        for attempt in range(self._retry_config.max_retries + 1):
+        attempt = 0
+        while True:
             try:
                 await self.begin()
                 result = await operation()
                 await self.commit()
             except Exception as exc:
-                last_error = exc
                 with contextlib.suppress(Exception):
                     await self.rollback()
                 if not is_retryable_error(exc) or attempt >= self._retry_config.max_retries:
@@ -197,9 +197,7 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             if self._retry_config.enable_logging:
                 logger.debug("CockroachDB retry %s/%s after %.3fs", attempt + 1, self._retry_config.max_retries, delay)
             await asyncio.sleep(delay)
-
-        msg = "CockroachDB transaction retry limit exceeded"
-        raise TransactionRetryError(msg) from last_error
+            attempt += 1
 
     async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
         return await self._dispatch_execute_impl(cursor, statement)
@@ -220,16 +218,15 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             object.__setattr__(self, "_data_dictionary", CockroachAsyncpgDataDictionary())
         return cast("CockroachAsyncpgDataDictionary", self._data_dictionary)
 
-    async def _apply_follower_reads(self, cursor: "CockroachAsyncpgConnection") -> None:
+    async def _apply_follower_reads(self) -> None:
         if not self.driver_features.get("enable_follower_reads", False):
             return
         if not self._follower_staleness:
             return
-        await cursor.execute(f"SET TRANSACTION AS OF SYSTEM TIME {self._follower_staleness}")
+        staleness = validate_follower_read_staleness(self._follower_staleness)
+        await self.connection.execute(f"SET TRANSACTION AS OF SYSTEM TIME {staleness}")
 
     async def _dispatch_execute_impl(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
-        if statement.returns_rows():
-            await self._apply_follower_reads(cursor)
         return await super().dispatch_execute(cursor, statement)
 
     async def _dispatch_execute_many_impl(

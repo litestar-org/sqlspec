@@ -5,16 +5,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sqlspec import StatementStack
+from sqlspec.exceptions import SerializationConflictError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgDriver
     from sqlspec.adapters.cockroach_psycopg import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
 
 pytestmark = pytest.mark.xdist_group("postgres")
-
-
-class _RetryableCockroachError(Exception):
-    sqlstate = "40001"
 
 
 def test_cockroach_psycopg_sync_retries_whole_transaction(
@@ -32,7 +29,7 @@ def test_cockroach_psycopg_sync_retries_whole_transaction(
         assert contract_cockroach_psycopg_sync_driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
         assert contract_cockroach_psycopg_sync_driver.connection.autocommit is False
         if calls == 1:
-            raise _RetryableCockroachError("restart transaction")
+            raise SerializationConflictError("restart transaction")
         return "ok"
 
     assert contract_cockroach_psycopg_sync_driver.run_transaction_with_retry(operation) == "ok"
@@ -48,7 +45,7 @@ async def test_cockroach_asyncpg_retries_whole_transaction(
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise _RetryableCockroachError("restart transaction")
+            raise SerializationConflictError("restart transaction")
         return "ok"
 
     assert await contract_cockroach_asyncpg_driver.run_transaction_with_retry(operation) == "ok"
@@ -70,7 +67,7 @@ async def test_cockroach_psycopg_async_retries_whole_transaction(
         assert contract_cockroach_psycopg_async_driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
         assert contract_cockroach_psycopg_async_driver.connection.autocommit is False
         if calls == 1:
-            raise _RetryableCockroachError("restart transaction")
+            raise SerializationConflictError("restart transaction")
         return "ok"
 
     assert await contract_cockroach_psycopg_async_driver.run_transaction_with_retry(operation) == "ok"
