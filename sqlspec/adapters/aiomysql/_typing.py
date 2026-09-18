@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     class AiomysqlModuleProtocol(Protocol):
         async def create_pool(self, **kwargs: Any) -> "AiomysqlPool": ...
 
+        async def connect(self, **kwargs: Any) -> "AiomysqlConnection": ...
+
     class AiomysqlFieldTypeProtocol(Protocol):
         JSON: int
 

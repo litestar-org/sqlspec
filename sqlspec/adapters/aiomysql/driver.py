@@ -223,8 +223,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             SQLSpecError: If transaction initialization fails
         """
         try:
-            async with AiomysqlCursor(self.connection) as cursor:
-                await cursor.execute("BEGIN")
+            await self.connection.begin()
         except AiomysqlPymysqlMySQLError as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -335,10 +334,10 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
                     tmp.write(payload)
                     tmp_name = tmp.name
                 try:
-                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     async with exc_handler, self.with_cursor(self.connection) as cursor:
-                        await cursor.execute(load_sql)
+                        await cursor.execute(load_sql, (tmp_name,))
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:

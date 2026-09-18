@@ -318,16 +318,15 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             self.connection_instance = None
 
     async def create_connection(self) -> AiomysqlConnection:
-        """Create a single async connection (not from pool).
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection settings and creation hook
+        the pool applies, consumes no pool slot, and must be closed by the caller.
 
         Returns:
             An aiomysql connection instance.
         """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        connection = cast("AiomysqlConnection", await pool.acquire())
+        connection = await aiomysql.connect(**self._connection_kwargs())
         await self._ensure_connection(connection)
         return connection
 

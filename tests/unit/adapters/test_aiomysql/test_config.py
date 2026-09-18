@@ -241,3 +241,34 @@ async def test_aiomysql_cursor_forwards_class_arg_when_set() -> None:
         assert cursor is raw_cursor
 
     connection.cursor.assert_awaited_once_with(AiomysqlRawCursor)
+
+
+async def test_create_connection_consumes_no_pool_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A standalone connection must not be taken out of the pool."""
+    sentinel = MagicMock()
+    connect = AsyncMock(return_value=sentinel)
+    monkeypatch.setattr("sqlspec.adapters.aiomysql.config.aiomysql.connect", connect)
+    config = AiomysqlConfig(connection_config={"host": "localhost", "minsize": 1, "maxsize": 1})
+
+    connection = await config.create_connection()
+
+    assert connection is sentinel
+    assert config.connection_instance is None
+    assert "minsize" not in connect.call_args.kwargs
+    assert "maxsize" not in connect.call_args.kwargs
+
+
+async def test_create_connection_runs_the_connection_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The creation hook the pool applies must also run on the standalone path."""
+    seen: list[object] = []
+    sentinel = MagicMock()
+
+    async def _hook(connection: object) -> None:
+        seen.append(connection)
+
+    monkeypatch.setattr("sqlspec.adapters.aiomysql.config.aiomysql.connect", AsyncMock(return_value=sentinel))
+    config = AiomysqlConfig(connection_config={"host": "localhost"}, driver_features={"on_connection_create": _hook})
+
+    await config.create_connection()
+
+    assert seen == [sentinel]
