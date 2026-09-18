@@ -740,8 +740,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 
-        credentials = getattr(self.connection, "_credentials", None)
-        client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
+        provider = self.driver_features.get("_storage_write_client_provider")
+        if provider is not None:
+            client = provider(self.connection)
+        else:
+            credentials = getattr(self.connection, "_credentials", None)
+            client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
         write_stream = client.create_write_stream(
             parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)

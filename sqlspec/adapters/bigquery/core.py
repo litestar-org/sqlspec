@@ -5,6 +5,7 @@ import datetime
 import importlib
 import io
 from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ from sqlspec.core import (
     ParameterProfile,
     ParameterStyle,
     StatementConfig,
+    TypedParameter,
     build_null_pruning_transform,
     build_statement_config_from_profile,
 )
@@ -37,7 +39,7 @@ from sqlspec.exceptions import (
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_errors, has_value_attribute
+from sqlspec.utils.type_guards import has_errors
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -229,12 +231,11 @@ def build_inlined_script(
 logger = get_logger("sqlspec.adapters.bigquery.core")
 
 
-def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") -> "list[BigQueryParam]":
+def create_parameters(parameters: Any) -> "list[BigQueryParam]":
     """Create BigQuery QueryParameter objects from parameters.
 
     Args:
         parameters: Dict of named parameters or list of positional parameters
-        json_serializer: Function to serialize dict/list to JSON string
 
     Returns:
         List of BigQuery QueryParameter objects
@@ -247,13 +248,23 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") 
     if isinstance(parameters, dict):
         for name, value in parameters.items():
             param_name_for_bq = name.lstrip("@")
-            actual_value = value.value if has_value_attribute(value) else value
-            param_type, array_element_type = _query_parameter_type(actual_value)
+            if _is_query_parameter(value):
+                bq_parameters.append(cast("BigQueryParam", value))
+                continue
+            declared_type: type[Any] | None = None
+            if type(value) is TypedParameter:
+                declared_type = value.original_type
+                actual_value = value.value
+            elif isinstance(value, Enum):
+                actual_value = value.value
+            else:
+                actual_value = value
+            param_type, array_element_type = _query_parameter_type(actual_value, declared_type)
 
             if param_type == "ARRAY" and array_element_type:
                 bq_parameters.append(_create_array_parameter(param_name_for_bq, actual_value, array_element_type))
             elif param_type == "JSON":
-                bq_parameters.append(_create_json_parameter(param_name_for_bq, actual_value, json_serializer))
+                bq_parameters.append(_create_json_parameter(param_name_for_bq, actual_value))
             elif param_type:
                 bq_parameters.append(_create_scalar_parameter(param_name_for_bq, actual_value, param_type))
             else:
@@ -358,7 +369,7 @@ def run_query_job(
         copy_job_config(default_job_config, final_job_config)
     if job_config:
         copy_job_config(job_config, final_job_config)
-    final_job_config.query_parameters = create_parameters(parameters, json_serializer)
+    final_job_config.query_parameters = create_parameters(parameters)
 
     query_kwargs: dict[str, Any] = {
         "job_config": final_job_config,
@@ -929,19 +940,22 @@ def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQuery
     return cast("BigQueryParam", bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value)))
 
 
-def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> "BigQueryParam":
-    """Create BigQuery JSON parameter as STRING type.
+def _create_json_parameter(name: str, value: Any) -> "BigQueryParam":
+    """Create a BigQuery JSON parameter.
+
+    The client serializes JSON parameters itself, so the raw value is passed
+    through; serializing first would send a JSON-encoded string rather than a
+    JSON object.
 
     Args:
         name: Parameter name.
         value: JSON-serializable value.
-        json_serializer: Function to serialize to JSON string.
 
     Returns:
-        ScalarQueryParameter with STRING type.
+        ScalarQueryParameter with JSON type.
     """
     bigquery = _load_bigquery_module()
-    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value)))
+    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "JSON", value))
 
 
 def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
@@ -959,6 +973,21 @@ def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQuer
     return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, param_type, value))
 
 
+def _is_query_parameter(value: Any) -> bool:
+    """Return whether the value is already a BigQuery query parameter.
+
+    Args:
+        value: Candidate parameter value.
+
+    Returns:
+        True when the value is a prebuilt BigQuery parameter object.
+    """
+    bigquery = _load_bigquery_module()
+    return isinstance(
+        value, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter, bigquery.StructQueryParameter)
+    )
+
+
 def _load_bigquery_module() -> Any:
     global _BIGQUERY_MODULE
     if _BIGQUERY_MODULE is None:
@@ -968,16 +997,22 @@ def _load_bigquery_module() -> Any:
     return _BIGQUERY_MODULE
 
 
-def _query_parameter_type(value: Any) -> "tuple[str | None, str | None]":
+def _query_parameter_type(value: Any, declared_type: "type[Any] | None" = None) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
     Args:
         value: Python value to determine BigQuery type for
+        declared_type: Type declared on the parameter, used for NULL values
+            where the runtime type carries no information.
 
     Returns:
         Tuple of (parameter_type, array_element_type)
     """
     if value is None:
+        if declared_type is not None and declared_type in _BQ_TYPE_MAP:
+            return _BQ_TYPE_MAP[declared_type]
+        if declared_type is datetime.datetime:
+            return ("TIMESTAMP", None)
         return ("STRING", None)
 
     value_type = type(value)
@@ -1067,7 +1102,7 @@ def _run_query_and_wait(
     final_job_config = QueryJobConfig()
     if default_job_config:
         copy_job_config(default_job_config, final_job_config)
-    final_job_config.query_parameters = create_parameters(parameters, json_serializer)
+    final_job_config.query_parameters = create_parameters(parameters)
 
     query_kwargs: dict[str, Any] = {"job_config": final_job_config}
     if retry is not None:

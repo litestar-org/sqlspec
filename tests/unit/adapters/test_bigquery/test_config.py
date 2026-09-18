@@ -1,8 +1,10 @@
 """BigQuery configuration tests covering statement config builders."""
 
 import uuid
+from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from pytest import MonkeyPatch
 
@@ -113,3 +115,59 @@ def test_bigquery_config_typed_surfaces_do_not_advertise_inert_settings() -> Non
     assert "enable_storage_write_api" not in BigQueryConnectionParams.__annotations__
     assert "on_job_start" not in BigQueryDriverFeatures.__annotations__
     assert "on_job_complete" not in BigQueryDriverFeatures.__annotations__
+
+
+def test_qualified_dataset_id_is_preserved_without_a_project() -> None:
+    """An already-qualified dataset must not be dropped for want of a project."""
+    config = BigQueryConfig(connection_config={"dataset_id": "other-project.analytics"})
+
+    assert config.connection_config["default_query_job_config"].default_dataset.dataset_id == "analytics"
+
+
+def test_unqualified_dataset_id_without_a_project_does_not_raise() -> None:
+    """BigQuery rejects an unqualified dataset, so it is left unset rather than crashing."""
+    config = BigQueryConfig(connection_config={"dataset_id": "analytics"})
+
+    assert config.connection_config["default_query_job_config"].default_dataset is None
+
+
+def test_unqualified_dataset_id_is_resolved_from_the_client_project() -> None:
+    """Once the client exists its project qualifies the dataset."""
+    config = BigQueryConfig(connection_config={"dataset_id": "analytics"})
+    config._qualify_default_dataset(cast("Any", SimpleNamespace(project="discovered")))
+    default_dataset = config.connection_config["default_query_job_config"].default_dataset
+
+    assert default_dataset.project == "discovered"
+    assert default_dataset.dataset_id == "analytics"
+
+
+def test_dataset_id_is_qualified_with_the_configured_project() -> None:
+    config = BigQueryConfig(connection_config={"project": "acme", "dataset_id": "analytics"})
+    default_dataset = config.connection_config["default_query_job_config"].default_dataset
+
+    assert default_dataset.project == "acme"
+    assert default_dataset.dataset_id == "analytics"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "enable_bigquery_ml",
+        "enable_gemini_integration",
+        "reservation_id",
+        "edition",
+        "enable_cross_cloud",
+        "enable_bigquery_omni",
+        "use_avro_logical_types",
+        "parquet_enable_list_inference",
+        "enable_column_level_security",
+        "enable_row_level_security",
+        "enable_dataframes",
+        "dataframes_backend",
+        "enable_continuous_queries",
+        "enable_vector_search",
+    ],
+)
+def test_unconsumed_connection_fields_are_not_declared(field: str) -> None:
+    """A declared field with no consumer promises behaviour the adapter does not have."""
+    assert field not in BigQueryConnectionParams.__annotations__

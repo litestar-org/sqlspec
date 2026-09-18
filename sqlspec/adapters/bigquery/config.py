@@ -5,7 +5,12 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor, BigQuerySessionContext
+from sqlspec.adapters.bigquery._typing import (
+    BigQueryConnection,
+    BigQueryCursor,
+    BigQuerySessionContext,
+    BigQueryStorageWriteModule,
+)
 from sqlspec.adapters.bigquery.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
@@ -48,22 +53,8 @@ class BigQueryConnectionParams(TypedDict):
     dataset_id: NotRequired[str]
     use_query_cache: NotRequired[bool]
     maximum_bytes_billed: NotRequired[int]
-    enable_bigquery_ml: NotRequired[bool]
-    enable_gemini_integration: NotRequired[bool]
     query_timeout_ms: NotRequired[int]
     job_timeout_ms: NotRequired[int]
-    reservation_id: NotRequired[str]
-    edition: NotRequired[str]
-    enable_cross_cloud: NotRequired[bool]
-    enable_bigquery_omni: NotRequired[bool]
-    use_avro_logical_types: NotRequired[bool]
-    parquet_enable_list_inference: NotRequired[bool]
-    enable_column_level_security: NotRequired[bool]
-    enable_row_level_security: NotRequired[bool]
-    enable_dataframes: NotRequired[bool]
-    dataframes_backend: NotRequired[str]
-    enable_continuous_queries: NotRequired[bool]
-    enable_vector_search: NotRequired[bool]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -225,6 +216,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
 
         resolved_connection_instance = connection_instance or features_connection_instance
         self._connection_instance = resolved_connection_instance
+        self._owns_connection_instance = resolved_connection_instance is None
+        self._storage_write_client: Any = None
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
@@ -247,16 +240,97 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         )
 
         self.driver_features = driver_features
+        self.driver_features["_storage_write_client_provider"] = self.provide_storage_write_client
+
+    def provide_storage_write_client(self, connection: "BigQueryConnection") -> Any:
+        """Return the shared BigQuery Storage Write client, creating it on first use.
+
+        Args:
+            connection: The BigQuery client whose credentials the write client reuses.
+
+        Returns:
+            The cached ``BigQueryWriteClient``.
+
+        Raises:
+            ImproperConfigurationError: If google-cloud-bigquery-storage is absent.
+        """
+        if self._storage_write_client is not None:
+            return self._storage_write_client
+        if BigQueryStorageWriteModule is None:
+            msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion."
+            raise ImproperConfigurationError(msg)
+        client_kwargs: dict[str, Any] = {"credentials": getattr(connection, "_credentials", None)}
+        client_options = self.connection_config.get("client_options")
+        if client_options is not None and client_options is not Empty:
+            client_kwargs["client_options"] = client_options
+        self._storage_write_client = BigQueryStorageWriteModule.BigQueryWriteClient(**client_kwargs)
+        return self._storage_write_client
+
+    def close_pool(self) -> None:
+        """Close the clients this configuration created.
+
+        A client supplied by the caller is left open, since its lifetime belongs
+        to whoever created it.
+        """
+        if self._storage_write_client is not None:
+            transport = getattr(self._storage_write_client, "transport", None)
+            if transport is not None:
+                transport.close()
+            self._storage_write_client = None
+        if self._owns_connection_instance and self._connection_instance is not None:
+            self._connection_instance.close()
+            self._connection_instance = None
+
+    def _resolve_default_dataset(self) -> "str | None":
+        """Resolve the fully qualified default dataset, if one can be determined.
+
+        BigQuery requires ``project.dataset``; an unqualified name raises when
+        assigned, so it is left unset rather than turned into a construction
+        error.
+
+        Returns:
+            The qualified dataset reference, or None when no project is known.
+        """
+        dataset_id = self.connection_config.get("dataset_id")
+        if not dataset_id:
+            return None
+        if "." in dataset_id:
+            return cast("str", dataset_id)
+        project = self.connection_config.get("project")
+        if not project:
+            return None
+        return f"{project}.{dataset_id}"
+
+    def _qualify_default_dataset(self, connection: "BigQueryConnection") -> None:
+        """Fill in the default dataset once the client's own project is known.
+
+        A dataset configured without a project cannot be qualified at
+        construction time without a credentials lookup, so it is resolved here
+        from the client instead.
+
+        Args:
+            connection: The freshly created BigQuery client.
+        """
+        dataset_id = self.connection_config.get("dataset_id")
+        if not dataset_id or "." in dataset_id:
+            return
+        if self.connection_config.get("project"):
+            return
+        job_config = self.connection_config.get("default_query_job_config")
+        if job_config is None or job_config.default_dataset is not None:
+            return
+        project = connection.project
+        if project:
+            job_config.default_dataset = f"{project}.{dataset_id}"
 
     def _setup_default_job_config(self) -> None:
         """Set up default job configuration."""
 
         job_config = QueryJobConfig()
 
-        dataset_id = self.connection_config.get("dataset_id")
-        project = self.connection_config.get("project")
-        if dataset_id and project and "." not in dataset_id:
-            job_config.default_dataset = f"{project}.{dataset_id}"
+        default_dataset = self._resolve_default_dataset()
+        if default_dataset is not None:
+            job_config.default_dataset = default_dataset
 
         use_query_cache = self.connection_config.get("use_query_cache")
         if use_query_cache is not None:
@@ -309,6 +383,8 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
                 if field in client_fields and value is not None and value is not Empty
             }
             connection = self.connection_type(**config_dict)
+
+            self._qualify_default_dataset(connection)
 
             if self._user_connection_hook is not None:
                 self._user_connection_hook(connection)
