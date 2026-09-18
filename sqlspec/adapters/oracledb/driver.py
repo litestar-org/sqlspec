@@ -831,6 +831,8 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle sync rows for the direct execution path."""
         column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+        if self.driver_features.get("fetch_lobs") is True:
+            return list(fetched), column_names, len(fetched)
         data, column_names = collect_sync_rows(
             cast("list[Any] | None", fetched),
             cursor.description,
@@ -1539,10 +1541,12 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         Falls back to the standard async dispatch path when rows contain async
         LOB locators, because those must be read with ``collect_async_rows``.
         """
+        column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+        if self.driver_features.get("fetch_lobs") is True:
+            return list(fetched), column_names, len(fetched)
         if fetched and any(_row_has_async_readable(row) for row in fetched):
             msg = "Oracle async LOB locators require async row collection"
             raise NotImplementedError(msg)
-        column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
         data, column_names = collect_sync_rows(
             cast("list[Any] | None", fetched),
             cursor.description,

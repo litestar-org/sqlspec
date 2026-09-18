@@ -1,5 +1,6 @@
 """BigQuery database configuration."""
 
+import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
@@ -218,6 +219,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self._connection_instance = resolved_connection_instance
         self._owns_connection_instance = resolved_connection_instance is None
         self._storage_write_client: Any = None
+        self._storage_write_lock = threading.Lock()
 
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
@@ -259,11 +261,14 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if BigQueryStorageWriteModule is None:
             msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion."
             raise ImproperConfigurationError(msg)
-        client_kwargs: dict[str, Any] = {"credentials": getattr(connection, "_credentials", None)}
-        client_options = self.connection_config.get("client_options")
-        if client_options is not None and client_options is not Empty:
-            client_kwargs["client_options"] = client_options
-        self._storage_write_client = BigQueryStorageWriteModule.BigQueryWriteClient(**client_kwargs)
+        with self._storage_write_lock:
+            if self._storage_write_client is not None:
+                return self._storage_write_client
+            client_kwargs: dict[str, Any] = {"credentials": getattr(connection, "_credentials", None)}
+            client_options = self.connection_config.get("client_options")
+            if client_options is not None and client_options is not Empty:
+                client_kwargs["client_options"] = client_options
+            self._storage_write_client = BigQueryStorageWriteModule.BigQueryWriteClient(**client_kwargs)
         return self._storage_write_client
 
     def close_pool(self) -> None:

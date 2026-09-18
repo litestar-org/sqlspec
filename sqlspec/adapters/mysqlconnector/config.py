@@ -1,7 +1,7 @@
 """MysqlConnector database configuration."""
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 from weakref import WeakSet
 
 from typing_extensions import NotRequired
@@ -275,6 +275,9 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
         self._connection = None
 
 
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"pool_name", "pool_size", "pool_reset_session"})
+
+
 class MysqlConnectorSyncConfig(
     SyncDatabaseConfig[MysqlConnectorSyncConnection, "MysqlConnectorConnectionPool", MysqlConnectorSyncDriver]
 ):
@@ -373,10 +376,21 @@ class MysqlConnectorSyncConfig(
             self.connection_instance = None
 
     def create_connection(self) -> MysqlConnectorSyncConnection:
-        connection = mysql.connector.connect(**self.connection_config)
-        autocommit = self.connection_config.get("autocommit")
+        """Open a standalone connection owned by the caller.
+
+        Pool settings are dropped, because mysql-connector routes ``connect`` to
+        its own module-global pool as soon as it sees one, which would return a
+        wrapper that neither applies autocommit nor closes on request.
+
+        Returns:
+            A newly opened mysql-connector connection.
+        """
+        config = {key: value for key, value in self.connection_config.items() if key not in _POOL_ONLY_CONFIG_KEYS}
+        connection = mysql.connector.connect(**config)
+        autocommit = config.get("autocommit")
         if autocommit is not None:
             connection.autocommit = bool(autocommit)
+        self._ensure_connection(connection)
         return connection
 
     def get_signature_namespace(self) -> "dict[str, Any]":

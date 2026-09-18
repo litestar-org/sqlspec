@@ -1,8 +1,9 @@
 """CockroachDB AsyncPG configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from asyncpg import Record
+from asyncpg import connect as asyncpg_connect
 from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
@@ -28,6 +29,16 @@ from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
+
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
+    "init",
+    "max_inactive_connection_lifetime",
+    "max_queries",
+    "max_size",
+    "min_size",
+    "setup",
+})
+
 
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
@@ -279,9 +290,21 @@ class CockroachAsyncpgConfig(
         self.connection_instance = None
 
     async def create_connection(self) -> "CockroachAsyncpgConnection":
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        return cast("CockroachAsyncpgConnection", await self.connection_instance.acquire())
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection settings and init hook the
+        pool applies, consumes no pool slot, and must be closed by the caller.
+
+        Returns:
+            A CockroachDB asyncpg connection.
+        """
+        config = build_connection_config(self.connection_config)
+        for key in _POOL_ONLY_CONFIG_KEYS:
+            config.pop(key, None)
+        connection = await asyncpg_connect(**config)
+        init = self.connection_config.get("init", self._init_connection)
+        await init(connection)
+        return cast("CockroachAsyncpgConnection", connection)
 
     def provide_session(
         self,

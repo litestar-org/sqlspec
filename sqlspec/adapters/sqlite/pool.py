@@ -70,6 +70,7 @@ class SqliteConnectionPool:
         "_connection_registry",
         "_enable_foreign_keys",
         "_enable_optimizations",
+        "_generation",
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
@@ -105,6 +106,7 @@ class SqliteConnectionPool:
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
         self._connection_registry: set[SqliteConnection] = set()
+        self._generation = 0
         self._registry_lock = threading.Lock()
         self._enable_optimizations = enable_optimizations
         self._enable_foreign_keys = enable_foreign_keys
@@ -189,6 +191,11 @@ class SqliteConnectionPool:
     def _get_thread_connection(self) -> SqliteConnection:
         """Get or create a connection for the current thread."""
         thread_state = self._thread_local.__dict__
+        if thread_state.get("generation") != self._generation:
+            thread_state.pop("connection", None)
+            thread_state.pop("created_at", None)
+            thread_state.pop("last_used", None)
+            self._thread_local.generation = self._generation
         if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
@@ -273,6 +280,7 @@ class SqliteConnectionPool:
         with self._registry_lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
+            self._generation += 1
         for connection in orphaned:
             with contextlib.suppress(Exception):
                 connection.close()

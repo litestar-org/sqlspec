@@ -266,3 +266,31 @@ def test_pool_skips_ending_a_transaction_that_is_not_open() -> None:
 
     assert connection.statements == []
     assert connection.commit_calls == 0
+
+
+def test_close_does_not_leave_other_threads_holding_a_closed_connection(tmp_path: Path) -> None:
+    """After shutdown a worker thread must get a fresh connection, not a dead one."""
+    pool = SqliteConnectionPool({"database": str(tmp_path / "generation.sqlite")})
+    results: list[str] = []
+    opened = threading.Event()
+    closed = threading.Event()
+
+    def _worker() -> None:
+        pool.acquire()
+        opened.set()
+        closed.wait(timeout=5)
+        try:
+            pool.acquire().execute("SELECT 1")
+            results.append("ok")
+        except Exception as exc:
+            results.append(type(exc).__name__)
+
+    worker = threading.Thread(target=_worker)
+    worker.start()
+    opened.wait(timeout=5)
+    pool.close()
+    closed.set()
+    worker.join(timeout=5)
+    pool.close()
+
+    assert results == ["ok"]

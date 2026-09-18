@@ -1,5 +1,6 @@
 """Spanner configuration."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from google.cloud.spanner_v1.database_sessions_manager import TransactionType
@@ -189,6 +190,7 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
                 self._connection = cast("SpannerConnection", txn)
             except Exception:
                 manager.put_session(self._session)
+                self._session = None
                 raise
             else:
                 return self._connection
@@ -409,9 +411,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
 
     def _close_pool(self) -> None:
         if self._database is not None and supports_close(self._database):
-            self._database.close()
-        if self.connection_instance and supports_close(self.connection_instance):
-            self.connection_instance.close()
+            with contextlib.suppress(Exception):
+                self._database.close()
+        pool = self.connection_instance
+        if pool is not None:
+            clear = getattr(pool, "clear", None)
+            if callable(clear):
+                with contextlib.suppress(Exception):
+                    clear()
+            elif supports_close(pool):
+                pool.close()
         if self._client and supports_close(self._client):
             self._client.close()
         self._client = None

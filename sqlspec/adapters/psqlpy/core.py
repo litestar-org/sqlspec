@@ -195,8 +195,10 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
 class PsqlpyStreamSource:
     """Compiled async chunk source streaming dict rows from a psqlpy server-side cursor.
 
-    The cursor is declared inside a stream-owned transaction and the transaction is
-    committed on close (rolled back on failure).
+    Outside a caller transaction the cursor is declared inside a stream-owned
+    transaction, which is committed on close and rolled back on failure. Inside
+    one the cursor is declared on the connection and the caller's transaction is
+    left untouched.
     """
 
     __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")

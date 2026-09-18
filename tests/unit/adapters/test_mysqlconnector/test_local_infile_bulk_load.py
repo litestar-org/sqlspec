@@ -47,3 +47,12 @@ def test_build_load_data_statement_never_embeds_a_path() -> None:
     statement = build_load_data_statement("orders", ["id"])
 
     assert "LOAD DATA LOCAL INFILE %s INTO TABLE" in statement
+
+
+def test_build_load_data_statement_keeps_percent_in_identifiers() -> None:
+    """mysql-connector substitutes only %s, so doubling corrupts the identifier."""
+    statement = build_load_data_statement("pct%tbl", ["a%b"])
+
+    assert "`pct%tbl`" in statement
+    assert "`a%b`" in statement
+    assert "%%" not in statement

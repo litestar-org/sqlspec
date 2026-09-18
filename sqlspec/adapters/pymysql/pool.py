@@ -29,6 +29,7 @@ class PyMysqlConnectionPool:
         "_connection_factory",
         "_connection_parameters",
         "_connection_registry",
+        "_generation",
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
@@ -58,6 +59,7 @@ class PyMysqlConnectionPool:
         self._connection_factory = connection_factory
         self._thread_local = threading.local()
         self._connection_registry: set[PyMysqlConnection] = set()
+        self._generation = 0
         self._registry_lock = threading.Lock()
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
@@ -106,6 +108,11 @@ class PyMysqlConnectionPool:
 
     def _get_thread_connection(self) -> PyMysqlConnection:
         thread_state = self._thread_local.__dict__
+        if thread_state.get("generation") != self._generation:
+            thread_state.pop("connection", None)
+            thread_state.pop("created_at", None)
+            thread_state.pop("last_used", None)
+            self._thread_local.generation = self._generation
         if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
@@ -186,6 +193,7 @@ class PyMysqlConnectionPool:
         with self._registry_lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
+            self._generation += 1
         for connection in orphaned:
             with contextlib.suppress(Exception):
                 connection.close()

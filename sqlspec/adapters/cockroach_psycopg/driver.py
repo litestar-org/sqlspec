@@ -217,7 +217,16 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         return rows
 
     def begin(self) -> None:
-        """Begin a transaction and apply follower-read staleness to it."""
+        """Begin a transaction and apply follower-read staleness to it.
+
+        The staleness clause must be the transaction's first statement, so it is
+        applied only when this call is what opened the transaction. A session
+        configured for follower reads is read-only: CockroachDB rejects writes
+        against a historical timestamp.
+        """
+        if self._connection_in_transaction():
+            super().begin()
+            return
         super().begin()
         self._apply_follower_reads()
 
@@ -414,7 +423,16 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         return rows
 
     async def begin(self) -> None:
-        """Begin a transaction and apply follower-read staleness to it."""
+        """Begin a transaction and apply follower-read staleness to it.
+
+        The staleness clause must be the transaction's first statement, so it is
+        applied only when this call is what opened the transaction. A session
+        configured for follower reads is read-only: CockroachDB rejects writes
+        against a historical timestamp.
+        """
+        if self._connection_in_transaction():
+            await super().begin()
+            return
         await super().begin()
         await self._apply_follower_reads()
 

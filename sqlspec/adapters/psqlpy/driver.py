@@ -246,9 +246,15 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Names of columns typed json or jsonb.
         """
         rows = await self.connection.fetch(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = $1 AND table_schema = COALESCE($2, current_schema()) "
-            "AND data_type IN ('json', 'jsonb')",
+            "SELECT a.attname AS column_name "
+            "FROM pg_attribute a "
+            "JOIN pg_class c ON c.oid = a.attrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE a.attnum > 0 AND NOT a.attisdropped "
+            "AND c.relname = $1 "
+            "AND ($2::text IS NULL OR n.nspname = $2) "
+            "AND ($2::text IS NOT NULL OR n.oid = ANY (current_schemas(true)::regnamespace[])) "
+            "AND format_type(a.atttypid, NULL) IN ('json', 'jsonb')",
             [table_name, schema_name],
         )
         data, _ = collect_rows(rows)

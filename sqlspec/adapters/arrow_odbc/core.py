@@ -260,9 +260,24 @@ def _is_sql_server_diagnostic(message: str) -> bool:
 
 
 def _format_connection_value(value: Any) -> str:
+    """Render a value for an ODBC connection string.
+
+    A value containing a delimiter, a brace, or edge whitespace is wrapped in
+    braces so it cannot be read as the start of another keyword, with any
+    closing brace doubled as ODBC requires.
+
+    Args:
+        value: The configured value.
+
+    Returns:
+        The value rendered for inclusion in the connection string.
+    """
     if isinstance(value, bool):
         return "yes" if value else "no"
-    return str(value)
+    text = str(value)
+    if text and text == text.strip() and not any(character in text for character in ";={}"):
+        return text
+    return "{" + text.replace("}", "}}") + "}"
 
 
 driver_profile = build_profile()

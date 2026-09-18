@@ -166,11 +166,15 @@ def build_load_data_statement(table: str, columns: "list[str]") -> str:
         table: Destination table identifier.
         columns: Destination column names.
 
+    mysql-connector substitutes only ``%s`` and leaves every other percent sign
+    alone, so identifiers are emitted verbatim; doubling them the way the
+    pymysql family requires would corrupt a name containing a percent sign.
+
     Returns:
         SQL with one positional filename placeholder.
     """
-    table_sql = format_identifier(table).replace("%", "%%")
-    column_list = ", ".join(format_identifier(column).replace("%", "%%") for column in columns)
+    table_sql = format_identifier(table)
+    column_list = ", ".join(format_identifier(column) for column in columns)
     return (
         f"LOAD DATA LOCAL INFILE %s INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "

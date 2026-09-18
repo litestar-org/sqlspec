@@ -184,20 +184,32 @@ def connection_is_thin(connection: object) -> bool:
 def supports_direct_path_load(connection: object) -> bool:
     """Return whether a connection supports direct path load.
 
-    ``direct_path_load`` is guaranteed by the declared ``oracledb>=3.4`` floor,
-    so only the Thin-mode requirement is checked.
+    The declared ``oracledb>=3.4`` floor guarantees the API on a real
+    ``oracledb`` connection, but a proxy or test double may not carry it, and
+    the documented behaviour is to fall back rather than raise.
+
+    Args:
+        connection: The connection about to be used for ingestion.
+
+    Returns:
+        True when the connection is Thin-mode and exposes the API.
     """
-    return connection_is_thin(connection)
+    return connection_is_thin(connection) and hasattr(connection, "direct_path_load")
 
 
 def supports_df_batches(connection: object) -> bool:
     """Return whether a connection exposes DataFrame batch fetches.
 
-    ``fetch_df_batches`` landed in python-oracledb 3.0 and is guaranteed by the
-    declared ``oracledb>=3.4`` floor.
+    ``fetch_df_batches`` landed in python-oracledb 3.0, below the declared
+    floor, but a proxy or test double may still not carry it.
+
+    Args:
+        connection: The connection about to be used for Arrow batch fetches.
+
+    Returns:
+        True when the connection exposes the API.
     """
-    _ = connection
-    return True
+    return hasattr(connection, "fetch_df_batches")
 
 
 def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
@@ -726,7 +738,7 @@ class OracleSyncStreamSource:
         fetch_lobs = self._fetch_lobs
         if fetch_lobs is None:
             fetch_lobs = self._driver.driver_features.get("fetch_lobs")
-        return fetch_lobs is True
+        return bool(fetch_lobs)
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -826,7 +838,7 @@ class OracleAsyncStreamSource:
         fetch_lobs = self._fetch_lobs
         if fetch_lobs is None:
             fetch_lobs = self._driver.driver_features.get("fetch_lobs")
-        return fetch_lobs is True
+        return bool(fetch_lobs)
 
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor

@@ -11,13 +11,7 @@ from arrow_odbc import TextEncoding
 import sqlspec.adapters.arrow_odbc.config as arrow_odbc_config
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver, build_connection_config
 from sqlspec.adapters.arrow_odbc.core import create_mapped_exception
-from sqlspec.exceptions import (
-    DatabaseConnectionError,
-    DataError,
-    ImproperConfigurationError,
-    IntegrityError,
-    SQLParsingError,
-)
+from sqlspec.exceptions import DatabaseConnectionError, DataError, IntegrityError, SQLParsingError
 
 
 class _RecordingConnection:
@@ -90,7 +84,7 @@ def test_payload_text_encoding_is_omitted_when_unset() -> None:
 def test_driver_pooling_is_enabled_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """The upstream switch is process-global and must be called exactly once."""
     calls: list[str] = []
-    monkeypatch.setattr(arrow_odbc_config, "_DRIVER_POOLING_ENABLED", None)
+    monkeypatch.setattr(arrow_odbc_config, "_DRIVER_POOLING_ENABLED", False)
     monkeypatch.setattr(arrow_odbc_config, "enable_odbc_connection_pooling", lambda: calls.append("enabled"))
 
     arrow_odbc_config._apply_driver_pooling(True)  # pyright: ignore[reportPrivateUsage]
@@ -99,21 +93,22 @@ def test_driver_pooling_is_enabled_once_per_process(monkeypatch: pytest.MonkeyPa
     assert calls == ["enabled"]
 
 
-def test_conflicting_driver_pooling_requests_raise(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Disagreeing configs must fail loudly rather than silently ignore the second."""
-    monkeypatch.setattr(arrow_odbc_config, "_DRIVER_POOLING_ENABLED", None)
-    monkeypatch.setattr(arrow_odbc_config, "enable_odbc_connection_pooling", lambda: None)
+def test_a_later_config_that_declines_pooling_does_not_disturb_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Declining is the default, so it must not fail or undo another config's opt-in."""
+    calls: list[str] = []
+    monkeypatch.setattr(arrow_odbc_config, "_DRIVER_POOLING_ENABLED", False)
+    monkeypatch.setattr(arrow_odbc_config, "enable_odbc_connection_pooling", lambda: calls.append("enabled"))
 
     arrow_odbc_config._apply_driver_pooling(True)  # pyright: ignore[reportPrivateUsage]
+    arrow_odbc_config._apply_driver_pooling(False)  # pyright: ignore[reportPrivateUsage]
 
-    with pytest.raises(ImproperConfigurationError, match="process-global"):
-        arrow_odbc_config._apply_driver_pooling(False)  # pyright: ignore[reportPrivateUsage]
+    assert calls == ["enabled"]
 
 
 def test_driver_pooling_defaults_to_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without the feature the upstream switch is never touched."""
     calls: list[str] = []
-    monkeypatch.setattr(arrow_odbc_config, "_DRIVER_POOLING_ENABLED", None)
+    monkeypatch.setattr(arrow_odbc_config, "_DRIVER_POOLING_ENABLED", False)
     monkeypatch.setattr(arrow_odbc_config, "enable_odbc_connection_pooling", lambda: calls.append("enabled"))
 
     arrow_odbc_config._apply_driver_pooling(False)  # pyright: ignore[reportPrivateUsage]

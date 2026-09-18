@@ -37,7 +37,7 @@ from sqlspec.exceptions import (
     _classify_timeout_or_cancellation,
 )
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_errors
 
@@ -231,11 +231,13 @@ def build_inlined_script(
 logger = get_logger("sqlspec.adapters.bigquery.core")
 
 
-def create_parameters(parameters: Any) -> "list[BigQueryParam]":
+def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | None" = None) -> "list[BigQueryParam]":
     """Create BigQuery QueryParameter objects from parameters.
 
     Args:
         parameters: Dict of named parameters or list of positional parameters
+        json_serializer: Serializer used to normalize JSON values before the
+            client encodes them, so types the stdlib encoder rejects still work.
 
     Returns:
         List of BigQuery QueryParameter objects
@@ -264,7 +266,7 @@ def create_parameters(parameters: Any) -> "list[BigQueryParam]":
             if param_type == "ARRAY" and array_element_type:
                 bq_parameters.append(_create_array_parameter(param_name_for_bq, actual_value, array_element_type))
             elif param_type == "JSON":
-                bq_parameters.append(_create_json_parameter(param_name_for_bq, actual_value))
+                bq_parameters.append(_create_json_parameter(param_name_for_bq, actual_value, json_serializer))
             elif param_type:
                 bq_parameters.append(_create_scalar_parameter(param_name_for_bq, actual_value, param_type))
             else:
@@ -369,7 +371,7 @@ def run_query_job(
         copy_job_config(default_job_config, final_job_config)
     if job_config:
         copy_job_config(job_config, final_job_config)
-    final_job_config.query_parameters = create_parameters(parameters)
+    final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
     query_kwargs: dict[str, Any] = {
         "job_config": final_job_config,
@@ -940,22 +942,29 @@ def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQuery
     return cast("BigQueryParam", bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value)))
 
 
-def _create_json_parameter(name: str, value: Any) -> "BigQueryParam":
+def _create_json_parameter(
+    name: str, value: Any, json_serializer: "Callable[[Any], str] | None" = None
+) -> "BigQueryParam":
     """Create a BigQuery JSON parameter.
 
-    The client serializes JSON parameters itself, so the raw value is passed
-    through; serializing first would send a JSON-encoded string rather than a
-    JSON object.
+    The client encodes JSON parameters itself with the standard library, which
+    rejects values such as UUID and Decimal. The configured serializer is used
+    to normalize the value first, then the result is decoded back into plain
+    containers so the client encodes a JSON object rather than a JSON string.
 
     Args:
         name: Parameter name.
         value: JSON-serializable value.
+        json_serializer: Serializer to normalize the value with.
 
     Returns:
         ScalarQueryParameter with JSON type.
     """
     bigquery = _load_bigquery_module()
-    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "JSON", value))
+    normalized = value
+    if json_serializer is not None:
+        normalized = from_json(json_serializer(value))
+    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "JSON", normalized))
 
 
 def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
@@ -1102,7 +1111,7 @@ def _run_query_and_wait(
     final_job_config = QueryJobConfig()
     if default_job_config:
         copy_job_config(default_job_config, final_job_config)
-    final_job_config.query_parameters = create_parameters(parameters)
+    final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
     query_kwargs: dict[str, Any] = {"job_config": final_job_config}
     if retry is not None:

@@ -1,5 +1,6 @@
 """arrow-odbc database configuration."""
 
+import threading
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
@@ -38,35 +39,29 @@ if TYPE_CHECKING:
 __all__ = ("ArrowOdbcConfig", "ArrowOdbcConnectionParams", "ArrowOdbcDriverFeatures")
 
 
-_DRIVER_POOLING_ENABLED: "bool | None" = None
+_DRIVER_POOLING_ENABLED = False
+_DRIVER_POOLING_LOCK = threading.Lock()
 
 
 def _apply_driver_pooling(requested: bool) -> None:
     """Apply the ODBC driver manager's process-global connection pooling switch.
 
-    The upstream switch can only be set once, before the first connection in the
-    process, so a later request that disagrees with the applied setting is an
-    error rather than a silent no-op.
+    The upstream switch can only be turned on once, before the first connection
+    in the process. Declining it is therefore not a decision that can be latched:
+    only an opt-in is recorded, and a later configuration that does not ask for
+    pooling simply inherits it.
 
     Args:
         requested: Whether this configuration asks for driver-level pooling.
-
-    Raises:
-        ImproperConfigurationError: If the request conflicts with the setting
-            already applied in this process.
     """
     global _DRIVER_POOLING_ENABLED
-    if _DRIVER_POOLING_ENABLED is None:
-        if requested:
-            enable_odbc_connection_pooling()
-        _DRIVER_POOLING_ENABLED = requested
+    if not requested:
         return
-    if requested != _DRIVER_POOLING_ENABLED:
-        msg = (
-            "enable_driver_pooling is a process-global ODBC setting applied before the first connection. "
-            f"It was already applied as {_DRIVER_POOLING_ENABLED} and cannot be changed to {requested}."
-        )
-        raise ImproperConfigurationError(msg)
+    with _DRIVER_POOLING_LOCK:
+        if _DRIVER_POOLING_ENABLED:
+            return
+        enable_odbc_connection_pooling()
+        _DRIVER_POOLING_ENABLED = True
 
 
 class ArrowOdbcConnectionParams(TypedDict):

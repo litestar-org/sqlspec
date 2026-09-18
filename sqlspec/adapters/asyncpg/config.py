@@ -414,7 +414,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         from google.cloud.sql.connector import Connector  # type: ignore[import-untyped,unused-ignore]
 
-        self._cloud_sql_connector = Connector()
+        if self._cloud_sql_connector is None:
+            self._cloud_sql_connector = Connector()
 
         user = config.get("user")
         password = config.get("password")
@@ -433,7 +434,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         from google.cloud.alloydb.connector import AsyncConnector  # type: ignore[import-untyped,unused-ignore]
 
-        self._alloydb_connector = AsyncConnector()
+        if self._alloydb_connector is None:
+            self._alloydb_connector = AsyncConnector()
 
         user = config.get("user")
         password = config.get("password")
@@ -540,7 +542,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         connect = config.pop("connect", None)
         connection = await connect() if connect is not None else await asyncpg_connect(**config)
-        await self._init_connection(connection)
+        init = self.connection_config.get("init", self._init_connection)
+        await init(connection)
         return cast("AsyncpgConnection", connection)
 
     def provide_session(

@@ -143,11 +143,8 @@ class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
         super().__init__(config)
 
     def __enter__(self) -> "CockroachSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("CockroachSyncConnection", self._ctx.__enter__())
-        self._ctx = self._config.create_connection()
-        return cast("CockroachSyncConnection", self._ctx)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("CockroachSyncConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -158,28 +155,16 @@ class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
 
 
 class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_conn",)
-
-    def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
-        super().__init__(config)
-        self._conn: CockroachSyncConnection | None = None
+    __slots__ = ()
 
     def acquire_connection(self) -> "CockroachSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("CockroachSyncConnection", self._ctx.__enter__())
-        self._conn = self._config.create_connection()
-        return cast("CockroachSyncConnection", self._conn)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("CockroachSyncConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "CockroachSyncConnection", **kwargs: Any) -> None:
-        exc_info = (kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
         if self._ctx is not None:
-            self._ctx.__exit__(*exc_info)
+            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
-            return
-        if self._conn is not None:
-            self._conn.__exit__(*exc_info)
-            self._conn = None
 
 
 class CockroachPsycopgSyncConfig(
@@ -307,7 +292,8 @@ class CockroachPsycopgSyncConfig(
         """
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = psycopg_crdb.CrdbConnection.connect(conninfo, **connection_kwargs)
-        self._configure_connection(cast("CockroachSyncConnection", connection))
+        configure = self.connection_config.get("configure", self._configure_connection)
+        configure(cast("CockroachSyncConnection", connection))
         return cast("CockroachSyncConnection", connection)
 
     def provide_session(
@@ -535,7 +521,8 @@ class CockroachPsycopgAsyncConfig(
         """
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = await psycopg_crdb.AsyncCrdbConnection.connect(conninfo, **connection_kwargs)
-        await self._configure_async_connection(cast("CockroachAsyncConnection", connection))
+        configure = self.connection_config.get("configure", self._configure_async_connection)
+        await configure(cast("CockroachAsyncConnection", connection))
         return cast("CockroachAsyncConnection", connection)
 
     def provide_session(

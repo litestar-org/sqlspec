@@ -75,6 +75,7 @@ class DuckDBConnectionPool:
         "_connection_config",
         "_connection_registry",
         "_extensions",
+        "_generation",
         "_health_check_interval",
         "_installed_signatures",
         "_is_memory_db",
@@ -114,6 +115,7 @@ class DuckDBConnectionPool:
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
         self._connection_registry: set[DuckDBConnection] = set()
+        self._generation = 0
         self._lock = threading.RLock()
         self._pool_id = str(uuid4())[:8]
         database = connection_config.get("database", "")
@@ -298,6 +300,11 @@ class DuckDBConnectionPool:
         thread-safety issues with concurrent cursor operations.
         """
         thread_state = self._thread_local.__dict__
+        if thread_state.get("generation") != self._generation:
+            thread_state.pop("connection", None)
+            thread_state.pop("created_at", None)
+            thread_state.pop("last_used", None)
+            self._thread_local.generation = self._generation
         if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
@@ -305,8 +312,7 @@ class DuckDBConnectionPool:
             return cast("DuckDBConnection", self._thread_local.connection)
 
         if self._recycle > 0 and time.time() - self._thread_local.created_at > self._recycle:
-            with suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
             self._thread_local.last_used = time.time()
@@ -324,8 +330,7 @@ class DuckDBConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            with suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
 
@@ -404,6 +409,7 @@ class DuckDBConnectionPool:
         with self._lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
+            self._generation += 1
         for connection in orphaned:
             with suppress(Exception):
                 connection.close()

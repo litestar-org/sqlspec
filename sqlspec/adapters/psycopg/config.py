@@ -195,11 +195,8 @@ class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
         super().__init__(config)
 
     def __enter__(self) -> "PsycopgSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgSyncConnection", self._ctx.__enter__())
-        self._ctx = self._config.create_connection()
-        return cast("PsycopgSyncConnection", self._ctx)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("PsycopgSyncConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -210,28 +207,16 @@ class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
 
 
 class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_conn",)
-
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
-        super().__init__(config)
-        self._conn: PsycopgSyncConnection | None = None
+    __slots__ = ()
 
     def acquire_connection(self) -> "PsycopgSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgSyncConnection", self._ctx.__enter__())
-        self._conn = self._config.create_connection()
-        return cast("PsycopgSyncConnection", self._conn)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("PsycopgSyncConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "PsycopgSyncConnection", **kwargs: Any) -> None:
-        exc_info = (kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
         if self._ctx is not None:
-            self._ctx.__exit__(*exc_info)
+            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
-            return
-        if self._conn is not None:
-            self._conn.__exit__(*exc_info)
-            self._conn = None
 
 
 @mypyc_attr(native_class=False)
@@ -493,7 +478,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
         connection = connection_class.connect(conninfo, **connection_kwargs)
-        self._configure_connection(cast("PsycopgSyncConnection", connection))
+        configure = self.connection_config.get("configure", self._configure_connection)
+        configure(cast("PsycopgSyncConnection", connection))
         return cast("PsycopgSyncConnection", connection)
 
     def provide_session(
@@ -798,7 +784,8 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
         connection = await connection_class.connect(conninfo, **connection_kwargs)
-        await self._configure_async_connection(cast("PsycopgAsyncConnection", connection))
+        configure = self.connection_config.get("configure", self._configure_async_connection)
+        await configure(cast("PsycopgAsyncConnection", connection))
         return cast("PsycopgAsyncConnection", connection)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
