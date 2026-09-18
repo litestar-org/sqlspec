@@ -120,6 +120,8 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "max_binary_size",
         "fetch_concurrently",
         "query_timeout_sec",
+        "payload_text_encoding",
+        "enable_driver_pooling",
         "connection_string",
         "dbms_name",
         "json_serializer",
