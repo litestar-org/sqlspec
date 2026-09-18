@@ -48,6 +48,8 @@ def _oracle_admin_sync_config(oracle_service: OracleService) -> OracleSyncConfig
             "service_name": oracle_service.service_name,
             "user": "system",
             "password": oracle_service.system_password,
+            "retry_count": 5,
+            "retry_delay": 1,
         }
     )
 
@@ -62,6 +64,8 @@ def _oracle_admin_async_config(oracle_service: OracleService) -> OracleAsyncConf
             "password": oracle_service.system_password,
             "min": 1,
             "max": 5,
+            "retry_count": 5,
+            "retry_delay": 1,
         }
     )
 
