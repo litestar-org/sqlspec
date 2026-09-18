@@ -473,15 +473,56 @@ def test_sync_create_connection_applies_the_connection_hook(monkeypatch: pytest.
     assert seen == [sentinel]
 
 
-def test_sync_connection_context_releases_through_the_branch_it_entered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Entering without a pool must close the connection rather than leaking a checkout."""
+def test_sync_connection_context_commits_a_standalone_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A standalone connection must be committed and closed, not dropped mid-transaction."""
     sentinel = MagicMock()
     monkeypatch.setattr("psycopg.Connection.connect", MagicMock(return_value=sentinel))
     config = PsycopgSyncConfig(connection_config={"host": "localhost"})
 
     with config.provide_connection() as connection:
         assert connection is sentinel
-        config.connection_instance = cast("Any", MagicMock())
 
-    assert sentinel.close.call_count == 1
-    config.connection_instance = None
+    sentinel.__exit__.assert_called_once_with(None, None, None)
+
+
+def test_sync_connection_context_rolls_a_standalone_connection_back_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exception must reach the connection so it rolls back rather than commits."""
+    sentinel = MagicMock()
+    sentinel.__exit__.return_value = None
+    monkeypatch.setattr("psycopg.Connection.connect", MagicMock(return_value=sentinel))
+    config = PsycopgSyncConfig(connection_config={"host": "localhost"})
+
+    with pytest.raises(RuntimeError), config.provide_connection():
+        raise RuntimeError
+
+    exc_type, exc_val, _ = sentinel.__exit__.call_args.args
+    assert exc_type is RuntimeError
+    assert isinstance(exc_val, RuntimeError)
+
+
+def test_sync_session_commits_a_standalone_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session on a non-pooled config must commit its work, not discard it."""
+    sentinel = MagicMock()
+    monkeypatch.setattr("psycopg.Connection.connect", MagicMock(return_value=sentinel))
+    config = PsycopgSyncConfig(connection_config={"host": "localhost"})
+    handler = psycopg_config._PsycopgSyncSessionConnectionHandler(config)
+
+    connection = handler.acquire_connection()
+    handler.release_connection(connection)
+
+    sentinel.__exit__.assert_called_once_with(None, None, None)
+    sentinel.close.assert_not_called()
+
+
+def test_sync_session_rolls_a_standalone_connection_back_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed session must reach the connection so it rolls back."""
+    sentinel = MagicMock()
+    monkeypatch.setattr("psycopg.Connection.connect", MagicMock(return_value=sentinel))
+    config = PsycopgSyncConfig(connection_config={"host": "localhost"})
+    handler = psycopg_config._PsycopgSyncSessionConnectionHandler(config)
+    error = RuntimeError("boom")
+
+    connection = handler.acquire_connection()
+    handler.release_connection(connection, exc_type=RuntimeError, exc_val=error, exc_tb=None)
+
+    sentinel.__exit__.assert_called_once_with(RuntimeError, error, None)

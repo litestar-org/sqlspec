@@ -11,6 +11,7 @@ from sqlspec.adapters.psqlpy.core import (
     _DML_COUNT_COLUMN,
     PsqlpyStreamSource,
     _dml_count_query,
+    coerce_json_columns,
     coerce_numeric_for_write,
     collect_rows,
     create_mapped_exception,
@@ -234,6 +235,25 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Reset the PostgreSQL search path after non-transactional migration SQL."""
         await self.connection.execute("RESET search_path")
 
+    async def _resolve_json_columns(self, schema_name: "str | None", table_name: str) -> "set[str]":
+        """Return the destination columns the database reports as json or jsonb.
+
+        Args:
+            schema_name: Destination schema, or None for the current search path.
+            table_name: Destination table name.
+
+        Returns:
+            Names of columns typed json or jsonb.
+        """
+        rows = await self.connection.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = $1 AND table_schema = COALESCE($2, current_schema()) "
+            "AND data_type IN ('json', 'jsonb')",
+            [table_name, schema_name],
+        )
+        data, _ = collect_rows(rows)
+        return {str(row["column_name"]) for row in data}
+
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
         normalized_schema = normalize_identifier(schema, "postgres")
@@ -322,7 +342,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
-                await cursor.copy_records_to_table(table_name, records, **copy_kwargs)
+                json_columns = await self._resolve_json_columns(schema_name, table_name)
+                await cursor.copy_records_to_table(
+                    table_name, coerce_json_columns(records, columns, json_columns), **copy_kwargs
+                )
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 

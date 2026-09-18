@@ -62,6 +62,7 @@ __all__ = (
     "build_postgres_extension_probe_names",
     "build_profile",
     "build_statement_config",
+    "coerce_json_columns",
     "coerce_numeric_for_write",
     "collect_rows",
     "create_mapped_exception",
@@ -299,6 +300,38 @@ def coerce_numeric_for_write(value: Any) -> Any:
             coerced_dict[key] = coerced_item
         return value if coerced_dict is None else coerced_dict
     return value
+
+
+def coerce_json_columns(
+    records: "list[tuple[Any, ...]]", columns: "list[str]", json_columns: "set[str]"
+) -> "list[tuple[Any, ...]]":
+    """Parse JSON text into objects for destination columns typed json or jsonb.
+
+    psqlpy binds a value by the destination column type, so a JSON column needs
+    a dict or list rather than the text an Arrow string column carries. Only the
+    columns the database reports as JSON are converted, because converting a
+    JSON-looking string bound for a text column would break it.
+
+    Args:
+        records: Row tuples in column order.
+        columns: Destination column names, positionally aligned with the rows.
+        json_columns: Names of destination columns typed json or jsonb.
+
+    Returns:
+        The rows, with JSON column values decoded.
+    """
+    if not json_columns:
+        return records
+    indexes = [index for index, name in enumerate(columns) if name in json_columns]
+    if not indexes:
+        return records
+    coerced: list[tuple[Any, ...]] = []
+    for record in records:
+        row = list(record)
+        for index in indexes:
+            row[index] = _coerce_json_text_for_execute_many(row[index])
+        coerced.append(tuple(row))
+    return coerced
 
 
 def split_schema_and_table(identifier: str) -> "tuple[str | None, str]":

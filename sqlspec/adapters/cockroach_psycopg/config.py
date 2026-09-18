@@ -137,18 +137,15 @@ class CockroachPsycopgDriverFeatures(TypedDict):
 class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for CockroachDB psycopg connections."""
 
-    __slots__ = ("_pooled",)
+    __slots__ = ()
 
     def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
         super().__init__(config)
-        self._pooled = False
 
     def __enter__(self) -> "CockroachSyncConnection":
         if self._config.connection_instance:
-            self._pooled = True
             self._ctx = self._config.connection_instance.connection()
             return cast("CockroachSyncConnection", self._ctx.__enter__())
-        self._pooled = False
         self._ctx = self._config.create_connection()
         return cast("CockroachSyncConnection", self._ctx)
 
@@ -157,10 +154,7 @@ class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
     ) -> bool | None:
         if self._ctx is None:
             return None
-        if self._pooled:
-            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
-        self._ctx.close()
-        return None
+        return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
 
 
 class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
@@ -178,12 +172,13 @@ class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
         return cast("CockroachSyncConnection", self._conn)
 
     def release_connection(self, _conn: "CockroachSyncConnection", **kwargs: Any) -> None:
+        exc_info = (kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
         if self._ctx is not None:
-            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+            self._ctx.__exit__(*exc_info)
             self._ctx = None
             return
         if self._conn is not None:
-            self._conn.close()
+            self._conn.__exit__(*exc_info)
             self._conn = None
 
 

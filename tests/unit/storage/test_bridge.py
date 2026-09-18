@@ -3,6 +3,7 @@
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import aiosqlite
@@ -99,6 +100,9 @@ class DummyPsqlpyConnection:
     async def execute(self, sql: str, params: "list[Any] | None" = None) -> None:
         _ = params
         self.statements.append(sql)
+
+    async def fetch(self, _sql: str, _params: "list[Any] | None" = None) -> Any:
+        return SimpleNamespace(result=list)
 
 
 class DummyAsyncmyCursorImpl:

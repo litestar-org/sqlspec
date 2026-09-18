@@ -1,5 +1,6 @@
 """psqlpy transaction state follows begin/commit/rollback."""
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -145,9 +146,13 @@ async def test_stream_error_close_rolls_back_only_its_own_transaction() -> None:
 class _CopyConnection(_FakeConnection):
     """Records the native COPY call and fails loudly on a row-by-row fallback."""
 
-    def __init__(self) -> None:
+    def __init__(self, json_columns: "tuple[str, ...]" = ()) -> None:
         super().__init__()
         self.copy_calls: list[tuple[str, list[Any], dict[str, Any]]] = []
+        self._json_columns = json_columns
+
+    async def fetch(self, _sql: str, _parameters: Any = None) -> Any:
+        return SimpleNamespace(result=lambda: [{"column_name": name} for name in self._json_columns])
 
     async def copy_records_to_table(self, table_name: str, records: Any, **kwargs: Any) -> int:
         self.copy_calls.append((table_name, list(records), kwargs))
@@ -175,3 +180,19 @@ async def test_load_from_arrow_uses_the_native_copy_path() -> None:
     assert table_name == "events"
     assert records == [(1, "a"), (2, "b")]
     assert kwargs == {"columns": ["id", "name"], "schema_name": "analytics"}
+
+
+async def test_load_from_arrow_decodes_json_text_for_json_columns() -> None:
+    """psqlpy binds by destination column type, so a JSON column needs an object."""
+    pa = pytest.importorskip("pyarrow")
+    connection = _CopyConnection(json_columns=("payload",))
+    config = PsqlpyConfig()
+    driver = PsqlpyDriver(
+        cast("Any", connection), driver_features={"storage_capabilities": config.storage_capabilities()}
+    )
+    table = pa.table({"id": [1], "payload": ['{"name": "alpha"}'], "note": ['{"not": "json"}']})
+
+    await driver.load_from_arrow("events", table)
+
+    _table_name, records, _kwargs = connection.copy_calls[0]
+    assert records == [(1, {"name": "alpha"}, '{"not": "json"}')]
