@@ -94,6 +94,7 @@ class AsyncmyConnectionParams(TypedDict):
     program_name: NotRequired[str]
     read_timeout: NotRequired[int | float]
     server_public_key: NotRequired[str | bytes]
+    stmt_cache_size: NotRequired[int]
     use_unicode: NotRequired[bool]
     write_timeout: NotRequired[int | float]
     extra: NotRequired["dict[str, Any]"]
@@ -344,16 +345,16 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             self.connection_instance = None
 
     async def create_connection(self) -> AsyncmyConnection:
-        """Create a single async connection (not from pool).
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection settings and creation hook
+        the pool applies, consumes no pool slot, and must be closed by the caller.
 
         Returns:
             An Asyncmy connection instance.
         """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        connection = cast("AsyncmyConnection", await pool.acquire())
+        _, connection_kwargs = _split_pool_config(self.connection_config)
+        connection = await asyncmy.connect(**connection_kwargs)
         await self._ensure_connection(connection)
         return connection
 
