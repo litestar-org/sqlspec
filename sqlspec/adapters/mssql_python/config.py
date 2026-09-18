@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext
+from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext, TokenProvider
 from sqlspec.adapters.mssql_python.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
@@ -80,6 +80,7 @@ class MssqlPythonConnectionParams(TypedDict):
     attrs_before: NotRequired[dict[int, int | str | bytes]]
     timeout: NotRequired[int]
     native_uuid: NotRequired[bool]
+    token_provider: NotRequired[TokenProvider]
     extra: NotRequired[dict[str, Any]]
 
 

@@ -4,7 +4,7 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 import mssql_python as _mssql_python  # pyright: ignore[reportMissingImports]
-from mssql_python.connection import Connection  # pyright: ignore
+from mssql_python.connection import Connection, TokenProvider  # pyright: ignore
 from mssql_python.cursor import Cursor  # pyright: ignore
 
 MSSQL_PYTHON_MODULE: Any = _mssql_python
@@ -30,6 +30,7 @@ __all__ = (
     "MssqlPythonCursor",
     "MssqlPythonRawCursor",
     "MssqlPythonSessionContext",
+    "TokenProvider",
 )
 
 
@@ -93,6 +94,9 @@ class MssqlPythonSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        if exc_type is not None and self._driver is not None:
+            with contextlib.suppress(Exception):
+                self._driver.rollback()
         if self._connection is not None:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None

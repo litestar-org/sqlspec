@@ -33,6 +33,7 @@ _MSSQL_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, A
     "image": ("binary", (), {}),
     "binary": ("binary", (), {}),
     "varbinary": ("binary", (), {}),
+    "time": ("time64", ("us",), {}),
     "timestamp": ("binary", (), {}),
     "rowversion": ("binary", (), {}),
     "char": ("string", (), {}),
