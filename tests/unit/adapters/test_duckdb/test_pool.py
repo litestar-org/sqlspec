@@ -1,6 +1,8 @@
 """Unit tests for DuckDB connection pool helpers."""
 
 import logging
+import threading
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -440,3 +442,84 @@ def test_pool_memory_leak_pool_creates_connection_after_attribute_removal() -> N
     finally:
         pool.close()
     assert row == (42,)
+
+
+def test_storage_settings_are_published_when_a_connection_hook_is_configured(tmp_path: Path) -> None:
+    """A connection hook must not suppress the storage state native pushdown depends on."""
+    seen: list[object] = []
+    pool = DuckDBConnectionPool(
+        connection_config={"database": str(tmp_path / "hooked.duckdb")}, on_connection_create=seen.append
+    )
+    try:
+        connection = pool.acquire()
+
+        settings = pool._storage_settings(connection)  # pyright: ignore[reportPrivateUsage]
+
+        assert seen == [connection]
+        assert settings["_duckdb_storage_extensions"] == frozenset()
+        assert settings["_duckdb_storage_secrets"] == ()
+        assert "_duckdb_storage_protocols" in settings
+    finally:
+        pool.close()
+
+
+def test_storage_extensions_survive_a_connection_hook(tmp_path: Path) -> None:
+    """Loaded extensions must still be published when a hook is present."""
+    hooked = DuckDBConnectionPool(
+        connection_config={"database": str(tmp_path / "with_hook.duckdb")},
+        extensions=[{"name": "json"}],
+        on_connection_create=lambda _connection: None,
+    )
+    plain = DuckDBConnectionPool(
+        connection_config={"database": str(tmp_path / "no_hook.duckdb")}, extensions=[{"name": "json"}]
+    )
+    try:
+        hooked_settings = hooked._storage_settings(hooked.acquire())  # pyright: ignore[reportPrivateUsage]
+        plain_settings = plain._storage_settings(plain.acquire())  # pyright: ignore[reportPrivateUsage]
+
+        assert hooked_settings["_duckdb_storage_extensions"] == plain_settings["_duckdb_storage_extensions"]
+    finally:
+        hooked.close()
+        plain.close()
+
+
+def test_close_closes_connections_opened_on_other_threads(tmp_path: Path) -> None:
+    """Connections opened by worker threads must not survive pool shutdown."""
+    pool = DuckDBConnectionPool(connection_config={"database": str(tmp_path / "threads.duckdb")})
+    opened: list[Any] = []
+    barrier = threading.Barrier(3)
+
+    def _open() -> None:
+        opened.append(pool.acquire())
+        barrier.wait()
+
+    workers = [threading.Thread(target=_open) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join()
+
+    assert len({id(connection) for connection in opened}) == 2
+
+    pool.close()
+
+    for connection in opened:
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+
+
+def test_clean_exit_commits_an_open_transaction(tmp_path: Path) -> None:
+    """A file-backed session that exits normally must keep its work."""
+    database = str(tmp_path / "commit.duckdb")
+    pool = DuckDBConnectionPool(connection_config={"database": database})
+    try:
+        with pool.get_connection() as connection:
+            connection.execute("CREATE TABLE items (id INTEGER)")
+            connection.execute("BEGIN TRANSACTION")
+            connection.execute("INSERT INTO items VALUES (1)")
+
+        with pool.get_connection() as connection:
+            assert connection.execute("SELECT id FROM items").fetchall() == [(1,)]
+    finally:
+        pool.close()
