@@ -27,10 +27,12 @@ class PymssqlConnectionPool:
 
     __slots__ = (
         "_connection_parameters",
+        "_connection_registry",
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
         "_recycle_seconds",
+        "_registry_lock",
         "_thread_local",
     )
 
@@ -51,6 +53,8 @@ class PymssqlConnectionPool:
         """
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
+        self._connection_registry: set[PymssqlConnection] = set()
+        self._registry_lock = threading.Lock()
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
         self._on_connection_create = on_connection_create
@@ -67,6 +71,9 @@ class PymssqlConnectionPool:
         # Call user-provided callback after connection creation
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
+
+        with self._registry_lock:
+            self._connection_registry.add(cast("PymssqlConnection", connection))
 
         return cast("PymssqlConnection", connection)
 
@@ -101,8 +108,7 @@ class PymssqlConnectionPool:
                 recycle_seconds=self._recycle_seconds,
                 reason="exceeded_recycle_time",
             )
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("PymssqlConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
             self._thread_local.last_used = time.time()
@@ -120,19 +126,24 @@ class PymssqlConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("PymssqlConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
 
         self._thread_local.last_used = time.time()
         return cast("PymssqlConnection", self._thread_local.connection)
 
+    def _retire_connection(self, connection: PymssqlConnection) -> None:
+        """Close a pool-owned connection and drop it from the shutdown registry."""
+        with self._registry_lock:
+            self._connection_registry.discard(connection)
+        with contextlib.suppress(Exception):
+            connection.close()
+
     def _close_thread_connection(self) -> None:
         thread_state = self._thread_local.__dict__
         if "connection" in thread_state:
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("PymssqlConnection", self._thread_local.connection))
             del self._thread_local.connection
             if "created_at" in thread_state:
                 del self._thread_local.created_at
@@ -155,7 +166,14 @@ class PymssqlConnectionPool:
             raise
 
     def close(self) -> None:
+        """Close every connection this pool opened, on any thread."""
         self._close_thread_connection()
+        with self._registry_lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+        for connection in orphaned:
+            with contextlib.suppress(Exception):
+                connection.close()
 
     def acquire(self) -> PymssqlConnection:
         return self._get_thread_connection()

@@ -1,5 +1,6 @@
 """pymssql pool tests."""
 
+import threading
 from typing import Any, cast
 
 from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakePymssqlModule
@@ -70,3 +71,60 @@ def test_pool_close_removes_thread_local_connection(monkeypatch) -> None:
 
     assert connection.closed is True
     assert pool.size() == 0
+
+
+def test_pool_close_closes_connections_opened_on_other_threads(monkeypatch) -> None:
+    """close() must reach connections opened by worker threads, not just the caller's."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    class SequencedModule(FakePymssqlModule):
+        def connect(self, **kwargs: Any) -> FakeConnection:
+            self.connect_calls.append(kwargs)
+            return FakeConnection()
+
+    monkeypatch.setattr(pool_module, "pymssql", SequencedModule())
+    pool = PymssqlConnectionPool({"server": "sql.example.test"})
+    opened: list[FakeConnection] = []
+    barrier = threading.Barrier(3)
+
+    def _open() -> None:
+        opened.append(cast(FakeConnection, pool.acquire()))
+        barrier.wait()
+
+    workers = [threading.Thread(target=_open) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join()
+
+    assert len({id(connection) for connection in opened}) == 2
+
+    pool.close()
+
+    assert [connection.closed for connection in opened] == [True, True]
+
+
+def test_pool_registry_does_not_grow_across_replacements(monkeypatch) -> None:
+    """Recycle and health-check replacement must deregister the connection they discard."""
+    import sqlspec.adapters.pymssql.pool as pool_module
+    from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
+
+    class SequencedModule(FakePymssqlModule):
+        def connect(self, **kwargs: Any) -> FakeConnection:
+            self.connect_calls.append(kwargs)
+            return FakeConnection()
+
+    monkeypatch.setattr(pool_module, "pymssql", SequencedModule())
+    monkeypatch.setattr(PymssqlConnectionPool, "_is_connection_alive", lambda *_: False)
+    pool = PymssqlConnectionPool({"server": "sql.example.test"}, health_check_interval=-1.0)
+
+    for _ in range(4):
+        pool.acquire()
+
+    assert len(pool._connection_registry) == 1  # pyright: ignore[reportPrivateUsage]
+
+    pool.close()
+
+    assert pool._connection_registry == set()  # pyright: ignore[reportPrivateUsage]
