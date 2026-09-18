@@ -87,7 +87,7 @@ class PyMysqlSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], PyMysqlConnection]",
-        release_connection: "Callable[[PyMysqlConnection], None]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PyMysqlDriver], PyMysqlDriver]",

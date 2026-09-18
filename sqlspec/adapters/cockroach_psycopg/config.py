@@ -588,7 +588,7 @@ class CockroachPsycopgAsyncConfig(
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
 
-_POOL_ONLY_CONFIG_KEYS: "Final[frozenset[str]]" = frozenset({
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "check",
     "close_returns",
     "configure",

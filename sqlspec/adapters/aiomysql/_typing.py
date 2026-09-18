@@ -127,7 +127,7 @@ class AiomysqlSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Awaitable[AiomysqlConnection]]",
-        release_connection: "Callable[[AiomysqlConnection], Awaitable[None]]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AiomysqlDriver], AiomysqlDriver]",

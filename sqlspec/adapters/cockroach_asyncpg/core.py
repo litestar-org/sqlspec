@@ -92,8 +92,8 @@ def calculate_backoff_seconds(attempt: int, config: "CockroachAsyncpgRetryConfig
     return random.uniform(capped_ms / 2.0, capped_ms) / 1000.0  # noqa: S311
 
 
-_STALENESS_LITERAL: "Final[re.Pattern[str]]" = re.compile(r"'[^'\\;]+'")
-_STALENESS_FUNCTION: "Final[re.Pattern[str]]" = re.compile(
+_STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")
+_STALENESS_FUNCTION: Final[re.Pattern[str]] = re.compile(
     r"(?:follower_read_timestamp|with_max_staleness|with_min_timestamp)"
     r"\(\s*(?:'[^'\\;]*'\s*(?:,\s*(?:'[^'\\;]*'|true|false)\s*)*)?\)",
     re.IGNORECASE,

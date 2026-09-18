@@ -146,7 +146,7 @@ class MysqlConnectorSyncSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], MysqlConnectorSyncConnection]",
-        release_connection: "Callable[[MysqlConnectorSyncConnection], None]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MysqlConnectorSyncDriver], MysqlConnectorSyncDriver]",
@@ -193,7 +193,7 @@ class MysqlConnectorAsyncSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Awaitable[MysqlConnectorAsyncConnection]]",
-        release_connection: "Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MysqlConnectorAsyncDriver], MysqlConnectorAsyncDriver]",

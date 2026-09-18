@@ -68,7 +68,7 @@ class MssqlPythonSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], MssqlPythonConnection]",
-        release_connection: "Callable[[MssqlPythonConnection], None]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MssqlPythonDriver], MssqlPythonDriver]",

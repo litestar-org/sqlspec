@@ -48,7 +48,7 @@ class CockroachAsyncpgSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[CockroachAsyncpgDriver], CockroachAsyncpgDriver]",

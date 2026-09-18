@@ -126,7 +126,7 @@ class AsyncmySessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Awaitable[AsyncmyConnection]]",
-        release_connection: "Callable[[AsyncmyConnection], Awaitable[None]]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AsyncmyDriver], AsyncmyDriver]",
