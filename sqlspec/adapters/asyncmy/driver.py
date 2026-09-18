@@ -369,7 +369,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:
                 with asyncmy_local_infile(self.connection, filename):
-                    await cursor.execute(statement, (filename,))
+                    await cursor.execute(statement, {"sqlspec_infile_path": filename})
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from exc_handler.pending_exception.__cause__
 

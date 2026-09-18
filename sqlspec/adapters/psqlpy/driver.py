@@ -28,7 +28,6 @@ from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -40,8 +39,6 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
-
-logger = get_logger("sqlspec.adapters.psqlpy")
 
 
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
@@ -242,20 +239,26 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             schema_name: Destination schema, or None for the current search path.
             table_name: Destination table name.
 
+        The relation is resolved the way the server would resolve it in a query,
+        so a table shadowed on the search path contributes no columns, and only
+        the one relation it names is inspected. A column typed as a domain is
+        read through to the type the domain is built on.
+
         Returns:
             Names of columns typed json or jsonb.
         """
+        qualified = quote_identifier(table_name)
+        if schema_name is not None:
+            qualified = f"{quote_identifier(schema_name)}.{qualified}"
         rows = await self.connection.fetch(
             "SELECT a.attname AS column_name "
             "FROM pg_attribute a "
-            "JOIN pg_class c ON c.oid = a.attrelid "
-            "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            "WHERE a.attnum > 0 AND NOT a.attisdropped "
-            "AND c.relname = $1 "
-            "AND ($2::text IS NULL OR n.nspname = $2) "
-            "AND ($2::text IS NOT NULL OR n.oid = ANY (current_schemas(true)::regnamespace[])) "
-            "AND format_type(a.atttypid, NULL) IN ('json', 'jsonb')",
-            [table_name, schema_name],
+            "JOIN pg_type t ON t.oid = a.atttypid "
+            "LEFT JOIN pg_type b ON b.oid = t.typbasetype "
+            "WHERE a.attrelid = to_regclass($1) "
+            "AND a.attnum > 0 AND NOT a.attisdropped "
+            "AND COALESCE(b.typname, t.typname) IN ('json', 'jsonb')",
+            [qualified],
         )
         data, _ = collect_rows(rows)
         return {str(row["column_name"]) for row in data}

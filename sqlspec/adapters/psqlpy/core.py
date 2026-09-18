@@ -225,14 +225,12 @@ class PsqlpyStreamSource:
         transaction = self._driver.connection.transaction()
         await transaction.begin()
         self._transaction = transaction
-        self._driver._transaction_active = True
         try:
             cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
             await cursor.start()
             self._cursor = cursor
         except BaseException:
             self._transaction = None
-            self._driver._transaction_active = False
             with contextlib.suppress(Exception):
                 await transaction.rollback()
             raise
@@ -262,8 +260,6 @@ class PsqlpyStreamSource:
             except Exception:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()
-            finally:
-                self._driver._transaction_active = False
 
 
 def coerce_numeric_for_write(value: Any) -> Any:

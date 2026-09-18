@@ -3,6 +3,7 @@
 import re
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import suppress
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -216,6 +217,11 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         agree on transaction state. A second call is a no-op rather than a
         savepoint, matching the other adapters and leaving nested
         ``transaction()`` blocks to the savepoint handling in the driver base.
+
+        asyncpg claims the connection for a transaction before it issues BEGIN
+        and does not release the claim when BEGIN fails, which would turn the
+        next attempt into a savepoint whose commit releases rather than commits.
+        The claim is therefore released here.
         """
         if self._transaction is not None:
             return
@@ -223,9 +229,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         try:
             await transaction.start()
         except AsyncpgPostgresError as e:
+            self._release_failed_transaction_claim(transaction)
             msg = f"Failed to begin async transaction: {e}"
             raise SQLSpecError(msg) from e
         self._transaction = transaction
+
+    def _release_failed_transaction_claim(self, transaction: Any) -> None:
+        """Clear the connection's transaction claim left by a failed start."""
+        with suppress(Exception):
+            if getattr(self.connection, "_top_xact", None) is transaction:
+                self.connection._top_xact = None
 
     async def commit(self) -> None:
         """Commit the current transaction."""

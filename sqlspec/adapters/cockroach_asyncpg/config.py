@@ -30,17 +30,6 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
-_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
-    "init",
-    "max_inactive_connection_lifetime",
-    "max_queries",
-    "max_size",
-    "min_size",
-    "reset",
-    "setup",
-})
-
-
 if TYPE_CHECKING:
     from asyncio.events import AbstractEventLoop
     from collections.abc import Awaitable, Callable
@@ -56,6 +45,16 @@ __all__ = (
     "CockroachAsyncpgPoolConfig",
     "CockroachAsyncpgTargetSessionAttrs",
 )
+
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
+    "init",
+    "max_inactive_connection_lifetime",
+    "max_queries",
+    "max_size",
+    "min_size",
+    "reset",
+    "setup",
+})
 
 
 CockroachAsyncpgTargetSessionAttrs = Literal["any", "primary", "standby", "read-write", "read-only", "prefer-standby"]

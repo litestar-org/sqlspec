@@ -159,6 +159,11 @@ Common keys
 
 See :class:`~sqlspec.config.MigrationConfig` for the complete set.
 
+A single migration may override this with its own ``transactional`` directive. The
+directive wins over the adapter's capability, so a data migration can still run
+atomically against a backend that restricts DDL inside transactions. Requesting a
+transaction for DDL on a backend that forbids it makes that migration fail.
+
 Running Against an Existing Schema
 ----------------------------------
 

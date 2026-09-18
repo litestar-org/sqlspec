@@ -121,13 +121,22 @@ async def test_stream_outside_a_transaction_manages_its_own() -> None:
 
     source = PsqlpyStreamSource(driver, "SELECT 1", None, 10)
     await source.start()
-
-    assert driver._connection_in_transaction() is True
-
     await source.close()
 
     assert connection.transaction_calls == ["begin", "commit"]
-    assert driver._connection_in_transaction() is False
+
+
+async def test_a_stream_transaction_is_not_offered_to_the_driver_as_its_own() -> None:
+    """Claiming it would let the driver's own transaction block commit the stream away."""
+    connection = _StreamingConnection()
+    driver = PsqlpyDriver(cast("Any", connection))
+
+    source = PsqlpyStreamSource(driver, "SELECT 1", None, 10)
+    await source.start()
+    try:
+        assert driver._connection_in_transaction() is False
+    finally:
+        await source.close()
 
 
 async def test_stream_error_close_rolls_back_only_its_own_transaction() -> None:

@@ -387,9 +387,14 @@ def resolve_driver_connect_func(driver_name: str | None, uri: str | None) -> "Ca
 
 
 def resolve_dialect_from_driver_path(driver_path: str) -> str:
-    """Get the SQL dialect type based on the driver path."""
+    """Get the SQL dialect type based on the driver path.
+
+    Only the final path segment is considered, because a directory on the way to
+    the driver can carry the name of an unrelated database.
+    """
+    candidate = driver_path.replace("\\", "/").rsplit("/", 1)[-1] or driver_path
     for keyword, dialect in _DRIVER_PATH_KEYWORDS_TO_DIALECT:
-        if keyword in driver_path:
+        if keyword in candidate:
             return dialect
     return "sqlite"
 
@@ -409,15 +414,14 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
     if isinstance(driver_name, str) and driver_name.lower() in {"gizmosql", "gizmo"}:
         return "duckdb"
 
+    if isinstance(driver_name, str) and is_shared_object_driver(driver_name):
+        return resolve_dialect_from_driver_path(driver_name.lower())
+
     uri = connection_config.get("uri")
     if isinstance(uri, str):
         lowered_uri = uri.lower()
         if lowered_uri.startswith(("gizmosql://", "gizmo://", "grpc+tls://")):
             return "duckdb"
-
-    driver_name = connection_config.get("driver_name")
-    if isinstance(driver_name, str) and is_shared_object_driver(driver_name):
-        return resolve_dialect_from_driver_path(driver_name.lower())
 
     return resolve_dialect_from_driver_path(resolve_driver_name_from_config(connection_config))
 
@@ -492,7 +496,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
             config["db_kwargs"] = db_kwargs_dict
 
     config.pop("driver_name", None)
-    if uses_driver_manager and isinstance(driver_name, str):
+    if uses_driver_manager and isinstance(driver_name, str) and "driver" not in config:
         config["driver"] = driver_name.strip()
 
     return config

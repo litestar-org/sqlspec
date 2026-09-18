@@ -22,6 +22,46 @@ Unreleased
   ``run_migrations`` key from extension settings. Run migrations with the commands
   and ``migration_config``. The Events ``listener_queue_capacity`` key is for
   asyncpg and psycopg.
+* ``create_connection()`` returns a connection the caller owns on the adapters that
+  previously handed back a pooled one. It consumes no pool slot and must be closed
+  by the caller.
+* The MySQL adapters connect with ``utf8mb4`` unless a charset is configured, matching
+  the character set their bulk-load path already declares.
+* CockroachDB reports that it does not support transactional DDL. A schema migration
+  runs without a wrapping transaction unless it carries its own ``transactional``
+  directive.
+* DuckDB ``extension_flags`` are applied as database startup settings, so an
+  unrecognized flag is reported when the database opens instead of being ignored.
+* Streaming row sources take an ``error`` flag when they close, and mapping rows to
+  dictionaries reports a missing column description rather than returning no rows.
+* ``sqlspec.exceptions.TransactionRetryError`` and
+  ``sqlspec.utils.type_guards.has_value_attribute`` are removed, along with
+  ``build_insert_statement``, ``coerce_records_for_execute_many``, and
+  ``encode_records_for_binary_copy`` from the psqlpy adapter. Serialization failures
+  are reported as ``SerializationConflictError``.
+
+**Added:**
+
+* The arrow-odbc adapter accepts individual ODBC connection fields alongside a
+  connection string, and the asyncmy adapter accepts ``stmt_cache_size``.
+* Bulk ingestion uses each driver's native Arrow path where one exists.
+
+**Fixed:**
+
+* A DuckDB session that exits with an exception no longer discards an in-memory
+  database, and opening a standalone connection no longer resets the storage setup
+  already prepared for the thread.
+* CockroachDB retries a transaction only for a genuine serialization conflict, and an
+  error that escapes a failed rollback keeps the cause that identifies it.
+* Oracle returns the same value types whether or not a statement was already cached.
+* Spanner declares a parameter type for UUID values.
+* ODBC connection values that are already quoted are passed through unchanged, and an
+  error code is read only from the driver's own diagnostic field.
+
+**Requirements:**
+
+* The ``duckdb`` extra installs ``pyarrow``. Minimum versions are raised for
+  ``oracledb`` (3.4), ``psqlpy`` (0.12.1), and ``mssql-python`` (1.13).
 
 v0.63.1 - Slotted service subclass compatibility
 ------------------------------------------------

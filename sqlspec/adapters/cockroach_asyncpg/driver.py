@@ -242,7 +242,24 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         staleness = validate_follower_read_staleness(self._follower_staleness)
         await self.connection.execute(f"SET TRANSACTION AS OF SYSTEM TIME {staleness}")
 
+    async def _begin_follower_read_transaction(self) -> None:
+        """Open the transaction a follower read needs so the staleness clause can lead it.
+
+        A statement run outside a transaction gets its own implicit one, which
+        the clause could not precede, so a read opens a transaction here when the
+        caller has not already done so.
+        """
+        if not self.driver_features.get("enable_follower_reads", False):
+            return
+        if not self._follower_staleness:
+            return
+        if self._connection_in_transaction():
+            return
+        await self.begin()
+
     async def _dispatch_execute_impl(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
+        if statement.returns_rows():
+            await self._begin_follower_read_transaction()
         return await super().dispatch_execute(cursor, statement)
 
     async def _dispatch_execute_many_impl(

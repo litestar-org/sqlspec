@@ -55,9 +55,6 @@ Transaction
    :members:
    :show-inheritance:
 
-   :members:
-   :show-inheritance:
-
 .. autoclass:: DeadlockError
    :members:
    :show-inheritance:

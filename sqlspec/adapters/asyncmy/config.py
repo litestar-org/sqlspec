@@ -289,6 +289,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
+        connection_config.setdefault("charset", "utf8mb4")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

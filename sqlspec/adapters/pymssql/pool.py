@@ -86,7 +86,6 @@ class PymssqlConnectionPool:
         """
         connection = pymssql.connect(**self._connection_parameters)
 
-        # Call user-provided callback after connection creation
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
 

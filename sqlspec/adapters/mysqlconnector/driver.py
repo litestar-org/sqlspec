@@ -332,10 +332,8 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        in_transaction = getattr(self.connection, "in_transaction", None)
-        if in_transaction is not None:
-            return bool(in_transaction)
-        return False
+        """Report whether the connector has an open transaction."""
+        return bool(self.connection.in_transaction)
 
 
 class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
@@ -576,10 +574,8 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        in_tx = getattr(self.connection, "in_transaction", None)
-        if in_tx is not None:
-            return bool(in_tx)
-        return False
+        """Report whether the connector has an open transaction."""
+        return bool(self.connection.in_transaction)
 
 
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":

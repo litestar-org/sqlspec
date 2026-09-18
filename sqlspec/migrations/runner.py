@@ -481,13 +481,13 @@ class BaseMigrationRunner:
     ) -> bool:
         """Determine if migration should run in a transaction.
 
-        Args:
-            migration: Migration metadata dictionary.
-            config: The database configuration instance.
-
         An explicit per-migration directive takes precedence over the config's
         transactional-DDL capability, so a data migration can still run
         atomically on a backend that restricts DDL in transactions.
+
+        Args:
+            migration: Migration metadata dictionary.
+            config: The database configuration instance.
 
         Returns:
             True if migration should be wrapped in a transaction.

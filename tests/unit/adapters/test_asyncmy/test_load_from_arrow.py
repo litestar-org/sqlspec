@@ -33,7 +33,7 @@ class _FakeCursor:
     async def execute(self, sql: str, *_args: Any) -> None:
         self.execute_calls.append(sql)
         if sql.startswith("LOAD DATA"):
-            self.payload_path = Path(_args[0][0])
+            self.payload_path = Path(_args[0]["sqlspec_infile_path"])
             self.payload = self.payload_path.read_bytes()
             if self.failure is not None:
                 raise self.failure
@@ -119,7 +119,7 @@ async def test_local_infile_payload_roundtrip_and_cleanup() -> None:
     assert job.telemetry["rows_processed"] == 2
     assert conn._cursor.executemany_calls == []
     assert conn._cursor.payload == "1\té\\t\\n\\r\\\\\\0\\Z\t1\n2\t\\N\t0\n".encode()
-    assert "LOCAL INFILE %s" in conn._cursor.execute_calls[0]
+    assert "LOCAL INFILE %(sqlspec_infile_path)s" in conn._cursor.execute_calls[0]
     assert "`text.with%%tick```" in conn._cursor.execute_calls[0]
     assert conn._cursor.payload_path is not None
     assert not conn._cursor.payload_path.parent.exists()

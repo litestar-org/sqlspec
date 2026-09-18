@@ -1,5 +1,6 @@
 """CockroachDB configuration using psycopg."""
 
+import re
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from psycopg import crdb as psycopg_crdb
@@ -606,16 +607,28 @@ def _standalone_connection_kwargs(connection_config: "dict[str, Any]") -> "tuple
     return str(conninfo or ""), all_config
 
 
+_CLUSTER_NAME_PATTERN: "re.Pattern[str]" = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def _apply_cluster_option(connection_kwargs: "dict[str, Any]") -> None:
     """Fold a CockroachDB Cloud cluster name into the libpq options string.
 
     ``cluster`` is not a libpq connection parameter; multi-tenant routing is
     expressed through ``options=--cluster=<name>``.
+
+    Raises:
+        ImproperConfigurationError: If the name carries anything but the
+            characters a cluster name may contain. The value is interpolated
+            into an options string, where whitespace would start a new option.
     """
     cluster = connection_kwargs.pop("cluster", None)
     if not cluster:
         return
-    routing = f"--cluster={cluster}"
+    name = str(cluster)
+    if _CLUSTER_NAME_PATTERN.fullmatch(name) is None:
+        msg = f"CockroachDB cluster name {name!r} may contain only letters, digits, hyphens, underscores, and periods."
+        raise ImproperConfigurationError(msg)
+    routing = f"--cluster={name}"
     existing = connection_kwargs.get("options")
     connection_kwargs["options"] = f"{existing} {routing}" if existing else routing
 

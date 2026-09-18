@@ -162,13 +162,13 @@ def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
 def build_load_data_statement(table: str, columns: "list[str]") -> str:
     """Build native LOAD DATA SQL with a bound filename.
 
-    Args:
-        table: Destination table identifier.
-        columns: Destination column names.
-
     mysql-connector substitutes only ``%s`` and leaves every other percent sign
     alone, so identifiers are emitted verbatim; doubling them the way the
     pymysql family requires would corrupt a name containing a percent sign.
+
+    Args:
+        table: Destination table identifier.
+        columns: Destination column names.
 
     Returns:
         SQL with one positional filename placeholder.
