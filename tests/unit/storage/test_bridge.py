@@ -80,20 +80,21 @@ class DummyPsqlpyConnection:
         self.copy_calls: list[dict[str, Any]] = []
         self.statements: list[str] = []
 
-    async def binary_copy_to_table(
+    async def copy_records_to_table(
         self,
-        source: list[tuple[object, ...]],
         table_name: str,
+        records: "list[tuple[object, ...]]",
         *,
         columns: list[str] | None = None,
         schema_name: str | None = None,
-    ) -> None:
+    ) -> int:
         self.copy_calls.append({
             "table": table_name,
             "schema": schema_name,
             "columns": columns or [],
-            "records": source,
+            "records": list(records),
         })
+        return len(records)
 
     async def execute(self, sql: str, params: "list[Any] | None" = None) -> None:
         _ = params
@@ -303,16 +304,12 @@ async def test_psqlpy_load_from_arrow_overwrite() -> None:
     assert dummy_connection.statements == ['TRUNCATE TABLE "analytics"."ingest_target"']
     assert dummy_connection.copy_calls[0]["table"] == "ingest_target"
     assert dummy_connection.copy_calls[0]["schema"] == "analytics"
-    payload = dummy_connection.copy_calls[0]["records"]
-    if isinstance(payload, bytes):
-        assert payload == b"7\teast\n8\twest\n"
-    else:
-        assert payload == [(7, "east"), (8, "west")]
+    assert dummy_connection.copy_calls[0]["records"] == [(7, "east"), (8, "west")]
     assert job.telemetry["destination"] == "analytics.ingest_target"
     assert job.telemetry["rows_processed"] == arrow_table.num_rows
 
 
-async def test_psqlpy_load_from_arrow_serializes_nested_json_values() -> None:
+async def test_psqlpy_load_from_arrow_passes_nested_values_natively() -> None:
     arrow_table = pa.table({"id": [1], "payload": pa.array([{"name": "alpha"}]), "tags": pa.array([["north", "east"]])})
     dummy_connection = DummyPsqlpyConnection()
     driver = PsqlpyDriver(
@@ -323,11 +320,7 @@ async def test_psqlpy_load_from_arrow_serializes_nested_json_values() -> None:
 
     await driver.load_from_arrow("analytics.events", arrow_table)
 
-    payload = dummy_connection.copy_calls[0]["records"]
-    if isinstance(payload, bytes):
-        assert payload == b'1\t{"name":"alpha"}\t["north","east"]\n'
-    else:
-        assert payload == [(1, {"name": "alpha"}, ["north", "east"])]
+    assert dummy_connection.copy_calls[0]["records"] == [(1, {"name": "alpha"}, ["north", "east"])]
 
 
 async def test_psqlpy_load_from_storage_merges_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:

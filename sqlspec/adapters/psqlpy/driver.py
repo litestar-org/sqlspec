@@ -4,7 +4,6 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
-import inspect
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
@@ -12,14 +11,11 @@ from sqlspec.adapters.psqlpy.core import (
     _DML_COUNT_COLUMN,
     PsqlpyStreamSource,
     _dml_count_query,
-    build_insert_statement,
     coerce_numeric_for_write,
-    coerce_records_for_execute_many,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
-    encode_records_for_binary_copy,
     extract_rows_affected,
     format_execute_many_parameters,
     format_table_identifier,
@@ -326,26 +322,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
-                try:
-                    copy_payload = encode_records_for_binary_copy(records)
-                    copy_operation = cursor.binary_copy_to_table(copy_payload, table_name, **copy_kwargs)
-                    if inspect.isawaitable(copy_operation):
-                        await copy_operation
-                except (TypeError, PsqlpyDatabaseError) as exc:
-                    logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
-                    insert_sql = build_insert_statement(table, columns)
-                    formatted_records = coerce_records_for_execute_many(records)
-                    try:
-                        insert_operation = cursor.execute_many(insert_sql, formatted_records)
-                        if inspect.isawaitable(insert_operation):
-                            await insert_operation
-                    except (PsqlpyDatabaseError, PsqlpyError) as fallback_exc:
-                        if "PyJSON must be dict, list, or tuple" not in str(fallback_exc):
-                            raise
-                        formatted_records = coerce_records_for_execute_many(records, parse_json_text=True)
-                        insert_operation = cursor.execute_many(insert_sql, formatted_records)
-                        if inspect.isawaitable(insert_operation):
-                            await insert_operation
+                await cursor.copy_records_to_table(table_name, records, **copy_kwargs)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
