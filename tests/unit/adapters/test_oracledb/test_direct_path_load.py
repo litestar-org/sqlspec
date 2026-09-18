@@ -273,3 +273,26 @@ def test_empty_arrow_table_skips_both_ingest_paths() -> None:
 
     assert conn.dpl_calls == []
     assert conn._cursor.executemany_calls == []
+
+
+def test_nested_arrow_columns_use_the_insert_path() -> None:
+    """oracledb cannot convert nested Arrow types, so those tables take the tuple path."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    nested = pa.table({"id": [1], "tags": pa.array([["north", "east"]])})
+
+    driver.load_from_arrow("MYTAB", nested)
+
+    assert conn.dpl_calls == []
+    assert len(conn._cursor.executemany_calls) == 1
+
+
+def test_flat_arrow_columns_still_use_direct_path_load() -> None:
+    """A flat schema keeps the native zero-copy path."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow("MYTAB", _arrow())
+
+    assert len(conn.dpl_calls) == 1
+    assert conn._cursor.executemany_calls == []

@@ -705,6 +705,8 @@ class OracleSyncStreamSource:
             column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
             self._requires_lob_coercion = requires_lob_coercion
+        if self._caller_wants_locators():
+            return rows_to_dicts(rows, column_names)
         coerced_rows, column_names = collect_sync_rows(
             rows,
             cursor.description,
@@ -713,6 +715,18 @@ class OracleSyncStreamSource:
             requires_lob_coercion=self._requires_lob_coercion,
         )
         return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
+
+    def _caller_wants_locators(self) -> bool:
+        """Report whether the caller asked to receive LOB locators.
+
+        ``fetch_lobs=True`` is a documented escape hatch for reading a LOB
+        incrementally, so coercing under it would remove the only reason to ask
+        for it.
+        """
+        fetch_lobs = self._fetch_lobs
+        if fetch_lobs is None:
+            fetch_lobs = self._driver.driver_features.get("fetch_lobs")
+        return fetch_lobs is True
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -791,6 +805,8 @@ class OracleAsyncStreamSource:
             column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
             self._requires_lob_coercion = requires_lob_coercion
+        if self._caller_wants_locators():
+            return rows_to_dicts(rows, column_names)
         coerced_rows, column_names = await collect_async_rows(
             rows,
             cursor.description,
@@ -799,6 +815,18 @@ class OracleAsyncStreamSource:
             requires_lob_coercion=self._requires_lob_coercion,
         )
         return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
+
+    def _caller_wants_locators(self) -> bool:
+        """Report whether the caller asked to receive LOB locators.
+
+        ``fetch_lobs=True`` is a documented escape hatch for reading a LOB
+        incrementally, so coercing under it would remove the only reason to ask
+        for it.
+        """
+        fetch_lobs = self._fetch_lobs
+        if fetch_lobs is None:
+            fetch_lobs = self._driver.driver_features.get("fetch_lobs")
+        return fetch_lobs is True
 
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor

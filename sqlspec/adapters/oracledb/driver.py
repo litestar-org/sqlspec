@@ -773,9 +773,11 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 cursor.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        use_direct_path = self.driver_features.get(
-            "enable_direct_path_load", True
-        ) is not False and supports_direct_path_load(self.connection)
+        use_direct_path = (
+            self.driver_features.get("enable_direct_path_load", True) is not False
+            and supports_direct_path_load(self.connection)
+            and not self._arrow_rows_need_preparation(arrow_table)
+        )
         if arrow_table.num_rows:
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
@@ -1474,9 +1476,11 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 await self.connection.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        use_direct_path = self.driver_features.get(
-            "enable_direct_path_load", True
-        ) is not False and supports_direct_path_load(self.connection)
+        use_direct_path = (
+            self.driver_features.get("enable_direct_path_load", True) is not False
+            and supports_direct_path_load(self.connection)
+            and not self._arrow_rows_need_preparation(arrow_table)
+        )
         if arrow_table.num_rows:
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
