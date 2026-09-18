@@ -128,7 +128,24 @@ class DuckDBConnectionPool:
         return str(db)
 
     def _create_connection(self) -> DuckDBConnection:
-        """Create a new DuckDB connection with extensions and secrets."""
+        """Create a pool-owned connection and record it for shutdown."""
+        connection = self.new_connection(record_thread_state=True)
+        with self._lock:
+            self._connection_registry.add(connection)
+        return connection
+
+    def new_connection(self, record_thread_state: bool = False) -> DuckDBConnection:
+        """Open a standalone connection with extensions and secrets applied.
+
+        Unless the pool asks it to, the result is owned by the caller: it is not
+        thread-local and is not tracked for pool shutdown.
+
+        Args:
+            record_thread_state: Whether to publish storage setup for this thread.
+
+        Returns:
+            DuckDBConnection: A newly opened, fully configured connection.
+        """
         self._thread_local.storage_extensions = frozenset()
         self._thread_local.storage_secrets = ()
         self._thread_local.storage_protocols = frozenset()
@@ -149,8 +166,6 @@ class DuckDBConnectionPool:
             connect_parameters["config"] = config_dict
 
         connection = duckdb.connect(**connect_parameters)
-        with self._lock:
-            self._connection_registry.add(connection)
 
         for ext_config in self._extensions:
             ext_name = ext_config.get("name")
@@ -221,10 +236,11 @@ class DuckDBConnectionPool:
 
         if self._on_connection_create:
             self._on_connection_create(connection)
-        self._thread_local.storage_extensions = frozenset(loaded_extensions)
-        self._thread_local.storage_secrets = tuple(created_secrets)
         storage_protocols.update(connection.list_filesystems())
-        self._thread_local.storage_protocols = frozenset(storage_protocols)
+        if record_thread_state:
+            self._thread_local.storage_extensions = frozenset(loaded_extensions)
+            self._thread_local.storage_secrets = tuple(created_secrets)
+            self._thread_local.storage_protocols = frozenset(storage_protocols)
         return connection
 
     def _storage_settings(self, connection: DuckDBConnection) -> "dict[str, Any]":

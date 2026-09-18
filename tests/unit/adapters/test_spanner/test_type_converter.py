@@ -1,5 +1,6 @@
 import base64
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
@@ -15,7 +16,6 @@ from sqlspec.adapters.spanner.type_converter import (
     spanner_to_uuid,
 )
 from sqlspec.core import TypedParameter
-from sqlspec.exceptions import SQLSpecError
 
 
 def test_spanner_to_uuid_converts_bytes() -> None:
@@ -166,10 +166,27 @@ def test_typed_null_covers_the_scalar_types(declared: type, expected_name: str) 
     assert types["value"] == getattr(param_types, expected_name)
 
 
-def test_bare_null_parameter_raises_a_clear_error() -> None:
-    """The diagnostic must name the remedy rather than leaving Spanner to reject it."""
-    with pytest.raises(SQLSpecError, match="TypedParameter"):
-        infer_spanner_param_types({"value": None})
+def test_bare_null_parameter_is_omitted_so_spanner_infers_it() -> None:
+    """An ordinary None must keep working; Spanner infers the type from the query."""
+    assert infer_spanner_param_types({"value": None}) == {}
+
+
+def test_bare_null_does_not_suppress_its_siblings() -> None:
+    """Only the untyped NULL is omitted, not the whole parameter set."""
+    types = infer_spanner_param_types({"id": "x", "email": None})
+
+    assert set(types) == {"id"}
+
+
+def test_typed_null_covers_decimal_and_uuid() -> None:
+    """The types the parameter pipeline auto-wraps must all be resolvable."""
+    assert infer_spanner_param_types({"amount": TypedParameter(None, Decimal)})["amount"] == param_types.NUMERIC
+    assert infer_spanner_param_types({"ident": TypedParameter(None, UUID)})["ident"] == param_types.STRING
+
+
+def test_typed_null_with_an_unmappable_type_is_omitted() -> None:
+    """An unmappable declared type falls back to Spanner's own inference."""
+    assert infer_spanner_param_types({"value": TypedParameter(None, object)}) == {}
 
 
 def test_typed_non_null_parameter_still_infers_from_its_value() -> None:

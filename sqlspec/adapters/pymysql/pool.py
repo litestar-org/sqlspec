@@ -70,6 +70,22 @@ class PyMysqlConnectionPool:
         return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> PyMysqlConnection:
+        connection = self.new_connection()
+
+        with self._registry_lock:
+            self._connection_registry.add(connection)
+
+        return connection
+
+    def new_connection(self) -> PyMysqlConnection:
+        """Open a standalone connection configured like a pooled one.
+
+        The result is owned by the caller: it is not thread-local and is not
+        tracked for pool shutdown.
+
+        Returns:
+            PyMysqlConnection: A newly opened, fully configured connection.
+        """
         if self._connection_factory is not None:
             connection = self._connection_factory()
         else:
@@ -78,9 +94,6 @@ class PyMysqlConnectionPool:
         # Call user-provided callback after connection creation
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
-
-        with self._registry_lock:
-            self._connection_registry.add(connection)
 
         return connection
 

@@ -776,7 +776,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         use_direct_path = (
             self.driver_features.get("enable_direct_path_load", True) is not False
             and supports_direct_path_load(self.connection)
-            and not self._arrow_rows_need_preparation(arrow_table)
+            and _arrow_schema_supports_direct_path(arrow_table)
         )
         if arrow_table.num_rows:
             if use_direct_path:
@@ -1479,7 +1479,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         use_direct_path = (
             self.driver_features.get("enable_direct_path_load", True) is not False
             and supports_direct_path_load(self.connection)
-            and not self._arrow_rows_need_preparation(arrow_table)
+            and _arrow_schema_supports_direct_path(arrow_table)
         )
         if arrow_table.num_rows:
             if use_direct_path:
@@ -1764,6 +1764,40 @@ class _CompiledStackOperation(NamedTuple):
     method: str
     returns_rows: bool
     summary: str
+
+
+def _arrow_schema_supports_direct_path(arrow_table: Any) -> bool:
+    """Report whether every column maps to a type direct path load can ingest.
+
+    This is an allow-list rather than a nested-type check. oracledb converts a
+    limited set of Arrow types, and a conversion it cannot perform fails part
+    way through the load, so anything unrecognized takes the insert path.
+
+    Args:
+        arrow_table: The Arrow table about to be ingested.
+
+    Returns:
+        True when every column type is known to be convertible.
+    """
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    for field in arrow_table.schema:
+        data_type = field.type
+        supported = (
+            pa.types.is_integer(data_type)
+            or (pa.types.is_floating(data_type) and not pa.types.is_float16(data_type))
+            or pa.types.is_boolean(data_type)
+            or pa.types.is_string(data_type)
+            or pa.types.is_large_string(data_type)
+            or pa.types.is_binary(data_type)
+            or pa.types.is_large_binary(data_type)
+            or pa.types.is_timestamp(data_type)
+            or pa.types.is_decimal128(data_type)
+        )
+        if not supported:
+            return False
+    return True
 
 
 def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:

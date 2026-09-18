@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
 
-from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool, _end_transaction
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite._typing import SqliteConnection
@@ -212,3 +212,57 @@ def test_new_connection_is_independent_of_the_thread_local_connection(tmp_path: 
         pooled.execute("SELECT 1")
     finally:
         pool.close()
+
+
+class _AutocommitConnection:
+    """Mimics a Python 3.12+ sqlite3 connection in autocommit mode."""
+
+    def __init__(self) -> None:
+        self.autocommit = True
+        self.in_transaction = True
+        self.statements: list[str] = []
+        self.commit_calls = 0
+        self.rollback_calls = 0
+
+    def execute(self, sql: str, parameters: object = ()) -> None:
+        _ = parameters
+        self.statements.append(sql)
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+
+
+@pytest.mark.parametrize(("commit", "statement"), [(True, "COMMIT"), (False, "ROLLBACK")], ids=["commit", "rollback"])
+def test_pool_ends_autocommit_transactions_with_an_explicit_statement(commit: bool, statement: str) -> None:
+    """The pool's own commit is a no-op in autocommit mode, exactly like the driver's."""
+    connection = _AutocommitConnection()
+
+    _end_transaction(cast("Any", connection), commit=commit, supports_autocommit=True)
+
+    assert connection.statements == [statement]
+    assert connection.commit_calls == 0
+    assert connection.rollback_calls == 0
+
+
+def test_pool_uses_the_dbapi_methods_outside_autocommit_mode() -> None:
+    """Legacy connections keep the DB-API path."""
+    connection = _AutocommitConnection()
+    connection.autocommit = False
+
+    _end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
+
+    assert connection.statements == []
+    assert connection.commit_calls == 1
+
+
+def test_pool_skips_ending_a_transaction_that_is_not_open() -> None:
+    connection = _AutocommitConnection()
+    connection.in_transaction = False
+
+    _end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
+
+    assert connection.statements == []
+    assert connection.commit_calls == 0

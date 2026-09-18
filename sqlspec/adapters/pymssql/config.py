@@ -161,8 +161,16 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             self.connection_instance = None
 
     def create_connection(self) -> "PymssqlConnection":
-        pool = self.provide_pool()
-        return pool.acquire()
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same parameters and creation hook the pool
+        applies, but it is not the pool's thread-local connection, so closing it
+        leaves the pool usable.
+
+        Returns:
+            PymssqlConnection: A newly opened connection.
+        """
+        return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()

@@ -3,6 +3,7 @@
 from typing import Any, cast
 
 import pyarrow as pa
+import pytest
 
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 
@@ -293,6 +294,38 @@ def test_flat_arrow_columns_still_use_direct_path_load() -> None:
     driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
 
     driver.load_from_arrow("MYTAB", _arrow())
+
+    assert len(conn.dpl_calls) == 1
+    assert conn._cursor.executemany_calls == []
+
+
+@pytest.mark.parametrize(
+    "arrow_type",
+    [pa.date32(), pa.time64("us"), pa.duration("s"), pa.null(), pa.float16(), pa.dictionary(pa.int8(), pa.string())],
+    ids=["date32", "time64", "duration", "null", "float16", "dictionary"],
+)
+def test_unconvertible_scalar_columns_use_the_insert_path(arrow_type: "pa.DataType") -> None:
+    """A conversion oracledb cannot perform fails part way through, so it is avoided."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow("MYTAB", pa.table({"c": pa.array([None], type=arrow_type)}))
+
+    assert conn.dpl_calls == []
+    assert len(conn._cursor.executemany_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "arrow_type",
+    [pa.int64(), pa.float64(), pa.bool_(), pa.string(), pa.binary(), pa.timestamp("us"), pa.decimal128(10, 2)],
+    ids=["int64", "float64", "bool", "string", "binary", "timestamp", "decimal128"],
+)
+def test_convertible_scalar_columns_keep_the_native_path(arrow_type: "pa.DataType") -> None:
+    """The types oracledb does convert must still take the zero-copy path."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow("MYTAB", pa.table({"c": pa.array([None], type=arrow_type)}))
 
     assert len(conn.dpl_calls) == 1
     assert conn._cursor.executemany_calls == []

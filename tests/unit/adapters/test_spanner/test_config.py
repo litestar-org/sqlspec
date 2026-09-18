@@ -2,7 +2,6 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from google.cloud.spanner_v1.database_sessions_manager import TransactionType
 from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
 
 from sqlspec.adapters.spanner.config import (
@@ -640,31 +639,15 @@ def test_provide_write_session_alias() -> None:
         assert isinstance(driver.connection, _Txn)
 
 
-def test_create_connection_checks_out_a_pooled_session() -> None:
-    """create_connection returns an entered snapshot on a pooled session."""
+def test_create_connection_returns_a_releasable_checkout() -> None:
+    """create_connection must return a checkout that can give its session back."""
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     sentinel = object()
     get_database_call_count = 0
 
-    class _Session:
+    class _DB:
         def snapshot(self, multi_use: bool = False) -> object:
             return sentinel
-
-    class _SessionsManager:
-        def __init__(self) -> None:
-            self.transaction_types: list[object] = []
-
-        def get_session(self, transaction_type: object) -> _Session:
-            self.transaction_types.append(transaction_type)
-            return _Session()
-
-        def put_session(self, _session: object) -> None:
-            return None
-
-    manager = _SessionsManager()
-
-    class _DB:
-        sessions_manager = manager
 
     def _get_database() -> _DB:
         nonlocal get_database_call_count
@@ -680,7 +663,6 @@ def test_create_connection_checks_out_a_pooled_session() -> None:
 
     assert config.create_connection() is sentinel
     assert get_database_call_count == 1
-    assert manager.transaction_types == [TransactionType.READ_ONLY]
 
     assert config.create_connection() is sentinel
     assert get_database_call_count == 2

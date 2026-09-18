@@ -12,6 +12,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_driver_connect_func,
     resolve_driver_name_from_config,
 )
+from sqlspec.core import ParameterStyle
 
 
 def _resolve_driver_name(config: AdbcConfig) -> str:
@@ -393,3 +394,19 @@ def test_entrypoint_is_preserved_on_the_driver_manager_route() -> None:
     )
 
     assert _get_connection_config_dict(config)["entrypoint"] == "PostgreSQL"
+
+
+def test_shared_object_driver_keeps_its_dialect() -> None:
+    """Routing through the driver manager must not erase the dialect the path names."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so", "uri": "postgresql://host/db"}
+    )
+
+    assert config.statement_config.dialect == "postgres"
+
+
+def test_shared_object_driver_keeps_its_parameter_style() -> None:
+    """A PostgreSQL shared object must not be given SQLite's qmark placeholders."""
+    config = AdbcConfig(connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"})
+
+    assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC

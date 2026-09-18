@@ -347,15 +347,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return self._database
 
     def create_connection(self) -> SpannerConnection:
-        """Check out a read-only snapshot on a pooled session.
+        """Return a read-only snapshot checkout owned by the caller.
+
+        The result is the database's own checkout object: it borrows a pooled
+        session when entered and returns it on exit. Returning an already-entered
+        snapshot instead would borrow a session that nothing could give back.
 
         Returns:
-            An entered snapshot, ready to use rather than a checkout object the
-            caller would still have to enter.
+            A snapshot checkout to be used as a context manager.
         """
-        database = cast("Any", self.get_database())
-        session = database.sessions_manager.get_session(TransactionType.READ_ONLY)
-        return cast("SpannerConnection", session.snapshot(multi_use=True))
+        return cast("SpannerConnection", self.get_database().snapshot(multi_use=True))  # type: ignore[no-untyped-call]
 
     def _create_pool(self) -> "AbstractSessionPool":
         from google.cloud.spanner_v1.pool import BurstyPool, FixedSizePool, PingingPool

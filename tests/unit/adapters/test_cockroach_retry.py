@@ -20,7 +20,7 @@ from sqlspec.adapters.cockroach_psycopg.driver import (
     CockroachPsycopgAsyncExceptionHandler,
     CockroachPsycopgSyncExceptionHandler,
 )
-from sqlspec.exceptions import SerializationConflictError
+from sqlspec.exceptions import SerializationConflictError, SQLSpecError
 
 
 class _RetryableError(Exception):
@@ -169,3 +169,56 @@ def test_backoff_stays_jittered_at_the_delay_cap(backoff: Any, config_type: Any)
 
     assert len(delays) > 1
     assert max(delays) <= 5.0
+
+
+@pytest.mark.parametrize("is_retryable", [psycopg_is_retryable, asyncpg_is_retryable])
+def test_commit_time_serialization_failure_is_retryable(is_retryable: Any) -> None:
+    """CockroachDB reports write-skew conflicts at COMMIT, wrapped by transaction control."""
+    driver_error = psycopg.errors.SerializationFailure("restart transaction: RETRY_SERIALIZABLE")
+    try:
+        try:
+            raise driver_error
+        except psycopg.Error as inner:
+            raise SQLSpecError("Failed to commit transaction: restart transaction") from inner
+    except SQLSpecError as wrapped:
+        assert is_retryable(wrapped)
+
+
+@pytest.mark.parametrize("is_retryable", [psycopg_is_retryable, asyncpg_is_retryable])
+def test_unrelated_wrapped_error_is_not_retryable(is_retryable: Any) -> None:
+    """Walking the cause chain must not turn every wrapped failure into a retry."""
+    try:
+        try:
+            raise ValueError("bad value")
+        except ValueError as inner:
+            raise SQLSpecError("Failed to commit transaction: bad value") from inner
+    except SQLSpecError as wrapped:
+        assert not is_retryable(wrapped)
+
+
+def test_sync_retry_loop_retries_a_commit_time_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retry loop must see a conflict raised by commit, not just by the operation."""
+    driver_type = CockroachPsycopgSyncDriver
+    monkeypatch.setattr(driver_type, "_connection_in_transaction", lambda _self: False)
+    monkeypatch.setattr(driver_type, "begin", MagicMock())
+    monkeypatch.setattr(driver_type, "rollback", MagicMock())
+
+    commits: list[int] = []
+
+    def _commit(_self: Any) -> None:
+        commits.append(1)
+        if len(commits) == 1:
+            try:
+                raise psycopg.errors.SerializationFailure("restart transaction")
+            except psycopg.Error as inner:
+                raise SQLSpecError("Failed to commit transaction: restart transaction") from inner
+
+    monkeypatch.setattr(driver_type, "commit", _commit)
+    driver = driver_type(
+        connection=MagicMock(),
+        driver_features={"max_retries": 2, "retry_delay_base_ms": 0, "enable_retry_logging": False},
+    )
+    operation = MagicMock(return_value="ok")
+
+    assert driver.run_transaction_with_retry(operation) == "ok"
+    assert len(commits) == 2

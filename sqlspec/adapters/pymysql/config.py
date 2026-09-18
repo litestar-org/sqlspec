@@ -339,8 +339,16 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
             self._cloud_sql_connector = None
 
     def create_connection(self) -> PyMysqlConnection:
-        pool = self.provide_pool()
-        return pool.acquire()
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same parameters and creation hook the pool
+        applies, but it is not the pool's thread-local connection, so closing it
+        leaves the pool usable.
+
+        Returns:
+            PyMysqlConnection: A newly opened connection.
+        """
+        return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()

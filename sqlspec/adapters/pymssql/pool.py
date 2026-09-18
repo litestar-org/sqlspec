@@ -66,14 +66,27 @@ class PymssqlConnectionPool:
         return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> PymssqlConnection:
+        connection = self.new_connection()
+
+        with self._registry_lock:
+            self._connection_registry.add(connection)
+
+        return connection
+
+    def new_connection(self) -> PymssqlConnection:
+        """Open a standalone connection configured like a pooled one.
+
+        The result is owned by the caller: it is not thread-local and is not
+        tracked for pool shutdown.
+
+        Returns:
+            PymssqlConnection: A newly opened, fully configured connection.
+        """
         connection = pymssql.connect(**self._connection_parameters)
 
         # Call user-provided callback after connection creation
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
-
-        with self._registry_lock:
-            self._connection_registry.add(cast("PymssqlConnection", connection))
 
         return cast("PymssqlConnection", connection)
 

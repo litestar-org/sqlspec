@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import sqlite3
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -23,6 +24,37 @@ SQLITE_BUSY_TIMEOUT: Final = 5000
 SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS: Final = False
 SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
 SQLITE_MEMORY_CACHE_SIZE: Final = -16000
+
+
+_CONNECT_SUPPORTS_AUTOCOMMIT: Final[bool] = sys.version_info >= (3, 12)
+
+
+def _end_transaction(
+    connection: SqliteConnection, *, commit: bool, supports_autocommit: bool = _CONNECT_SUPPORTS_AUTOCOMMIT
+) -> None:
+    """End an open transaction on a connection.
+
+    ``Connection.commit`` and ``Connection.rollback`` are no-ops while the
+    connection runs in sqlite3's autocommit mode, so the statement is issued
+    directly there.
+
+    Args:
+        connection: Connection whose transaction should end.
+        commit: Whether to commit rather than roll back.
+        supports_autocommit: Whether this runtime's sqlite3 exposes autocommit.
+
+    Returns:
+        None.
+    """
+    if not connection.in_transaction:
+        return
+    if supports_autocommit and cast("Any", connection).autocommit is True:
+        connection.execute("COMMIT" if commit else "ROLLBACK")
+        return
+    if commit:
+        connection.commit()
+    else:
+        connection.rollback()
 
 
 class SqliteConnectionPool:
@@ -229,13 +261,11 @@ class SqliteConnectionPool:
             yield connection
         except Exception:
             with contextlib.suppress(Exception):
-                if connection.in_transaction:
-                    connection.rollback()
+                _end_transaction(connection, commit=False)
             raise
         else:
             with contextlib.suppress(Exception):
-                if connection.in_transaction:
-                    connection.commit()
+                _end_transaction(connection, commit=True)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""

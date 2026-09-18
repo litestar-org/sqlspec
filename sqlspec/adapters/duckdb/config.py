@@ -353,18 +353,16 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         return driver
 
     def create_connection(self) -> DuckDBConnection:
-        """Get a DuckDB connection from the pool.
+        """Open a standalone connection owned by the caller.
 
-        This method ensures the pool is created and returns a connection
-        from the pool. The connection is checked out from the pool and must
-        be properly managed by the caller.
+        The connection carries the same settings, extensions, and secrets the
+        pool applies, but it is not the pool's thread-local connection, so
+        closing it leaves the pool usable.
 
         Returns:
-            DuckDBConnection: A connection from the pool
+            DuckDBConnection: A newly opened connection.
         """
-        pool = self.provide_pool()
-
-        return pool.acquire()
+        return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for DuckDB types.

@@ -2,7 +2,7 @@
 
 import random
 import re
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import tokenize
@@ -69,13 +69,28 @@ def is_retryable_error(error: BaseException) -> bool:
     """Return True when the error should trigger a CockroachDB retry.
 
     Translated errors arrive as ``SerializationConflictError`` with no SQLSTATE
-    attribute, so the class check comes first; the SQLSTATE branch covers raw
-    driver errors raised outside the translation seam.
+    attribute, so the class check comes first, and the SQLSTATE branch covers
+    raw driver errors raised outside the translation seam.
+
+    The cause chain is also walked because CockroachDB reports a serialization
+    failure at COMMIT for the write-skew case, and transaction control wraps the
+    driver error with ``raise ... from e``, which keeps the original reachable.
+
+    Args:
+        error: The exception raised by the transaction body or its commit.
+
+    Returns:
+        True when the transaction should be retried.
     """
-    if isinstance(error, SerializationConflictError):
-        return True
-    if has_sqlstate(error):
-        return str(error.sqlstate) == "40001"
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, SerializationConflictError):
+            return True
+        if has_sqlstate(current) and str(current.sqlstate) == "40001":
+            return True
+        current = cast("BaseException | None", cast("Any", current).__cause__)
     return False
 
 

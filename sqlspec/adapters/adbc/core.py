@@ -415,6 +415,10 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
         if lowered_uri.startswith(("gizmosql://", "gizmo://", "grpc+tls://")):
             return "duckdb"
 
+    driver_name = connection_config.get("driver_name")
+    if isinstance(driver_name, str) and is_shared_object_driver(driver_name):
+        return resolve_dialect_from_driver_path(driver_name.lower())
+
     return resolve_dialect_from_driver_path(resolve_driver_name_from_config(connection_config))
 
 
