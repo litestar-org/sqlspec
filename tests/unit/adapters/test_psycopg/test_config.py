@@ -441,3 +441,47 @@ def test_psycopg_async_provide_session_tracks_promoted_statement_config() -> Non
 
     assert callable(session_config)
     assert session_config().dialect == "pgvector"
+
+
+def test_sync_create_connection_does_not_create_a_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A standalone connection must not build or consume the pool."""
+    sentinel = MagicMock()
+    connect = MagicMock(return_value=sentinel)
+    monkeypatch.setattr("psycopg.Connection.connect", connect)
+    config = PsycopgSyncConfig(connection_config={"host": "localhost", "min_size": 1, "max_size": 1})
+
+    connection = config.create_connection()
+
+    assert connection is sentinel
+    assert config.connection_instance is None
+    assert "min_size" not in connect.call_args.kwargs
+    assert "max_size" not in connect.call_args.kwargs
+    assert "timeout" not in connect.call_args.kwargs
+
+
+def test_sync_create_connection_applies_the_connection_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pool applies on_connection_create through configure; the standalone path must too."""
+    seen: list[object] = []
+    sentinel = MagicMock()
+    monkeypatch.setattr("psycopg.Connection.connect", MagicMock(return_value=sentinel))
+    config = PsycopgSyncConfig(
+        connection_config={"host": "localhost"}, driver_features={"on_connection_create": seen.append}
+    )
+
+    config.create_connection()
+
+    assert seen == [sentinel]
+
+
+def test_sync_connection_context_releases_through_the_branch_it_entered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Entering without a pool must close the connection rather than leaking a checkout."""
+    sentinel = MagicMock()
+    monkeypatch.setattr("psycopg.Connection.connect", MagicMock(return_value=sentinel))
+    config = PsycopgSyncConfig(connection_config={"host": "localhost"})
+
+    with config.provide_connection() as connection:
+        assert connection is sentinel
+        config.connection_instance = cast("Any", MagicMock())
+
+    assert sentinel.close.call_count == 1
+    config.connection_instance = None
