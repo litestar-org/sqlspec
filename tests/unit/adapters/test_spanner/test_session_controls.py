@@ -93,8 +93,8 @@ def test_write_transactions_reuse_pooled_sessions() -> None:
         def __enter__(self) -> "Self":
             return self
 
-        def __exit__(self, *_: object) -> bool:
-            return False
+        def __exit__(self, *_: object) -> None:
+            return None
 
         def commit(self) -> None:
             return None

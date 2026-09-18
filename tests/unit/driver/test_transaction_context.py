@@ -395,9 +395,8 @@ def test_sync_session_factory_forwards_exception_to_pool_context() -> None:
         def __enter__(self) -> object:
             return object()
 
-        def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> bool:
+        def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
             recorded.append((exc_type, exc_val, exc_tb))
-            return False
 
     class _RecordingPool:
         def get_connection(self) -> _RecordingCtx:

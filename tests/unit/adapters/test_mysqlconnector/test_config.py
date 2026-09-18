@@ -291,7 +291,7 @@ def test_sync_create_connection_passes_local_infile_gate(monkeypatch: pytest.Mon
 
 def test_sync_create_connection_applies_autocommit(monkeypatch: pytest.MonkeyPatch) -> None:
     """The sync connector exposes autocommit as a property; it must be set directly."""
-    connection = SimpleNamespace(autocommit=None)
+    connection: Any = SimpleNamespace(autocommit=None)
     monkeypatch.setattr("sqlspec.adapters.mysqlconnector.config.mysql.connector.connect", lambda **_kwargs: connection)
     config = MysqlConnectorSyncConfig(connection_config={"host": "localhost", "autocommit": True})
 

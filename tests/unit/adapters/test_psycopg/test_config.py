@@ -482,9 +482,8 @@ class _RecordingPoolCtx:
     def __enter__(self) -> object:
         return object()
 
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> bool:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self._released.append((exc_type, exc_val, exc_tb))
-        return False
 
 
 def _pooled_config(
