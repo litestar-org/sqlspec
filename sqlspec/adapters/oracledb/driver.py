@@ -133,7 +133,15 @@ class OraclePipelineDriver(Protocol):
 
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
-PIPELINE_MIN_DATABASE_MAJOR: int = 26
+"""Lowest python-oracledb version that supports pipelining."""
+
+PIPELINE_MIN_DATABASE_MAJOR: int = 23
+"""Lowest Oracle Database major version pipelining is used on.
+
+This is a policy threshold for when pipelining is worth the round trips, not a
+correctness guard: python-oracledb self-gates through ``supports_pipelining()``
+and falls back to sequential execution on databases that cannot pipeline.
+"""
 
 
 class OraclePipelineMixin:
@@ -765,21 +773,24 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 cursor.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            use_direct_path = self.driver_features.get(
-                "enable_direct_path_load", True
-            ) is not False and supports_direct_path_load(self.connection)
+        use_direct_path = self.driver_features.get(
+            "enable_direct_path_load", True
+        ) is not False and supports_direct_path_load(self.connection)
+        if arrow_table.num_rows:
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
                 with exc_handler:
                     self.connection.direct_path_load(
-                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_names=list(arrow_table.column_names),
+                        data=arrow_table,
                     )
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
             else:
+                columns, records = self._arrow_table_to_rows(arrow_table)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
                 with self.with_cursor(self.connection) as cursor, exc_handler:
@@ -1463,21 +1474,24 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 await self.connection.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            use_direct_path = self.driver_features.get(
-                "enable_direct_path_load", True
-            ) is not False and supports_direct_path_load(self.connection)
+        use_direct_path = self.driver_features.get(
+            "enable_direct_path_load", True
+        ) is not False and supports_direct_path_load(self.connection)
+        if arrow_table.num_rows:
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
                 async with exc_handler:
                     await self.connection.direct_path_load(
-                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_names=list(arrow_table.column_names),
+                        data=arrow_table,
                     )
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
             else:
+                columns, records = self._arrow_table_to_rows(arrow_table)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
                 async with self.with_cursor(self.connection) as cursor, exc_handler:

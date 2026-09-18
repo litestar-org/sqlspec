@@ -1,6 +1,8 @@
 """Unit tests for Oracle NumPy vector type handlers."""
 
 import array
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock, Mock
 
 import pytest
@@ -220,3 +222,38 @@ def test_register_numpy_handlers_registers_even_when_numpy_missing(monkeypatch: 
 
     assert mock_connection.inputtypehandler is not None
     assert mock_connection.outputtypehandler is not None
+
+
+def test_register_numpy_handlers_preserves_an_existing_handler() -> None:
+    """A handler installed before vector registration must keep firing."""
+    calls: list[str] = []
+
+    def existing_input(cursor: object, value: object, arraysize: int) -> object:
+        calls.append("input")
+        return None
+
+    def existing_output(cursor: object, metadata: object) -> object:
+        calls.append("output")
+        return None
+
+    connection = SimpleNamespace(inputtypehandler=existing_input, outputtypehandler=existing_output)
+
+    register_numpy_handlers(cast("Any", connection))
+
+    assert connection.inputtypehandler is not existing_input
+    assert connection.outputtypehandler is not existing_output
+
+    connection.inputtypehandler(SimpleNamespace(), "not a vector", 1)
+    connection.outputtypehandler(SimpleNamespace(), SimpleNamespace(type_code=None))
+
+    assert calls == ["input", "output"]
+
+
+def test_register_numpy_handlers_without_existing_handlers() -> None:
+    """Registration must still work on a connection that has no handlers yet."""
+    connection = SimpleNamespace()
+
+    register_numpy_handlers(cast("Any", connection))
+
+    assert connection.inputtypehandler is not None
+    assert connection.outputtypehandler is not None

@@ -182,13 +182,22 @@ def connection_is_thin(connection: object) -> bool:
 
 
 def supports_direct_path_load(connection: object) -> bool:
-    """Return whether a connection exposes Thin-mode direct path load."""
-    return connection_is_thin(connection) and hasattr(connection, "direct_path_load")
+    """Return whether a connection supports direct path load.
+
+    ``direct_path_load`` is guaranteed by the declared ``oracledb>=3.4`` floor,
+    so only the Thin-mode requirement is checked.
+    """
+    return connection_is_thin(connection)
 
 
 def supports_df_batches(connection: object) -> bool:
-    """Return whether a connection exposes DataFrame batch fetches."""
-    return hasattr(connection, "fetch_df_batches")
+    """Return whether a connection exposes DataFrame batch fetches.
+
+    ``fetch_df_batches`` landed in python-oracledb 3.0 and is guaranteed by the
+    declared ``oracledb>=3.4`` floor.
+    """
+    _ = connection
+    return True
 
 
 def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":

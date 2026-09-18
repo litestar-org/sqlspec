@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import oracledb as _oracledb
 
+from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
@@ -128,13 +129,24 @@ def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register vector type handlers on an Oracle connection.
 
     Enables automatic conversion between Python sequence types and Oracle
-    VECTOR columns. Works for both sync and async connections.
+    VECTOR columns, chaining to any handler already installed so it keeps
+    firing for values the vector handler does not claim. Works for both sync
+    and async connections.
 
     Args:
         connection: Oracle connection (sync or async).
     """
-    connection.inputtypehandler = numpy_input_type_handler
-    connection.outputtypehandler = numpy_output_type_handler
+    try:
+        existing_input = connection.inputtypehandler
+    except AttributeError:
+        existing_input = None
+    try:
+        existing_output = connection.outputtypehandler
+    except AttributeError:
+        existing_output = None
+
+    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
+    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
 
 
 def _is_vector_payload(value: Any) -> bool:
