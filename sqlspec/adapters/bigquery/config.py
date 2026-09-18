@@ -277,11 +277,13 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         A client supplied by the caller is left open, since its lifetime belongs
         to whoever created it.
         """
-        if self._storage_write_client is not None:
-            transport = getattr(self._storage_write_client, "transport", None)
+        with self._storage_write_lock:
+            storage_write_client = self._storage_write_client
+            self._storage_write_client = None
+        if storage_write_client is not None:
+            transport = getattr(storage_write_client, "transport", None)
             if transport is not None:
                 transport.close()
-            self._storage_write_client = None
         if self._owns_connection_instance and self._connection_instance is not None:
             self._connection_instance.close()
             self._connection_instance = None
