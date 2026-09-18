@@ -161,8 +161,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
     def begin(self) -> None:
         try:
-            with PyMysqlCursor(self.connection) as cursor:
-                cursor.execute("BEGIN")
+            self.connection.begin()
         except PyMysqlMySQLError as exc:
             msg = f"Failed to begin MySQL transaction: {exc}"
             raise SQLSpecError(msg) from exc
@@ -244,10 +243,10 @@ class PyMysqlDriver(SyncDriverAdapterBase):
                     tmp.write(payload)
                     tmp_name = tmp.name
                 try:
-                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     with exc_handler, self.with_cursor(self.connection) as cursor:
-                        cursor.execute(load_sql)
+                        cursor.execute(load_sql, (tmp_name,))
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:

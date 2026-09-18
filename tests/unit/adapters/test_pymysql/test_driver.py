@@ -34,6 +34,7 @@ class _FakeConnection:
         self.commits = 0
         self.executed: list[tuple[str, Any]] = []
         self.rollbacks = 0
+        self.begins = 0
 
     @property
     def server_status(self) -> int:
@@ -46,6 +47,9 @@ class _FakeConnection:
 
     def get_autocommit(self) -> bool:
         return self._autocommit
+
+    def begin(self) -> None:
+        self.begins += 1
 
     def commit(self) -> None:
         self.commits += 1
@@ -64,7 +68,8 @@ def test_execute_stack_commits_when_autocommit_disabled_without_server_transacti
 
     _driver(connection).execute_stack(stack)
 
-    assert connection.executed[0][0] == "BEGIN"
+    assert connection.begins == 1
+    assert all(statement != "BEGIN" for statement, _ in connection.executed)
     assert connection.commits == 1
     assert connection.rollbacks == 0
 
@@ -75,6 +80,7 @@ def test_execute_stack_preserves_caller_transaction_when_server_status_reports_t
 
     _driver(connection).execute_stack(stack)
 
+    assert connection.begins == 0
     assert all(statement != "BEGIN" for statement, _ in connection.executed)
     assert connection.commits == 0
     assert connection.rollbacks == 0

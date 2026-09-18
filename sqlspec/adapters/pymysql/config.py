@@ -195,7 +195,7 @@ class _PyMysqlCloudSqlConnector:
         if self._password:
             conn_kwargs["password"] = self._password
         if self._database:
-            conn_kwargs["db"] = self._database
+            conn_kwargs["database"] = self._database
 
         return cast("PyMysqlConnection", connector.connect(**conn_kwargs))
 
@@ -246,6 +246,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
         connection_config.setdefault("local_infile", False)
+        connection_config.setdefault("charset", "utf8mb4")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
