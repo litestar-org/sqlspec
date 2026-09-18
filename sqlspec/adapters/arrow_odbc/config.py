@@ -4,7 +4,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcSessionContext, arrow_odbc_connect
+from sqlspec.adapters.arrow_odbc._typing import (
+    ArrowOdbcConnection,
+    ArrowOdbcSessionContext,
+    TextEncoding,
+    arrow_odbc_connect,
+    enable_odbc_connection_pooling,
+)
 from sqlspec.adapters.arrow_odbc.core import (
     apply_driver_features,
     build_connection_config,
@@ -30,6 +36,37 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 __all__ = ("ArrowOdbcConfig", "ArrowOdbcConnectionParams", "ArrowOdbcDriverFeatures")
+
+
+_DRIVER_POOLING_ENABLED: "bool | None" = None
+
+
+def _apply_driver_pooling(requested: bool) -> None:
+    """Apply the ODBC driver manager's process-global connection pooling switch.
+
+    The upstream switch can only be set once, before the first connection in the
+    process, so a later request that disagrees with the applied setting is an
+    error rather than a silent no-op.
+
+    Args:
+        requested: Whether this configuration asks for driver-level pooling.
+
+    Raises:
+        ImproperConfigurationError: If the request conflicts with the setting
+            already applied in this process.
+    """
+    global _DRIVER_POOLING_ENABLED
+    if _DRIVER_POOLING_ENABLED is None:
+        if requested:
+            enable_odbc_connection_pooling()
+        _DRIVER_POOLING_ENABLED = requested
+        return
+    if requested != _DRIVER_POOLING_ENABLED:
+        msg = (
+            "enable_driver_pooling is a process-global ODBC setting applied before the first connection. "
+            f"It was already applied as {_DRIVER_POOLING_ENABLED} and cannot be changed to {requested}."
+        )
+        raise ImproperConfigurationError(msg)
 
 
 class ArrowOdbcConnectionParams(TypedDict):
@@ -64,6 +101,8 @@ class ArrowOdbcDriverFeatures(TypedDict):
     max_binary_size: NotRequired[int]
     fetch_concurrently: NotRequired[bool]
     query_timeout_sec: NotRequired[int]
+    payload_text_encoding: NotRequired["TextEncoding"]
+    enable_driver_pooling: NotRequired[bool]
     connection_string: NotRequired[str]
     dbms_name: NotRequired[str]
     json_serializer: "NotRequired[Callable[[Any], str]]"
@@ -182,6 +221,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         """Create and return a new arrow-odbc connection."""
         if self.connection_instance is not None:
             return cast("ArrowOdbcConnection", self.connection_instance)
+        _apply_driver_pooling(bool(self.driver_features.get("enable_driver_pooling", False)))
         connection_string, connect_kwargs = build_connection_config(self.connection_config)
         try:
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))

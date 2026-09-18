@@ -10,12 +10,14 @@ from sqlspec.exceptions import (
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
+    IntegrityError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
@@ -76,6 +78,18 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     1105: (OperationalError, "operational error"),
     102: (SQLParsingError, "syntax error"),
 }
+_ARROW_ODBC_SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b([0-9A-Z]{2}[0-9A-Z]{3})\b")
+_SQLSTATE_CLASS_CODE_LEN: Final[int] = 2
+_SQLSTATE_CLASS_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "08": (DatabaseConnectionError, "connection error"),
+    "22": (DataError, "data error"),
+    "23": (IntegrityError, "integrity constraint violation"),
+    "28": (PermissionDeniedError, "invalid authorization"),
+    "40": (TransactionError, "transaction rollback"),
+    "42": (SQLParsingError, "syntax error or access rule violation"),
+    "53": (OperationalError, "insufficient resources"),
+    "57": (OperationalError, "operator intervention"),
+}
 
 
 def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
@@ -101,6 +115,13 @@ def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> S
                 error_class, description = mapping
                 return error_class(f"ODBC SQL Server error {error_number}: {description}. Original error: {error}")
 
+    sqlstate = _extract_sqlstate(message)
+    if sqlstate is not None:
+        mapped = _SQLSTATE_CLASS_MAPPING.get(sqlstate[:_SQLSTATE_CLASS_CODE_LEN])
+        if mapped is not None:
+            error_class, description = mapped
+            return error_class(f"ODBC error {sqlstate}: {description}. Original error: {error}")
+
     if "Incorrect syntax near" in message:
         return SQLParsingError(f"ODBC SQL parsing error. Original error: {error}")
     return SQLSpecError(f"ODBC database error. Original error: {error}")
@@ -125,7 +146,18 @@ def apply_driver_features(
 
 
 def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Build arrow-odbc connection arguments using the 10.4 keyword names."""
+    """Build arrow-odbc connection arguments using the 10.4 keyword names.
+
+    An explicit ``connection_string`` is the prefix of the result; individual
+    ODBC fields and ``extra`` entries are appended after it, so a later field
+    wins over the same option inside the string per ODBC's own last-wins rule.
+
+    Args:
+        params: Raw connection configuration.
+
+    Returns:
+        The ODBC connection string and the ``connect`` keyword arguments.
+    """
     config = dict(params)
     extra = config.pop("extra", None)
     if isinstance(extra, dict):
@@ -137,8 +169,6 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     connect_kwargs = {key: config.pop(key) for key in tuple(config) if key in _CONNECT_KWARG_KEYS}
     connection_string = config.pop("connection_string", None)
-    if connection_string is not None:
-        return str(connection_string), connect_kwargs
 
     parts: list[str] = []
     consumed: set[str] = set()
@@ -153,6 +183,12 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         if key in consumed or value is None:
             continue
         parts.append(f"{key}={_format_connection_value(value)}")
+
+    if connection_string is not None:
+        prefix = str(connection_string)
+        if parts and not prefix.rstrip().endswith(";"):
+            prefix += ";"
+        return prefix + ";".join(parts) + (";" if parts else ""), connect_kwargs
 
     if not parts:
         msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
@@ -197,6 +233,11 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
         bytes: _identity,
         **build_uuid_coercions(native=False),
     }
+
+
+def _extract_sqlstate(message: str) -> "str | None":
+    match = _ARROW_ODBC_SQLSTATE_PATTERN.search(message)
+    return match.group(1) if match is not None else None
 
 
 def _extract_error_number(error: Exception) -> "int | None":

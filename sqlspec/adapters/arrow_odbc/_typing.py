@@ -4,6 +4,10 @@
 from typing import TYPE_CHECKING, Any
 
 import arrow_odbc as _arrow_odbc  # pyright: ignore[reportMissingImports]
+from arrow_odbc import (
+    TextEncoding,  # pyright: ignore[reportMissingImports]
+    enable_odbc_connection_pooling,  # pyright: ignore[reportMissingImports]
+)
 from arrow_odbc import connect as arrow_odbc_connect  # pyright: ignore[reportMissingImports]
 
 if TYPE_CHECKING:
@@ -27,7 +31,9 @@ __all__ = (
     "ArrowOdbcError",
     "ArrowOdbcRawCursor",
     "ArrowOdbcSessionContext",
+    "TextEncoding",
     "arrow_odbc_connect",
+    "enable_odbc_connection_pooling",
 )
 
 ArrowOdbcError: "type[Exception]" = getattr(_arrow_odbc, "Error", Exception)
