@@ -54,9 +54,7 @@ def test_duckdb_config_merges_existing_extension_flags() -> None:
         ("enable_external_access", False, "enable_external_access"),
     ],
 )
-def test_extension_flags_take_effect_on_the_connection(
-    flag: str, value: bool, setting: str, tmp_path: Path
-) -> None:
+def test_extension_flags_take_effect_on_the_connection(flag: str, value: bool, setting: str, tmp_path: Path) -> None:
     """DuckDB rejects these settings at runtime, so each must be applied at startup."""
     config = DuckDBConfig(connection_config={"database": str(tmp_path / f"{flag}.duckdb"), flag: value})
     try:

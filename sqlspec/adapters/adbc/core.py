@@ -76,6 +76,7 @@ __all__ = (
     "handle_postgres_rollback",
     "is_postgres_dialect",
     "is_postgres_extension_active",
+    "is_shared_object_driver",
     "normalize_driver_path",
     "normalize_postgres_empty_parameters",
     "normalize_script_rowcount",
@@ -170,7 +171,13 @@ _PARAMETER_STYLES_BY_KEYWORD: "tuple[tuple[str, tuple[tuple[str, ...], str]], ..
     ("snowflake", (("qmark", "numeric"), "qmark")),
 )
 
-_BIGQUERY_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("project_id", "dataset_id", "token")
+_BIGQUERY_DB_KWARGS_OPTIONS: "tuple[tuple[str, str], ...]" = (
+    ("project_id", "adbc.bigquery.sql.project_id"),
+    ("dataset_id", "adbc.bigquery.sql.dataset_id"),
+    ("token", "adbc.bigquery.sql.auth.refresh_token"),
+)
+_SHARED_OBJECT_SUFFIXES: "tuple[str, ...]" = (".so", ".dylib", ".dll")
+_DRIVER_MANAGER_CONNECT: Final[str] = "adbc_driver_manager.dbapi.connect"
 _FLIGHTSQL_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("username", "password")
 _FLIGHTSQL_TLS_SKIP_VERIFY_KEY: Final[str] = "adbc.flight.sql.client_option.tls_skip_verify"
 _FLIGHTSQL_AUTHORIZATION_HEADER_KEY: Final[str] = "adbc.flight.sql.authorization_header"
@@ -273,9 +280,27 @@ def detect_postgres_extensions(
         return False, False, False
 
 
+def is_shared_object_driver(driver_name: str) -> bool:
+    """Return whether a driver name points at a shared library rather than a module.
+
+    Args:
+        driver_name: Raw driver name or path from configuration.
+
+    Returns:
+        True when the value is a filesystem path to a driver shared object.
+    """
+    stripped = driver_name.strip()
+    if not stripped:
+        return False
+    lowered = stripped.lower()
+    return lowered.endswith(_SHARED_OBJECT_SUFFIXES) or "/" in stripped or "\\" in stripped
+
+
 def normalize_driver_path(driver_name: str) -> str:
     """Normalize a driver name to an importable connect function path."""
     stripped = driver_name.strip()
+    if is_shared_object_driver(stripped):
+        return _DRIVER_MANAGER_CONNECT
     if stripped.endswith(".dbapi.connect"):
         return stripped
     if stripped.endswith(".dbapi"):
@@ -320,6 +345,8 @@ def driver_kind_from_uri(uri: str) -> "str | None":
 def resolve_driver_name(driver_name: str | None, uri: str | None) -> str:
     """Resolve and normalize the driver name."""
     if isinstance(driver_name, str):
+        if is_shared_object_driver(driver_name):
+            return _DRIVER_MANAGER_CONNECT
         lowered_driver = driver_name.lower()
         alias = _DRIVER_ALIASES.get(lowered_driver)
         if alias is not None:
@@ -440,18 +467,29 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if legacy_entrypoint is not None:
         config.setdefault("entrypoint", legacy_entrypoint)
 
+    uses_driver_manager = (
+        resolve_driver_name(
+            driver_name if isinstance(driver_name, str) else None, uri if isinstance(uri, str) else None
+        )
+        == _DRIVER_MANAGER_CONNECT
+    )
+    if not uses_driver_manager:
+        config.pop("entrypoint", None)
+
     if driver_kind in {"gizmosql", "flightsql"}:
         _lift_flightsql_db_kwargs(config)
     elif driver_kind == "bigquery":
         db_kwargs = config.get("db_kwargs")
         db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
-        for param in _BIGQUERY_DB_KWARGS_FIELDS:
+        for param, option in _BIGQUERY_DB_KWARGS_OPTIONS:
             if param in config:
-                db_kwargs_dict[param] = config.pop(param)
+                db_kwargs_dict[option] = config.pop(param)
         if db_kwargs_dict:
             config["db_kwargs"] = db_kwargs_dict
 
     config.pop("driver_name", None)
+    if uses_driver_manager and isinstance(driver_name, str):
+        config["driver"] = driver_name.strip()
 
     return config
 
