@@ -4,6 +4,7 @@ from typing import get_type_hints
 
 import pytest
 
+from sqlspec.adapters.pymssql import build_connection_config
 from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
@@ -45,6 +46,23 @@ def test_config_defaults_server_port_and_features() -> None:
     assert config.supports_transactional_ddl is True
     assert config.supports_native_arrow_export is False
     assert config.driver_features["enable_events"] is True
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """build_connection_config should normalize host, db, and username aliases."""
+    normalized = build_connection_config({"host": "sql.local", "db": "analytics", "username": "admin"})
+    assert normalized == {"server": "sql.local", "port": 1433, "database": "analytics", "user": "admin"}
+
+
+def test_pymssql_config_normalizes_aliases() -> None:
+    """PymssqlConfig should map host, db, and username to server, database, and user."""
+    config = PymssqlConfig(connection_config={"host": "sql.local", "db": "analytics", "username": "admin"})
+    assert config.connection_config["server"] == "sql.local"
+    assert config.connection_config["database"] == "analytics"
+    assert config.connection_config["user"] == "admin"
+    assert "host" not in config.connection_config
+    assert "db" not in config.connection_config
+    assert "username" not in config.connection_config
 
 
 def test_config_create_pool_splits_pool_options_and_hook() -> None:

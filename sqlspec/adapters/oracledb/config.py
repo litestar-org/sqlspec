@@ -24,7 +24,7 @@ from sqlspec.adapters.oracledb._typing import OraclePurity as Purity
 from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
-from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.oracledb.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, resolve_oracle_connection_major
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
@@ -322,7 +322,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
             extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(normalize_connection_config(connection_config))
         self._oracle_version_cache = OracleVersionCache()
         self._pool_session_callback = cast(
             "Callable[[OracleSyncConnection, str], None] | None", connection_config.pop("session_callback", None)
@@ -525,7 +525,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
             extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(normalize_connection_config(connection_config))
         self._oracle_version_cache = OracleVersionCache()
         self._pool_session_callback = cast(
             "Callable[[OracleAsyncConnection, str], Any] | None", connection_config.pop("session_callback", None)

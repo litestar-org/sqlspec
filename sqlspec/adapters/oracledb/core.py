@@ -62,6 +62,7 @@ __all__ = (
     "OracleSyncStreamSource",
     "apply_driver_features",
     "build_arrow_fetch_kwargs",
+    "build_connection_config",
     "build_fetch_kwargs",
     "build_insert_statement",
     "build_pipeline_stack_result",
@@ -1448,3 +1449,26 @@ def _create_oracle_error(
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection parameters.
+    """
+    config = dict(connection_config)
+    if "dsn" not in config:
+        dsn = config.pop("url", None) or config.pop("connection_string", None)
+        if dsn is not None:
+            config["dsn"] = dsn
+    else:
+        config.pop("url", None)
+        config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if "user" not in config and user_alias is not None:
+        config["user"] = user_alias
+    return config
