@@ -401,10 +401,11 @@ class DuckDBConnectionPool:
                 self._close_thread_connection()
             raise
         else:
-            with suppress(Exception):
+            try:
                 connection.commit()
-            if not self._is_memory_db:
-                self._close_thread_connection()
+            finally:
+                if not self._is_memory_db:
+                    self._close_thread_connection()
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""

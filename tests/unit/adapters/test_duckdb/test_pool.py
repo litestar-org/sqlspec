@@ -15,6 +15,24 @@ from sqlspec.adapters.duckdb.pool import DuckDBConnectionPool, _secret_sql, _val
 pytest.importorskip("duckdb", reason="DuckDB adapter requires duckdb package")
 
 
+def test_pool_propagates_commit_conflicts_and_releases_connection(tmp_path: Path) -> None:
+    database = str(tmp_path / "commit-conflict.duckdb")
+    pool = DuckDBConnectionPool(connection_config={"database": database})
+    other = duckdb.connect(database)
+    other.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    try:
+        with pytest.raises(duckdb.TransactionException, match="PRIMARY KEY"):
+            with pool.get_connection() as connection:
+                connection.execute("BEGIN")
+                connection.execute("INSERT INTO items VALUES (1)")
+                other.execute("INSERT INTO items VALUES (1)")
+        assert pool.size() == 0
+        assert other.execute("SELECT id FROM items").fetchall() == [(1,)]
+    finally:
+        pool.close()
+        other.close()
+
+
 class _FakeDuckDBConnection:
     def __init__(self, verification_row: tuple[Any, ...] | None = None) -> None:
         self.executed: list[tuple[str, Any]] = []

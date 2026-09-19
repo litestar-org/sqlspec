@@ -1,5 +1,6 @@
 """Psycopg database configuration with direct field-based configuration."""
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
@@ -479,7 +480,12 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
         connection = connection_class.connect(conninfo, **connection_kwargs)
         configure = self.connection_config.get("configure", self._configure_connection)
-        configure(cast("PsycopgSyncConnection", connection))
+        try:
+            configure(cast("PsycopgSyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                connection.close()
+            raise
         return cast("PsycopgSyncConnection", connection)
 
     def provide_session(
@@ -785,7 +791,12 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
         connection = await connection_class.connect(conninfo, **connection_kwargs)
         configure = self.connection_config.get("configure", self._configure_async_connection)
-        await configure(cast("PsycopgAsyncConnection", connection))
+        try:
+            await configure(cast("PsycopgAsyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
         return cast("PsycopgAsyncConnection", connection)
 
     def get_signature_namespace(self) -> "dict[str, Any]":

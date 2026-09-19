@@ -1,6 +1,7 @@
 """CockroachDB configuration using psycopg."""
 
 import re
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from psycopg import crdb as psycopg_crdb
@@ -294,7 +295,12 @@ class CockroachPsycopgSyncConfig(
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = psycopg_crdb.CrdbConnection.connect(conninfo, **connection_kwargs)
         configure = self.connection_config.get("configure", self._configure_connection)
-        configure(cast("CockroachSyncConnection", connection))
+        try:
+            configure(cast("CockroachSyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                connection.close()
+            raise
         return cast("CockroachSyncConnection", connection)
 
     def provide_session(
@@ -523,7 +529,12 @@ class CockroachPsycopgAsyncConfig(
         conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
         connection = await psycopg_crdb.AsyncCrdbConnection.connect(conninfo, **connection_kwargs)
         configure = self.connection_config.get("configure", self._configure_async_connection)
-        await configure(cast("CockroachAsyncConnection", connection))
+        try:
+            await configure(cast("CockroachAsyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
         return cast("CockroachAsyncConnection", connection)
 
     def provide_session(

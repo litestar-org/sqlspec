@@ -1,5 +1,6 @@
 """CockroachDB AsyncPG configuration."""
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from asyncpg import Record
@@ -304,7 +305,12 @@ class CockroachAsyncpgConfig(
         connect = config.pop("connect", None)
         connection = await connect() if connect is not None else await asyncpg_connect(**config)
         init = self.connection_config.get("init", self._init_connection)
-        await init(connection)
+        try:
+            await init(connection)
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
         return cast("CockroachAsyncpgConnection", connection)
 
     def provide_session(

@@ -48,6 +48,10 @@ Unreleased
 
 **Fixed:**
 
+* DuckDB reports failed commits to the caller. It also closes the file-backed
+  connection when a commit fails.
+* PostgreSQL and CockroachDB close new connections if a setup hook fails or the
+  task is cancelled. This prevents a leak before the caller can take ownership.
 * A DuckDB session that exits with an exception no longer discards an in-memory
   database, and opening a standalone connection no longer resets the storage setup
   already prepared for the thread.

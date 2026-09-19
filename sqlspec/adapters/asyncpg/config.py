@@ -1,5 +1,6 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from asyncpg import Connection, Record
@@ -544,7 +545,12 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         connect = config.pop("connect", None)
         connection = await connect() if connect is not None else await asyncpg_connect(**config)
         init = self.connection_config.get("init", self._init_connection)
-        await init(connection)
+        try:
+            await init(connection)
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
         return cast("AsyncpgConnection", connection)
 
     def provide_session(
