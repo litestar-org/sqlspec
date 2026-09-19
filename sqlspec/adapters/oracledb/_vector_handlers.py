@@ -14,8 +14,7 @@ import array
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
-from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
-from sqlspec.adapters.oracledb._typing import oracledb_module as _oracledb
+from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR, OracleSparseVector
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
 
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleSyncConnection as Connection
     from sqlspec.adapters.oracledb._typing import OracleSyncRawCursor as Cursor
 
-SPARSE_VECTOR_TYPE: "type[object] | None" = getattr(_oracledb, "SparseVector", None)
+SPARSE_VECTOR_TYPE = OracleSparseVector
 
 __all__ = (
     "DTYPE_TO_ARRAY_CODE",
@@ -159,7 +158,7 @@ def _is_vector_payload(value: Any) -> bool:
     JSON handler owns. ``bool`` is excluded explicitly because it is a subclass
     of ``int`` but is owned by the JSON path.
     """
-    if SPARSE_VECTOR_TYPE is not None and isinstance(value, SPARSE_VECTOR_TYPE):
+    if isinstance(value, SPARSE_VECTOR_TYPE):
         return False
     if isinstance(value, array.array):
         return True

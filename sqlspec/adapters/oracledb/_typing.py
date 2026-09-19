@@ -19,6 +19,7 @@ from oracledb import (
     DB_TYPE_NVARCHAR,
     DB_TYPE_RAW,
     DB_TYPE_VARCHAR,
+    DB_TYPE_VECTOR,
     DEQ_IMMEDIATE,
     DEQ_ON_COMMIT,
     AsyncConnection,
@@ -31,6 +32,7 @@ from oracledb import (
 from oracledb import AuthMode as OracleAuthMode
 from oracledb import PoolGetMode as OraclePoolGetMode
 from oracledb import Purity as OraclePurity
+from oracledb import SparseVector as OracleSparseVector
 from oracledb import create_pipeline as oracledb_create_pipeline
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
@@ -38,8 +40,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
-
-    from oracledb import DB_TYPE_VECTOR  # pyright: ignore[reportUnknownVariableType]
 
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.core import StatementConfig
@@ -52,11 +52,6 @@ if TYPE_CHECKING:
     OracleAsyncRawCursor: TypeAlias = AsyncCursor
 
 if not TYPE_CHECKING:
-    try:
-        from oracledb import DB_TYPE_VECTOR
-    except ImportError:
-        DB_TYPE_VECTOR = None
-
     OracleSyncConnection = Connection
     OracleAsyncConnection = AsyncConnection
     OracleSyncConnectionPool = ConnectionPool
@@ -88,6 +83,7 @@ __all__ = (
     "OracleAuthMode",
     "OraclePoolGetMode",
     "OraclePurity",
+    "OracleSparseVector",
     "OracleSyncConnection",
     "OracleSyncConnectionPool",
     "OracleSyncCursor",

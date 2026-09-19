@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
+from sqlspec.adapters.psycopg._typing import psycopg_errors as pg_errors
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -45,12 +46,6 @@ from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_json_list_converter, build_json_tuple_converter, build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate, resolve_row_format
 from sqlspec.utils.uuids import uuid4
-
-# Module-level lazy import for psycopg errors (mypyc optimization)
-try:
-    from sqlspec.adapters.psycopg._typing import psycopg_errors as pg_errors
-except ImportError:
-    pg_errors = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -516,9 +511,6 @@ _EXCEPTION_MAPPING_CACHE: Final[dict[type[Any], tuple[str, type[SQLSpecError], s
 
 
 def _register_exception_mappings() -> None:
-    if pg_errors is None:
-        return
-
     _EXCEPTION_MAPPING.update({
         pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
         pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
@@ -529,16 +521,10 @@ def _register_exception_mappings() -> None:
         pg_errors.SerializationFailure: ("40001", SerializationConflictError, "serialization failure"),
         pg_errors.QueryCanceled: ("57014", OperationCancelledError, "query canceled"),
         pg_errors.InsufficientPrivilege: ("42501", PermissionDeniedError, "insufficient privilege"),
+        pg_errors.AdminShutdown: ("57P01", ConnectionTimeoutError, "admin shutdown"),
+        pg_errors.CannotConnectNow: ("57P03", ConnectionTimeoutError, "cannot connect now"),
         pg_errors.SyntaxError: ("42601", SQLParsingError, "SQL syntax error"),
     })
-
-    admin_shutdown = getattr(pg_errors, "AdminShutdown", None)
-    if isinstance(admin_shutdown, type):
-        _EXCEPTION_MAPPING[admin_shutdown] = ("57P01", ConnectionTimeoutError, "admin shutdown")
-
-    cannot_connect_now = getattr(pg_errors, "CannotConnectNow", None)
-    if isinstance(cannot_connect_now, type):
-        _EXCEPTION_MAPPING[cannot_connect_now] = ("57P03", ConnectionTimeoutError, "cannot connect now")
 
 
 _register_exception_mappings()

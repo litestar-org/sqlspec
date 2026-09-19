@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlspec.adapters.oracledb._json_handlers import is_json_payload
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
-from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB
+from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
 from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
@@ -145,32 +145,10 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
     return parts[0], parts[1], parts[2]
 
 
-def _resolve_oracledb_version() -> "tuple[int, int, int]":
-    try:
-        from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
-    except ImportError:
-        return (0, 0, 0)
-    try:
-        version = oracledb.__version__
-    except AttributeError:
-        version = "0.0.0"
-    return _parse_version_tuple(str(version))
-
-
-ORACLEDB_VERSION: "tuple[int, int, int]" = _resolve_oracledb_version()
+ORACLEDB_VERSION: "tuple[int, int, int]" = _parse_version_tuple(oracledb_module.__version__)
 SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
-
-
-def _resolve_sparse_vector_support() -> bool:
-    """Return whether the installed python-oracledb exports SparseVector."""
-    try:
-        from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
-    except ImportError:
-        return False
-    return getattr(oracledb, "SparseVector", None) is not None
-
-
-ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = _resolve_sparse_vector_support()
+# Retained public capability flag; the supported SDK floor guarantees SparseVector.
+ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
 
 def connection_is_thin(connection: object) -> bool:

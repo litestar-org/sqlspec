@@ -48,6 +48,9 @@ Unreleased
 
 **Fixed:**
 
+* Driver exception handling uses native error classes through adapter facades.
+  SQL Server and Arrow ODBC no longer fall back to catching every exception when
+  a driver error export is missing.
 * Oracle AQ visibility accepts ``DEQ_IMMEDIATE`` and ``DEQ_ON_COMMIT`` names.
   The previously advertised ``AQMSG_*`` names do not exist in python-oracledb.
   Omitting visibility continues to use the driver's default.

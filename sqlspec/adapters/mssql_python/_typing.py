@@ -4,6 +4,7 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 import mssql_python as _mssql_python  # pyright: ignore[reportMissingImports]
+from mssql_python import Error as MssqlPythonError
 from mssql_python.connection import Connection, TokenProvider  # pyright: ignore
 from mssql_python.cursor import Cursor  # pyright: ignore
 
@@ -28,6 +29,7 @@ __all__ = (
     "MSSQL_PYTHON_MODULE",
     "MssqlPythonConnection",
     "MssqlPythonCursor",
+    "MssqlPythonError",
     "MssqlPythonRawCursor",
     "MssqlPythonSessionContext",
     "TokenProvider",

@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.mssql_python._typing import (
-    MSSQL_PYTHON_MODULE,
     MssqlPythonConnection,
     MssqlPythonCursor,
+    MssqlPythonError,
     MssqlPythonRawCursor,
     MssqlPythonSessionContext,
 )
@@ -52,7 +52,6 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.mssql_python")
-_MSSQL_ERROR = cast("type[BaseException]", getattr(MSSQL_PYTHON_MODULE, "Error", Exception))
 _COLUMN_CACHE_MAX_SIZE = 256
 
 
@@ -72,7 +71,7 @@ class MssqlPythonExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if isinstance(exc_val, _MSSQL_ERROR):
+        if isinstance(exc_val, MssqlPythonError):
             self.pending_exception = create_mapped_exception(cast("Exception", exc_val), logger=logger)
             return True
         return False
@@ -215,7 +214,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             restore_autocommit = bool(self.connection.autocommit)
             if restore_autocommit:
                 self.connection.autocommit = False
-        except _MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             msg = f"Failed to begin transaction: {exc}"
             raise SQLSpecError(msg) from exc
         self._restore_autocommit = restore_autocommit
@@ -224,7 +223,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     def commit(self) -> None:
         try:
             self.connection.commit()
-        except _MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             msg = f"Failed to commit transaction: {exc}"
             raise SQLSpecError(msg) from exc
         self._transaction_active = False
@@ -233,7 +232,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     def rollback(self) -> None:
         try:
             self.connection.rollback()
-        except _MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             msg = f"Failed to rollback transaction: {exc}"
             raise SQLSpecError(msg) from exc
         self._transaction_active = False
@@ -457,7 +456,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             return
         try:
             self.connection.autocommit = True
-        except _MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             msg = f"Failed to restore autocommit: {exc}"
             raise SQLSpecError(msg) from exc
 

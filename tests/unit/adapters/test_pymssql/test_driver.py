@@ -3,17 +3,13 @@
 from typing import cast
 
 import pytest
+from pymssql import IntegrityError as PymssqlIntegrityError
 
 from sqlspec import StatementStack
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError, StackExecutionError, TransactionError, UniqueViolationError
-from tests.unit.adapters.test_pymssql._fakes import (
-    FakeConnection,
-    FakeCursor,
-    FakePymssqlIntegrityError,
-    FakePymssqlModule,
-)
+from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakeCursor
 
 UNSAFE_SAVEPOINT_NAMES = ["1; DROP TABLE users", "sp-1", "sp 1", "", '"sp"']
 
@@ -162,32 +158,28 @@ def test_begin_reuses_the_open_transaction_without_autocommit() -> None:
     assert driver._connection_in_transaction() is False
 
 
-def test_exception_handler_maps_pymssql_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_exception_handler_maps_pymssql_errors() -> None:
     """pymssql exception handlers should surface mapped SQLSpec exceptions."""
-    import sqlspec.adapters.pymssql.driver as driver_module
     from sqlspec.adapters.pymssql.driver import PymssqlExceptionHandler
 
-    monkeypatch.setattr(driver_module, "pymssql", FakePymssqlModule())
     handler = PymssqlExceptionHandler()
 
     handled = handler._handle_exception(
-        FakePymssqlIntegrityError, FakePymssqlIntegrityError("Violation of UNIQUE KEY constraint (2627)")
+        PymssqlIntegrityError, PymssqlIntegrityError("Violation of UNIQUE KEY constraint (2627)")
     )
 
     assert handled is True
     assert isinstance(handler.pending_exception, UniqueViolationError)
 
 
-def test_commit_wraps_driver_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_commit_wraps_driver_errors() -> None:
     """Commit failures should be wrapped in SQLSpecError."""
-    import sqlspec.adapters.pymssql.driver as driver_module
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
     class FailingConnection(FakeConnection):
         def commit(self) -> None:
-            raise FakePymssqlIntegrityError("commit failed")
+            raise PymssqlIntegrityError("commit failed")
 
-    monkeypatch.setattr(driver_module, "pymssql", FakePymssqlModule())
     driver = PymssqlDriver(cast("PymssqlConnection", FailingConnection()))
 
     with pytest.raises(SQLSpecError, match="Failed to commit SQL Server transaction"):
@@ -238,18 +230,17 @@ def test_connection_in_transaction_tracks_successful_boundaries(finish: str) -> 
 
 @pytest.mark.parametrize("operation", ["begin", "commit", "rollback"])
 def test_failed_transaction_boundary_preserves_state(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    import sqlspec.adapters.pymssql.driver as driver_module
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
     connection = FakeConnection()
-    driver = driver_module.PymssqlDriver(cast("PymssqlConnection", connection))
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
     if operation != "begin":
         driver.begin()
-    failure = FakePymssqlIntegrityError("boundary failed")
+    failure = PymssqlIntegrityError("boundary failed")
 
     def fail(*_args: object) -> None:
         raise failure
 
-    monkeypatch.setattr(driver_module, "pymssql", FakePymssqlModule())
     monkeypatch.setattr(connection.cursor_obj, "execute", fail)
     with pytest.raises(SQLSpecError) as caught:
         getattr(driver, operation)()

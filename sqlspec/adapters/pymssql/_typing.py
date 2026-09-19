@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pymssql as _pymssql  # pyright: ignore[reportMissingTypeStubs]
 from pymssql import Connection as _PymssqlConnection  # pyright: ignore[reportMissingTypeStubs]
 from pymssql import Cursor as _PymssqlRawCursor  # pyright: ignore[reportMissingTypeStubs]
+from pymssql import Error as PymssqlError
 
 PYMSSQL_MODULE = _pymssql
 
@@ -35,6 +36,7 @@ __all__ = (
     "PYMSSQL_MODULE",
     "PymssqlConnection",
     "PymssqlCursor",
+    "PymssqlError",
     "PymssqlQueryParams",
     "PymssqlRawCursor",
     "PymssqlSessionContext",

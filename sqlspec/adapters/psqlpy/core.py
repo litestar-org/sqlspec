@@ -55,6 +55,8 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from sqlspec.core import SQL
+
 __all__ = (
     "PsqlpyStreamSource",
     "apply_driver_features",
@@ -366,20 +368,10 @@ def extract_rows_affected(result: Any) -> int:
     return 0
 
 
-def get_parameter_casts(statement: Any) -> "dict[int, str]":
-    """Get parameter cast metadata from compiled statements."""
-    processed_state = getattr(statement, "get_processed_state", None)
-    if callable(processed_state):
-        state = cast("Any", processed_state())
-        if state is not Empty:
-            return state.parameter_casts or {}
-    parameter_casts = getattr(statement, "parameter_casts", None)
-    if parameter_casts:
-        return cast("dict[int, str]", parameter_casts)
-    processed_state = getattr(statement, "processed_state", None)
-    if processed_state is not None and processed_state is not Empty:
-        return cast("dict[int, str]", getattr(processed_state, "parameter_casts", {}) or {})
-    return {}
+def get_parameter_casts(statement: "SQL") -> "dict[int, str]":
+    """Get parameter cast metadata from a SQLSpec statement."""
+    state = statement.get_processed_state()
+    return {} if state is Empty else state.parameter_casts or {}
 
 
 def prepare_parameters_with_casts(

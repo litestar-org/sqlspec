@@ -19,6 +19,7 @@ from sqlspec.adapters.psqlpy.core import (
     get_parameter_casts,
     prepare_parameters_with_casts,
 )
+from sqlspec.core import SQL
 from sqlspec.exceptions import DataError, IntegrityError, OperationalError, PermissionDeniedError, SQLSpecError
 
 
@@ -146,14 +147,18 @@ def test_build_statement_config_builds_base_profile_once(monkeypatch) -> None:
 
 
 def test_get_parameter_casts_reads_processed_state_from_cached_statement() -> None:
-    class _ProcessedState:
-        parameter_casts = {1: "JSONB"}
+    statement = SQL(
+        "SELECT :value::jsonb", {"value": {"key": "value"}}, statement_config=psqlpy_core.default_statement_config
+    )
+    statement.compile()
+    assert get_parameter_casts(statement) == {1: "JSONB"}
+    cached = statement.copy()
+    cached.compile()
+    assert get_parameter_casts(cached) == {1: "JSONB"}
 
-    class _Statement:
-        def get_processed_state(self) -> _ProcessedState:
-            return _ProcessedState()
 
-    assert get_parameter_casts(_Statement()) == {1: "JSONB"}
+def test_get_parameter_casts_handles_unprocessed_statement() -> None:
+    assert get_parameter_casts(SQL("SELECT 1")) == {}
 
 
 def test_format_execute_many_parameters_handles_scalar_input() -> None:

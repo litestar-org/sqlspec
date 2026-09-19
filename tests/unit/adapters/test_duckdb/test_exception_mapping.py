@@ -1,7 +1,5 @@
 """Tests for DuckDB exception mapping via create_mapped_exception."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest
@@ -29,9 +27,7 @@ from sqlspec.exceptions import (
 
 
 def _make_native(name: str, message: str) -> tuple[type[BaseException], BaseException]:
-    cls = getattr(duckdb, name, None)
-    if cls is None or not isinstance(cls, type) or not issubclass(cls, BaseException):
-        pytest.skip(f"duckdb.{name} not available in this duckdb build")
+    cls = getattr(duckdb, name)
     instance: BaseException = cls(message)
     return cls, instance
 
@@ -123,11 +119,8 @@ def test_create_mapped_exception_substring_fallback_type_mismatch_message() -> N
 
 def test_create_mapped_exception_subclass_dispatch() -> None:
     """Subclasses of mapped types resolve via the MRO walk."""
-    catalog_cls = getattr(duckdb, "CatalogException", None)
-    if catalog_cls is None:
-        pytest.skip("duckdb.CatalogException not available")
 
-    class _CustomCatalogError(catalog_cls):  # type: ignore[misc, valid-type]
+    class _CustomCatalogError(duckdb.CatalogException):
         pass
 
     err: Any = _CustomCatalogError("derived missing-table error")

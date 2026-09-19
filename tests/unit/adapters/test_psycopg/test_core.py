@@ -15,7 +15,7 @@ from sqlspec.adapters.psycopg.core import (
     create_mapped_exception,
     resolve_many_rowcount,
 )
-from sqlspec.exceptions import SQLParsingError, UniqueViolationError
+from sqlspec.exceptions import ConnectionTimeoutError, SQLParsingError, UniqueViolationError
 
 
 def test_resolve_many_rowcount_prefers_positive_driver_rowcount() -> None:
@@ -200,3 +200,14 @@ def test_build_async_pipeline_execution_result_detects_record_row_format() -> No
         assert dict(selected_data[0]) == {"id": 1, "name": "alice"}
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize("error_name, sqlstate", [("AdminShutdown", "57P01"), ("CannotConnectNow", "57P03")])
+def test_create_mapped_exception_dispatches_connection_errors(error_name: str, sqlstate: str) -> None:
+    from psycopg import errors
+
+    error = getattr(errors, error_name)("server unavailable")
+    mapped = create_mapped_exception(error)
+    assert isinstance(mapped, ConnectionTimeoutError)
+    assert mapped.__cause__ is error
+    assert sqlstate in str(mapped)

@@ -9,6 +9,17 @@ from urllib.parse import urlsplit
 from sqlglot import Dialect, exp, parse
 from sqlglot.errors import ParseError
 
+from sqlspec.adapters.duckdb._typing import (
+    DuckDBBinderException,
+    DuckDBCatalogException,
+    DuckDBConstraintException,
+    DuckDBConversionException,
+    DuckDBInterruptException,
+    DuckDBIOException,
+    DuckDBParserException,
+    DuckDBPermissionException,
+    DuckDBTransactionException,
+)
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -193,10 +204,16 @@ def apply_driver_features(
     return statement_config.replace(parameter_config=param_config), features
 
 
-_EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
+_EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {
+    DuckDBCatalogException: (NotFoundError, "catalog error"),
+    DuckDBParserException: (SQLParsingError, "SQL parsing error"),
+    DuckDBBinderException: (SQLParsingError, "SQL parsing error"),
+    DuckDBPermissionException: (PermissionDeniedError, "permission denied"),
+    DuckDBInterruptException: (OperationCancelledError, "query interrupted"),
+    DuckDBIOException: (OperationalError, "operational error"),
+    DuckDBConversionException: (DataError, "data error"),
+}
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {}
-_CONSTRAINT_EXCEPTION_TYPE: type[BaseException] | None = None
-_TRANSACTION_EXCEPTION_TYPE: type[BaseException] | None = None
 
 
 def create_mapped_exception(error: "BaseException", *, logger: Any | None = None) -> SQLSpecError:
@@ -209,7 +226,7 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     Mapping priority:
         1. ConstraintException -> message-pattern sub-classification (Unique/FK/NotNull/Check)
         2. Native DuckDB exception type via dispatch table (MRO-walked, cached)
-        3. Type-name substring fallback (for environments without duckdb importable)
+        3. Type-name substring fallback for exception-like inputs
         4. Message-pattern fallback for unrelated types (permission/interrupt/type-mismatch)
         5. Default SQLSpecError fallback
 
@@ -222,9 +239,9 @@ def create_mapped_exception(error: "BaseException", *, logger: Any | None = None
     """
     del logger
     exc_type = type(error)
-    if _CONSTRAINT_EXCEPTION_TYPE is not None and isinstance(error, _CONSTRAINT_EXCEPTION_TYPE):
+    if isinstance(error, DuckDBConstraintException):
         return _classify_duckdb_constraint(error)
-    if _TRANSACTION_EXCEPTION_TYPE is not None and isinstance(error, _TRANSACTION_EXCEPTION_TYPE):
+    if isinstance(error, DuckDBTransactionException):
         return _map_transaction_exception(error)
 
     mapped = _resolve_duckdb_exception_mapping(exc_type)
@@ -572,41 +589,6 @@ def _create_duckdb_error(error: Any, error_class: type[SQLSpecError], descriptio
     return exc
 
 
-def _register_duckdb_exception_mappings() -> None:
-    """Populate the native-type dispatch table from the installed duckdb module.
-
-    Falls back silently when duckdb isn't importable so the substring-based
-    fallback in create_mapped_exception still works for tests and probe paths.
-    """
-    try:
-        from sqlspec.adapters.duckdb._typing import duckdb_module as _duckdb_module
-    except ImportError:
-        return
-
-    global _CONSTRAINT_EXCEPTION_TYPE, _TRANSACTION_EXCEPTION_TYPE
-    constraint_cls = getattr(_duckdb_module, "ConstraintException", None)
-    if isinstance(constraint_cls, type) and issubclass(constraint_cls, BaseException):
-        _CONSTRAINT_EXCEPTION_TYPE = constraint_cls
-
-    transaction_cls = getattr(_duckdb_module, "TransactionException", None)
-    if isinstance(transaction_cls, type) and issubclass(transaction_cls, BaseException):
-        _TRANSACTION_EXCEPTION_TYPE = transaction_cls
-
-    direct_mappings: tuple[tuple[str, tuple[type[SQLSpecError], str]], ...] = (
-        ("CatalogException", (NotFoundError, "catalog error")),
-        ("ParserException", (SQLParsingError, "SQL parsing error")),
-        ("BinderException", (SQLParsingError, "SQL parsing error")),
-        ("PermissionException", (PermissionDeniedError, "permission denied")),
-        ("InterruptException", (OperationCancelledError, "query interrupted")),
-        ("IOException", (OperationalError, "operational error")),
-        ("ConversionException", (DataError, "data error")),
-    )
-    for attr_name, target in direct_mappings:
-        cls = getattr(_duckdb_module, attr_name, None)
-        if isinstance(cls, type) and issubclass(cls, BaseException):
-            _EXCEPTION_MAPPING[cls] = target
-
-
 def _resolve_duckdb_exception_mapping(error_type: "type[BaseException]") -> "tuple[type[SQLSpecError], str] | None":
     cached = _EXCEPTION_MAPPING_CACHE.get(error_type)
     if cached is not None:
@@ -701,8 +683,6 @@ def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] 
             if isinstance(value, str):
                 row[column] = uuid_from_string(value)
 
-
-_register_duckdb_exception_mappings()
 
 driver_profile = build_profile()
 
