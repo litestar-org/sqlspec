@@ -257,19 +257,23 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
         extra = config.pop("extra", None)
         if isinstance(extra, dict):
-            for key, value in extra.items():
-                if value is not None:
-                    canonical_key = _CANONICAL_KEY_LOOKUP.get(key.lower(), key)
-                    options[canonical_key.lower()] = (canonical_key, _format_connection_value(value))
+            for extra_key, extra_value in extra.items():
+                if extra_value is not None:
+                    extra_key_str = str(extra_key)
+                    canonical_extra_key = _CANONICAL_KEY_LOOKUP.get(extra_key_str.lower(), extra_key_str)
+                    options[canonical_extra_key.lower()] = (canonical_extra_key, _format_connection_value(extra_value))
 
-        for key, value in list(config.items()):
-            if value is not None:
-                canonical_key = _CANONICAL_KEY_LOOKUP.get(key.lower(), key)
-                options[canonical_key.lower()] = (canonical_key, _format_connection_value(value))
-            config.pop(key, None)
+        for remaining_key, remaining_value in list(config.items()):
+            if remaining_value is not None:
+                canonical_remaining_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
+                options[canonical_remaining_key.lower()] = (
+                    canonical_remaining_key,
+                    _format_connection_value(remaining_value),
+                )
+            config.pop(remaining_key, None)
 
-        parts = [f"{name}={val}" for name, val in options.values()]
-        return ";".join(parts) + ";", connect_kwargs
+        merged_parts = [f"{name}={val}" for name, val in options.values()]
+        return ";".join(merged_parts) + ";", connect_kwargs
 
     server = _pop_alias(config, ("server", "address", "addr"), "server")
     if not server:
