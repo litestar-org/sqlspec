@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
+from urllib.parse import parse_qs, unquote, urlsplit
 from weakref import WeakSet
 
 from typing_extensions import NotRequired
@@ -49,6 +50,7 @@ __all__ = (
     "MysqlConnectorPoolParams",
     "MysqlConnectorSyncConfig",
     "MysqlConnectorSyncConnectionParams",
+    "build_connection_config",
 )
 mysql: "MysqlConnectorMysqlModule" = cast("MysqlConnectorMysqlModule", MysqlConnectorMysqlModule)
 mysqlconnector_aio: "MysqlConnectorAio" = cast("MysqlConnectorAio", MysqlConnectorAio)
@@ -195,12 +197,64 @@ class MysqlConnectorDriverFeatures(TypedDict):
     enable_local_infile_bulk_load: NotRequired[bool]
 
 
-def _normalize_local_infile(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
-    """Normalize mysql-connector local-infile consent."""
+def _parse_mysql_dsn(dsn: str) -> dict[str, Any]:
+    """Parse a MySQL connection DSN or URL into keyword arguments."""
+    if "://" in dsn:
+        parsed = urlsplit(dsn)
+        params: dict[str, Any] = {}
+        if parsed.username is not None:
+            params["user"] = unquote(parsed.username)
+        if parsed.password is not None:
+            params["password"] = unquote(parsed.password)
+        if parsed.hostname is not None:
+            params["host"] = parsed.hostname
+        if parsed.port is not None:
+            params["port"] = parsed.port
+        path = parsed.path.lstrip("/")
+        if path:
+            params["database"] = unquote(path)
+        if parsed.query:
+            query = parse_qs(parsed.query)
+            for k, v in query.items():
+                if v:
+                    val = v[-1]
+                    if val.lower() == "true":
+                        params[k] = True
+                    elif val.lower() == "false":
+                        params[k] = False
+                    elif val.isdigit():
+                        params[k] = int(val)
+                    else:
+                        params[k] = val
+        return params
+    key_value_params: dict[str, Any] = {}
+    for item in dsn.split(";"):
+        if "=" in item:
+            param_key, param_val = item.split("=", 1)
+            key_value_params[param_key.strip()] = param_val.strip()
+    return key_value_params
+
+
+def build_connection_config(
+    connection_config: "MysqlConnectorPoolParams | MysqlConnectorAsyncConnectionParams | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize mysqlconnector connection configuration mapping, parsing any DSN and applying overrides."""
     config = normalize_connection_config(connection_config)
+    dsn = config.pop("dsn", None)
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = _parse_mysql_dsn(dsn)
+        for key, value in dsn_params.items():
+            config.setdefault(key, value)
+    config.setdefault("host", "localhost")
+    config.setdefault("port", 3306)
     local_infile = bool(config.pop("local_infile", False))
     config["allow_local_infile"] = bool(config.get("allow_local_infile", False) or local_infile)
     return config
+
+
+def _normalize_local_infile(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
+    """Normalize mysql-connector local-infile consent and connection config."""
+    return build_connection_config(connection_config)
 
 
 class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
@@ -316,9 +370,7 @@ class MysqlConnectorSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = _normalize_local_infile(connection_config)
-        connection_config.setdefault("host", "localhost")
-        connection_config.setdefault("port", 3306)
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -446,9 +498,7 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        self.connection_config = _normalize_local_infile(connection_config)
-        self.connection_config.setdefault("host", "localhost")
-        self.connection_config.setdefault("port", 3306)
+        self.connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

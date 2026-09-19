@@ -17,6 +17,7 @@ from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorPoolParams,
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncConnectionParams,
+    build_connection_config,
 )
 
 if TYPE_CHECKING:
@@ -316,3 +317,69 @@ async def test_async_create_connection_applies_autocommit(monkeypatch: pytest.Mo
 
     assert await config.create_connection() is connection
     assert recorded == [False]
+
+
+def test_build_connection_config_parses_url_dsn() -> None:
+    """DSN URLs should be parsed into individual connection parameters."""
+    cfg = build_connection_config({
+        "dsn": "mysql://testuser:secret@remotehost:3307/appdb?ssl_disabled=true&connect_timeout=15"
+    })
+    assert "dsn" not in cfg
+    assert cfg["user"] == "testuser"
+    assert cfg["password"] == "secret"
+    assert cfg["host"] == "remotehost"
+    assert cfg["port"] == 3307
+    assert cfg["database"] == "appdb"
+    assert cfg["ssl_disabled"] is True
+    assert cfg["connect_timeout"] == 15
+
+
+def test_build_connection_config_discrete_args_override_dsn() -> None:
+    """Discrete keyword arguments should override values parsed from the DSN."""
+    cfg = build_connection_config({
+        "dsn": "mysql://dsnuser:dsnpass@dsnhost:3307/dsndb",
+        "user": "override_user",
+        "port": 3308,
+    })
+    assert "dsn" not in cfg
+    assert cfg["user"] == "override_user"
+    assert cfg["password"] == "dsnpass"
+    assert cfg["host"] == "dsnhost"
+    assert cfg["port"] == 3308
+    assert cfg["database"] == "dsndb"
+
+
+def test_build_connection_config_parses_key_value_dsn() -> None:
+    """Key-value semicolon separated DSNs should be parsed."""
+    cfg = build_connection_config({"dsn": "user=kvuser;password=kvpass;host=kvhost;database=kvdb;port=3309"})
+    assert "dsn" not in cfg
+    assert cfg["user"] == "kvuser"
+    assert cfg["password"] == "kvpass"
+    assert cfg["host"] == "kvhost"
+    assert cfg["database"] == "kvdb"
+    assert cfg["port"] == "3309"
+
+
+def test_sync_config_with_dsn_does_not_forward_dsn_to_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MysqlConnectorSyncConfig with DSN must pop DSN and pass parsed params to connect()."""
+    calls: list[dict[str, Any]] = []
+    fake_conn = MagicMock()
+
+    def connect(**kwargs: Any) -> MagicMock:
+        calls.append(kwargs)
+        return fake_conn
+
+    monkeypatch.setattr("sqlspec.adapters.mysqlconnector.config.mysql.connector.connect", connect)
+    config = MysqlConnectorSyncConfig(
+        connection_config={"dsn": "mysql://user1:pass1@dbhost:3306/production", "raise_on_warnings": True}
+    )
+    conn = config.create_connection()
+
+    assert conn is fake_conn
+    assert len(calls) == 1
+    assert "dsn" not in calls[0]
+    assert calls[0]["user"] == "user1"
+    assert calls[0]["password"] == "pass1"
+    assert calls[0]["host"] == "dbhost"
+    assert calls[0]["database"] == "production"
+    assert calls[0]["raise_on_warnings"] is True

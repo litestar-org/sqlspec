@@ -13,6 +13,7 @@ from sqlspec.adapters.mysqlconnector.config import (
     MysqlConnectorPoolParams,
     MysqlConnectorSyncConfig,
     MysqlConnectorSyncConnectionParams,
+    build_connection_config,
 )
 from sqlspec.adapters.mysqlconnector.core import default_statement_config
 from sqlspec.adapters.mysqlconnector.driver import (
@@ -39,5 +40,6 @@ __all__ = (
     "MysqlConnectorSyncCursor",
     "MysqlConnectorSyncDriver",
     "MysqlConnectorSyncExceptionHandler",
+    "build_connection_config",
     "default_statement_config",
 )
