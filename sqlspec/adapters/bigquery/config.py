@@ -129,6 +129,20 @@ class BigQueryDriverFeatures(TypedDict):
     native_export_connection: NotRequired[str]
 
 
+def build_connection_config(
+    connection_config: "BigQueryConnectionParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize BigQuery connection configuration and map aliases."""
+    config = normalize_connection_config(connection_config)
+    project_alias = config.pop("project_id", None)
+    if project_alias is not None and "project" not in config:
+        config["project"] = project_alias
+    dataset_alias = config.pop("dataset", None) or config.pop("database", None) or config.pop("db", None)
+    if dataset_alias is not None and "dataset_id" not in config:
+        config["dataset_id"] = dataset_alias
+    return config
+
+
 class BigQueryConnectionContext(SyncPoolConnectionContext):
     """Context manager for BigQuery connections."""
 
@@ -465,17 +479,3 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """Return polling defaults tuned for BigQuery latency."""
 
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
-
-
-def build_connection_config(
-    connection_config: "BigQueryConnectionParams | dict[str, Any] | Mapping[str, Any] | None",
-) -> dict[str, Any]:
-    """Normalize BigQuery connection configuration and map aliases."""
-    config = normalize_connection_config(connection_config)
-    project_alias = config.pop("project_id", None)
-    if project_alias is not None and "project" not in config:
-        config["project"] = project_alias
-    dataset_alias = config.pop("dataset", None) or config.pop("database", None) or config.pop("db", None)
-    if dataset_alias is not None and "dataset_id" not in config:
-        config["dataset_id"] = dataset_alias
-    return config

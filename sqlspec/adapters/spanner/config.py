@@ -181,6 +181,23 @@ class SpannerDriverFeatures(TypedDict):
     enable_batch_write_api: "NotRequired[bool]"
 
 
+def build_connection_config(
+    connection_config: "SpannerPoolParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize Spanner connection configuration and map aliases."""
+    config = normalize_connection_config(connection_config)
+    project_alias = config.pop("project_id", None)
+    if project_alias is not None and "project" not in config:
+        config["project"] = project_alias
+    instance_alias = config.pop("instance", None)
+    if instance_alias is not None and "instance_id" not in config:
+        config["instance_id"] = instance_alias
+    database_alias = config.pop("database", None) or config.pop("db", None)
+    if database_alias is not None and "database_id" not in config:
+        config["database_id"] = database_alias
+    return config
+
+
 class SpannerConnectionContext(SyncPoolConnectionContext):
     """Context manager for Spanner connections."""
 
@@ -595,20 +612,3 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         """Return queue defaults for Spanner JSON handling."""
 
         return EventRuntimeHints()
-
-
-def build_connection_config(
-    connection_config: "SpannerPoolParams | dict[str, Any] | Mapping[str, Any] | None",
-) -> dict[str, Any]:
-    """Normalize Spanner connection configuration and map aliases."""
-    config = normalize_connection_config(connection_config)
-    project_alias = config.pop("project_id", None)
-    if project_alias is not None and "project" not in config:
-        config["project"] = project_alias
-    instance_alias = config.pop("instance", None)
-    if instance_alias is not None and "instance_id" not in config:
-        config["instance_id"] = instance_alias
-    database_alias = config.pop("database", None) or config.pop("db", None)
-    if database_alias is not None and "database_id" not in config:
-        config["database_id"] = database_alias
-    return config
