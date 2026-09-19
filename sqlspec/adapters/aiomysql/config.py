@@ -22,7 +22,7 @@ from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -33,7 +33,13 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 
-__all__ = ("AiomysqlConfig", "AiomysqlConnectionParams", "AiomysqlDriverFeatures", "AiomysqlPoolParams")
+__all__ = (
+    "AiomysqlConfig",
+    "AiomysqlConnectionParams",
+    "AiomysqlDriverFeatures",
+    "AiomysqlPoolParams",
+    "build_connection_config",
+)
 
 _POOL_ONLY_CONFIG_KEYS = frozenset({"maxsize", "minsize", "pool_recycle"})
 aiomysql: "AiomysqlModule" = cast("AiomysqlModule", AiomysqlModule)
@@ -46,8 +52,12 @@ class AiomysqlConnectionParams(TypedDict):
     until aiomysql accepts them at runtime.
     """
 
+    dsn: NotRequired[str]
+    url: NotRequired[str]
+    connection_string: NotRequired[str]
     host: NotRequired[str]
     user: NotRequired[str]
+    username: NotRequired[str]
     password: NotRequired[str]
     passwd: NotRequired[str]
     db: NotRequired[str]
@@ -247,11 +257,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        connection_config = _normalize_local_infile(normalize_connection_config(connection_config))
-
-        connection_config.setdefault("host", "localhost")
-        connection_config.setdefault("port", 3306)
-        connection_config.setdefault("charset", "utf8mb4")
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -367,3 +373,27 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         """Return queue polling defaults for aiomysql adapters."""
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+
+def build_connection_config(
+    connection_config: "AiomysqlPoolParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize aiomysql connection configuration, parsing DSN and mapping aliases."""
+    config = normalize_connection_config(connection_config)
+    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if user_alias is not None and "user" not in config:
+        config["user"] = user_alias
+    db_alias = config.pop("database", None)
+    if db_alias is not None and "db" not in config:
+        config["db"] = db_alias
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = parse_mysql_dsn(dsn)
+        if "database" in dsn_params and "db" not in dsn_params:
+            dsn_params["db"] = dsn_params.pop("database")
+        for key, value in dsn_params.items():
+            config.setdefault(key, value)
+    config.setdefault("host", "localhost")
+    config.setdefault("port", 3306)
+    config.setdefault("charset", "utf8mb4")
+    return _normalize_local_infile(config)

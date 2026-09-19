@@ -7,7 +7,7 @@ import aiomysql  # pyright: ignore
 import pytest
 
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlDictCursor, AiomysqlRawCursor
-from sqlspec.adapters.aiomysql.config import AiomysqlConfig
+from sqlspec.adapters.aiomysql.config import AiomysqlConfig, build_connection_config
 from sqlspec.adapters.aiomysql.core import build_statement_config
 
 
@@ -272,3 +272,51 @@ async def test_create_connection_runs_the_connection_hook(monkeypatch: pytest.Mo
     await config.create_connection()
 
     assert seen == [sentinel]
+
+
+def test_build_connection_config_parses_url_dsn() -> None:
+    """DSN URLs should be parsed into individual connection parameters."""
+    cfg = build_connection_config({"dsn": "mysql://testuser:secret@remotehost:3307/appdb"})
+    assert "dsn" not in cfg
+    assert cfg["user"] == "testuser"
+    assert cfg["password"] == "secret"
+    assert cfg["host"] == "remotehost"
+    assert cfg["port"] == 3307
+    assert cfg["db"] == "appdb"
+
+
+def test_build_connection_config_discrete_args_override_dsn() -> None:
+    """Discrete keyword arguments should override values parsed from the DSN."""
+    cfg = build_connection_config({
+        "dsn": "mysql://dsnuser:dsnpass@dsnhost:3307/dsndb",
+        "user": "override_user",
+        "port": 3308,
+        "db": "override_db",
+    })
+    assert "dsn" not in cfg
+    assert cfg["user"] == "override_user"
+    assert cfg["password"] == "dsnpass"
+    assert cfg["host"] == "dsnhost"
+    assert cfg["port"] == 3308
+    assert cfg["db"] == "override_db"
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """Username and database aliases should map to user and db."""
+    cfg = build_connection_config({"username": "alias_user", "database": "alias_db"})
+    assert "username" not in cfg
+    assert "database" not in cfg
+    assert cfg["user"] == "alias_user"
+    assert cfg["db"] == "alias_db"
+
+
+def test_aiomysql_config_with_dsn_applies_to_connection_kwargs() -> None:
+    """AiomysqlConfig with DSN must pop DSN and populate connection kwargs."""
+    config = AiomysqlConfig(connection_config={"dsn": "mysql://user1:pass1@dbhost:3306/production"})
+    assert "dsn" not in config.connection_config
+    kwargs = config._connection_kwargs()
+    assert "dsn" not in kwargs
+    assert kwargs["user"] == "user1"
+    assert kwargs["password"] == "pass1"
+    assert kwargs["host"] == "dbhost"
+    assert kwargs["db"] == "production"

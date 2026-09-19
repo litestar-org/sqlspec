@@ -23,7 +23,7 @@ from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
 if TYPE_CHECKING:
     import ssl
@@ -34,7 +34,14 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 
-__all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", "AsyncmyPoolParams", "AsyncmySSLParams")
+__all__ = (
+    "AsyncmyConfig",
+    "AsyncmyConnectionParams",
+    "AsyncmyDriverFeatures",
+    "AsyncmyPoolParams",
+    "AsyncmySSLParams",
+    "build_connection_config",
+)
 
 
 _ASYNCMY_POOL_ONLY_KEYS = frozenset(("minsize", "maxsize", "pool_recycle"))
@@ -68,8 +75,12 @@ class AsyncmySSLParams(TypedDict):
 class AsyncmyConnectionParams(TypedDict):
     """Asyncmy connection parameters."""
 
+    dsn: NotRequired[str]
+    url: NotRequired[str]
+    connection_string: NotRequired[str]
     host: NotRequired[str]
     user: NotRequired[str]
+    username: NotRequired[str]
     password: NotRequired[str]
     database: NotRequired[str]
     db: NotRequired[str]
@@ -285,11 +296,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments
         """
-        connection_config = _normalize_connection_config(connection_config)
-
-        connection_config.setdefault("host", "localhost")
-        connection_config.setdefault("port", 3306)
-        connection_config.setdefault("charset", "utf8mb4")
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -399,3 +406,28 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Return queue polling defaults for Asyncmy adapters."""
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+
+def build_connection_config(
+    connection_config: "AsyncmyPoolParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize asyncmy connection configuration, parsing DSN and mapping aliases."""
+    config = _normalize_connection_config(connection_config)
+    dsn = (
+        config.pop("dsn", None)
+        or config.pop("url", None)
+        or config.pop("connection_string", None)
+    )
+    user_alias = config.pop("username", None)
+    if user_alias is not None and "user" not in config:
+        config["user"] = user_alias
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = parse_mysql_dsn(dsn)
+        for key, value in dsn_params.items():
+            if key == "database" and "db" in config:
+                continue
+            config.setdefault(key, value)
+    config.setdefault("host", "localhost")
+    config.setdefault("port", 3306)
+    config.setdefault("charset", "utf8mb4")
+    return config

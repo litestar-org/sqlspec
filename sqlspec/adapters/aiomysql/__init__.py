@@ -4,6 +4,7 @@ from sqlspec.adapters.aiomysql.config import (
     AiomysqlConnectionParams,
     AiomysqlDriverFeatures,
     AiomysqlPoolParams,
+    build_connection_config,
 )
 from sqlspec.adapters.aiomysql.core import default_statement_config
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver, AiomysqlExceptionHandler
@@ -17,5 +18,6 @@ __all__ = (
     "AiomysqlDriverFeatures",
     "AiomysqlExceptionHandler",
     "AiomysqlPoolParams",
+    "build_connection_config",
     "default_statement_config",
 )
