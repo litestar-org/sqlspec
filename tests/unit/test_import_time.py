@@ -5,7 +5,38 @@ import sys
 
 import pytest
 
-FORBIDDEN = ("pandas", "polars", "pyarrow", "litestar", "pydantic", "opentelemetry", "prometheus_client")
+FORBIDDEN = (
+    "pandas",
+    "polars",
+    "pyarrow",
+    "litestar",
+    "pydantic",
+    "opentelemetry",
+    "prometheus_client",
+    "asyncpg",
+    "rich",
+    "sqlglot",
+)
+
+
+@pytest.mark.parametrize(
+    ("statement", "unused"),
+    [
+        ("from sqlspec.builder import QueryBuilder", ("sqlspec.builder._factory",)),
+        ("from sqlspec.migrations import SyncMigrationTracker", ("sqlspec.migrations.commands", "rich")),
+        (
+            "from sqlspec.extensions.events import EventRuntimeHints",
+            ("sqlspec.extensions.events._channel", "sqlspec.migrations"),
+        ),
+        (
+            "from sqlspec import SQLSpec; from sqlspec.adapters.sqlite import SqliteConfig; manager = SQLSpec(); config = manager.add_config(SqliteConfig());\nwith manager.provide_session(config) as session: assert session.select_value('SELECT 1') == 1\nconfig.close_pool()",
+            ("sqlspec.migrations.commands", "sqlspec.builder._factory", "rich", "asyncpg"),
+        ),
+    ],
+)
+def test_first_use_avoids_unrelated_imports(statement: str, unused: tuple[str, ...]) -> None:
+    script = f"import sys\n{statement}\nassert not set({unused!r}).intersection(sys.modules)"
+    subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
 
 
 @pytest.mark.parametrize("block_asyncpg", [False, True])

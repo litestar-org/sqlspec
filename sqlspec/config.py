@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, Ty
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.core.capabilities import TypeCoercionCapabilities
+from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import (
     build_default_statement_config,
     close_async_pool,
