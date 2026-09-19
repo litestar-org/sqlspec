@@ -10,6 +10,7 @@ import pytest
 from sqlspec.adapters.pymysql.config import PyMysqlConfig
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.utils.module_loader import reset_dependency_cache
 
 # pyright: reportPrivateUsage=false
 
@@ -30,11 +31,13 @@ def mock_cloud_sql_module() -> Generator[MagicMock, None, None]:
 
     sys.modules["google.cloud.sql"] = mock_module
     sys.modules["google.cloud.sql.connector"] = mock_module.connector
+    reset_dependency_cache("google.cloud.sql.connector")
 
     yield mock_connector_class
 
     sys.modules.pop("google.cloud.sql", None)
     sys.modules.pop("google.cloud.sql.connector", None)
+    reset_dependency_cache("google.cloud.sql.connector")
 
 
 def test_cloud_sql_defaults_to_false() -> None:

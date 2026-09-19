@@ -3,7 +3,6 @@
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
-from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery._typing import (
@@ -12,6 +11,8 @@ from sqlspec.adapters.bigquery._typing import (
     BigQuerySessionContext,
     BigQueryStorageWriteModule,
 )
+from sqlspec.adapters.bigquery._typing import BigQueryLoadJobConfig as LoadJobConfig
+from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
 from sqlspec.adapters.bigquery.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
@@ -26,10 +27,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
 
-    from google.api_core.client_info import ClientInfo
-    from google.api_core.client_options import ClientOptions
-    from google.auth.credentials import Credentials
-
+    from sqlspec.adapters.bigquery._typing import BigQueryClientInfo as ClientInfo
+    from sqlspec.adapters.bigquery._typing import BigQueryClientOptions as ClientOptions
+    from sqlspec.adapters.bigquery._typing import BigQueryCredentials as Credentials
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 

@@ -7,13 +7,20 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+import oracledb as oracledb_module
 from oracledb import (
     DB_TYPE_BLOB,
+    DB_TYPE_CHAR,
     DB_TYPE_CLOB,
     DB_TYPE_JSON,
     DB_TYPE_LONG,
     DB_TYPE_LONG_RAW,
+    DB_TYPE_NCHAR,
+    DB_TYPE_NVARCHAR,
     DB_TYPE_RAW,
+    DB_TYPE_VARCHAR,
+    DEQ_IMMEDIATE,
+    DEQ_ON_COMMIT,
     AsyncConnection,
     AsyncCursor,
     Connection,
@@ -21,6 +28,10 @@ from oracledb import (
     DatabaseError,
     Error,
 )
+from oracledb import AuthMode as OracleAuthMode
+from oracledb import PoolGetMode as OraclePoolGetMode
+from oracledb import Purity as OraclePurity
+from oracledb import create_pipeline as oracledb_create_pipeline
 from oracledb.pool import AsyncConnectionPool, ConnectionPool
 
 if TYPE_CHECKING:
@@ -55,12 +66,18 @@ if not TYPE_CHECKING:
 
 __all__ = (
     "DB_TYPE_BLOB",
+    "DB_TYPE_CHAR",
     "DB_TYPE_CLOB",
     "DB_TYPE_JSON",
     "DB_TYPE_LONG",
     "DB_TYPE_LONG_RAW",
+    "DB_TYPE_NCHAR",
+    "DB_TYPE_NVARCHAR",
     "DB_TYPE_RAW",
+    "DB_TYPE_VARCHAR",
     "DB_TYPE_VECTOR",
+    "DEQ_IMMEDIATE",
+    "DEQ_ON_COMMIT",
     "DatabaseError",
     "Error",
     "OracleAsyncConnection",
@@ -68,11 +85,16 @@ __all__ = (
     "OracleAsyncCursor",
     "OracleAsyncRawCursor",
     "OracleAsyncSessionContext",
+    "OracleAuthMode",
+    "OraclePoolGetMode",
+    "OraclePurity",
     "OracleSyncConnection",
     "OracleSyncConnectionPool",
     "OracleSyncCursor",
     "OracleSyncRawCursor",
     "OracleSyncSessionContext",
+    "oracledb_create_pipeline",
+    "oracledb_module",
 )
 
 

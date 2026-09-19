@@ -4,8 +4,7 @@ import contextlib
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from aiomysql import SSCursor
-
+from sqlspec.adapters.aiomysql._typing import AiomysqlSSCursor as SSCursor
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (

@@ -3,11 +3,6 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
-from asyncpg import Connection, Record
-from asyncpg import connect as asyncpg_connect
-from asyncpg import create_pool as asyncpg_create_pool
-from asyncpg.connection import ConnectionMeta
-from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
@@ -17,7 +12,15 @@ from sqlspec.adapters.asyncpg._typing import (
     AsyncpgPool,
     AsyncpgPreparedStatement,
     AsyncpgSessionContext,
+    asyncpg_connect,
+    asyncpg_create_pool,
 )
+from sqlspec.adapters.asyncpg._typing import AsyncpgConnectionMeta as ConnectionMeta
+from sqlspec.adapters.asyncpg._typing import AsyncpgNativePool as Pool
+from sqlspec.adapters.asyncpg._typing import AsyncpgNativePoolConnectionProxy as PoolConnectionProxy
+from sqlspec.adapters.asyncpg._typing import AsyncpgPoolConnectionProxyMeta as PoolConnectionProxyMeta
+from sqlspec.adapters.asyncpg._typing import AsyncpgRawConnection as Connection
+from sqlspec.adapters.asyncpg._typing import AsyncpgRecord as Record
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
     build_connection_config,
@@ -414,7 +417,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Args:
             config: Pool configuration dictionary to modify in-place.
         """
-        from google.cloud.sql.connector import Connector  # type: ignore[import-untyped,unused-ignore]
+        from sqlspec.adapters.asyncpg._typing import AsyncpgCloudSqlConnector as Connector
 
         if self._cloud_sql_connector is None:
             self._cloud_sql_connector = Connector()
@@ -434,7 +437,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Args:
             config: Pool configuration dictionary to modify in-place.
         """
-        from google.cloud.alloydb.connector import AsyncConnector  # type: ignore[import-untyped,unused-ignore]
+        from sqlspec.adapters.asyncpg._typing import AsyncpgAlloydbAsyncConnector as AsyncConnector
 
         if self._alloydb_connector is None:
             self._alloydb_connector = AsyncConnector()

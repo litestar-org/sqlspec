@@ -4,18 +4,19 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
-from psycopg import Connection as PsycopgConnection
-from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
     PsycopgAsyncCursor,
     PsycopgAsyncSessionContext,
+    PsycopgConnection,
     PsycopgSyncConnection,
     PsycopgSyncCursor,
     PsycopgSyncSessionContext,
 )
+from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnectionPool as AsyncConnectionPool
+from sqlspec.adapters.psycopg._typing import PsycopgConnectionPool as ConnectionPool
 from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
@@ -43,11 +44,17 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
-    from psycopg.abc import AdaptContext
-    from psycopg.rows import AsyncRowFactory, RowFactory
-    from psycopg_pool.abc import AsyncConnectFailedCB, AsyncConnectionCB, ConnectFailedCB, ConnectionCB
-
+    from sqlspec.adapters.psycopg._typing import PsycopgAdaptContext as AdaptContext
+    from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnectFailedCB as AsyncConnectFailedCB
+    from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnectionCB as AsyncConnectionCB
+    from sqlspec.adapters.psycopg._typing import PsycopgAsyncRowFactory as AsyncRowFactory
+    from sqlspec.adapters.psycopg._typing import PsycopgConnectFailedCB as ConnectFailedCB
+    from sqlspec.adapters.psycopg._typing import PsycopgConnection as Connection
+    from sqlspec.adapters.psycopg._typing import PsycopgConnectionCB as ConnectionCB
+    from sqlspec.adapters.psycopg._typing import PsycopgCursor as Cursor
+    from sqlspec.adapters.psycopg._typing import PsycopgNativeAsyncConnection as AsyncConnection
+    from sqlspec.adapters.psycopg._typing import PsycopgNativeAsyncCursor as AsyncCursor
+    from sqlspec.adapters.psycopg._typing import PsycopgRowFactory as RowFactory
     from sqlspec.core import StatementConfig
 
 __all__ = (
@@ -326,7 +333,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self, config: "dict[str, Any]", pool_parameters: "dict[str, Any] | None" = None
     ) -> None:
         """Setup AlloyDB connector and configure psycopg-pool connection_class."""
-        from google.cloud.alloydb.connector import Connector  # type: ignore[import-untyped,unused-ignore]
+        from sqlspec.adapters.psycopg._typing import PsycopgAlloydbConnector as Connector
 
         if self._alloydb_connector is None:
             self._alloydb_connector = Connector()

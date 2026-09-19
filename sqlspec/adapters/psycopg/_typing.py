@@ -7,16 +7,39 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any, Protocol
 
+import psycopg as psycopg_module
 from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
+from psycopg import AsyncConnection as PsycopgNativeAsyncConnection
+from psycopg import AsyncCursor as PsycopgNativeAsyncCursor
+from psycopg import Connection as PsycopgConnection
+from psycopg import Cursor as PsycopgCursor
+from psycopg import ProgrammingError as PsycopgProgrammingError
+from psycopg import errors as psycopg_errors
+from psycopg import sql as psycopg_sql
+from psycopg.abc import AdaptContext as PsycopgAdaptContext
+from psycopg.rows import AsyncRowFactory as PsycopgAsyncRowFactory
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.rows import RowFactory as PsycopgRowFactory
+from psycopg.rows import dict_row as psycopg_dict_row
 from psycopg.sql import SQL as PsycopgSQL  # noqa: N811
 from psycopg.sql import Composed as PsycopgComposed
 from psycopg.sql import Identifier as PsycopgIdentifier
+from psycopg.types.json import Jsonb as PsycopgJsonb
+from psycopg_pool import AsyncConnectionPool as PsycopgAsyncConnectionPool
+from psycopg_pool import ConnectionPool as PsycopgConnectionPool
+from psycopg_pool.abc import AsyncConnectFailedCB as PsycopgAsyncConnectFailedCB
+from psycopg_pool.abc import AsyncConnectionCB as PsycopgAsyncConnectionCB
+from psycopg_pool.abc import ConnectFailedCB as PsycopgConnectFailedCB
+from psycopg_pool.abc import ConnectionCB as PsycopgConnectionCB
+
+from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
+
+    from google.cloud.alloydb.connector import Connector as PsycopgAlloydbConnector
 
     from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
     from sqlspec.builder import QueryBuilder
@@ -33,20 +56,41 @@ if not TYPE_CHECKING:
     PsycopgSyncRawCursor = Cursor
     PsycopgAsyncRawCursor = AsyncCursor
 
+
 __all__ = (
+    "PsycopgAdaptContext",
+    "PsycopgAlloydbConnector",
+    "PsycopgAsyncConnectFailedCB",
     "PsycopgAsyncConnection",
+    "PsycopgAsyncConnectionCB",
+    "PsycopgAsyncConnectionPool",
     "PsycopgAsyncCursor",
     "PsycopgAsyncRawCursor",
+    "PsycopgAsyncRowFactory",
     "PsycopgAsyncSessionContext",
     "PsycopgComposed",
+    "PsycopgConnectFailedCB",
+    "PsycopgConnection",
+    "PsycopgConnectionCB",
+    "PsycopgConnectionPool",
+    "PsycopgCursor",
     "PsycopgDictRow",
     "PsycopgIdentifier",
+    "PsycopgJsonb",
+    "PsycopgNativeAsyncConnection",
+    "PsycopgNativeAsyncCursor",
     "PsycopgPipelineDriver",
+    "PsycopgProgrammingError",
+    "PsycopgRowFactory",
     "PsycopgSQL",
     "PsycopgSyncConnection",
     "PsycopgSyncCursor",
     "PsycopgSyncRawCursor",
     "PsycopgSyncSessionContext",
+    "psycopg_dict_row",
+    "psycopg_errors",
+    "psycopg_module",
+    "psycopg_sql",
 )
 
 
@@ -226,3 +270,22 @@ class PsycopgAsyncSessionContext:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+_LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
+    "PsycopgAlloydbConnector": ("google.cloud.alloydb.connector", "Connector")
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve optional driver symbols only when a consumer requests them."""
+    target = _LAZY_DRIVER_EXPORTS.get(name)
+    if target is None:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    module_name, attribute = target
+    value = import_optional_attr(module_name, attribute)
+    if value is None:
+        msg = f"Cannot import {attribute!r} from {module_name!r}"
+        raise ImportError(msg)
+    return value

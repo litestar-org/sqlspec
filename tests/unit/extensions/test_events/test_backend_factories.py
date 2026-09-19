@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event backend factories."""
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -257,6 +258,27 @@ def test_oracle_factory_unknown_returns_none() -> None:
     backend = create_event_backend(config, "notify", {})
 
     assert backend is None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(("setting", "expected"), [(None, 2), ("DEQ_IMMEDIATE", 1), ("DEQ_ON_COMMIT", 2), (1, 1)])
+def test_oracle_aq_visibility_reaches_dequeue_options(is_async: bool, setting: str | int | None, expected: int) -> None:
+    from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
+    from sqlspec.adapters.oracledb.events._hub import _apply_deq_options
+    from sqlspec.adapters.oracledb.events.backend import (
+        OracleAsyncAQEventBackend,
+        OracleSyncAQEventBackend,
+        create_event_backend,
+    )
+
+    config = OracleAsyncConfig() if is_async else OracleSyncConfig()
+    backend = create_event_backend(config, "aq", {"aq_visibility": setting})
+    assert isinstance(backend, (OracleAsyncAQEventBackend, OracleSyncAQEventBackend))
+    queue = SimpleNamespace(deqoptions=SimpleNamespace(visibility=2, wait=0))
+
+    _apply_deq_options(queue, backend._visibility, None, 1)
+
+    assert queue.deqoptions.visibility == expected
 
 
 def test_oracle_factory_txeventq_backend() -> None:

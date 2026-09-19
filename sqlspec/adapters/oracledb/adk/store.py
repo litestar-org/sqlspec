@@ -3,11 +3,11 @@
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
-import oracledb
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
 from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report, _validate_oracle_identifier
+from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.adapters.oracledb.data_dictionary import (
     JSONStorageType,
     OracleVersionInfo,
@@ -56,7 +56,6 @@ ORACLE_DEFAULT_EVENTS_TABLE: Final = "adk_event"
 ORACLE_DEFAULT_APP_STATE_TABLE: Final = "adk_app_state"
 ORACLE_DEFAULT_USER_STATE_TABLE: Final = "adk_user_state"
 ORACLE_DEFAULT_METADATA_TABLE: Final = "adk_internal_metadata"
-OracleDatabaseError: Final[type[Exception]] = cast("type[Exception]", oracledb.DatabaseError)
 
 
 _ADK_METADATA_TABLE_DDL_TEMPLATE = (

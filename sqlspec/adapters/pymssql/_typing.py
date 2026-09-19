@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from types import TracebackType
     from typing import TypeAlias
 
+    from pymssql._pymssql import QueryParams as PymssqlQueryParams
+
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import StatementConfig
 
@@ -25,10 +27,18 @@ if TYPE_CHECKING:
     PymssqlRawCursor: TypeAlias = _PymssqlRawCursor
 
 if not TYPE_CHECKING:
+    PymssqlQueryParams = Any
     PymssqlConnection = _PymssqlConnection
     PymssqlRawCursor = _PymssqlRawCursor
 
-__all__ = ("PYMSSQL_MODULE", "PymssqlConnection", "PymssqlCursor", "PymssqlRawCursor", "PymssqlSessionContext")
+__all__ = (
+    "PYMSSQL_MODULE",
+    "PymssqlConnection",
+    "PymssqlCursor",
+    "PymssqlQueryParams",
+    "PymssqlRawCursor",
+    "PymssqlSessionContext",
+)
 
 
 class PymssqlCursor:

@@ -1,7 +1,6 @@
 """SQLite adapter compiled helpers."""
 
 import contextlib
-import sqlite3
 import sys
 from collections.abc import Mapping
 from datetime import date, datetime
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp
 
+from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (

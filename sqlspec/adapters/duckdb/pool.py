@@ -7,10 +7,10 @@ import time
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import duckdb
 from typing_extensions import final
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 

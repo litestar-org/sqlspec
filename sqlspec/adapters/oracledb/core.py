@@ -147,7 +147,7 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
 
 def _resolve_oracledb_version() -> "tuple[int, int, int]":
     try:
-        import oracledb
+        from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
     except ImportError:
         return (0, 0, 0)
     try:
@@ -164,7 +164,7 @@ SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
 def _resolve_sparse_vector_support() -> bool:
     """Return whether the installed python-oracledb exports SparseVector."""
     try:
-        import oracledb
+        from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
     except ImportError:
         return False
     return getattr(oracledb, "SparseVector", None) is not None

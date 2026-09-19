@@ -5,8 +5,6 @@ from inspect import isawaitable
 from ssl import TLSVersion
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
-import oracledb
-from oracledb import AuthMode, PoolGetMode, Purity
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
@@ -20,6 +18,10 @@ from sqlspec.adapters.oracledb._typing import (
     OracleSyncCursor,
     OracleSyncSessionContext,
 )
+from sqlspec.adapters.oracledb._typing import OracleAuthMode as AuthMode
+from sqlspec.adapters.oracledb._typing import OraclePoolGetMode as PoolGetMode
+from sqlspec.adapters.oracledb._typing import OraclePurity as Purity
+from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
 from sqlspec.adapters.oracledb.core import apply_driver_features, default_statement_config

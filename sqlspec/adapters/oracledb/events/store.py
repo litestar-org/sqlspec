@@ -99,8 +99,8 @@ class OracleEventsConfig(EventsConfig):
     aq_queue: NotRequired[str]
     """Oracle AQ queue name or channel template. Default: SQLSPEC_EVENTS_QUEUE."""
 
-    aq_visibility: NotRequired[int | Literal["AQMSG_VISIBLE", "AQMSG_INVISIBLE"]]
-    """Oracle AQ visibility integer or supported AQMSG_VISIBLE/AQMSG_INVISIBLE name."""
+    aq_visibility: NotRequired[int | Literal["DEQ_IMMEDIATE", "DEQ_ON_COMMIT"]]
+    """Oracle AQ visibility integer or DEQ_IMMEDIATE/DEQ_ON_COMMIT name."""
 
     aq_wait_seconds: NotRequired[int]
     """Oracle AQ dequeue wait in seconds. Default: 5."""

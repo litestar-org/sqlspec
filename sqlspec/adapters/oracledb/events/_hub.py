@@ -15,7 +15,8 @@ import threading
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.exceptions import EventChannelError, MissingDependencyError
+from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
+from sqlspec.exceptions import EventChannelError
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -24,33 +25,6 @@ if TYPE_CHECKING:
 __all__ = ("OracleAsyncAQHub", "OracleSyncAQHub")
 
 logger = get_logger("sqlspec.adapters.oracledb.events.hub")
-
-
-_AQ_AVAILABLE = False
-OracleDatabaseError: Any
-
-try:  # pragma: no cover
-    import oracledb as _oracledb
-
-    from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
-    from sqlspec.adapters.oracledb._typing import DatabaseError as _OracleDatabaseErrorImported
-except ImportError:  # pragma: no cover
-    _AQMSG_INVISIBLE = None
-    _AQMSG_PAYLOAD_TYPE_JSON = None
-    _AQMSG_VISIBLE = None
-    _DB_TYPE_JSON = None
-    OracleDatabaseError = None
-else:  # pragma: no cover
-    _AQ_AVAILABLE = True
-    OracleDatabaseError = _OracleDatabaseErrorImported
-    _AQMSG_INVISIBLE = getattr(_oracledb, "AQMSG_INVISIBLE", None)
-    _AQMSG_PAYLOAD_TYPE_JSON = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
-    _AQMSG_VISIBLE = getattr(_oracledb, "AQMSG_VISIBLE", None)
-
-AQMSG_INVISIBLE: "int | None" = _AQMSG_INVISIBLE
-AQMSG_PAYLOAD_TYPE_JSON: Any = _AQMSG_PAYLOAD_TYPE_JSON
-AQMSG_VISIBLE: "int | None" = _AQMSG_VISIBLE
-DB_TYPE_JSON: Any = _DB_TYPE_JSON
 
 
 class OracleSyncAQHub:
@@ -111,7 +85,7 @@ class OracleSyncAQHub:
             try:
                 message = queue.deqone()
             except Exception as error:  # pragma: no cover
-                if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
+                if not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
                     logger,
@@ -153,9 +127,6 @@ class OracleSyncAQHub:
         cached = self._queues.get(channel)
         if cached is not None:
             return cached
-        if not _AQ_AVAILABLE:  # pragma: no cover
-            msg = "oracledb"
-            raise MissingDependencyError(msg, install_package="oracledb")
         driver = self._session_driver
         if driver is None:
             session_cm = self._config.provide_session()
@@ -168,7 +139,7 @@ class OracleSyncAQHub:
             msg = "Oracle driver does not expose a raw connection"
             raise EventChannelError(msg)
         queue_name = _channel_queue_name(self._queue_name_template, channel)
-        queue = connection.queue(queue_name, payload_type=_resolve_payload_type())
+        queue = connection.queue(queue_name, payload_type="JSON")
         self._queues[channel] = queue
         return queue
 
@@ -241,7 +212,7 @@ class OracleAsyncAQHub:
             try:
                 message = await queue.deqone()
             except Exception as error:  # pragma: no cover
-                if OracleDatabaseError is None or not isinstance(error, OracleDatabaseError):
+                if not isinstance(error, OracleDatabaseError):
                     raise
                 log_with_context(
                     logger,
@@ -283,9 +254,6 @@ class OracleAsyncAQHub:
         cached = self._queues.get(channel)
         if cached is not None:
             return cached
-        if not _AQ_AVAILABLE:  # pragma: no cover
-            msg = "oracledb"
-            raise MissingDependencyError(msg, install_package="oracledb")
         driver = self._session_driver
         if driver is None:
             session_cm = self._config.provide_session()
@@ -298,7 +266,7 @@ class OracleAsyncAQHub:
             msg = "Oracle driver does not expose a raw connection"
             raise EventChannelError(msg)
         queue_name = _channel_queue_name(self._queue_name_template, channel)
-        queue = connection.queue(queue_name, payload_type=_resolve_payload_type())
+        queue = connection.queue(queue_name, payload_type="JSON")
         self._queues[channel] = queue
         return queue
 
@@ -311,13 +279,6 @@ class OracleAsyncAQHub:
 
     def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
         return self.shutdown()
-
-
-def _resolve_payload_type() -> Any:
-    """Pick the payload-type argument for ``connection.queue()`` JSON payloads."""
-    if DB_TYPE_JSON is not None:
-        return "JSON"
-    return AQMSG_PAYLOAD_TYPE_JSON
 
 
 def _apply_deq_options(

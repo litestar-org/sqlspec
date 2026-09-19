@@ -297,7 +297,7 @@ def _null_param_type(raw_value: Any, param_types: "SpannerParamTypesProtocol") -
 def _get_param_types() -> "SpannerParamTypesProtocol":
     global _SPANNER_PARAM_TYPES
     if _SPANNER_PARAM_TYPES is None:
-        from google.cloud.spanner_v1 import param_types
+        from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 
         _SPANNER_PARAM_TYPES = cast("SpannerParamTypesProtocol", param_types)
     return _SPANNER_PARAM_TYPES
@@ -306,7 +306,7 @@ def _get_param_types() -> "SpannerParamTypesProtocol":
 def _get_json_object_type() -> "type[Any]":
     global _JSON_OBJECT_TYPE
     if _JSON_OBJECT_TYPE is None:
-        from google.cloud.spanner_v1 import JsonObject
+        from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
 
         _JSON_OBJECT_TYPE = JsonObject
     return _JSON_OBJECT_TYPE

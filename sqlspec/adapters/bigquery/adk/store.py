@@ -13,9 +13,9 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from google.cloud import bigquery
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options

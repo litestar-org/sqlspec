@@ -13,15 +13,17 @@ as a follow-up.
 import array
 from typing import TYPE_CHECKING, Any, cast
 
-import oracledb as _oracledb
-
 from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
+from sqlspec.adapters.oracledb._typing import oracledb_module as _oracledb
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection as AsyncConnection
+    from sqlspec.adapters.oracledb._typing import OracleAsyncRawCursor as AsyncCursor
+    from sqlspec.adapters.oracledb._typing import OracleSyncConnection as Connection
+    from sqlspec.adapters.oracledb._typing import OracleSyncRawCursor as Cursor
 
 SPARSE_VECTOR_TYPE: "type[object] | None" = getattr(_oracledb, "SparseVector", None)
 

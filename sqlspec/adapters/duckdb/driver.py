@@ -4,10 +4,10 @@ import contextlib
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-import duckdb
 from sqlglot import exp
 
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
+from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
 from sqlspec.adapters.duckdb.core import (
     _build_storage_copy_sql,
     _build_storage_read_sql,

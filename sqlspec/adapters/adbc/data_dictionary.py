@@ -2,10 +2,9 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
-from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
-from adbc_driver_manager import OperationalError as AdbcOperationalError
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.adbc._typing import AdbcNotSupportedError, AdbcOperationalError
 from sqlspec.adapters.sqlite.core import format_identifier
 from sqlspec.data_dictionary import (
     ColumnMetadata,

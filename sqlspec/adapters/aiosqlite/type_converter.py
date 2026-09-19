@@ -10,10 +10,10 @@ instead of lambdas for adapter registration.
 """
 
 import json
-import sqlite3
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:

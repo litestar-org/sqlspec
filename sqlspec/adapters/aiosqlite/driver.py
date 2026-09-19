@@ -2,12 +2,11 @@
 
 import asyncio
 import random
-import sqlite3
 from typing import TYPE_CHECKING, Any, cast
 
-import aiosqlite
-
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import (
     AiosqliteStreamSource,
     _execute_and_resolve_metadata,

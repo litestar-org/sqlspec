@@ -1,7 +1,6 @@
 """AIOSQLite adapter compiled helpers."""
 
 import contextlib
-import sqlite3
 import sys
 from datetime import date, datetime
 from decimal import Decimal
@@ -9,6 +8,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlglot import exp
 
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (

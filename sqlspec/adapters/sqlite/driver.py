@@ -1,9 +1,9 @@
 """SQLite driver implementation."""
 
-import sqlite3
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
+from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.adapters.sqlite.core import (
     SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT,
     SqliteStreamSource,

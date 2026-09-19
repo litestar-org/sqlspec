@@ -3,9 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from google.cloud.spanner_v1 import param_types
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -15,8 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Protocol
 
-    from google.cloud.spanner_v1.transaction import Transaction
-
+    from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.adapters.spanner.config import SpannerSyncConfig
 
     class _DatabaseProtocol(Protocol):

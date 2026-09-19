@@ -19,13 +19,16 @@ if TYPE_CHECKING:
     from typing import TypeAlias
 
     from psqlpy import Connection as _PsqlpyConnection
+    from psqlpy import ConnectionPool as PsqlpyConnectionPool
     from psqlpy import Listener as _PsqlpyListener
+    from psqlpy.exceptions import ConnectionExecuteError as _PsqlpyConnectionExecuteError
     from psqlpy.exceptions import DatabaseError as _PsqlpyDatabaseError
     from psqlpy.exceptions import DataError as _PsqlpyDataError
     from psqlpy.exceptions import Error as _PsqlpyError
     from psqlpy.exceptions import IntegrityError as _PsqlpyIntegrityError
     from psqlpy.exceptions import NotSupportedError as _PsqlpyNotSupportedError
     from psqlpy.exceptions import OperationalError as _PsqlpyOperationalError
+    from psqlpy.extra_types import JSONB as PSQLPY_JSONB
 
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
     from sqlspec.core import StatementConfig
@@ -33,24 +36,33 @@ if TYPE_CHECKING:
     PsqlpyConnection: TypeAlias = _PsqlpyConnection
     PsqlpyDataError: TypeAlias = _PsqlpyDataError
     PsqlpyDatabaseError: TypeAlias = _PsqlpyDatabaseError
+    PsqlpyConnectionExecuteError: TypeAlias = _PsqlpyConnectionExecuteError
     PsqlpyError: TypeAlias = _PsqlpyError
     PsqlpyIntegrityError: TypeAlias = _PsqlpyIntegrityError
     PsqlpyListener: TypeAlias = _PsqlpyListener
     PsqlpyNotSupportedError: TypeAlias = _PsqlpyNotSupportedError
     PsqlpyOperationalError: TypeAlias = _PsqlpyOperationalError
 
+
 if not TYPE_CHECKING:
     PsqlpyConnection = import_optional_attr("psqlpy", "Connection") or Any
     PsqlpyDataError = import_optional_attr("psqlpy.exceptions", "DataError") or _PsqlpyUnavailableError
     PsqlpyDatabaseError = import_optional_attr("psqlpy.exceptions", "DatabaseError") or _PsqlpyUnavailableError
+    PsqlpyConnectionExecuteError = (
+        import_optional_attr("psqlpy.exceptions", "ConnectionExecuteError") or _PsqlpyUnavailableError
+    )
     PsqlpyError = import_optional_attr("psqlpy.exceptions", "Error") or _PsqlpyUnavailableError
     PsqlpyIntegrityError = import_optional_attr("psqlpy.exceptions", "IntegrityError") or _PsqlpyUnavailableError
     PsqlpyListener = import_optional_attr("psqlpy", "Listener") or Any
     PsqlpyNotSupportedError = import_optional_attr("psqlpy.exceptions", "NotSupportedError") or _PsqlpyUnavailableError
     PsqlpyOperationalError = import_optional_attr("psqlpy.exceptions", "OperationalError") or _PsqlpyUnavailableError
 
+
 __all__ = (
+    "PSQLPY_JSONB",
     "PsqlpyConnection",
+    "PsqlpyConnectionExecuteError",
+    "PsqlpyConnectionPool",
     "PsqlpyCursor",
     "PsqlpyDataError",
     "PsqlpyDatabaseError",
@@ -146,3 +158,23 @@ class PsqlpySessionContext:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+_LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
+    "PSQLPY_JSONB": ("psqlpy.extra_types", "JSONB"),
+    "PsqlpyConnectionPool": ("psqlpy", "ConnectionPool"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve optional driver symbols only when a consumer requests them."""
+    target = _LAZY_DRIVER_EXPORTS.get(name)
+    if target is None:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    module_name, attribute = target
+    value = import_optional_attr(module_name, attribute)
+    if value is None:
+        msg = f"Cannot import {attribute!r} from {module_name!r}"
+        raise ImportError(msg)
+    return value

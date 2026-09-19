@@ -3,9 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import asyncmy
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.asyncmy._typing import AsyncmyProgrammingError
 from sqlspec.adapters.asyncmy.core import resolve_rowcount
 from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -116,7 +116,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                         await conn.commit()
 
                 return bytes(data_value)
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except AsyncmyProgrammingError as e:  # pyright: ignore
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -168,7 +168,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                 await cursor.execute(sql)
                 await conn.commit()
             self._log_delete_all()
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except AsyncmyProgrammingError as e:  # pyright: ignore
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -195,7 +195,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except AsyncmyProgrammingError as e:  # pyright: ignore
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

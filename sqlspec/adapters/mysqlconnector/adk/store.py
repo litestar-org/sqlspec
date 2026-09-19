@@ -4,9 +4,9 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-import mysql.connector
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -248,7 +248,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     await cursor.close()
 
             return _session_record_from_row(row) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -294,7 +294,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
             return [_session_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -423,7 +423,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
             return [_event_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -465,7 +465,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
             return str(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -598,7 +598,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return _session_record_from_row(row) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -646,7 +646,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return [_session_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -779,7 +779,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return [_event_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -827,7 +827,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return str(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -1412,7 +1412,7 @@ async def _async_delete_before(
             finally:
                 await cursor.close()
             await conn.commit()
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return 0
         raise
@@ -1434,7 +1434,7 @@ async def _async_state(
             finally:
                 await cursor.close()
         return _json_dict(row[0]) if row is not None else None
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return None
         raise
@@ -1472,7 +1472,7 @@ def _sync_delete_before(
             finally:
                 cursor.close()
             conn.commit()
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return 0
         raise
@@ -1494,7 +1494,7 @@ def _sync_state(
             finally:
                 cursor.close()
         return _json_dict(row[0]) if row is not None else None
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return None
         raise

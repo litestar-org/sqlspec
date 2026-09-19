@@ -3,8 +3,6 @@
 import logging
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, overload
 
-from oracledb import create_pipeline as create_oracle_pipeline
-
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
     DB_TYPE_CLOB,
@@ -17,6 +15,7 @@ from sqlspec.adapters.oracledb._typing import (
 )
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
 from sqlspec.adapters.oracledb._typing import Error as OracleError
+from sqlspec.adapters.oracledb._typing import oracledb_create_pipeline as create_oracle_pipeline
 from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
     OracleAsyncStreamSource,

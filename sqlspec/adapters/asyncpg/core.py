@@ -6,8 +6,7 @@ import re
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
-import asyncpg
-
+from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.core.config_runtime import (
     build_postgres_extension_probe_names,

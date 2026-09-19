@@ -2,7 +2,11 @@
 
 from typing import TYPE_CHECKING, Any
 
+import asyncpg as cockroach_asyncpg_module
 from asyncpg import Pool, PostgresError
+from asyncpg import Record as CockroachAsyncpgRecord
+from asyncpg import connect as cockroach_asyncpg_connect
+from asyncpg import create_pool as cockroach_asyncpg_create_pool
 from asyncpg.pool import PoolConnectionProxy
 
 if TYPE_CHECKING:
@@ -28,7 +32,11 @@ __all__ = (
     "CockroachAsyncpgConnection",
     "CockroachAsyncpgPool",
     "CockroachAsyncpgPostgresError",
+    "CockroachAsyncpgRecord",
     "CockroachAsyncpgSessionContext",
+    "cockroach_asyncpg_connect",
+    "cockroach_asyncpg_create_pool",
+    "cockroach_asyncpg_module",
 )
 
 

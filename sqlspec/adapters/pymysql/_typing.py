@@ -10,11 +10,17 @@ from typing import TYPE_CHECKING, Any
 import pymysql
 from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
 from pymysql.constants import SERVER_STATUS as _PYMYSQL_SERVER_STATUS
+from pymysql.cursors import DictCursor as PyMysqlDictCursor
+from pymysql.cursors import SSCursor as PyMysqlSSCursor
+
+from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
+
+    from google.cloud.sql.connector import Connector as PyMysqlCloudSqlConnector
 
     from sqlspec.adapters.pymysql.driver import PyMysqlDriver
     from sqlspec.core import StatementConfig
@@ -40,13 +46,17 @@ if not TYPE_CHECKING:
     PyMysqlRawCursor = pymysql.cursors.Cursor
     PyMysqlServerStatus = _PYMYSQL_SERVER_STATUS
 
+
 __all__ = (
+    "PyMysqlCloudSqlConnector",
     "PyMysqlConnect",
     "PyMysqlConnection",
     "PyMysqlCursor",
+    "PyMysqlDictCursor",
     "PyMysqlFieldType",
     "PyMysqlMySQLError",
     "PyMysqlRawCursor",
+    "PyMysqlSSCursor",
     "PyMysqlServerStatus",
     "PyMysqlSessionContext",
 )
@@ -116,3 +126,22 @@ class PyMysqlSessionContext:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+_LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
+    "PyMysqlCloudSqlConnector": ("google.cloud.sql.connector", "Connector")
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve optional driver symbols only when a consumer requests them."""
+    target = _LAZY_DRIVER_EXPORTS.get(name)
+    if target is None:
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    module_name, attribute = target
+    value = import_optional_attr(module_name, attribute)
+    if value is None:
+        msg = f"Cannot import {attribute!r} from {module_name!r}"
+        raise ImportError(msg)
+    return value

@@ -11,6 +11,7 @@ from psycopg import Connection
 import sqlspec.adapters.psycopg.config as psycopg_config
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.utils.module_loader import reset_dependency_cache
 
 # pyright: reportPrivateUsage=false
 
@@ -60,11 +61,13 @@ def mock_alloydb_module() -> Generator[MagicMock, None, None]:
 
     sys.modules["google.cloud.alloydb"] = mock_module
     sys.modules["google.cloud.alloydb.connector"] = mock_module.connector
+    reset_dependency_cache("google.cloud.alloydb.connector")
 
     yield mock_connector_class
 
     sys.modules.pop("google.cloud.alloydb", None)
     sys.modules.pop("google.cloud.alloydb.connector", None)
+    reset_dependency_cache("google.cloud.alloydb.connector")
 
 
 def test_alloydb_defaults_to_false() -> None:

@@ -7,6 +7,7 @@ import pytest
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
+from sqlspec.utils.module_loader import reset_dependency_cache
 
 # pyright: reportPrivateUsage=false
 
@@ -28,11 +29,13 @@ def mock_cloud_sql_module():
 
     sys.modules["google.cloud.sql"] = mock_module
     sys.modules["google.cloud.sql.connector"] = mock_module.connector
+    reset_dependency_cache("google.cloud.sql.connector")
 
     yield mock_connector_class
 
     sys.modules.pop("google.cloud.sql", None)
     sys.modules.pop("google.cloud.sql.connector", None)
+    reset_dependency_cache("google.cloud.sql.connector")
 
 
 @pytest.fixture
@@ -44,11 +47,13 @@ def mock_alloydb_module():
 
     sys.modules["google.cloud.alloydb"] = mock_module
     sys.modules["google.cloud.alloydb.connector"] = mock_module.connector
+    reset_dependency_cache("google.cloud.alloydb.connector")
 
     yield mock_connector_class
 
     sys.modules.pop("google.cloud.alloydb", None)
     sys.modules.pop("google.cloud.alloydb.connector", None)
+    reset_dependency_cache("google.cloud.alloydb.connector")
 
 
 def test_cloud_sql_defaults_to_false() -> None:

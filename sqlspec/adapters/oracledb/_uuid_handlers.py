@@ -13,7 +13,10 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid_from_bytes
 
 if TYPE_CHECKING:
-    from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection as AsyncConnection
+    from sqlspec.adapters.oracledb._typing import OracleAsyncRawCursor as AsyncCursor
+    from sqlspec.adapters.oracledb._typing import OracleSyncConnection as Connection
+    from sqlspec.adapters.oracledb._typing import OracleSyncRawCursor as Cursor
 
 __all__ = (
     "register_uuid_handlers",

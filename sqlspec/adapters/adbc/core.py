@@ -1345,7 +1345,7 @@ def _prepare_batch_with_casts(
 
 def _resolve_flightsql_db_kwargs_keys() -> "tuple[str, str]":
     try:
-        from adbc_driver_flightsql import DatabaseOptions
+        from sqlspec.adapters.adbc._typing import AdbcFlightSqlDatabaseOptions as DatabaseOptions
     except ImportError:
         return _FLIGHTSQL_TLS_SKIP_VERIFY_KEY, _FLIGHTSQL_AUTHORIZATION_HEADER_KEY
     return DatabaseOptions.TLS_SKIP_VERIFY.value, DatabaseOptions.AUTHORIZATION_HEADER.value

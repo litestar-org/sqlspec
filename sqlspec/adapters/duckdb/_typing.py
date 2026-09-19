@@ -6,6 +6,7 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import duckdb as duckdb_module
 from duckdb import DuckDBPyConnection
 
 _DuckDBConnection = DuckDBPyConnection
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 if not TYPE_CHECKING:
     DuckDBConnection = _DuckDBConnection
 
-__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")
+__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext", "duckdb_module")
 
 
 class DuckDBCursor:

@@ -6,7 +6,18 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+from google.api_core import exceptions as bigquery_exceptions
+from google.api_core.client_info import ClientInfo as BigQueryClientInfo
+from google.api_core.client_options import ClientOptions as BigQueryClientOptions
+from google.api_core.retry import Retry as BigQueryRetry
+from google.auth.credentials import Credentials as BigQueryCredentials
+from google.cloud import bigquery as bigquery_module
 from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter
+from google.cloud.bigquery import LoadJobConfig as BigQueryLoadJobConfig
+from google.cloud.bigquery import QueryJob as BigQueryQueryJob
+from google.cloud.bigquery import QueryJobConfig as BigQueryQueryJobConfig
+from google.cloud.bigquery.retry import DEFAULT_RETRY as BIGQUERY_DEFAULT_RETRY
+from google.cloud.bigquery.retry import POLLING_DEFAULT_VALUE as BIGQUERY_POLLING_DEFAULT_VALUE
 from google.cloud.exceptions import GoogleCloudError
 
 from sqlspec.typing import import_optional
@@ -15,6 +26,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
+
+    from google.cloud import bigquery_storage as bigquery_storage_read_module
 
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
     from sqlspec.core import StatementConfig
@@ -27,17 +40,30 @@ if TYPE_CHECKING:
 if not TYPE_CHECKING:
     BigQueryConnection = Client
     BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
+    bigquery_storage_read_module = import_optional("google.cloud.bigquery_storage")
     BigQueryStorageWriteModule = import_optional("google.cloud.bigquery_storage_v1")
     BigQueryStorageWriteTypes = import_optional("google.cloud.bigquery_storage_v1.types")
 
 __all__ = (
+    "BIGQUERY_DEFAULT_RETRY",
+    "BIGQUERY_POLLING_DEFAULT_VALUE",
+    "BigQueryClientInfo",
+    "BigQueryClientOptions",
     "BigQueryConnection",
+    "BigQueryCredentials",
     "BigQueryCursor",
+    "BigQueryLoadJobConfig",
     "BigQueryParam",
+    "BigQueryQueryJob",
+    "BigQueryQueryJobConfig",
+    "BigQueryRetry",
     "BigQuerySessionContext",
     "BigQueryStorageWriteModule",
     "BigQueryStorageWriteTypes",
     "GoogleCloudError",
+    "bigquery_exceptions",
+    "bigquery_module",
+    "bigquery_storage_read_module",
 )
 
 

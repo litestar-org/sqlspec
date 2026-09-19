@@ -6,6 +6,7 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import sqlite3
+import sqlite3 as sqlite_module
 from typing import TYPE_CHECKING, Any
 
 _SqliteConnection = sqlite3.Connection
@@ -27,7 +28,14 @@ if not TYPE_CHECKING:
     SqliteConnectionFactory = type[sqlite3.Connection]
     SqliteRawCursor = sqlite3.Cursor
 
-__all__ = ("SqliteConnection", "SqliteConnectionFactory", "SqliteCursor", "SqliteRawCursor", "SqliteSessionContext")
+__all__ = (
+    "SqliteConnection",
+    "SqliteConnectionFactory",
+    "SqliteCursor",
+    "SqliteRawCursor",
+    "SqliteSessionContext",
+    "sqlite_module",
+)
 
 
 class SqliteCursor:

@@ -6,9 +6,9 @@ Provides both async and sync PostgreSQL session stores using psycopg3.
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from psycopg.rows import dict_row
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.psycopg._typing import psycopg_dict_row as dict_row
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_

@@ -9,8 +9,7 @@ from collections.abc import Mapping
 from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
 
-from google.cloud.bigquery.retry import POLLING_DEFAULT_VALUE
-
+from sqlspec.adapters.bigquery._typing import BIGQUERY_POLLING_DEFAULT_VALUE as POLLING_DEFAULT_VALUE
 from sqlspec.adapters.bigquery._typing import (
     BigQueryConnection,
     BigQueryCursor,
@@ -63,10 +62,10 @@ from sqlspec.utils.text import split_qualified_identifier
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
-    from google.api_core.retry import Retry
-    from google.cloud import bigquery_storage  # type: ignore[attr-defined, unused-ignore]
-    from google.cloud.bigquery import QueryJob, QueryJobConfig
-
+    from sqlspec.adapters.bigquery._typing import BigQueryQueryJob as QueryJob
+    from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
+    from sqlspec.adapters.bigquery._typing import BigQueryRetry as Retry
+    from sqlspec.adapters.bigquery._typing import bigquery_storage_read_module as bigquery_storage
     from sqlspec.adapters.bigquery.core import BigQueryLoadFormat
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, ArrowResult, Statement, StatementFilter

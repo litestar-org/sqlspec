@@ -3,9 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from psycopg.rows import dict_row
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_

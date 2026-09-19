@@ -6,9 +6,17 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import psycopg as cockroach_psycopg_module
 from psycopg import AsyncCursor, Cursor
+from psycopg import crdb as cockroach_psycopg_crdb
 from psycopg import crdb as psycopg_crdb
+from psycopg import errors as cockroach_psycopg_errors
+from psycopg import sql as cockroach_psycopg_sql
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.rows import dict_row as cockroach_psycopg_dict_row
+from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
+from psycopg_pool import AsyncConnectionPool as CockroachPsycopgAsyncConnectionPool
+from psycopg_pool import ConnectionPool as CockroachPsycopgConnectionPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,11 +42,19 @@ if not TYPE_CHECKING:
 __all__ = (
     "CockroachAsyncConnection",
     "CockroachAsyncCursor",
+    "CockroachPsycopgAsyncConnectionPool",
     "CockroachPsycopgAsyncSessionContext",
+    "CockroachPsycopgConnectionPool",
+    "CockroachPsycopgJsonb",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
     "CockroachSyncCursor",
     "PsycopgDictRow",
+    "cockroach_psycopg_crdb",
+    "cockroach_psycopg_dict_row",
+    "cockroach_psycopg_errors",
+    "cockroach_psycopg_module",
+    "cockroach_psycopg_sql",
 )
 
 

@@ -4,10 +4,10 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast
 
-from google.api_core.exceptions import NotFound
-from google.cloud.spanner_v1 import param_types
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
+from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import OperationalError
@@ -19,9 +19,8 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from google.cloud.spanner_v1.database import Database
-    from google.cloud.spanner_v1.transaction import Transaction
-
+    from sqlspec.adapters.spanner._typing import SpannerDatabase as Database
+    from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")

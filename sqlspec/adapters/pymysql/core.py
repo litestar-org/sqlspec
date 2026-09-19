@@ -199,7 +199,7 @@ class PymysqlStreamSource:
         self._row_plan: tuple[list[str], list[int] | None] | None = None
 
     def start(self) -> None:
-        from pymysql.cursors import SSCursor
+        from sqlspec.adapters.pymysql._typing import PyMysqlSSCursor as SSCursor
 
         handler = self._driver.handle_database_exceptions()
         with handler:

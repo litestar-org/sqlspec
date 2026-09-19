@@ -36,7 +36,8 @@ profile and overrides. Import each from its adapter's ``events`` package.
 enable partitioning. ``OracleEventsConfig`` instead accepts structured
 ``OracleEventsPartitionConfig`` and ``OracleEventsCompressionConfig`` values,
 along with Oracle storage and AQ options. Oracle visibility accepts a native
-integer or an available ``AQMSG_VISIBLE``/``AQMSG_INVISIBLE`` name.
+integer or a ``DEQ_IMMEDIATE``/``DEQ_ON_COMMIT`` name. Omitting it preserves
+the driver default, ``DEQ_ON_COMMIT``.
 
 Stores and channels reject settings the selected adapter cannot consume,
 including native notification and AQ channels. Ordinary dictionaries remain

@@ -7,9 +7,11 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import sqlite3
+import sqlite3 as aiosqlite_sqlite_module
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
+import aiosqlite as aiosqlite_module
 from typing_extensions import TypeAliasType
 
 _AiosqliteConnection = aiosqlite.Connection
@@ -37,6 +39,8 @@ __all__ = (
     "AiosqliteCursor",
     "AiosqliteRawCursor",
     "AiosqliteSessionContext",
+    "aiosqlite_module",
+    "aiosqlite_sqlite_module",
 )
 
 

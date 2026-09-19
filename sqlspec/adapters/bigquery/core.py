@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
 import sqlglot
-from google.api_core import exceptions as api_exceptions
 from sqlglot import exp
 
+from sqlspec.adapters.bigquery._typing import bigquery_exceptions as api_exceptions
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterProfile,
@@ -45,10 +45,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
     from typing import Literal
 
-    from google.api_core.retry import Retry
-    from google.cloud.bigquery import LoadJobConfig, QueryJob, QueryJobConfig
-
     from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryParam
+    from sqlspec.adapters.bigquery._typing import BigQueryLoadJobConfig as LoadJobConfig
+    from sqlspec.adapters.bigquery._typing import BigQueryQueryJob as QueryJob
+    from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
+    from sqlspec.adapters.bigquery._typing import BigQueryRetry as Retry
     from sqlspec.driver._common import SyncExceptionHandler
     from sqlspec.storage import StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
@@ -282,7 +283,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | 
 
 def build_retry(deadline: float) -> "Retry":
     """Build retry policy for job restarts based on error reason codes."""
-    from google.api_core.retry import Retry
+    from sqlspec.adapters.bigquery._typing import BigQueryRetry as Retry
 
     return Retry(predicate=_should_retry_bigquery_job, deadline=deadline)
 
@@ -364,7 +365,7 @@ def run_query_job(
     Returns:
         QueryJob object representing the executed job.
     """
-    from google.cloud.bigquery import QueryJobConfig
+    from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
 
     final_job_config = QueryJobConfig()
     if default_job_config:
@@ -391,7 +392,7 @@ def run_query_job(
 
 
 def build_load_job_config(file_format: "BigQueryLoadFormat", overwrite: bool) -> "LoadJobConfig":
-    from google.cloud.bigquery import LoadJobConfig
+    from sqlspec.adapters.bigquery._typing import BigQueryLoadJobConfig as LoadJobConfig
 
     job_config = LoadJobConfig()
     job_config.source_format = _map_bigquery_source_format(file_format)
@@ -524,7 +525,7 @@ class BigQueryStreamSource:
         self._pages: Iterator[Iterable[_BigQueryRow]] | None = None
 
     def start(self) -> None:
-        from google.cloud.bigquery.retry import DEFAULT_RETRY
+        from sqlspec.adapters.bigquery._typing import BIGQUERY_DEFAULT_RETRY as DEFAULT_RETRY
 
         handler = self._driver.handle_database_exceptions()
         with handler:
@@ -1000,7 +1001,7 @@ def _is_query_parameter(value: Any) -> bool:
 def _load_bigquery_module() -> Any:
     global _BIGQUERY_MODULE
     if _BIGQUERY_MODULE is None:
-        from google.cloud import bigquery
+        from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 
         _BIGQUERY_MODULE = bigquery
     return _BIGQUERY_MODULE
@@ -1058,7 +1059,7 @@ def _inline_bigquery_literals(
 
 def _should_retry_bigquery_job(exception: Exception) -> bool:
     """Return True when a BigQuery job exception is safe to retry."""
-    from google.cloud.exceptions import GoogleCloudError
+    from sqlspec.adapters.bigquery._typing import GoogleCloudError
 
     if not isinstance(exception, GoogleCloudError):
         return False
@@ -1106,7 +1107,7 @@ def _run_query_and_wait(
     max_results: int | None = None,
 ) -> Any:
     """Execute a BigQuery query via query_and_wait and return the row iterator."""
-    from google.cloud.bigquery import QueryJobConfig
+    from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
 
     final_job_config = QueryJobConfig()
     if default_job_config:

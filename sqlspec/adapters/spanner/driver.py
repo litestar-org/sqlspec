@@ -41,11 +41,12 @@ from sqlspec.utils.serializers import from_json
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from google.api_core.retry import Retry
-    from google.cloud.spanner_v1 import DirectedReadOptions, RequestOptions
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
+    from sqlspec.adapters.spanner._typing import SpannerDirectedReadOptions as DirectedReadOptions
+    from sqlspec.adapters.spanner._typing import SpannerRequestOptions as RequestOptions
+    from sqlspec.adapters.spanner._typing import SpannerRetry as Retry
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.core.statement import SQL

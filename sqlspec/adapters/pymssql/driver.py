@@ -38,7 +38,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from pymssql._pymssql import QueryParams
+    from sqlspec.adapters.pymssql._typing import PymssqlQueryParams as QueryParams
 
 __all__ = ("PymssqlCursor", "PymssqlDriver", "PymssqlExceptionHandler", "PymssqlSessionContext")
 

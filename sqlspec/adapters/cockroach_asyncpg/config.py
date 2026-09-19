@@ -3,9 +3,6 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
-from asyncpg import Record
-from asyncpg import connect as asyncpg_connect
-from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.core import (
@@ -20,6 +17,9 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgPool,
     CockroachAsyncpgSessionContext,
 )
+from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgRecord as Record
+from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_connect as asyncpg_connect
+from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_create_pool as asyncpg_create_pool
 from sqlspec.adapters.cockroach_asyncpg.core import validate_follower_read_staleness
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs

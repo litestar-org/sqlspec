@@ -4,7 +4,6 @@ from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
-import psycopg
 from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import (
@@ -17,6 +16,7 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncCursor,
     PsycopgSyncSessionContext,
 )
+from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
 from sqlspec.adapters.psycopg.core import (
     TRANSACTION_STATUS_IDLE,
     PipelineCursorEntry,

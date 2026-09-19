@@ -579,7 +579,7 @@ def _register_duckdb_exception_mappings() -> None:
     fallback in create_mapped_exception still works for tests and probe paths.
     """
     try:
-        import duckdb as _duckdb_module
+        from sqlspec.adapters.duckdb._typing import duckdb_module as _duckdb_module
     except ImportError:
         return
 

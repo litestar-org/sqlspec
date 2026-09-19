@@ -3,10 +3,9 @@
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
-from google.api_core import exceptions as api_exceptions
-from google.cloud.spanner_v1.data_types import JsonObject
-from google.cloud.spanner_v1.types.type import TypeCode
-
+from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
+from sqlspec.adapters.spanner._typing import SpannerTypeCode as TypeCode
+from sqlspec.adapters.spanner._typing import spanner_exceptions as api_exceptions
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import (
     DriverParameterProfile,

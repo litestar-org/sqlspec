@@ -301,7 +301,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def _setup_cloud_sql_connector(self, config: "dict[str, Any]") -> "_PyMysqlCloudSqlConnector":
         """Setup Cloud SQL connector and return a pool connection factory."""
-        from google.cloud.sql.connector import Connector  # type: ignore[import-untyped,unused-ignore]
+        from sqlspec.adapters.pymysql._typing import PyMysqlCloudSqlConnector as Connector
 
         self._cloud_sql_connector = Connector()
 

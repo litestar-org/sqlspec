@@ -2,15 +2,14 @@
 
 import asyncio
 import logging
-import sqlite3
 import time
 from contextlib import suppress
 from inspect import isawaitable
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Final
 
-import aiosqlite
-
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import run_on_worker_thread
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context

@@ -3,10 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql.err
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
+from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlProgrammingError, AiomysqlRawCursor
 from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -118,7 +117,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                         await conn.commit()
 
                 return bytes(data_value)
-        except pymysql.err.ProgrammingError as e:
+        except AiomysqlProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -178,7 +177,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql)
                 await conn.commit()
             self._log_delete_all()
-        except pymysql.err.ProgrammingError as e:
+        except AiomysqlProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -207,7 +206,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
-        except pymysql.err.ProgrammingError as e:
+        except AiomysqlProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

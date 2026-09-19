@@ -16,6 +16,8 @@ from asyncmy.connection import MySQLResult as _AsyncmyResult  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
 from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
+from asyncmy.cursors import SSCursor as AsyncmySSCursor
+from asyncmy.errors import ProgrammingError as AsyncmyProgrammingError
 from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
 from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper  # pyright: ignore
 
@@ -74,7 +76,9 @@ __all__ = (
     "AsyncmyModule",
     "AsyncmyMySQLError",
     "AsyncmyPool",
+    "AsyncmyProgrammingError",
     "AsyncmyRawCursor",
+    "AsyncmySSCursor",
     "AsyncmySessionContext",
     "asyncmy_local_infile",
 )

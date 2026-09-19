@@ -4,15 +4,14 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-import psycopg
-from psycopg.rows import dict_row
-
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
     CockroachPsycopgAsyncSessionContext,
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
 )
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_module as psycopg
 from sqlspec.adapters.cockroach_psycopg.core import (
     CockroachPsycopgRetryConfig,
     build_native_export,

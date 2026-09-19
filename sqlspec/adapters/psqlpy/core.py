@@ -91,7 +91,7 @@ _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: type[Any] | None = None
 try:
-    from psqlpy.extra_types import JSONB as _JSONB_IMPORTED
+    from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_IMPORTED
 except ImportError:
     pass
 else:

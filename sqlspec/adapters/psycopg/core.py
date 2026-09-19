@@ -48,7 +48,7 @@ from sqlspec.utils.uuids import uuid4
 
 # Module-level lazy import for psycopg errors (mypyc optimization)
 try:
-    from psycopg import errors as pg_errors
+    from sqlspec.adapters.psycopg._typing import psycopg_errors as pg_errors
 except ImportError:
     pg_errors = None  # type: ignore[assignment]
 
@@ -111,7 +111,7 @@ class PipelineCursorEntry(NamedTuple):
 def pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
     try:
-        import psycopg
+        from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
 
         capabilities = psycopg.capabilities
     except (ImportError, AttributeError):

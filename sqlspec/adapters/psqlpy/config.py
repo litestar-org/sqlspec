@@ -24,8 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from psqlpy import ConnectionPool
-
+    from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
     from sqlspec.core import StatementConfig
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
@@ -294,7 +293,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        from psqlpy import ConnectionPool
+        from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
 
         return ConnectionPool(**build_connection_config(self.connection_config))
 

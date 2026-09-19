@@ -4,8 +4,6 @@ import re
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
-from psycopg import crdb as psycopg_crdb
-from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
@@ -14,6 +12,9 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
 )
+from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgAsyncConnectionPool as AsyncConnectionPool
+from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgConnectionPool as ConnectionPool
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_crdb as psycopg_crdb
 from sqlspec.adapters.cockroach_psycopg.core import (
     apply_driver_features,
     build_statement_config,

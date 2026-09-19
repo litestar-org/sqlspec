@@ -48,6 +48,9 @@ Unreleased
 
 **Fixed:**
 
+* Oracle AQ visibility accepts ``DEQ_IMMEDIATE`` and ``DEQ_ON_COMMIT`` names.
+  The previously advertised ``AQMSG_*`` names do not exist in python-oracledb.
+  Omitting visibility continues to use the driver's default.
 * DuckDB reports failed commits to the caller. It also closes the file-backed
   connection when a commit fails.
 * PostgreSQL and CockroachDB close new connections if a setup hook fails or the
