@@ -291,7 +291,7 @@ def test_build_static_expression_explicit_optimize_overrides_disabled_builder(mo
         calls += 1
         return expression
 
-    monkeypatch.setattr("sqlspec.builder._base.optimize", fake_optimize)
+    monkeypatch.setattr("sqlglot.optimizer.optimize", fake_optimize)
     builder = Select(enable_optimization=False, simplify_expressions=True)
     builder.build_static_expression(expression=exp.select("1"), optimize_expression=True)
     assert calls == 1

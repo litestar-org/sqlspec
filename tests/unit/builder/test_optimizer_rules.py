@@ -37,7 +37,7 @@ def _capture_optimize_kwargs(monkeypatch: pytest.MonkeyPatch) -> dict[str, objec
         return expression
 
     monkeypatch.setattr("sqlspec.builder._base.get_cache", lambda: _NoOpCache())
-    monkeypatch.setattr("sqlspec.builder._base.optimize", fake_optimize)
+    monkeypatch.setattr("sqlglot.optimizer.optimize", fake_optimize)
     return captured_kwargs
 
 
