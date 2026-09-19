@@ -46,6 +46,24 @@ def test_build_connection_config_drops_other_none_values() -> None:
     assert connection_config == {"database": ":memory:", "isolation_level": None}
 
 
+def test_build_connection_config_resolves_database_aliases() -> None:
+    """build_connection_config should resolve db, path, and file aliases to database without leaking them."""
+    assert build_connection_config({"path": "app.db"}) == {"database": "app.db"}
+    assert build_connection_config({"db": "app.db"}) == {"database": "app.db"}
+    assert build_connection_config({"file": "app.db"}) == {"database": "app.db"}
+
+
+def test_sqlite_config_resolves_database_aliases() -> None:
+    """SqliteConfig should resolve path/db/file aliases and avoid generating memory UUID."""
+    config = SqliteConfig(connection_config={"path": "app.db"})
+    assert config.connection_config["database"] == "app.db"
+    assert "path" not in config.connection_config
+
+    config_db = SqliteConfig(connection_config={"db": "app2.db"})
+    assert config_db.connection_config["database"] == "app2.db"
+    assert "db" not in config_db.connection_config
+
+
 def test_build_connection_config_filters_pragma_pool_flags() -> None:
     connection_config = build_connection_config({
         "database": ":memory:",

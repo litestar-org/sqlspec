@@ -290,6 +290,9 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         "pool_timeout",
         "pool_recycle_seconds",
         "extra",
+        "db",
+        "path",
+        "file",
     }
     connection_parameters = {
         key: value
@@ -299,12 +302,23 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
     }
 
+    if "database" not in connection_parameters:
+        database = (
+            connection_config.get("database")
+            or connection_config.get("db")
+            or connection_config.get("path")
+            or connection_config.get("file")
+        )
+        if database is not None:
+            connection_parameters["database"] = database
+
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
         connection_parameters.update({
             key: value
             for key, value in extra.items()
-            if (value is not None or key == "isolation_level")
+            if key not in excluded_keys
+            and (value is not None or key == "isolation_level")
             and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
         })
 

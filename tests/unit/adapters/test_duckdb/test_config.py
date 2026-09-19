@@ -131,6 +131,24 @@ def test_build_connection_config_preserves_nested_config_and_extra() -> None:
     }
 
 
+def test_build_connection_config_resolves_database_aliases() -> None:
+    """DuckDB connect should map db, path, and file aliases to database without leaking to config."""
+    assert build_connection_config({"path": "my.duckdb"}) == {"database": "my.duckdb"}
+    assert build_connection_config({"db": "my.duckdb"}) == {"database": "my.duckdb"}
+    assert build_connection_config({"file": "my.duckdb"}) == {"database": "my.duckdb"}
+
+
+def test_duckdb_config_resolves_database_aliases() -> None:
+    """DuckDBConfig should resolve path/db/file aliases and not fall back to shared memory."""
+    config = DuckDBConfig(connection_config={"path": "target.duckdb"})
+    assert config.connection_config["database"] == "target.duckdb"
+    assert "path" not in config.connection_config
+
+    config_db = DuckDBConfig(connection_config={"db": "target2.duckdb"})
+    assert config_db.connection_config["database"] == "target2.duckdb"
+    assert "db" not in config_db.connection_config
+
+
 def test_driver_init_does_not_apply_driver_features_when_statement_config_is_none() -> None:
     connection = duckdb.connect(database=":memory:")
     driver_features: dict[str, Any] = {"json_serializer": lambda value: "[]"}

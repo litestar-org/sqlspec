@@ -97,6 +97,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         Dictionary with connection parameters.
     """
     pool_only_keys = {"pool_min_size", "pool_max_size", "pool_timeout", "pool_recycle_seconds", "health_check_interval"}
+    alias_keys = {"db", "path", "file"}
     connect_parameters: dict[str, Any] = {}
     duckdb_config: dict[str, Any] = {}
 
@@ -104,10 +105,19 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if isinstance(nested_config, dict):
         duckdb_config.update({key: value for key, value in nested_config.items() if value is not None})
 
+    database = (
+        connection_config.get("database")
+        or connection_config.get("db")
+        or connection_config.get("path")
+        or connection_config.get("file")
+    )
+    if database is not None:
+        connect_parameters["database"] = database
+
     for key, value in connection_config.items():
-        if value is None or key in pool_only_keys or key in {"config", "extra"}:
+        if value is None or key in pool_only_keys or key in alias_keys or key in {"database", "config", "extra"}:
             continue
-        if key in {"database", "read_only"}:
+        if key == "read_only":
             connect_parameters[key] = value
         else:
             duckdb_config[key] = value

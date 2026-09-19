@@ -280,6 +280,14 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
         connection_config = normalize_connection_config(connection_config)
+        database = (
+            connection_config.pop("database", None)
+            or connection_config.pop("db", None)
+            or connection_config.pop("path", None)
+            or connection_config.pop("file", None)
+        )
+        if database is not None:
+            connection_config["database"] = database
         connection_config.setdefault("database", ":memory:shared_db")
 
         if connection_config.get("database") in {":memory:", ""}:

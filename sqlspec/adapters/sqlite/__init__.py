@@ -9,7 +9,7 @@ from sqlspec.adapters.sqlite.config import (
     SqliteDriverFeatures,
     SqliteFunctionConfig,
 )
-from sqlspec.adapters.sqlite.core import default_statement_config
+from sqlspec.adapters.sqlite.core import build_connection_config, default_statement_config
 from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 
@@ -25,5 +25,6 @@ __all__ = (
     "SqliteDriverFeatures",
     "SqliteExceptionHandler",
     "SqliteFunctionConfig",
+    "build_connection_config",
     "default_statement_config",
 )
