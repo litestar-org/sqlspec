@@ -10,6 +10,7 @@ from sqlspec.adapters.cockroach_psycopg.config import (
     CockroachPsycopgDriverFeatures,
     CockroachPsycopgPoolConfig,
     CockroachPsycopgSyncConfig,
+    build_connection_config,
 )
 from sqlspec.adapters.cockroach_psycopg.core import CockroachPsycopgRetryConfig, build_statement_config, driver_profile
 from sqlspec.adapters.cockroach_psycopg.driver import (
@@ -34,6 +35,7 @@ __all__ = (
     "CockroachPsycopgSyncExceptionHandler",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
+    "build_connection_config",
     "build_statement_config",
     "driver_profile",
 )

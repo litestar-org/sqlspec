@@ -10,7 +10,12 @@ from psycopg.rows import dict_row
 
 import sqlspec.adapters.psycopg.config as psycopg_config
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncSessionContext, PsycopgSyncSessionContext
-from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgPoolParams, PsycopgSyncConfig
+from sqlspec.adapters.psycopg.config import (
+    PsycopgAsyncConfig,
+    PsycopgPoolParams,
+    PsycopgSyncConfig,
+    build_connection_config,
+)
 from sqlspec.adapters.psycopg.core import (
     build_postgres_extension_probe_names,
     build_statement_config,
@@ -546,3 +551,47 @@ def test_sync_session_forwards_the_exception_to_the_pool(monkeypatch: pytest.Mon
     handler.release_connection(connection, exc_type=RuntimeError, exc_val=error, exc_tb=None)
 
     assert released == [(RuntimeError, error, None)]
+
+
+def test_build_connection_config_resolves_aliases() -> None:
+    """build_connection_config should map dsn/url to conninfo, database/db to dbname, and username to user."""
+    cfg = build_connection_config({
+        "url": "postgresql://usr:pwd@host.internal:5432/main",
+        "database": "override_db",
+        "username": "override_usr",
+    })
+    assert cfg["conninfo"] == "postgresql://usr:pwd@host.internal:5432/main"
+    assert cfg["dbname"] == "override_db"
+    assert cfg["user"] == "override_usr"
+    assert "url" not in cfg
+    assert "database" not in cfg
+    assert "username" not in cfg
+
+
+def test_build_connection_config_resolves_db_and_dsn() -> None:
+    """build_connection_config should resolve db and dsn aliases and remove them from output."""
+    cfg = build_connection_config({"dsn": "postgresql://localhost/test", "db": "mydb"})
+    assert cfg["conninfo"] == "postgresql://localhost/test"
+    assert cfg["dbname"] == "mydb"
+    assert "dsn" not in cfg
+    assert "db" not in cfg
+
+
+def test_sync_config_normalizes_aliases() -> None:
+    """PsycopgSyncConfig should normalize aliases in connection_config."""
+    config = PsycopgSyncConfig(connection_config={"dsn": "postgresql://localhost:5432/initial", "database": "override"})
+    assert config.connection_config["conninfo"] == "postgresql://localhost:5432/initial"
+    assert config.connection_config["dbname"] == "override"
+    assert "dsn" not in config.connection_config
+    assert "database" not in config.connection_config
+
+
+def test_async_config_normalizes_aliases() -> None:
+    """PsycopgAsyncConfig should normalize aliases in connection_config."""
+    config = PsycopgAsyncConfig(
+        connection_config={"connection_string": "postgresql://localhost:5432/initial", "db": "override"}
+    )
+    assert config.connection_config["conninfo"] == "postgresql://localhost:5432/initial"
+    assert config.connection_config["dbname"] == "override"
+    assert "connection_string" not in config.connection_config
+    assert "db" not in config.connection_config

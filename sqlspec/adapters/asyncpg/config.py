@@ -336,7 +336,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         )
 
         super().__init__(
-            connection_config=normalize_connection_config(connection_config),
+            connection_config=build_connection_config(normalize_connection_config(connection_config)),
             connection_instance=connection_instance,
             migration_config=migration_config,
             statement_config=statement_config,
