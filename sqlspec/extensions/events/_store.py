@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
-from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget
 
 __all__ = ("BaseEventQueueStore", "normalize_event_channel_name", "normalize_queue_table_name")
 
@@ -85,15 +85,19 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
     async def prepare_schema_async(self, driver: Any) -> None:
         """Prepare adapter-specific schema decisions with an asynchronous driver."""
 
-    def reconcile_schema_sync(self, driver: Any) -> SchemaEnsureResult:
+    def reconcile_schema_sync(self, driver: Any) -> "SchemaEnsureResult":
         """Apply additive queue-table changes with a synchronous driver."""
+        from sqlspec.migrations.schema import ensure_schema_sync
+
         manage_schema, create_schema = self._schema_management_flags()
         if not manage_schema:
             return ensure_schema_sync(driver, [], manage_schema=False)
         return ensure_schema_sync(driver, [self._schema_target()], manage_schema=True, create_schema=create_schema)
 
-    async def reconcile_schema_async(self, driver: Any) -> SchemaEnsureResult:
+    async def reconcile_schema_async(self, driver: Any) -> "SchemaEnsureResult":
         """Apply additive queue-table changes with an asynchronous driver."""
+        from sqlspec.migrations.schema import ensure_schema_async
+
         manage_schema, create_schema = self._schema_management_flags()
         if not manage_schema:
             return await ensure_schema_async(driver, [], manage_schema=False)
@@ -101,8 +105,10 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
             driver, [self._schema_target()], manage_schema=True, create_schema=create_schema
         )
 
-    def _schema_target(self) -> SchemaTarget:
+    def _schema_target(self) -> "SchemaTarget":
         """Build a schema target from the canonical queue table DDL."""
+        from sqlspec.migrations.schema import SchemaTarget
+
         statement_config = getattr(self._config, "statement_config", None)
         dialect = getattr(statement_config, "dialect", None)
         return SchemaTarget.from_ddl(self.table_name, self.create_statements()[0], dialect=dialect)

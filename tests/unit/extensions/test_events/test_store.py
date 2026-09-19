@@ -6,6 +6,44 @@ from sqlspec.exceptions import EventChannelError
 from sqlspec.extensions.events import normalize_event_channel_name, normalize_queue_table_name
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_sqlite_event_schema_reconciliation(asynchronous: bool) -> None:
+    """First reconciliation creates the queue; subsequent reconciliation is idempotent."""
+    if asynchronous:
+        from sqlspec.adapters.aiosqlite import AiosqliteConfig
+        from sqlspec.adapters.aiosqlite.events import AiosqliteEventQueueStore
+
+        async_config = AiosqliteConfig()
+        async_store = AiosqliteEventQueueStore(async_config)
+        try:
+            async with async_config.provide_session() as driver:
+                await async_store.prepare_schema_async(driver)
+                first = await async_store.reconcile_schema_async(driver)
+                second = await async_store.reconcile_schema_async(driver)
+                count = await driver.select_value("SELECT COUNT(*) FROM sqlspec_event_queue")
+        finally:
+            await async_config.close_pool()
+    else:
+        from sqlspec.adapters.sqlite import SqliteConfig
+        from sqlspec.adapters.sqlite.events import SqliteEventQueueStore
+
+        config = SqliteConfig()
+        store = SqliteEventQueueStore(config)
+        try:
+            with config.provide_session() as sync_driver:
+                store.prepare_schema_sync(sync_driver)
+                first = store.reconcile_schema_sync(sync_driver)
+                second = store.reconcile_schema_sync(sync_driver)
+                count = sync_driver.select_value("SELECT COUNT(*) FROM sqlspec_event_queue")
+        finally:
+            config.close_pool()
+    assert first.created_tables == ["sqlspec_event_queue"]
+    assert second.created_tables == []
+    assert second.added_columns == {}
+    assert count == 0
+
+
 def test_normalize_queue_table_name_simple() -> None:
     """Simple table names pass validation."""
     result = normalize_queue_table_name("events_queue")
