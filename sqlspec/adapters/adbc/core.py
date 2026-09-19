@@ -363,7 +363,13 @@ def resolve_driver_name(driver_name: str | None, uri: str | None) -> str:
 
 def resolve_driver_name_from_config(connection_config: "Mapping[str, Any]") -> str:
     """Resolve and normalize the driver name from a connection config mapping."""
-    return resolve_driver_name(connection_config.get("driver_name"), connection_config.get("uri"))
+    uri = (
+        connection_config.get("uri")
+        or connection_config.get("url")
+        or connection_config.get("dsn")
+        or connection_config.get("connection_string")
+    )
+    return resolve_driver_name(connection_config.get("driver_name"), uri)
 
 
 def resolve_driver_connect_func(driver_name: str | None, uri: str | None) -> "Callable[..., Any]":
@@ -417,7 +423,12 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
     if isinstance(driver_name, str) and is_shared_object_driver(driver_name):
         return resolve_dialect_from_driver_path(driver_name.lower())
 
-    uri = connection_config.get("uri")
+    uri = (
+        connection_config.get("uri")
+        or connection_config.get("url")
+        or connection_config.get("dsn")
+        or connection_config.get("connection_string")
+    )
     if isinstance(uri, str):
         lowered_uri = uri.lower()
         if lowered_uri.startswith(("gizmosql://", "gizmo://", "grpc+tls://")):
@@ -457,6 +468,15 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     """
     config = dict(connection_config)
 
+    if "uri" not in config:
+        uri_alias = config.pop("url", None) or config.pop("dsn", None) or config.pop("connection_string", None)
+        if uri_alias is not None:
+            config["uri"] = uri_alias
+    else:
+        config.pop("url", None)
+        config.pop("dsn", None)
+        config.pop("connection_string", None)
+
     driver_name = config.get("driver_name")
     uri = config.get("uri")
     driver_kind: str | None = None
@@ -464,6 +484,29 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         driver_kind = driver_kind_from_driver_name(driver_name)
     if driver_kind is None and isinstance(uri, str):
         driver_kind = driver_kind_from_uri(uri)
+
+    if (driver_kind == "sqlite" or driver_kind is None) and "uri" not in config:
+        db_path = (
+            config.pop("database", None)
+            or config.pop("db", None)
+            or config.pop("path", None)
+            or config.pop("file", None)
+        )
+        if db_path is not None:
+            config["uri"] = db_path
+            uri = db_path
+            if driver_kind is None:
+                driver_kind = "sqlite"
+
+    if driver_kind == "duckdb" and "path" not in config:
+        duck_path = (
+            config.pop("database", None)
+            or config.pop("db", None)
+            or config.pop("file", None)
+            or config.pop("path", None)
+        )
+        if duck_path is not None:
+            config["path"] = duck_path
 
     if isinstance(uri, str) and driver_kind == "sqlite" and uri.startswith("sqlite://"):
         config["uri"] = uri[9:]

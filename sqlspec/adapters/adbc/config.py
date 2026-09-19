@@ -44,6 +44,11 @@ class AdbcConnectionParams(TypedDict):
     """ADBC connection parameters."""
 
     uri: NotRequired[str]
+    dsn: NotRequired[str]
+    url: NotRequired[str]
+    connection_string: NotRequired[str]
+    db: NotRequired[str]
+    path: NotRequired[str]
     driver_name: NotRequired[str]
     db_kwargs: NotRequired[dict[str, Any]]
     conn_kwargs: NotRequired[dict[str, Any]]
@@ -241,7 +246,41 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
-        self.connection_config = normalize_connection_config(connection_config)
+        config_dict = normalize_connection_config(connection_config)
+        if "uri" not in config_dict:
+            uri = (
+                config_dict.pop("url", None)
+                or config_dict.pop("dsn", None)
+                or config_dict.pop("connection_string", None)
+            )
+            if uri is not None:
+                config_dict["uri"] = uri
+        else:
+            config_dict.pop("url", None)
+            config_dict.pop("dsn", None)
+            config_dict.pop("connection_string", None)
+
+        driver_name = config_dict.get("driver_name")
+        if (driver_name in {"sqlite", "adbc_driver_sqlite"} or driver_name is None) and "uri" not in config_dict:
+            db_path = (
+                config_dict.pop("database", None)
+                or config_dict.pop("db", None)
+                or config_dict.pop("path", None)
+                or config_dict.pop("file", None)
+            )
+            if db_path is not None:
+                config_dict["uri"] = db_path
+        elif driver_name in {"duckdb", "adbc_driver_duckdb"} and "path" not in config_dict:
+            duck_path = (
+                config_dict.pop("database", None)
+                or config_dict.pop("db", None)
+                or config_dict.pop("file", None)
+                or config_dict.pop("path", None)
+            )
+            if duck_path is not None:
+                config_dict["path"] = duck_path
+
+        self.connection_config = config_dict
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
