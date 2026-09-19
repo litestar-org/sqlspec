@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp, parse
 
-from sqlspec.builder import AlterTable, CreateTable, sql
+from sqlspec.builder import AlterTable, CreateTable
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -62,6 +62,8 @@ class SchemaTarget:
         Raises:
             ValueError: If no CREATE TABLE definition can be parsed.
         """
+        from sqlspec.builder import sql
+
         create_expression = _find_create_table_expression(create_statement, table_name, dialect)
         target = sql.create_table(table_name, dialect=dialect)
         if schema:
@@ -303,6 +305,8 @@ def _add_column_statements(
     target: SchemaTarget, existing_columns: set[str]
 ) -> "tuple[list[tuple[str, AlterTable]], bool]":
     """Build additive statements and identify likely rename-only drift."""
+    from sqlspec.builder import sql
+
     target_columns = {column.name.casefold(): column for column in target.create_table.columns}
     missing_columns = set(target_columns).difference(existing_columns)
     extra_columns = existing_columns.difference(target_columns)

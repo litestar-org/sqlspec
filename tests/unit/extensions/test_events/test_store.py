@@ -1,5 +1,7 @@
 """Unit tests for BaseEventQueueStore and validation utilities."""
 
+from typing import get_type_hints
+
 import pytest
 
 from sqlspec.exceptions import EventChannelError
@@ -144,3 +146,12 @@ def test_normalize_event_channel_name_empty() -> None:
     """Empty channel names are rejected."""
     with pytest.raises(EventChannelError, match="Invalid events channel name"):
         normalize_event_channel_name("")
+
+
+@pytest.mark.parametrize("method_name", ["reconcile_schema_sync", "reconcile_schema_async"])
+def test_event_schema_return_type_reflection(method_name: str) -> None:
+    """Framework reflection resolves the real schema result before first use."""
+    from sqlspec.extensions.events._store import BaseEventQueueStore
+    from sqlspec.migrations.schema import SchemaEnsureResult
+
+    assert get_type_hints(getattr(BaseEventQueueStore, method_name))["return"] is SchemaEnsureResult

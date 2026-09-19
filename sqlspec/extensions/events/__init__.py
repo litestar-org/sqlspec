@@ -4,6 +4,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from sqlspec.extensions.events import primitives as primitives
     from sqlspec.extensions.events._channel import (
         AsyncEventChannel,
         AsyncEventListener,
@@ -71,7 +72,8 @@ __all__ = (
     "select_limit_prefix",
 )
 
-_EXPORTS: dict[str, tuple[str, str]] = {
+_EXPORTS: dict[str, tuple[str, str | None]] = {
+    "primitives": ("sqlspec.extensions.events.primitives", None),
     "AsyncEventBackendProtocol": ("sqlspec.extensions.events._protocols", "AsyncEventBackendProtocol"),
     "AsyncEventChannel": ("sqlspec.extensions.events._channel", "AsyncEventChannel"),
     "AsyncEventHandler": ("sqlspec.extensions.events._protocols", "AsyncEventHandler"),
@@ -112,10 +114,11 @@ def __getattr__(name: str) -> Any:
     except KeyError:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg) from None
-    value = getattr(import_module(module_name), attribute)
+    module = import_module(module_name)
+    value = module if attribute is None else getattr(module, attribute)
     globals()[name] = value
     return value
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(__all__))
+    return sorted(set(globals()) | set(_EXPORTS))

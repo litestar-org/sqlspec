@@ -1,5 +1,7 @@
 """Unit tests for public table-queue primitives."""
 
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -90,3 +92,16 @@ def test_events_package_exports() -> None:
     assert "lock_clause" in events.__all__
     assert "row_limit_clause" in events.__all__
     assert "select_limit_prefix" in events.__all__
+
+
+def test_primitives_module_attribute_before_function_access() -> None:
+    """The conventional module attribute resolves without an earlier child import."""
+    script = """
+import importlib
+import sqlspec.extensions.events as events
+module = events.primitives
+assert module is importlib.import_module("sqlspec.extensions.events.primitives")
+assert module.lock_clause(select_for_update=True, skip_locked=True) == " FOR UPDATE SKIP LOCKED"
+assert "primitives" in dir(events)
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
