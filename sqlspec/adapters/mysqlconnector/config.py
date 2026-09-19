@@ -2,7 +2,6 @@
 
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
-from urllib.parse import parse_qs, unquote, urlsplit
 from weakref import WeakSet
 
 from typing_extensions import NotRequired
@@ -31,7 +30,7 @@ from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFa
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -197,52 +196,20 @@ class MysqlConnectorDriverFeatures(TypedDict):
     enable_local_infile_bulk_load: NotRequired[bool]
 
 
-def _parse_mysql_dsn(dsn: str) -> dict[str, Any]:
-    """Parse a MySQL connection DSN or URL into keyword arguments."""
-    if "://" in dsn:
-        parsed = urlsplit(dsn)
-        params: dict[str, Any] = {}
-        if parsed.username is not None:
-            params["user"] = unquote(parsed.username)
-        if parsed.password is not None:
-            params["password"] = unquote(parsed.password)
-        if parsed.hostname is not None:
-            params["host"] = parsed.hostname
-        if parsed.port is not None:
-            params["port"] = parsed.port
-        path = parsed.path.lstrip("/")
-        if path:
-            params["database"] = unquote(path)
-        if parsed.query:
-            query = parse_qs(parsed.query)
-            for k, v in query.items():
-                if v:
-                    val = v[-1]
-                    if val.lower() == "true":
-                        params[k] = True
-                    elif val.lower() == "false":
-                        params[k] = False
-                    elif val.isdigit():
-                        params[k] = int(val)
-                    else:
-                        params[k] = val
-        return params
-    key_value_params: dict[str, Any] = {}
-    for item in dsn.split(";"):
-        if "=" in item:
-            param_key, param_val = item.split("=", 1)
-            key_value_params[param_key.strip()] = param_val.strip()
-    return key_value_params
-
-
 def build_connection_config(
     connection_config: "MysqlConnectorPoolParams | MysqlConnectorAsyncConnectionParams | Mapping[str, Any] | None",
 ) -> dict[str, Any]:
     """Normalize mysqlconnector connection configuration mapping, parsing any DSN and applying overrides."""
     config = normalize_connection_config(connection_config)
-    dsn = config.pop("dsn", None)
+    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if user_alias is not None and "user" not in config:
+        config["user"] = user_alias
+    db_alias = config.pop("db", None)
+    if db_alias is not None and "database" not in config:
+        config["database"] = db_alias
     if dsn is not None and isinstance(dsn, str):
-        dsn_params = _parse_mysql_dsn(dsn)
+        dsn_params = parse_mysql_dsn(dsn)
         for key, value in dsn_params.items():
             config.setdefault(key, value)
     config.setdefault("host", "localhost")

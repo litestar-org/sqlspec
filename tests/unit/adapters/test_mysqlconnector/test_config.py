@@ -383,3 +383,13 @@ def test_sync_config_with_dsn_does_not_forward_dsn_to_connect(monkeypatch: pytes
     assert calls[0]["host"] == "dbhost"
     assert calls[0]["database"] == "production"
     assert calls[0]["raise_on_warnings"] is True
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """Username and db aliases should map to user and database."""
+    cfg = build_connection_config({"username": "alias_user", "db": "alias_db"})
+    assert "username" not in cfg
+    assert "db" not in cfg
+    assert cfg["user"] == "alias_user"
+    assert cfg["database"] == "alias_db"
+
