@@ -5,6 +5,7 @@ from sqlspec.adapters.spanner.config import (
     SpannerDriverFeatures,
     SpannerPoolParams,
     SpannerSyncConfig,
+    build_connection_config,
 )
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.adapters.spanner.type_converter import (
@@ -23,6 +24,7 @@ __all__ = (
     "SpannerPoolParams",
     "SpannerSyncConfig",
     "SpannerSyncDriver",
+    "build_connection_config",
     "bytes_to_spanner",
     "coerce_params_for_spanner",
     "infer_spanner_param_types",

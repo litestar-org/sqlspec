@@ -7,7 +7,12 @@ from typing import Any, cast
 from google.cloud.bigquery import LoadJobConfig, QueryJobConfig
 from pytest import MonkeyPatch
 
-from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams, BigQueryDriverFeatures
+from sqlspec.adapters.bigquery.config import (
+    BigQueryConfig,
+    BigQueryConnectionParams,
+    BigQueryDriverFeatures,
+    build_connection_config,
+)
 from sqlspec.adapters.bigquery.core import apply_driver_features, build_statement_config
 
 
@@ -146,3 +151,45 @@ def test_dataset_id_is_qualified_with_the_configured_project() -> None:
 
     assert default_dataset.project == "acme"
     assert default_dataset.dataset_id == "analytics"
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """Project and dataset aliases should map to canonical keys."""
+    cfg = build_connection_config({"project_id": "p-123", "dataset": "d-456"})
+    assert "project_id" not in cfg
+    assert "dataset" not in cfg
+    assert cfg["project"] == "p-123"
+    assert cfg["dataset_id"] == "d-456"
+
+
+def test_build_connection_config_canonical_keys_override_aliases() -> None:
+    """Canonical parameter names should take precedence over aliases."""
+    cfg = build_connection_config({
+        "project": "canonical-p",
+        "project_id": "alias-p",
+        "dataset_id": "canonical-d",
+        "dataset": "alias-d",
+    })
+    assert cfg["project"] == "canonical-p"
+    assert cfg["dataset_id"] == "canonical-d"
+
+
+def test_build_connection_config_database_and_db_aliases() -> None:
+    """Database and db aliases should map to dataset_id."""
+    cfg_db = build_connection_config({"project": "p", "database": "db-1"})
+    assert cfg_db["dataset_id"] == "db-1"
+    assert "database" not in cfg_db
+
+    cfg_short_db = build_connection_config({"project": "p", "db": "db-2"})
+    assert cfg_short_db["dataset_id"] == "db-2"
+    assert "db" not in cfg_short_db
+
+
+def test_bigquery_config_uses_project_id_and_dataset_alias() -> None:
+    """BigQueryConfig should accept project_id and dataset aliases and configure jobs."""
+    config = BigQueryConfig(connection_config={"project_id": "my-proj", "dataset": "my-dataset"})
+    assert config.connection_config["project"] == "my-proj"
+    assert config.connection_config["dataset_id"] == "my-dataset"
+    default_dataset = config.connection_config["default_query_job_config"].default_dataset
+    assert default_dataset.project == "my-proj"
+    assert default_dataset.dataset_id == "my-dataset"

@@ -9,6 +9,7 @@ from sqlspec.adapters.spanner.config import (
     SpannerDriverFeatures,
     SpannerPoolParams,
     SpannerSyncConfig,
+    build_connection_config,
 )
 from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.driver import SyncDriverAdapterBase
@@ -666,3 +667,46 @@ def test_create_connection_returns_a_releasable_checkout() -> None:
 
     assert config.create_connection() is sentinel
     assert get_database_call_count == 2
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """Project, instance, and database aliases should map to canonical keys."""
+    cfg = build_connection_config({"project_id": "proj-1", "instance": "inst-1", "database": "db-1"})
+    assert "project_id" not in cfg
+    assert "instance" not in cfg
+    assert "database" not in cfg
+    assert cfg["project"] == "proj-1"
+    assert cfg["instance_id"] == "inst-1"
+    assert cfg["database_id"] == "db-1"
+
+
+def test_build_connection_config_db_alias() -> None:
+    """Short db alias should map to database_id."""
+    cfg = build_connection_config({"project": "p", "instance_id": "i", "db": "my-db"})
+    assert "db" not in cfg
+    assert cfg["database_id"] == "my-db"
+
+
+def test_build_connection_config_canonical_keys_override_aliases() -> None:
+    """Canonical parameter names should take precedence over aliases."""
+    cfg = build_connection_config({
+        "project": "canonical-p",
+        "project_id": "alias-p",
+        "instance_id": "canonical-i",
+        "instance": "alias-i",
+        "database_id": "canonical-d",
+        "database": "alias-d",
+    })
+    assert cfg["project"] == "canonical-p"
+    assert cfg["instance_id"] == "canonical-i"
+    assert cfg["database_id"] == "canonical-d"
+
+
+def test_spanner_config_accepts_aliases() -> None:
+    """SpannerSyncConfig should accept aliases and initialize the pool properly."""
+    config = SpannerSyncConfig(connection_config={"project_id": "p", "instance": "inst", "database": "db"})
+    assert config.connection_config["project"] == "p"
+    assert config.connection_config["instance_id"] == "inst"
+    assert config.connection_config["database_id"] == "db"
+    pool = config.provide_pool()
+    assert pool is not None
