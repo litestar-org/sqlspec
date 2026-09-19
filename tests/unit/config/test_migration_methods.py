@@ -16,8 +16,13 @@ Tests cover all 4 base config classes:
 - AsyncDatabaseConfig (async, pooled)
 """
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Event
 from unittest.mock import patch
+
+import pytest
 
 import sqlspec.config as config_module
 import sqlspec.typing as typing_module
@@ -34,7 +39,28 @@ from sqlspec.config import (
     PoolT,
     SyncDatabaseConfig,
 )
+from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+
+
+@pytest.mark.parametrize("key", ["script_location", "project_root"])
+def test_invalid_builtin_migration_paths_remain_eager(key: str) -> None:
+    """Deferring helpers must not defer built-in path errors."""
+    with pytest.raises(TypeError):
+        SqliteConfig(migration_config={key: None})
+
+
+def test_invalid_migration_template_remains_eager() -> None:
+    from sqlspec.migrations.templates import TemplateValidationError
+
+    with pytest.raises(TemplateValidationError, match="string or list"):
+        SqliteConfig(migration_config={"templates": {"sql": {"metadata": 42}}})
+
+
+def test_migration_format_fallback_is_preserved() -> None:
+    config = SqliteConfig(migration_config={"default_format": "unknown"})
+    assert config.get_migration_commands()._template_settings.default_format == "sql"
 
 
 def test_config_reexports_shared_type_variables() -> None:
@@ -540,3 +566,228 @@ async def test_fix_migrations_default_parameters_async(tmp_path: Path) -> None:
         await config.fix_migrations()
 
         mock_fix.assert_called_once_with(False, True, False)
+
+
+def test_migration_helpers_are_independent_and_retryable(tmp_path: Path) -> None:
+    attempts: list[str] = []
+
+    class Tracker(SyncMigrationTracker):
+        def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+            attempts.append(version_table_name)
+            if len(attempts) == 1:
+                raise RuntimeError("tracker temporarily unavailable")
+            super().__init__(version_table_name)
+
+    class Config(SqliteConfig):
+        migration_tracker_type = Tracker
+
+    config = Config(migration_config={"script_location": str(tmp_path)})
+    assert attempts == []
+    loader = config.get_migration_loader()
+    with config.provide_session() as session:
+        assert session.select_value("SELECT 1") == 1
+    assert attempts == []
+    with pytest.raises(RuntimeError, match="temporarily unavailable"):
+        config.get_migration_commands()
+    commands = config.get_migration_commands()
+    assert config.get_migration_commands() is commands
+    assert config.get_migration_loader() is loader
+    assert isinstance(commands.tracker, Tracker)
+    assert attempts == ["ddl_migrations", "ddl_migrations"]
+    config.close_pool()
+
+
+@pytest.mark.parametrize("kind", ["sync", "async", "no_pool_sync", "no_pool_async"])
+def test_migration_tracker_initializes_once_per_config_family(kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class SyncTracker(SyncMigrationTracker):
+        def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+            calls.append(version_table_name)
+            super().__init__(version_table_name)
+
+    class AsyncTracker(AsyncMigrationTracker):
+        def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+            calls.append(version_table_name)
+            super().__init__(version_table_name)
+
+    if kind == "no_pool_sync":
+        config_type = pytest.importorskip("sqlspec.adapters.adbc").AdbcConfig
+    elif kind == "no_pool_async":
+        config_type = pytest.importorskip("sqlspec.adapters.mysqlconnector").MysqlConnectorAsyncConfig
+    else:
+        config_type = SqliteConfig if kind == "sync" else AiosqliteConfig
+    tracker_type = AsyncTracker if kind in {"async", "no_pool_async"} else SyncTracker
+    monkeypatch.setattr(config_type, "migration_tracker_type", tracker_type)
+    config = config_type()
+    assert calls == []
+    config.get_migration_loader()
+    assert calls == []
+    commands = config.get_migration_commands()
+    assert config.get_migration_commands() is commands
+    assert type(commands.tracker) is tracker_type
+    assert calls == ["ddl_migrations"]
+
+
+@pytest.mark.parametrize("helper", ["commands", "loader"])
+def test_concurrent_first_migration_access_shares_one_helper(
+    helper: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[object] = []
+    config = SqliteConfig(migration_config={"script_location": str(tmp_path)})
+    barrier = Barrier(3)
+    get_helper: Callable[[], object]
+    if helper == "commands":
+
+        class Tracker(SyncMigrationTracker):
+            def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+                calls.append(self)
+                super().__init__(version_table_name)
+
+        monkeypatch.setattr(config, "migration_tracker_type", Tracker)
+        get_helper = config.get_migration_commands
+    else:
+        original = SQLFileLoader.load_sql
+
+        def load_sql(self: SQLFileLoader, *paths: str | Path) -> None:
+            calls.append(self)
+            original(self, *paths)
+
+        monkeypatch.setattr(SQLFileLoader, "load_sql", load_sql)
+        (tmp_path / "query.sql").write_text("-- name: value\nSELECT 7;\n")
+        get_helper = config.get_migration_loader
+
+    def get() -> object:
+        barrier.wait(timeout=5)
+        return get_helper()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(get) for _ in range(2)]
+        barrier.wait(timeout=5)
+        results = [future.result(timeout=5) for future in futures]
+    assert results[0] is results[1]
+    assert len(calls) == 1
+
+
+def test_migration_loader_failure_retries_without_publishing_partial_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "query.sql").write_text("-- name: value\nSELECT 7;\n")
+    attempted: list[SQLFileLoader] = []
+    original = SQLFileLoader.load_sql
+
+    def load_sql(self: SQLFileLoader, *paths: str | Path) -> None:
+        attempted.append(self)
+        original(self, *paths)
+        if len(attempted) == 1:
+            raise RuntimeError("file temporarily unavailable")
+
+    monkeypatch.setattr(SQLFileLoader, "load_sql", load_sql)
+    config = SqliteConfig(migration_config={"script_location": str(tmp_path)})
+    with pytest.raises(RuntimeError, match="temporarily unavailable"):
+        config.get_migration_loader()
+    loader = config.get_migration_loader()
+    assert len(attempted) == 2
+    assert loader is attempted[1]
+    assert loader is not attempted[0]
+    with config.provide_session() as session:
+        assert session.select_value(loader.get_sql("value")) == 7
+    config.close_pool()
+
+
+def test_empty_migration_loader_notices_new_directory(tmp_path: Path) -> None:
+    directory = tmp_path / "later"
+    config = SqliteConfig(migration_config={"script_location": str(directory)})
+    loader = config.get_migration_loader()
+    assert loader.list_queries() == []
+    directory.mkdir()
+    (directory / "query.sql").write_text("-- name: value\nSELECT 9;\n")
+    assert config.get_migration_loader() is loader
+    with config.provide_session() as session:
+        assert session.select_value(loader.get_sql("value")) == 9
+    config.close_pool()
+
+
+def test_supported_migration_mutations_refresh_only_affected_helpers(tmp_path: Path) -> None:
+    extra = tmp_path / "extra.sql"
+    extra.write_text("-- name: value\nSELECT 11;\n")
+    extensions = tmp_path / "extension"
+    extensions.mkdir()
+    config = SqliteConfig(migration_config={"script_location": str(tmp_path / "absent")})
+    config.load_migration_sql_files(extra)
+    loader = config.get_migration_loader()
+    commands = config.get_migration_commands()
+    config.add_extension_migrations("example", extensions)
+    updated = config.get_migration_commands()
+    assert updated is not commands
+    assert updated.runner.extension_migrations["example"] == extensions
+    assert config.get_migration_loader() is loader
+    config.add_extension_migrations("example", extensions)
+    assert config.get_migration_commands() is updated
+    assert config.remove_extension_migrations("example")
+    assert config.get_migration_commands() is not updated
+    assert config.get_migration_loader() is loader
+    with config.provide_session() as session:
+        assert session.select_value(loader.get_sql("value")) == 11
+    config.set_migration_config({"version_table_name": "new_versions", "script_location": str(tmp_path / "absent")})
+    assert config.get_migration_loader() is not loader
+    assert config.get_migration_commands().tracker.version_table_name == "new_versions"
+    assert config.get_migration_loader().list_queries() == []
+    config.close_pool()
+
+
+@pytest.mark.parametrize("helper", ["loader", "commands"])
+def test_migration_assignment_waits_for_helper_publication(
+    helper: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = tmp_path / "old"
+    new = tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    (old / "query.sql").write_text("-- name: value\nSELECT 1;\n")
+    (new / "query.sql").write_text("-- name: value\nSELECT 2;\n")
+    config = SqliteConfig(migration_config={"script_location": str(old)})
+    loading = Event()
+    release = Event()
+    assigning = Event()
+    original = SQLFileLoader.load_sql
+
+    def load_sql(self: SQLFileLoader, *paths: str | Path) -> None:
+        if paths == (old,):
+            loading.set()
+            assert release.wait(timeout=5)
+        original(self, *paths)
+
+    def assign() -> None:
+        assigning.set()
+        config.set_migration_config({"script_location": str(new), "version_table_name": "new_versions"})
+
+    get_helper: Callable[[], object]
+    if helper == "loader":
+        monkeypatch.setattr(SQLFileLoader, "load_sql", load_sql)
+        get_helper = config.get_migration_loader
+    else:
+
+        class Tracker(SyncMigrationTracker):
+            def __init__(self, version_table_name: str = "ddl_migrations") -> None:
+                if version_table_name == "ddl_migrations":
+                    loading.set()
+                    assert release.wait(timeout=5)
+                super().__init__(version_table_name)
+
+        monkeypatch.setattr(config, "migration_tracker_type", Tracker)
+        get_helper = config.get_migration_commands
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        initial = executor.submit(get_helper)
+        assert loading.wait(timeout=5)
+        mutation = executor.submit(assign)
+        assert assigning.wait(timeout=5)
+        release.set()
+        old_helper = initial.result(timeout=5)
+        mutation.result(timeout=5)
+    assert get_helper() is not old_helper
+    new_loader = config.get_migration_loader()
+    assert config.get_migration_commands().tracker.version_table_name == "new_versions"
+    with config.provide_session() as session:
+        assert session.select_value(new_loader.get_sql("value")) == 2
+    config.close_pool()

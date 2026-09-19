@@ -31,7 +31,6 @@ from sqlspec.core.config_runtime import (
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
-from sqlspec.migrations import create_migration_commands
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import ConnectionT, PoolT
@@ -773,6 +772,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "_migration_commands",
         "_migration_config",
         "_migration_loader",
+        "_migration_lock",
         "_observability_runtime",
         "_storage_capabilities",
         "bind_key",
@@ -784,8 +784,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         "statement_config",
     )
 
-    _migration_loader: "SQLFileLoader"
-    _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]"
+    _migration_loader: "SQLFileLoader | None"
+    _migration_commands: "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any] | None"
+    _migration_lock: "threading.RLock"
     _migration_config: "dict[str, Any] | MigrationConfig"
     driver_type: "ClassVar[type[Any]]"
     connection_type: "ClassVar[type[Any]]"
@@ -847,11 +848,19 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Store migration configuration and refresh derived migration helpers."""
         resolved = dict(cast("dict[str, Any]", value) or {})
         validate_migration_config_keys(resolved)
-        object.__setattr__(self, "_migration_config", resolved)
-        if self._has_initialized_attribute("extension_config"):
-            self._ensure_extension_migrations()
-        if self._migration_components_ready():
-            self._initialize_migration_components()
+        Path(resolved.get("script_location", "migrations"))
+        if "project_root" in resolved:
+            Path(resolved["project_root"])
+        if any(key in resolved for key in ("templates", "title", "default_format")):
+            from sqlspec.migrations.templates import build_template_settings
+
+            build_template_settings(resolved)
+        with self._migration_lock:
+            object.__setattr__(self, "_migration_config", resolved)
+            self._migration_loader = None
+            self._migration_commands = None
+            if self._has_initialized_attribute("extension_config"):
+                self._ensure_extension_migrations()
 
     def set_migration_config(self, config: "dict[str, Any] | MigrationConfig") -> None:
         """Attach migration configuration after initial config creation.
@@ -977,6 +986,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
     def get_migration_commands(self) -> "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]":
         """Get migration commands for this configuration.
 
+        The first call constructs the tracker and discovers extension migrations.
+        Call this during application startup to surface their initialization errors
+        eagerly. Subsequent calls reuse the helper until configuration changes.
+
         Returns:
             MigrationCommands instance configured for this database.
         """
@@ -988,9 +1001,10 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Register migrations shipped by a package outside the ``sqlspec.extensions`` namespace.
 
         Records the extension under ``extension_config``, opts it into
-        ``migration_config["include_extensions"]``, and rebuilds the cached migration
-        commands so the extension is discovered. Migrations are versioned under the
-        ``ext_{name}_`` prefix, so ``name`` must stay stable once migrations are applied.
+        ``migration_config["include_extensions"]``, and invalidates cached migration
+        commands so the extension is discovered on their next access. Migrations
+        are versioned under the ``ext_{name}_`` prefix, so ``name`` must stay stable
+        once migrations are applied.
 
         Args:
             name: Extension name, used as the ``ext_{name}_`` version prefix.
@@ -999,30 +1013,33 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             settings: Extension settings passed to its migrations. Merged into any
                 settings already registered under ``name``.
         """
-        extension_config = cast("dict[str, Any]", self.extension_config)
-        existing = extension_config.get(name)
-        merged: dict[str, Any] = dict(existing) if isinstance(existing, Mapping) else {}
-        if settings:
-            merged.update(settings)
-        merged["migrations_path"] = migrations_path
-        extension_config[name] = merged
+        with self._migration_lock:
+            extension_config = cast("dict[str, Any]", self.extension_config)
+            existing = extension_config.get(name)
+            merged: dict[str, Any] = dict(existing) if isinstance(existing, Mapping) else {}
+            if settings:
+                merged.update(settings)
+            merged["migrations_path"] = migrations_path
+            extension_config[name] = merged
 
-        migration_config = cast("dict[str, Any]", self.migration_config)
-        include_extensions = migration_config.get("include_extensions")
-        include_list = list(include_extensions) if include_extensions else []
-        if name not in include_list:
-            include_list.append(name)
-        migration_config["include_extensions"] = include_list
+            migration_config = cast("dict[str, Any]", self.migration_config)
+            include_extensions = migration_config.get("include_extensions")
+            include_list = list(include_extensions) if include_extensions else []
+            changed = merged != existing or name not in include_list
+            if name not in include_list:
+                include_list.append(name)
+            migration_config["include_extensions"] = include_list
 
-        self._rebuild_migration_commands()
+            if changed:
+                self._migration_commands = None
 
     def remove_extension_migrations(self, name: str) -> bool:
         """Unregister migrations previously registered for an extension.
 
         Removes the extension entry from ``extension_config`` and from
         ``migration_config["include_extensions"]``. If anything
-        was removed, cached migration commands are rebuilt so the extension is no
-        longer discovered.
+        was removed, cached migration commands are invalidated so the extension is no
+        longer discovered on their next access.
 
         Args:
             name: Extension name to unregister.
@@ -1030,23 +1047,24 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         Returns:
             True if the extension was found and removed, False otherwise.
         """
-        removed = False
-        extension_config = cast("dict[str, Any]", self.extension_config)
-        if isinstance(extension_config, dict) and name in extension_config:
-            del extension_config[name]
-            removed = True
+        with self._migration_lock:
+            removed = False
+            extension_config = cast("dict[str, Any]", self.extension_config)
+            if isinstance(extension_config, dict) and name in extension_config:
+                del extension_config[name]
+                removed = True
 
-        migration_config = cast("dict[str, Any]", self.migration_config)
-        include_extensions = migration_config.get("include_extensions")
-        if include_extensions is not None and name in include_extensions:
-            migration_config["include_extensions"] = [ext for ext in include_extensions if ext != name]
-            removed = True
+            migration_config = cast("dict[str, Any]", self.migration_config)
+            include_extensions = migration_config.get("include_extensions")
+            if include_extensions is not None and name in include_extensions:
+                migration_config["include_extensions"] = [ext for ext in include_extensions if ext != name]
+                removed = True
 
-        if removed:
-            self._rebuild_migration_commands()
-            return True
+            if removed:
+                self._migration_commands = None
+                return True
 
-        return False
+            return False
 
     @abstractmethod
     def migrate_up(
@@ -1161,12 +1179,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         except AttributeError:
             return False
         return True
-
-    def _migration_components_ready(self) -> bool:
-        """Return whether migration helpers have already been initialized."""
-        return self._has_initialized_attribute("_migration_loader") and self._has_initialized_attribute(
-            "_migration_commands"
-        )
 
     def _ensure_extension_migrations(self) -> None:
         """Auto-include extension migrations when extension_config has them configured.
@@ -1350,31 +1362,25 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
             return False
         return True
 
-    def _initialize_migration_components(self) -> None:
-        """Initialize migration loader and migration command helpers."""
-        runtime = self.get_observability_runtime()
-        self._migration_loader = SQLFileLoader(runtime=runtime)
-        self._rebuild_migration_commands()
-
-    def _rebuild_migration_commands(self) -> None:
-        """Rebuild the cached migration commands against current configuration."""
-        self._migration_commands = create_migration_commands(self)  # pyright: ignore
-
     def _ensure_migration_loader(self) -> "SQLFileLoader":
         """Get the migration SQL loader and auto-load files if needed.
 
         Returns:
             SQLFileLoader instance for migration files.
         """
-        migration_config = self.migration_config or {}
-        script_location = migration_config.get("script_location", "migrations")
-
-        migration_path = Path(script_location)
-        if migration_path.exists() and not self._migration_loader.list_files():
-            self._migration_loader.load_sql(migration_path)
-            logger.debug("Auto-loaded migration SQL files from %s", migration_path)
-
-        return self._migration_loader
+        loader = self._migration_loader
+        if loader is not None and loader.list_files():
+            return loader
+        with self._migration_lock:
+            loader = self._migration_loader
+            if loader is None:
+                loader = SQLFileLoader(runtime=self.get_observability_runtime())
+            migration_path = Path(self.migration_config.get("script_location", "migrations"))
+            if migration_path.exists() and not loader.list_files():
+                loader.load_sql(migration_path)
+                logger.debug("Auto-loaded migration SQL files from %s", migration_path)
+            self._migration_loader = loader
+            return loader
 
     def _ensure_migration_commands(self) -> "SyncMigrationCommands[Any] | AsyncMigrationCommands[Any]":
         """Get the migration commands instance.
@@ -1382,7 +1388,17 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         Returns:
             MigrationCommands instance for this config.
         """
-        return self._migration_commands
+        commands = self._migration_commands
+        if commands is not None:
+            return commands
+        with self._migration_lock:
+            commands = self._migration_commands
+            if commands is None:
+                from sqlspec.migrations.commands import create_migration_commands
+
+                commands = create_migration_commands(self)  # pyright: ignore
+                self._migration_commands = commands
+            return commands
 
     def _reject_unexpected_kwargs(self, kwargs: "dict[str, Any]") -> None:
         """Raise ``TypeError`` when construction receives unrecognized keyword arguments."""
@@ -1407,10 +1423,13 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Populate the configuration state shared by every base config class.
 
         Assigns identity and connection attributes, initializes observability and
-        migration components, resolves the statement configuration against
+        migration helper caches, resolves the statement configuration against
         ``default_dialect``, seeds runtime driver features from storage
         capabilities, and attaches lifecycle and observability extensions.
         """
+        self._migration_lock = threading.RLock()
+        self._migration_loader = None
+        self._migration_commands = None
         self.bind_key = bind_key
         self.connection_instance = connection_instance
         self.connection_config = connection_config or {}
@@ -1418,7 +1437,6 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self.migration_config = migration_config or {}
         self._init_observability(observability_config)
         self.statement_config = statement_config or build_default_statement_config(default_dialect)
-        self._initialize_migration_components()
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
         self._attach_lifecycle_hooks()

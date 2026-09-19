@@ -175,13 +175,14 @@ def test_missing_migrations_path_warns_and_registers_nothing(tmp_path: Path, cap
 
 
 def test_invalid_migrations_path_raises(tmp_path: Path) -> None:
-    """A migrations_path of the wrong type is a configuration error, not a warning."""
+    """Invalid extension paths raise when migration discovery is first requested."""
+    config = SqliteConfig(
+        connection_config={"database": ":memory:"},
+        extension_config={"vendor_ext": {"migrations_path": 42}},
+        migration_config={"script_location": str(tmp_path / "migrations")},
+    )
     with pytest.raises(MigrationError, match="invalid migrations_path of type int"):
-        SqliteConfig(
-            connection_config={"database": ":memory:"},
-            extension_config={"vendor_ext": {"migrations_path": 42}},
-            migration_config={"script_location": str(tmp_path / "migrations")},
-        )
+        config.get_migration_commands()
 
 
 def test_unresolvable_extension_warning_names_module_and_consequence(
@@ -297,31 +298,19 @@ def test_remove_extension_migrations_stops_discovery(tmp_path: Path, third_party
     assert "litestar_queues" not in config.extension_config
 
 
-def test_remove_unknown_extension_is_noop(
-    tmp_path: Path, third_party_migrations: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Removing an unknown extension returns False without rebuilding commands."""
+def test_remove_unknown_extension_is_noop(tmp_path: Path, third_party_migrations: Path) -> None:
+    """Removing an unknown extension preserves the initialized command helper."""
     config = SqliteConfig(
         connection_config={"database": ":memory:"}, migration_config={"script_location": str(tmp_path / "migrations")}
     )
-    rebuild_called = False
-
-    def fail_rebuild() -> None:
-        nonlocal rebuild_called
-        rebuild_called = True
-
-    monkeypatch.setattr(config, "_rebuild_migration_commands", fail_rebuild)
-
+    commands = config.get_migration_commands()
     assert config.remove_extension_migrations("unknown_ext") is False
-    assert not rebuild_called
-
-    monkeypatch.undo()
+    assert config.get_migration_commands() is commands
     config.add_extension_migrations("litestar_queues", third_party_migrations)
     assert config.remove_extension_migrations("litestar_queues") is True
-
-    monkeypatch.setattr(config, "_rebuild_migration_commands", fail_rebuild)
+    updated = config.get_migration_commands()
     assert config.remove_extension_migrations("litestar_queues") is False
-    assert not rebuild_called
+    assert config.get_migration_commands() is updated
 
 
 def test_remove_extension_preserves_caller_include_list(tmp_path: Path) -> None:
