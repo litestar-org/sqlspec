@@ -14,6 +14,12 @@ Unreleased
 
 **Changed:**
 
+* Importing SQLSpec no longer loads unused query builders or migration commands.
+  Public import paths stay the same.
+* Configs build migration commands and custom trackers on first use. Built-in
+  checks still run when you create a config. Call
+  ``config.get_migration_commands()`` at startup to check custom tracker setup
+  and find extension migrations early; see :ref:`migration-startup-checks`.
 * Use the types in each adapter's Litestar and Events package to tune its tables.
   Shared settings stay in ``sqlspec.config``. The ``extension_config`` layout stays
   the same. ADK vector, BM25, and ScaNN keys move to the asyncpg and psycopg ADK types.

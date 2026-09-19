@@ -75,6 +75,11 @@ Use ``manage_schema`` and
 ``create_schema`` for automatic table checks. Run versioned migrations through
 the migration commands and ``migration_config``.
 
+Configs can run queries before they build migration helpers. To check custom
+tracker setup and find extension migrations at startup, call
+``config.get_migration_commands()``. See :ref:`migration-startup-checks` for a
+full example and the checks that still run when you create a config.
+
 Multiple Databases
 ------------------
 
