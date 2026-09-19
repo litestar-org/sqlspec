@@ -860,6 +860,80 @@ for method in (BaseEventQueueStore.reconcile_schema_sync, BaseEventQueueStore.re
     return _run_startup_check(f"public_import_order_{order}", script, require_compiled=require_compiled)
 
 
+def _check_concurrent_public_exports(mode: str, *, require_compiled: bool) -> dict[str, Any]:
+    """Resolve mixed facades and direct modules concurrently in a fresh process."""
+    script = """
+import importlib
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+exports = [
+    ("sqlspec", "SQLSpec", "sqlspec.base"),
+    ("sqlspec", "SQL", "sqlspec.core.statement"),
+    ("sqlspec", "sql", "sqlspec.builder._factory"),
+    ("sqlspec", "SyncDatabaseConfig", "sqlspec.config"),
+    ("sqlspec", "EventMessage", "sqlspec.extensions.events._models"),
+    ("sqlspec", "Select", "sqlspec.builder._select"),
+    ("sqlspec", "StatementConfig", "sqlspec.core.statement"),
+    ("sqlspec", "SQLFileLoader", "sqlspec.loader"),
+    ("sqlspec.builder", "sql", "sqlspec.builder._factory"),
+    ("sqlspec.builder", "QueryBuilder", "sqlspec.builder._base"),
+    ("sqlspec.builder", "Select", "sqlspec.builder._select"),
+    ("sqlspec.migrations", "SyncMigrationTracker", "sqlspec.migrations.tracker"),
+    ("sqlspec.migrations", "SyncMigrationCommands", "sqlspec.migrations.commands"),
+    ("sqlspec.migrations", "SchemaTarget", "sqlspec.migrations.schema"),
+    ("sqlspec.extensions.events", "EventMessage", "sqlspec.extensions.events._models"),
+    ("sqlspec.extensions.events", "EventRuntimeHints", "sqlspec.extensions.events._hints"),
+    ("sqlspec.extensions.events", "BaseEventQueueStore", "sqlspec.extensions.events._store"),
+]
+"""
+    if mode == "attributes":
+        script += """
+packages = {package: importlib.import_module(package) for package, _, _ in exports}
+barrier = Barrier(len(exports))
+
+def resolve(item):
+    package, name, _ = item
+    barrier.wait()
+    return getattr(packages[package], name)
+
+with ThreadPoolExecutor(max_workers=len(exports)) as pool:
+    values = list(pool.map(resolve, exports))
+"""
+    else:
+        script += """
+# Concurrent child imports are supported after their parent package initializes.
+# Racing the initial parent import itself already fails in baseline native wheels.
+importlib.import_module("sqlspec")
+barrier = Barrier(len(exports))
+
+def resolve(index):
+    package, name, defining_module = exports[index]
+    barrier.wait()
+    module = importlib.import_module(defining_module if index % 2 else package)
+    return getattr(module, name)
+
+with ThreadPoolExecutor(max_workers=len(exports)) as pool:
+    values = list(pool.map(resolve, range(len(exports))))
+"""
+    script += """
+for (package, name, defining_module), value in zip(exports, values):
+    assert value is getattr(importlib.import_module(package), name), (package, name)
+    assert value is getattr(importlib.import_module(defining_module), name), (defining_module, name)
+
+from sqlspec import sql
+from sqlspec.adapters.sqlite import SqliteConfig
+
+config = SqliteConfig(connection_config={"database": ":memory:"})
+try:
+    with config.provide_session() as session:
+        assert session.select_value(sql.select("1 AS value")) == 1
+finally:
+    config.close_pool()
+"""
+    return _run_startup_check(f"concurrent_public_exports_{mode}", script, require_compiled=require_compiled)
+
+
 def _check_migration_first_use(*, require_compiled: bool) -> dict[str, Any]:
     """Exercise supported subclasses and real migrations through helper invalidation."""
     script = """
@@ -988,6 +1062,8 @@ def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str,
             _check_public_import_order(order, require_compiled=require_compiled)
             for order in ("facade_first", "definitions_first", "builder_first", "migration_first")
         ],
+        _check_concurrent_public_exports("attributes", require_compiled=require_compiled),
+        _check_concurrent_public_exports("direct_imports", require_compiled=require_compiled),
         _check_migration_first_use(require_compiled=require_compiled),
         _check_litestar_openapi(require_compiled=require_compiled),
         _check_sqlspec_construction(),
