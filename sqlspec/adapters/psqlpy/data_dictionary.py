@@ -68,106 +68,6 @@ _POSTGRES_SYSTEM_METADATA_QUERIES = {
 }
 
 
-def _postgres_metadata_capability(domain: str) -> MetadataCapability:
-    if domain == "system":
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.UNSUPPORTED,
-            fidelity=MetadataFidelity.UNSUPPORTED,
-            source=MetadataSource.SYSTEM_VIEW,
-            risks=(MetadataRisk.EXPENSIVE, MetadataRisk.PRIVILEGED),
-            warnings=("System metadata is opt-in and disabled by default.",),
-        )
-    if domain in _POSTGRES_SUPPORTED_DOMAINS:
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.NATIVE,
-            source=MetadataSource.CATALOG,
-        )
-    return MetadataCapability.unsupported(domain)
-
-
-def _postgres_metadata_profile(adapter: str, domains: Sequence[str] | None) -> MetadataCapabilityProfile:
-    requested_domains = _POSTGRES_METADATA_DOMAINS if domains is None else tuple(domains)
-    return MetadataCapabilityProfile(
-        "postgres",
-        adapter=adapter,
-        capabilities=tuple(_postgres_metadata_capability(domain) for domain in requested_domains),
-    )
-
-
-def _metadata_result(
-    domain: str, capability: MetadataCapability, rows: list[Any] | tuple[Any, ...] = ()
-) -> MetadataResult:
-    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
-
-
-def _row_value(row: object, key: str) -> object | None:
-    if isinstance(row, Mapping):
-        return row.get(key)
-    return getattr(row, key, None)
-
-
-def _rows_as_mappings(rows: list[Any] | tuple[Any, ...]) -> tuple[Mapping[str, object], ...]:
-    return tuple(cast("Mapping[str, object]", row) for row in rows if isinstance(row, Mapping))
-
-
-def _ddl_result_from_rows(
-    *,
-    dialect: str,
-    object_name: str,
-    object_type: str,
-    schema: str | None,
-    rows: list[Any] | tuple[Any, ...],
-    warnings: tuple[str, ...] = (),
-) -> DDLResult:
-    row = rows[0] if rows else None
-    resolved_schema = _row_value(row, "schema_name") if row is not None else schema
-    ddl = _row_value(row, "ddl") if row is not None else None
-    fidelity = _row_value(row, "fidelity") if row is not None else MetadataFidelity.UNSUPPORTED
-    row_warning = _row_value(row, "warning") if row is not None else None
-    result_warnings = warnings + ((str(row_warning),) if row_warning else ())
-    identity = ObjectIdentity(
-        name=object_name,
-        object_type=object_type,
-        schema=str(resolved_schema) if resolved_schema is not None else None,
-        dialect=dialect,
-        source=MetadataSource.CATALOG,
-    )
-    if ddl is None:
-        return DDLResult.unsupported(identity, source=MetadataSource.CATALOG, warnings=result_warnings)
-    return DDLResult(
-        identity=identity,
-        status=MetadataSupport.SUPPORTED,
-        fidelity=str(fidelity),
-        source=MetadataSource.CATALOG,
-        ddl=str(ddl),
-        warnings=result_warnings,
-    )
-
-
-def _postgres_system_metadata_capability(domain: str) -> SystemMetadataCapability:
-    if domain not in _POSTGRES_SYSTEM_METADATA_QUERIES:
-        return unsupported_system_metadata_capability(domain)
-    return SystemMetadataCapability(
-        domain,
-        MetadataSupport.SUPPORTED,
-        fidelity=MetadataFidelity.NATIVE,
-        source=MetadataSource.SYSTEM_VIEW,
-        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
-        redaction_fields=("query_text", "setting_value", "user_oid"),
-    )
-
-
-def _postgres_domain_sql(domain: str, query_name: str) -> "SQL":
-    query = get_data_dictionary_loader().get_domain_query("postgres", domain, query_name)
-    if query.sql is None:
-        msg = f"Missing PostgreSQL data-dictionary query: {domain}/{query_name}"
-        raise RuntimeError(msg)
-    return query.sql
-
-
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsqlpyDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary via psqlpy."""
@@ -423,3 +323,103 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+
+
+def _postgres_metadata_capability(domain: str) -> MetadataCapability:
+    if domain == "system":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.EXPENSIVE, MetadataRisk.PRIVILEGED),
+            warnings=("System metadata is opt-in and disabled by default.",),
+        )
+    if domain in _POSTGRES_SUPPORTED_DOMAINS:
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+def _postgres_metadata_profile(adapter: str, domains: Sequence[str] | None) -> MetadataCapabilityProfile:
+    requested_domains = _POSTGRES_METADATA_DOMAINS if domains is None else tuple(domains)
+    return MetadataCapabilityProfile(
+        "postgres",
+        adapter=adapter,
+        capabilities=tuple(_postgres_metadata_capability(domain) for domain in requested_domains),
+    )
+
+
+def _metadata_result(
+    domain: str, capability: MetadataCapability, rows: list[Any] | tuple[Any, ...] = ()
+) -> MetadataResult:
+    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
+
+def _row_value(row: object, key: str) -> object | None:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _rows_as_mappings(rows: list[Any] | tuple[Any, ...]) -> tuple[Mapping[str, object], ...]:
+    return tuple(cast("Mapping[str, object]", row) for row in rows if isinstance(row, Mapping))
+
+
+def _ddl_result_from_rows(
+    *,
+    dialect: str,
+    object_name: str,
+    object_type: str,
+    schema: str | None,
+    rows: list[Any] | tuple[Any, ...],
+    warnings: tuple[str, ...] = (),
+) -> DDLResult:
+    row = rows[0] if rows else None
+    resolved_schema = _row_value(row, "schema_name") if row is not None else schema
+    ddl = _row_value(row, "ddl") if row is not None else None
+    fidelity = _row_value(row, "fidelity") if row is not None else MetadataFidelity.UNSUPPORTED
+    row_warning = _row_value(row, "warning") if row is not None else None
+    result_warnings = warnings + ((str(row_warning),) if row_warning else ())
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type,
+        schema=str(resolved_schema) if resolved_schema is not None else None,
+        dialect=dialect,
+        source=MetadataSource.CATALOG,
+    )
+    if ddl is None:
+        return DDLResult.unsupported(identity, source=MetadataSource.CATALOG, warnings=result_warnings)
+    return DDLResult(
+        identity=identity,
+        status=MetadataSupport.SUPPORTED,
+        fidelity=str(fidelity),
+        source=MetadataSource.CATALOG,
+        ddl=str(ddl),
+        warnings=result_warnings,
+    )
+
+
+def _postgres_system_metadata_capability(domain: str) -> SystemMetadataCapability:
+    if domain not in _POSTGRES_SYSTEM_METADATA_QUERIES:
+        return unsupported_system_metadata_capability(domain)
+    return SystemMetadataCapability(
+        domain,
+        MetadataSupport.SUPPORTED,
+        fidelity=MetadataFidelity.NATIVE,
+        source=MetadataSource.SYSTEM_VIEW,
+        risks=(MetadataRisk.PRIVILEGED, MetadataRisk.REDACTED),
+        redaction_fields=("query_text", "setting_value", "user_oid"),
+    )
+
+
+def _postgres_domain_sql(domain: str, query_name: str) -> "SQL":
+    query = get_data_dictionary_loader().get_domain_query("postgres", domain, query_name)
+    if query.sql is None:
+        msg = f"Missing PostgreSQL data-dictionary query: {domain}/{query_name}"
+        raise RuntimeError(msg)
+    return query.sql

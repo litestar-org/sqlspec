@@ -171,3 +171,25 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.bigquery.data_dictionary.BigQueryDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.bigquery.litestar.BigQueryLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.bigquery.events.BigQueryEventsConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.bigquery.adk.BigQueryADKConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.bigquery.adk.BigQueryADKRetentionConfig
+   :members:
+   :show-inheritance:

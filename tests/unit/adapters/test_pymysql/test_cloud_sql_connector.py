@@ -150,9 +150,10 @@ def test_cloud_sql_connection_factory_calls_connector(mock_cloud_sql_module: Mag
         ip_type="PUBLIC",
         autocommit=True,
         local_infile=False,
+        charset="utf8mb4",
         user="testuser",
         password="testpass",
-        db="testdb",
+        database="testdb",
     )
 
 

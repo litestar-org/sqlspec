@@ -18,10 +18,13 @@ Configuration (optional override):
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+
+from typing_extensions import NotRequired, TypedDict
 
 from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, _storage_type_from_version
+from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -29,9 +32,78 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
     from sqlspec.adapters.oracledb.data_dictionary import OracleVersionInfo
 
-__all__ = ("OracleAsyncEventQueueStore", "OracleSyncEventQueueStore")
+__all__ = (
+    "OracleAsyncEventQueueStore",
+    "OracleEventsCompressionConfig",
+    "OracleEventsConfig",
+    "OracleEventsPartitionConfig",
+    "OracleSyncEventQueueStore",
+)
 
 logger = get_logger("sqlspec.adapters.oracledb.events.store")
+
+
+class OracleEventsCompressionConfig(TypedDict):
+    """Oracle queue-table compression settings."""
+
+    enabled: NotRequired[bool]
+    """Enable compression. Default: False."""
+
+    algorithm: NotRequired[str]
+    """Oracle compression algorithm key. Default: advanced."""
+
+
+class OracleEventsPartitionConfig(TypedDict):
+    """Oracle queue-table hash or range partition settings."""
+
+    strategy: NotRequired[str]
+    """Partitioning strategy: hash or range; omitted to disable partitioning."""
+
+    partition_count: NotRequired[int]
+    """Hash partition count, at least two. Default: 16."""
+
+    partitions: NotRequired[int]
+    """Alternative name for partition_count."""
+
+    interval: NotRequired[str]
+    """Range interval: day, week, month or year. Default: month."""
+
+    initial_less_than: NotRequired[str]
+    """Initial range upper bound. Default: TIMESTAMP '2000-01-01 00:00:00'."""
+
+    partition_key: NotRequired[str]
+    """Partition key; defaults to event_id for hash and available_at for range."""
+
+    queue_partition_key: NotRequired[str]
+    """Queue-specific override for partition_key."""
+
+
+class OracleEventsConfig(EventsConfig):
+    """Oracle events settings for queue storage and supported native transports."""
+
+    in_memory: NotRequired[bool]
+    """Emit Oracle INMEMORY PRIORITY HIGH. Default: False."""
+
+    partitioning: NotRequired[OracleEventsPartitionConfig]
+    """Oracle hash/range queue partition settings; omitted for an unpartitioned table."""
+
+    compression: NotRequired[OracleEventsCompressionConfig]
+    """Oracle queue-table compression; disabled unless explicitly enabled."""
+
+    table_options: NotRequired[str]
+    """Additional Oracle queue-table DDL options; omitted by default."""
+
+    json_storage: NotRequired[Literal["json", "blob_json", "blob_plain"]]
+    """Override Oracle JSON storage detection with json, blob_json or blob_plain."""
+
+    aq_queue: NotRequired[str]
+    """Oracle AQ queue name or channel template. Default: SQLSPEC_EVENTS_QUEUE."""
+
+    aq_visibility: NotRequired[int | Literal["AQMSG_VISIBLE", "AQMSG_INVISIBLE"]]
+    """Oracle AQ visibility integer or supported AQMSG_VISIBLE/AQMSG_INVISIBLE name."""
+
+    aq_wait_seconds: NotRequired[int]
+    """Oracle AQ dequeue wait in seconds. Default: 5."""
 
 
 class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):

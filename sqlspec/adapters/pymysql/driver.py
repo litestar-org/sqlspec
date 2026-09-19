@@ -71,22 +71,6 @@ _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
 }
 
 
-def _resolve_column_types(description: Any) -> "dict[str, str] | None":
-    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
-
-    Returns ``None`` when the cursor has no description or reports no
-    recognizable type codes.
-    """
-    if not description:
-        return None
-    column_types: dict[str, str] = {}
-    for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
-    return column_types or None
-
-
 class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling PyMySQL exceptions."""
 
@@ -177,8 +161,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
     def begin(self) -> None:
         try:
-            with PyMysqlCursor(self.connection) as cursor:
-                cursor.execute("BEGIN")
+            self.connection.begin()
         except PyMysqlMySQLError as exc:
             msg = f"Failed to begin MySQL transaction: {exc}"
             raise SQLSpecError(msg) from exc
@@ -260,10 +243,10 @@ class PyMysqlDriver(SyncDriverAdapterBase):
                     tmp.write(payload)
                     tmp_name = tmp.name
                 try:
-                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     with exc_handler, self.with_cursor(self.connection) as cursor:
-                        cursor.execute(load_sql)
+                        cursor.execute(load_sql, (tmp_name,))
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:
@@ -324,3 +307,19 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
 
 register_driver_profile("pymysql", driver_profile)
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable type codes.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
+        if token is not None:
+            column_types[col[0]] = token
+    return column_types or None

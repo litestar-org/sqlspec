@@ -25,23 +25,6 @@ class _UnsetType:
 _UNSET = _UnsetType()
 
 
-class _EnvFactory:
-    """Callable factory for delayed environment parsing."""
-
-    __slots__ = ("_aliases", "_default", "_key", "_type_hint")
-
-    def __init__(self, key: str, aliases: "Sequence[str]", default: ParseType, type_hint: object) -> None:
-        self._aliases = aliases
-        self._default = default
-        self._key = key
-        self._type_hint = type_hint
-
-    def __call__(self) -> Any:
-        if self._aliases:
-            return get_config_val_with_aliases(self._key, self._aliases, self._default, self._type_hint)
-        return get_config_val(self._key, self._default, self._type_hint)
-
-
 @overload
 def get_env(key: str, default: bool, type_hint: "_UnsetType" = _UNSET) -> "Callable[[], bool]": ...
 
@@ -433,3 +416,20 @@ def _parse_value(key: str, value: str, default: ParseType, type_hint: object) ->
     if target_type is dict:
         return _parse_dict(key, value)
     return _parse_basic_type(key, value, target_type)
+
+
+class _EnvFactory:
+    """Callable factory for delayed environment parsing."""
+
+    __slots__ = ("_aliases", "_default", "_key", "_type_hint")
+
+    def __init__(self, key: str, aliases: "Sequence[str]", default: ParseType, type_hint: object) -> None:
+        self._aliases = aliases
+        self._default = default
+        self._key = key
+        self._type_hint = type_hint
+
+    def __call__(self) -> Any:
+        if self._aliases:
+            return get_config_val_with_aliases(self._key, self._aliases, self._default, self._type_hint)
+        return get_config_val(self._key, self._default, self._type_hint)

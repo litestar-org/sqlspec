@@ -101,21 +101,18 @@ class SamplingConfig:
         ):
             return True
 
-        # Rate-based sampling
         if self.sample_rate >= 1.0:
             return True
 
         if self.sample_rate <= 0.0:
             return False
 
-        # Deterministic or random sampling
         if self.deterministic and correlation_id:
             # Hash-based sampling for consistency across distributed systems
             hash_value = hash(correlation_id) % self.HASH_MODULUS
             threshold = int(self.sample_rate * self.HASH_MODULUS)
             return hash_value < threshold
 
-        # Fall back to random sampling
         return random.random() < self.sample_rate  # noqa: S311
 
     def copy(self) -> "SamplingConfig":

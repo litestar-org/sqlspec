@@ -28,10 +28,13 @@ class PyMysqlConnectionPool:
     __slots__ = (
         "_connection_factory",
         "_connection_parameters",
+        "_connection_registry",
+        "_generation",
         "_health_check_interval",
         "_on_connection_create",
         "_pool_id",
         "_recycle_seconds",
+        "_registry_lock",
         "_thread_local",
     )
 
@@ -55,6 +58,9 @@ class PyMysqlConnectionPool:
         self._connection_parameters = connection_parameters
         self._connection_factory = connection_factory
         self._thread_local = threading.local()
+        self._connection_registry: set[PyMysqlConnection] = set()
+        self._generation = 0
+        self._registry_lock = threading.Lock()
         self._recycle_seconds = recycle_seconds
         self._health_check_interval = health_check_interval
         self._on_connection_create = on_connection_create
@@ -66,12 +72,27 @@ class PyMysqlConnectionPool:
         return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> PyMysqlConnection:
+        connection = self.new_connection()
+
+        with self._registry_lock:
+            self._connection_registry.add(connection)
+
+        return connection
+
+    def new_connection(self) -> PyMysqlConnection:
+        """Open a standalone connection configured like a pooled one.
+
+        The result is owned by the caller: it is not thread-local and is not
+        tracked for pool shutdown.
+
+        Returns:
+            PyMysqlConnection: A newly opened, fully configured connection.
+        """
         if self._connection_factory is not None:
             connection = self._connection_factory()
         else:
             connection = _pymysql_connect(**self._connection_parameters)
 
-        # Call user-provided callback after connection creation
         if self._on_connection_create is not None:
             self._on_connection_create(connection)
 
@@ -86,6 +107,13 @@ class PyMysqlConnectionPool:
 
     def _get_thread_connection(self) -> PyMysqlConnection:
         thread_state = self._thread_local.__dict__
+        if thread_state.get("generation") != self._generation:
+            stale = thread_state.pop("connection", None)
+            if stale is not None:
+                self._retire_connection(cast("PyMysqlConnection", stale))
+            thread_state.pop("created_at", None)
+            thread_state.pop("last_used", None)
+            self._thread_local.generation = self._generation
         if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
@@ -103,8 +131,7 @@ class PyMysqlConnectionPool:
                 recycle_seconds=self._recycle_seconds,
                 reason="exceeded_recycle_time",
             )
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("PyMysqlConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
             self._thread_local.last_used = time.time()
@@ -122,19 +149,24 @@ class PyMysqlConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("PyMysqlConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
 
         self._thread_local.last_used = time.time()
         return cast("PyMysqlConnection", self._thread_local.connection)
 
+    def _retire_connection(self, connection: PyMysqlConnection) -> None:
+        """Close a pool-owned connection and drop it from the shutdown registry."""
+        with self._registry_lock:
+            self._connection_registry.discard(connection)
+        with contextlib.suppress(Exception):
+            connection.close()
+
     def _close_thread_connection(self) -> None:
         thread_state = self._thread_local.__dict__
         if "connection" in thread_state:
-            with contextlib.suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("PyMysqlConnection", self._thread_local.connection))
             del self._thread_local.connection
             if "created_at" in thread_state:
                 del self._thread_local.created_at
@@ -157,7 +189,15 @@ class PyMysqlConnectionPool:
             raise
 
     def close(self) -> None:
+        """Close every connection this pool opened, on any thread."""
         self._close_thread_connection()
+        with self._registry_lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+            self._generation += 1
+        for connection in orphaned:
+            with contextlib.suppress(Exception):
+                connection.close()
 
     def acquire(self) -> PyMysqlConnection:
         return self._get_thread_connection()

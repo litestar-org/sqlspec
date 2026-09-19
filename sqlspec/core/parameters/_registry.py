@@ -66,6 +66,42 @@ def register_driver_profile(
     DRIVER_PARAMETER_PROFILES[key] = profile
 
 
+def build_statement_config_from_profile(
+    profile: "DriverParameterProfile",
+    *,
+    parameter_overrides: "dict[str, Any] | None" = None,
+    statement_overrides: "dict[str, Any] | None" = None,
+    json_serializer: "Callable[[Any], str] | None" = None,
+    json_deserializer: "Callable[[str], Any] | None" = None,
+) -> "StatementConfig":
+    """Construct a :class:`StatementConfig` seeded from a driver profile.
+
+    Args:
+        profile: Driver profile providing default parameter behaviour.
+        parameter_overrides: Optional overrides for parameter config fields.
+        statement_overrides: Optional overrides for resulting statement config.
+        json_serializer: Optional JSON serializer supplied by the adapter.
+        json_deserializer: Optional JSON deserializer supplied by the adapter.
+
+    Returns:
+        New :class:`StatementConfig` instance with merged configuration.
+    """
+    parameter_config = _style_config_from_profile(profile, parameter_overrides, json_serializer, json_deserializer)
+
+    from sqlspec.core.statement import StatementConfig as _StatementConfig
+
+    statement_kwargs: dict[str, Any] = {}
+    if profile.default_dialect is not None:
+        statement_kwargs["dialect"] = profile.default_dialect
+    if profile.statement_kwargs:
+        statement_kwargs.update(profile.statement_kwargs)
+    if statement_overrides:
+        statement_kwargs.update(statement_overrides)
+
+    filtered_statement_kwargs = {k: v for k, v in statement_kwargs.items() if v is not None}
+    return _StatementConfig(parameter_config=parameter_config, **filtered_statement_kwargs)
+
+
 def _style_config_from_profile(
     profile: "DriverParameterProfile",
     parameter_overrides: "dict[str, Any] | None",
@@ -168,39 +204,3 @@ def _style_config_from_profile(
         parameter_config = parameter_config.replace(type_coercion_map=updated_map)
 
     return parameter_config
-
-
-def build_statement_config_from_profile(
-    profile: "DriverParameterProfile",
-    *,
-    parameter_overrides: "dict[str, Any] | None" = None,
-    statement_overrides: "dict[str, Any] | None" = None,
-    json_serializer: "Callable[[Any], str] | None" = None,
-    json_deserializer: "Callable[[str], Any] | None" = None,
-) -> "StatementConfig":
-    """Construct a :class:`StatementConfig` seeded from a driver profile.
-
-    Args:
-        profile: Driver profile providing default parameter behaviour.
-        parameter_overrides: Optional overrides for parameter config fields.
-        statement_overrides: Optional overrides for resulting statement config.
-        json_serializer: Optional JSON serializer supplied by the adapter.
-        json_deserializer: Optional JSON deserializer supplied by the adapter.
-
-    Returns:
-        New :class:`StatementConfig` instance with merged configuration.
-    """
-    parameter_config = _style_config_from_profile(profile, parameter_overrides, json_serializer, json_deserializer)
-
-    from sqlspec.core.statement import StatementConfig as _StatementConfig
-
-    statement_kwargs: dict[str, Any] = {}
-    if profile.default_dialect is not None:
-        statement_kwargs["dialect"] = profile.default_dialect
-    if profile.statement_kwargs:
-        statement_kwargs.update(profile.statement_kwargs)
-    if statement_overrides:
-        statement_kwargs.update(statement_overrides)
-
-    filtered_statement_kwargs = {k: v for k, v in statement_kwargs.items() if v is not None}
-    return _StatementConfig(parameter_config=parameter_config, **filtered_statement_kwargs)

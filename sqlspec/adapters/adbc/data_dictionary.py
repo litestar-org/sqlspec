@@ -86,197 +86,7 @@ _ADBC_DDL_UNSUPPORTED_WARNING: Final = "ADBC metadata is not a lossless DDL sour
 _ADBC_STATISTICS_WARNING: Final = "ADBC statistics metadata may be approximate, expensive, and driver-specific."
 
 
-class _NativeMetadataIncompleteError(Exception):
-    pass
-
-
-def _iter_object_tables(rows: "list[dict[str, Any]]") -> "list[tuple[str | None, str | None, dict[str, Any]]]":
-    entries: list[tuple[str | None, str | None, dict[str, Any]]] = []
-    for catalog in rows:
-        catalog_name = catalog.get("catalog_name")
-        for db_schema in catalog.get("catalog_db_schemas") or []:
-            schema_name = db_schema.get("db_schema_name")
-            entries.extend((catalog_name, schema_name, table) for table in db_schema.get("db_schema_tables") or [])
-    return entries
-
-
-def _primary_key_columns(table: "dict[str, Any]") -> "set[str]":
-    names: set[str] = set()
-    for constraint in table.get("table_constraints") or []:
-        if str(constraint.get("constraint_type") or "").upper() == "PRIMARY KEY":
-            names.update(str(column) for column in constraint.get("constraint_column_names") or [])
-    return names
-
-
-def _normalize_native_tables(rows: "list[dict[str, Any]]") -> "list[TableMetadata]":
-    tables: list[TableMetadata] = []
-    for catalog_name, schema_name, table in _iter_object_tables(rows):
-        table_type = str(table.get("table_type") or "")
-        if table_type.lower() not in _NATIVE_TABLE_TYPES:
-            continue
-        metadata: TableMetadata = {"table_name": str(table["table_name"]), "table_type": table_type}
-        resolved_schema = schema_name or catalog_name
-        if resolved_schema:
-            metadata["schema_name"] = str(resolved_schema)
-        if catalog_name:
-            metadata["table_catalog"] = str(catalog_name)
-        if schema_name:
-            metadata["table_schema"] = str(schema_name)
-        tables.append(metadata)
-    return tables
-
-
-def _normalize_native_columns(
-    rows: "list[dict[str, Any]]", table_name_exact: "str | None" = None
-) -> "list[ColumnMetadata]":
-    columns: list[ColumnMetadata] = []
-    for catalog_name, schema_name, table in _iter_object_tables(rows):
-        if str(table.get("table_type") or "").lower() not in _NATIVE_TABLE_TYPES:
-            continue
-        table_name = str(table["table_name"])
-        if table_name_exact is not None and table_name != table_name_exact:
-            continue
-        primary_columns = _primary_key_columns(table)
-        resolved_schema = schema_name or catalog_name
-        for column in table.get("table_columns") or []:
-            entry: ColumnMetadata = {"table_name": table_name, "column_name": str(column["column_name"])}
-            if resolved_schema:
-                entry["schema_name"] = str(resolved_schema)
-            type_name = column.get("xdbc_type_name")
-            if type_name:
-                entry["data_type"] = str(type_name)
-            ordinal = column.get("ordinal_position")
-            if ordinal is not None:
-                entry["ordinal_position"] = int(ordinal)
-            nullable = column.get("xdbc_is_nullable")
-            if nullable is not None:
-                entry["is_nullable"] = str(nullable)
-            default = column.get("xdbc_column_def")
-            if default is not None:
-                entry["column_default"] = str(default)
-            size = column.get("xdbc_column_size")
-            if size is not None:
-                entry["max_length"] = int(size)
-            digits = column.get("xdbc_decimal_digits")
-            if digits is not None:
-                entry["numeric_scale"] = int(digits)
-            if entry["column_name"] in primary_columns:
-                entry["is_primary"] = True
-            columns.append(entry)
-    return columns
-
-
-def _normalize_native_foreign_keys(
-    rows: "list[dict[str, Any]]", table_name_exact: "str | None" = None
-) -> "list[ForeignKeyMetadata]":
-    keys: list[ForeignKeyMetadata] = []
-    for catalog_name, schema_name, table in _iter_object_tables(rows):
-        table_name = str(table["table_name"])
-        if table_name_exact is not None and table_name != table_name_exact:
-            continue
-        resolved_schema = schema_name or catalog_name
-        for constraint in table.get("table_constraints") or []:
-            if str(constraint.get("constraint_type") or "").upper() != "FOREIGN KEY":
-                continue
-            column_names = [str(column) for column in constraint.get("constraint_column_names") or []]
-            usage_entries = constraint.get("constraint_column_usage") or []
-            constraint_name = constraint.get("constraint_name")
-            for column_name, usage in zip(column_names, usage_entries, strict=False):
-                referenced_schema = usage.get("fk_db_schema") or usage.get("fk_catalog")
-                keys.append(
-                    ForeignKeyMetadata(
-                        table_name=table_name,
-                        column_name=column_name,
-                        referenced_table=str(usage["fk_table"]),
-                        referenced_column=str(usage["fk_column_name"]),
-                        constraint_name=str(constraint_name) if constraint_name else None,
-                        schema=str(resolved_schema) if resolved_schema else None,
-                        referenced_schema=str(referenced_schema) if referenced_schema else None,
-                    )
-                )
-    return keys
-
-
-def _generated_constraint_name(table_name: str, constraint_type: str, column_names: "tuple[str, ...]") -> str:
-    constraint_label = constraint_type.lower().replace(" ", "_") or "constraint"
-    column_label = "_".join(column_names) if column_names else "unnamed"
-    return f"{table_name}_{constraint_label}_{column_label}"
-
-
-def _normalize_native_constraints(
-    rows: "list[dict[str, Any]]", table_name_exact: "str | None" = None, dialect: "str | None" = None
-) -> "list[ConstraintMetadata]":
-    constraints: list[ConstraintMetadata] = []
-    for catalog_name, schema_name, table in _iter_object_tables(rows):
-        table_name = str(table["table_name"])
-        if table_name_exact is not None and table_name != table_name_exact:
-            continue
-        resolved_schema = schema_name or catalog_name
-        for constraint in table.get("table_constraints") or []:
-            constraint_type = str(constraint.get("constraint_type") or "").upper()
-            if not constraint_type:
-                continue
-            column_names = tuple(str(column) for column in constraint.get("constraint_column_names") or ())
-            raw_name = constraint.get("constraint_name")
-            constraint_name = (
-                str(raw_name) if raw_name else _generated_constraint_name(table_name, constraint_type, column_names)
-            )
-            identity = ObjectIdentity(
-                name=constraint_name,
-                object_type="constraint",
-                catalog=str(catalog_name) if catalog_name else None,
-                schema=str(resolved_schema) if resolved_schema else None,
-                dialect=dialect,
-                source=MetadataSource.DRIVER_METADATA,
-            )
-            constraints.append(
-                ConstraintMetadata(
-                    identity=identity,
-                    source=MetadataSource.DRIVER_METADATA,
-                    attributes={
-                        "table_name": table_name,
-                        "constraint_type": constraint_type,
-                        "column_names": column_names,
-                        "column_usage": tuple(constraint.get("constraint_column_usage") or ()),
-                        "is_lossy": True,
-                    },
-                )
-            )
-    return constraints
-
-
 _ARROW_DECIMAL_FORMAT: Final = "DECIMAL({precision},{scale})"
-
-
-def _arrow_type_to_sql(data_type: Any) -> str:
-    import pyarrow as pa
-
-    types = pa.types
-    if types.is_boolean(data_type):
-        return "BOOLEAN"
-    if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):
-        return "SMALLINT"
-    if types.is_int32(data_type) or types.is_uint32(data_type):
-        return "INTEGER"
-    if types.is_int64(data_type) or types.is_uint64(data_type):
-        return "BIGINT"
-    if types.is_float16(data_type) or types.is_float32(data_type):
-        return "REAL"
-    if types.is_float64(data_type):
-        return "DOUBLE"
-    if types.is_decimal(data_type):
-        return _ARROW_DECIMAL_FORMAT.format(precision=data_type.precision, scale=data_type.scale)
-    if types.is_string(data_type) or types.is_large_string(data_type):
-        return "VARCHAR"
-    if types.is_binary(data_type) or types.is_large_binary(data_type) or types.is_fixed_size_binary(data_type):
-        return "VARBINARY"
-    if types.is_date(data_type):
-        return "DATE"
-    if types.is_time(data_type):
-        return "TIME"
-    if types.is_timestamp(data_type):
-        return "TIMESTAMP"
-    return str(data_type).upper()
 
 
 _ADBC_STATISTIC_NAMES: dict[int, str] = {
@@ -288,50 +98,6 @@ _ADBC_STATISTIC_NAMES: dict[int, str] = {
     5: "adbc.statistic.null_count",
     6: "adbc.statistic.row_count",
 }
-
-
-def _normalize_native_statistic_names(rows: "list[dict[str, Any]]") -> "dict[int, str]":
-    statistic_names: dict[int, str] = {}
-    for entry in rows:
-        key = entry.get("statistic_key")
-        name = entry.get("statistic_name")
-        if key is None or name is None:
-            continue
-        try:
-            statistic_names[int(key)] = str(name)
-        except (TypeError, ValueError):
-            continue
-    return statistic_names
-
-
-def _normalize_native_statistics(
-    rows: "list[dict[str, Any]]", statistic_names: "dict[int, str] | None" = None
-) -> "list[TableStatisticsMetadata]":
-    statistic_name_map = (
-        _ADBC_STATISTIC_NAMES if statistic_names is None else {**_ADBC_STATISTIC_NAMES, **statistic_names}
-    )
-    statistics: list[TableStatisticsMetadata] = []
-    for catalog in rows:
-        catalog_name = catalog.get("catalog_name")
-        for db_schema in catalog.get("catalog_db_schemas") or []:
-            schema_name = db_schema.get("db_schema_name")
-            for entry in db_schema.get("db_schema_statistics") or []:
-                key = int(entry["statistic_key"])
-                column_name = entry.get("column_name")
-                record: TableStatisticsMetadata = {
-                    "table_name": str(entry["table_name"]),
-                    "column_name": str(column_name) if column_name is not None else None,
-                    "statistic_key": key,
-                    "statistic_name": statistic_name_map.get(key, str(key)),
-                    "statistic_value": entry.get("statistic_value"),
-                    "is_approximate": bool(entry.get("statistic_is_approximate")),
-                }
-                if catalog_name:
-                    record["catalog_name"] = str(catalog_name)
-                if schema_name:
-                    record["schema_name"] = str(schema_name)
-                statistics.append(record)
-    return statistics
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -353,7 +119,6 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         # Inline cache check to avoid cross-module method call that causes mypyc segfault
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
-        # Not cached, fetch from database
 
         try:
             version_query_dialect = "mysql" if dialect == "mariadb" else dialect
@@ -1032,3 +797,237 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         if not foreign_keys:
             raise _NativeMetadataIncompleteError
         return foreign_keys
+
+
+class _NativeMetadataIncompleteError(Exception):
+    pass
+
+
+def _iter_object_tables(rows: "list[dict[str, Any]]") -> "list[tuple[str | None, str | None, dict[str, Any]]]":
+    entries: list[tuple[str | None, str | None, dict[str, Any]]] = []
+    for catalog in rows:
+        catalog_name = catalog.get("catalog_name")
+        for db_schema in catalog.get("catalog_db_schemas") or []:
+            schema_name = db_schema.get("db_schema_name")
+            entries.extend((catalog_name, schema_name, table) for table in db_schema.get("db_schema_tables") or [])
+    return entries
+
+
+def _primary_key_columns(table: "dict[str, Any]") -> "set[str]":
+    names: set[str] = set()
+    for constraint in table.get("table_constraints") or []:
+        if str(constraint.get("constraint_type") or "").upper() == "PRIMARY KEY":
+            names.update(str(column) for column in constraint.get("constraint_column_names") or [])
+    return names
+
+
+def _normalize_native_tables(rows: "list[dict[str, Any]]") -> "list[TableMetadata]":
+    tables: list[TableMetadata] = []
+    for catalog_name, schema_name, table in _iter_object_tables(rows):
+        table_type = str(table.get("table_type") or "")
+        if table_type.lower() not in _NATIVE_TABLE_TYPES:
+            continue
+        metadata: TableMetadata = {"table_name": str(table["table_name"]), "table_type": table_type}
+        resolved_schema = schema_name or catalog_name
+        if resolved_schema:
+            metadata["schema_name"] = str(resolved_schema)
+        if catalog_name:
+            metadata["table_catalog"] = str(catalog_name)
+        if schema_name:
+            metadata["table_schema"] = str(schema_name)
+        tables.append(metadata)
+    return tables
+
+
+def _normalize_native_columns(
+    rows: "list[dict[str, Any]]", table_name_exact: "str | None" = None
+) -> "list[ColumnMetadata]":
+    columns: list[ColumnMetadata] = []
+    for catalog_name, schema_name, table in _iter_object_tables(rows):
+        if str(table.get("table_type") or "").lower() not in _NATIVE_TABLE_TYPES:
+            continue
+        table_name = str(table["table_name"])
+        if table_name_exact is not None and table_name != table_name_exact:
+            continue
+        primary_columns = _primary_key_columns(table)
+        resolved_schema = schema_name or catalog_name
+        for column in table.get("table_columns") or []:
+            entry: ColumnMetadata = {"table_name": table_name, "column_name": str(column["column_name"])}
+            if resolved_schema:
+                entry["schema_name"] = str(resolved_schema)
+            type_name = column.get("xdbc_type_name")
+            if type_name:
+                entry["data_type"] = str(type_name)
+            ordinal = column.get("ordinal_position")
+            if ordinal is not None:
+                entry["ordinal_position"] = int(ordinal)
+            nullable = column.get("xdbc_is_nullable")
+            if nullable is not None:
+                entry["is_nullable"] = str(nullable)
+            default = column.get("xdbc_column_def")
+            if default is not None:
+                entry["column_default"] = str(default)
+            size = column.get("xdbc_column_size")
+            if size is not None:
+                entry["max_length"] = int(size)
+            digits = column.get("xdbc_decimal_digits")
+            if digits is not None:
+                entry["numeric_scale"] = int(digits)
+            if entry["column_name"] in primary_columns:
+                entry["is_primary"] = True
+            columns.append(entry)
+    return columns
+
+
+def _normalize_native_foreign_keys(
+    rows: "list[dict[str, Any]]", table_name_exact: "str | None" = None
+) -> "list[ForeignKeyMetadata]":
+    keys: list[ForeignKeyMetadata] = []
+    for catalog_name, schema_name, table in _iter_object_tables(rows):
+        table_name = str(table["table_name"])
+        if table_name_exact is not None and table_name != table_name_exact:
+            continue
+        resolved_schema = schema_name or catalog_name
+        for constraint in table.get("table_constraints") or []:
+            if str(constraint.get("constraint_type") or "").upper() != "FOREIGN KEY":
+                continue
+            column_names = [str(column) for column in constraint.get("constraint_column_names") or []]
+            usage_entries = constraint.get("constraint_column_usage") or []
+            constraint_name = constraint.get("constraint_name")
+            for column_name, usage in zip(column_names, usage_entries, strict=False):
+                referenced_schema = usage.get("fk_db_schema") or usage.get("fk_catalog")
+                keys.append(
+                    ForeignKeyMetadata(
+                        table_name=table_name,
+                        column_name=column_name,
+                        referenced_table=str(usage["fk_table"]),
+                        referenced_column=str(usage["fk_column_name"]),
+                        constraint_name=str(constraint_name) if constraint_name else None,
+                        schema=str(resolved_schema) if resolved_schema else None,
+                        referenced_schema=str(referenced_schema) if referenced_schema else None,
+                    )
+                )
+    return keys
+
+
+def _generated_constraint_name(table_name: str, constraint_type: str, column_names: "tuple[str, ...]") -> str:
+    constraint_label = constraint_type.lower().replace(" ", "_") or "constraint"
+    column_label = "_".join(column_names) if column_names else "unnamed"
+    return f"{table_name}_{constraint_label}_{column_label}"
+
+
+def _normalize_native_constraints(
+    rows: "list[dict[str, Any]]", table_name_exact: "str | None" = None, dialect: "str | None" = None
+) -> "list[ConstraintMetadata]":
+    constraints: list[ConstraintMetadata] = []
+    for catalog_name, schema_name, table in _iter_object_tables(rows):
+        table_name = str(table["table_name"])
+        if table_name_exact is not None and table_name != table_name_exact:
+            continue
+        resolved_schema = schema_name or catalog_name
+        for constraint in table.get("table_constraints") or []:
+            constraint_type = str(constraint.get("constraint_type") or "").upper()
+            if not constraint_type:
+                continue
+            column_names = tuple(str(column) for column in constraint.get("constraint_column_names") or ())
+            raw_name = constraint.get("constraint_name")
+            constraint_name = (
+                str(raw_name) if raw_name else _generated_constraint_name(table_name, constraint_type, column_names)
+            )
+            identity = ObjectIdentity(
+                name=constraint_name,
+                object_type="constraint",
+                catalog=str(catalog_name) if catalog_name else None,
+                schema=str(resolved_schema) if resolved_schema else None,
+                dialect=dialect,
+                source=MetadataSource.DRIVER_METADATA,
+            )
+            constraints.append(
+                ConstraintMetadata(
+                    identity=identity,
+                    source=MetadataSource.DRIVER_METADATA,
+                    attributes={
+                        "table_name": table_name,
+                        "constraint_type": constraint_type,
+                        "column_names": column_names,
+                        "column_usage": tuple(constraint.get("constraint_column_usage") or ()),
+                        "is_lossy": True,
+                    },
+                )
+            )
+    return constraints
+
+
+def _arrow_type_to_sql(data_type: Any) -> str:
+    import pyarrow as pa
+
+    types = pa.types
+    if types.is_boolean(data_type):
+        return "BOOLEAN"
+    if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):
+        return "SMALLINT"
+    if types.is_int32(data_type) or types.is_uint32(data_type):
+        return "INTEGER"
+    if types.is_int64(data_type) or types.is_uint64(data_type):
+        return "BIGINT"
+    if types.is_float16(data_type) or types.is_float32(data_type):
+        return "REAL"
+    if types.is_float64(data_type):
+        return "DOUBLE"
+    if types.is_decimal(data_type):
+        return _ARROW_DECIMAL_FORMAT.format(precision=data_type.precision, scale=data_type.scale)
+    if types.is_string(data_type) or types.is_large_string(data_type):
+        return "VARCHAR"
+    if types.is_binary(data_type) or types.is_large_binary(data_type) or types.is_fixed_size_binary(data_type):
+        return "VARBINARY"
+    if types.is_date(data_type):
+        return "DATE"
+    if types.is_time(data_type):
+        return "TIME"
+    if types.is_timestamp(data_type):
+        return "TIMESTAMP"
+    return str(data_type).upper()
+
+
+def _normalize_native_statistic_names(rows: "list[dict[str, Any]]") -> "dict[int, str]":
+    statistic_names: dict[int, str] = {}
+    for entry in rows:
+        key = entry.get("statistic_key")
+        name = entry.get("statistic_name")
+        if key is None or name is None:
+            continue
+        try:
+            statistic_names[int(key)] = str(name)
+        except (TypeError, ValueError):
+            continue
+    return statistic_names
+
+
+def _normalize_native_statistics(
+    rows: "list[dict[str, Any]]", statistic_names: "dict[int, str] | None" = None
+) -> "list[TableStatisticsMetadata]":
+    statistic_name_map = (
+        _ADBC_STATISTIC_NAMES if statistic_names is None else {**_ADBC_STATISTIC_NAMES, **statistic_names}
+    )
+    statistics: list[TableStatisticsMetadata] = []
+    for catalog in rows:
+        catalog_name = catalog.get("catalog_name")
+        for db_schema in catalog.get("catalog_db_schemas") or []:
+            schema_name = db_schema.get("db_schema_name")
+            for entry in db_schema.get("db_schema_statistics") or []:
+                key = int(entry["statistic_key"])
+                column_name = entry.get("column_name")
+                record: TableStatisticsMetadata = {
+                    "table_name": str(entry["table_name"]),
+                    "column_name": str(column_name) if column_name is not None else None,
+                    "statistic_key": key,
+                    "statistic_name": statistic_name_map.get(key, str(key)),
+                    "statistic_value": entry.get("statistic_value"),
+                    "is_approximate": bool(entry.get("statistic_is_approximate")),
+                }
+                if catalog_name:
+                    record["catalog_name"] = str(catalog_name)
+                if schema_name:
+                    record["schema_name"] = str(schema_name)
+                statistics.append(record)
+    return statistics

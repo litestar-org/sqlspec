@@ -43,13 +43,6 @@ R = TypeVar("R")
 MetadataBuilder = Callable[[dict[str, Any]], tuple[str | None, dict[str, Any]]]
 
 
-def _bind_arguments(signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
-    bound = signature.bind_partial(*args, **kwargs)
-    arguments = dict(bound.arguments)
-    arguments.pop("self", None)
-    return arguments
-
-
 def _with_command_span(
     event: str, metadata_fn: "MetadataBuilder | None" = None, *, dry_run_param: str | None = "dry_run"
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
@@ -2029,3 +2022,10 @@ def _report_no_pending_migrations(use_logger: bool, echo: bool, summary_only: bo
             "Already at latest version",
             rich_message="[green]Already at latest version[/]",
         )
+
+
+def _bind_arguments(signature: inspect.Signature, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    bound = signature.bind_partial(*args, **kwargs)
+    arguments = dict(bound.arguments)
+    arguments.pop("self", None)
+    return arguments

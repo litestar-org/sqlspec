@@ -44,10 +44,6 @@ __all__ = (
 )
 
 
-# =============================================================================
-# Dependency Availability Checking
-# =============================================================================
-
 _dependency_cache: "dict[str, bool]" = {}
 _optional_module_cache: "dict[str, ModuleType | None]" = {}
 T = TypeVar("T")
@@ -200,41 +196,6 @@ def dependency_flag(module_name: str) -> "OptionalDependencyFlag":
     """
 
     return OptionalDependencyFlag(module_name)
-
-
-# =============================================================================
-# Module Loading and Import Utilities
-# =============================================================================
-
-
-def _require_dependency(
-    module_name: str, *, package_name: str | None = None, install_package: str | None = None
-) -> None:
-    """Raise MissingDependencyError when an optional dependency is absent."""
-
-    if module_available(module_name):
-        return
-
-    package = package_name or module_name
-    install = install_package or package
-    raise MissingDependencyError(package=package, install_package=install)
-
-
-def _raise_import_error(msg: str, exc: "Exception | None" = None) -> None:
-    """Raise an ImportError with optional exception chaining."""
-    if exc is not None:
-        raise ImportError(msg) from exc
-    raise ImportError(msg)
-
-
-def _resolve_import_attr(obj: Any, attr: str, module: "ModuleType | None", dotted_path: str) -> Any:
-    """Resolve a dotted attribute path segment on a module or object."""
-    try:
-        return obj.__getattribute__(attr)
-    except AttributeError as exc:
-        module_name = module.__name__ if module is not None else "unknown"
-        _raise_import_error(f"Module '{module_name}' has no attribute '{attr}' in '{dotted_path}'", exc)
-        raise
 
 
 def module_to_os_path(dotted_path: str = "app") -> "Path":
@@ -406,3 +367,33 @@ def ensure_pydantic() -> None:
 def ensure_uvloop() -> None:
     """Ensure uvloop is available for fast event loops."""
     _require_dependency("uvloop")
+
+
+def _require_dependency(
+    module_name: str, *, package_name: str | None = None, install_package: str | None = None
+) -> None:
+    """Raise MissingDependencyError when an optional dependency is absent."""
+
+    if module_available(module_name):
+        return
+
+    package = package_name or module_name
+    install = install_package or package
+    raise MissingDependencyError(package=package, install_package=install)
+
+
+def _raise_import_error(msg: str, exc: "Exception | None" = None) -> None:
+    """Raise an ImportError with optional exception chaining."""
+    if exc is not None:
+        raise ImportError(msg) from exc
+    raise ImportError(msg)
+
+
+def _resolve_import_attr(obj: Any, attr: str, module: "ModuleType | None", dotted_path: str) -> Any:
+    """Resolve a dotted attribute path segment on a module or object."""
+    try:
+        return obj.__getattribute__(attr)
+    except AttributeError as exc:
+        module_name = module.__name__ if module is not None else "unknown"
+        _raise_import_error(f"Module '{module_name}' has no attribute '{attr}' in '{dotted_path}'", exc)
+        raise

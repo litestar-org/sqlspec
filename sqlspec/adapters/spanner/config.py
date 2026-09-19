@@ -1,7 +1,9 @@
 """Spanner configuration."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
+from google.cloud.spanner_v1.database_sessions_manager import TransactionType
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import SpannerConnection
@@ -180,14 +182,15 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
     def __enter__(self) -> SpannerConnection:
         database = self._config.get_database()
         if self._transaction:
-            self._session = cast("Any", database).session()
-            self._session.create()
+            manager = cast("Any", database).sessions_manager
+            self._session = manager.get_session(TransactionType.READ_WRITE)
             try:
                 txn = self._session.transaction()
                 txn.__enter__()
                 self._connection = cast("SpannerConnection", txn)
             except Exception:
-                self._session.delete()
+                manager.put_session(self._session)
+                self._session = None
                 raise
             else:
                 return self._connection
@@ -223,7 +226,7 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
                         txn.rollback()
             finally:
                 if self._session:
-                    self._session.delete()
+                    cast("Any", self._config.get_database()).sessions_manager.put_session(self._session)
         elif self._session:
             self._session.__exit__(exc_type, exc_val, exc_tb)
 
@@ -346,7 +349,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return self._database
 
     def create_connection(self) -> SpannerConnection:
-        return cast("SpannerConnection", self.get_database().snapshot())  # type: ignore[no-untyped-call]
+        """Return a read-only snapshot checkout owned by the caller.
+
+        The result is the database's own checkout object: it borrows a pooled
+        session when entered and returns it on exit. Returning an already-entered
+        snapshot instead would borrow a session that nothing could give back.
+
+        Returns:
+            A snapshot checkout to be used as a context manager.
+        """
+        return cast("SpannerConnection", self.get_database().snapshot(multi_use=True))  # type: ignore[no-untyped-call]
 
     def _create_pool(self) -> "AbstractSessionPool":
         from google.cloud.spanner_v1.pool import BurstyPool, FixedSizePool, PingingPool
@@ -398,8 +410,18 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         }
 
     def _close_pool(self) -> None:
-        if self.connection_instance and supports_close(self.connection_instance):
-            self.connection_instance.close()
+        """Release sessions before the database that manages them is torn down."""
+        pool = self.connection_instance
+        if pool is not None:
+            clear = getattr(pool, "clear", None)
+            if callable(clear):
+                with contextlib.suppress(Exception):
+                    clear()
+            elif supports_close(pool):
+                pool.close()
+        if self._database is not None and supports_close(self._database):
+            with contextlib.suppress(Exception):
+                self._database.close()
         if self._client and supports_close(self._client):
             self._client.close()
         self._client = None

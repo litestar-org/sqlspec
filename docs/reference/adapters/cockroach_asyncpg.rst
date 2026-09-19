@@ -116,3 +116,17 @@ measurement details match :doc:`cockroach_psycopg`.
 
 Local tests cover CockroachDB CCL v26.2.5 with RustFS. CockroachDB Cloud tiers,
 hosted privileges, cloud credentials, GCS and Azure remain unverified.
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.litestar.CockroachAsyncpgLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKConfig
+   :members:
+   :show-inheritance:

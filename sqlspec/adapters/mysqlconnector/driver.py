@@ -96,22 +96,6 @@ _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
 }
 
 
-def _resolve_column_types(description: Any) -> "dict[str, str] | None":
-    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
-
-    Returns ``None`` when the cursor has no description or reports no
-    recognizable type codes.
-    """
-    if not description:
-        return None
-    column_types: dict[str, str] = {}
-    for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
-    return column_types or None
-
-
 class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling mysql-connector sync exceptions."""
 
@@ -291,10 +275,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
                     tmp.write(payload)
                     tmp_name = tmp.name
                 try:
-                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     with exc_handler, self.with_cursor(self.connection) as cursor:
-                        cursor.execute(load_sql)
+                        cursor.execute(load_sql, (tmp_name,))
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:
@@ -348,10 +332,8 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        in_transaction = getattr(self.connection, "in_transaction", None)
-        if in_transaction is not None:
-            return bool(in_transaction)
-        return False
+        """Report whether the connector has an open transaction."""
+        return bool(self.connection.in_transaction)
 
 
 class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
@@ -533,10 +515,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                     tmp.write(payload)
                     tmp_name = tmp.name
                 try:
-                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     async with exc_handler, self.with_cursor(self.connection) as cursor:
-                        await cursor.execute(load_sql)
+                        await cursor.execute(load_sql, (tmp_name,))
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:
@@ -592,10 +574,24 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        in_tx = getattr(self.connection, "in_transaction", None)
-        if in_tx is not None:
-            return bool(in_tx)
-        return False
+        """Report whether the connector has an open transaction."""
+        return bool(self.connection.in_transaction)
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable type codes.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
+        if token is not None:
+            column_types[col[0]] = token
+    return column_types or None
 
 
 register_driver_profile("mysql-connector", driver_profile)

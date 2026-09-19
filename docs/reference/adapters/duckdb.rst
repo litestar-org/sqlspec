@@ -211,6 +211,11 @@ Pool Parameters
 Driver Features
 ===============
 
+``extension_flags`` values are folded into the database startup configuration.
+DuckDB rejects these settings once the database is running, so an unrecognized
+flag fails at connect time rather than being ignored.
+
+
 .. autoclass:: sqlspec.adapters.duckdb.DuckDBDriverFeatures
    :members:
    :show-inheritance:
@@ -244,5 +249,18 @@ Data Dictionary
 ===============
 
 .. autoclass:: sqlspec.adapters.duckdb.data_dictionary.DuckDBDataDictionary
+   :members:
+   :show-inheritance:
+
+Extension Settings
+==================
+
+Use these types inside ``extension_config["adk"]``.
+
+.. autoclass:: sqlspec.adapters.duckdb.adk.DuckdbADKConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.duckdb.adk.DuckdbADKFTSOptions
    :members:
    :show-inheritance:

@@ -82,28 +82,6 @@ _ORDER_PARTS_COUNT: Final = 2
 _MAX_PARAM_COLLISION_ATTEMPTS: Final = 1000
 
 
-def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
-    """Parse a single ORDER BY item string into a SQLGlot expression."""
-    normalized = order_item.strip()
-    if not normalized:
-        return exp.column(order_item)
-
-    if enable_parsing:
-        try:
-            parsed = sqlglot.parse_one(normalized, dialect=dialect, into=exp.Ordered)
-        except ParseError:
-            parsed = None
-        if parsed is not None:
-            return parsed
-
-    parts = normalized.rsplit(None, 1)
-    if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
-        base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
-        return base_expr.desc() if parts[1].lower() == "desc" else base_expr.asc()
-
-    return exp.column(normalized)
-
-
 SQL_CONFIG_SLOTS: Final = (
     "dialect",
     "enable_analysis",
@@ -993,10 +971,6 @@ class SQL:
             is_many=self._is_many,
         )
 
-    # ==========================================================================
-    # Parameter Generation Helpers
-    # ==========================================================================
-
     def _next_parameter_name(self, base_name: str) -> str:
         """Generate unique parameter name with param_ prefix.
 
@@ -1143,10 +1117,6 @@ class SQL:
             new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
 
         return self._copy_with_expression(new_expr)
-
-    # ==========================================================================
-    # Parameterized WHERE Methods (using shared utilities)
-    # ==========================================================================
 
     def where_eq(self, column: "str | exp.Column", value: Any) -> "SQL":
         """Add WHERE column = value condition.
@@ -1390,10 +1360,6 @@ class SQL:
 
         return self._copy_with_expression(new_expr)
 
-    # ==========================================================================
-    # Pagination Methods
-    # ==========================================================================
-
     def limit(self, value: int) -> "SQL":
         """Add LIMIT clause to the SQL statement.
 
@@ -1438,10 +1404,6 @@ class SQL:
             raise sqlspec.exceptions.SQLSpecError(msg)
         offset_value = (page - 1) * page_size
         return self.limit(page_size).offset(offset_value)
-
-    # ==========================================================================
-    # Column Projection Methods
-    # ==========================================================================
 
     def select_only(self, *columns: "str | exp.Expr", prune_columns: bool | None = None) -> "SQL":
         """Replace SELECT columns with only the specified columns.
@@ -1921,3 +1883,25 @@ def _rebuild_sql(
 
 
 Statement: TypeAlias = str | exp.Expr | SQL
+
+
+def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:
+    """Parse a single ORDER BY item string into a SQLGlot expression."""
+    normalized = order_item.strip()
+    if not normalized:
+        return exp.column(order_item)
+
+    if enable_parsing:
+        try:
+            parsed = sqlglot.parse_one(normalized, dialect=dialect, into=exp.Ordered)
+        except ParseError:
+            parsed = None
+        if parsed is not None:
+            return parsed
+
+    parts = normalized.rsplit(None, 1)
+    if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
+        base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
+        return base_expr.desc() if parts[1].lower() == "desc" else base_expr.asc()
+
+    return exp.column(normalized)

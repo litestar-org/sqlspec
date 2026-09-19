@@ -1,11 +1,15 @@
 """BigQuery opt-in Storage Write API Arrow transport for load_from_arrow."""
 
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 import pyarrow as pa
 import pytest
 from google.cloud.bigquery_storage_v1 import types
 
+import sqlspec.adapters.bigquery.config as bigquery_config
+from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.core import build_arrow_write_stream_payload
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.exceptions import StorageOperationFailedError
@@ -197,3 +201,62 @@ def test_storage_write_payload_splits_before_request_limit() -> None:
     assert requests[0].arrow_rows.writer_schema.serialized_schema
     assert all(request.arrow_rows.rows.serialized_record_batch for request in requests)
     assert all(len(request.arrow_rows.rows.serialized_record_batch) <= 1_200 for request in requests)
+
+
+def test_storage_write_client_is_created_once_per_config() -> None:
+    """The write client is expensive; two ingests must share one."""
+    built: list[dict[str, Any]] = []
+
+    class _WriteClient:
+        def __init__(self, **kwargs: Any) -> None:
+            built.append(kwargs)
+
+    module = SimpleNamespace(BigQueryWriteClient=_WriteClient)
+    config = BigQueryConfig(connection_config={"project": "p", "dataset_id": "d"})
+    with patch.object(bigquery_config, "BigQueryStorageWriteModule", module):
+        first = config.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+        second = config.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+
+    assert first is second
+    assert len(built) == 1
+
+
+def test_storage_write_client_receives_client_options() -> None:
+    """Client options configured on the connection must reach the write client."""
+    built: list[dict[str, Any]] = []
+
+    class _WriteClient:
+        def __init__(self, **kwargs: Any) -> None:
+            built.append(kwargs)
+
+    options = object()
+    module = SimpleNamespace(BigQueryWriteClient=_WriteClient)
+    config = BigQueryConfig(connection_config={"project": "p", "client_options": cast("Any", options)})
+    with patch.object(bigquery_config, "BigQueryStorageWriteModule", module):
+        config.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+
+    assert built[0]["client_options"] is options
+
+
+def test_close_pool_closes_only_clients_sqlspec_created() -> None:
+    """A caller-supplied client keeps its own lifetime."""
+    closed: list[str] = []
+
+    class _WriteClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.transport = SimpleNamespace(close=lambda: closed.append("write"))
+
+    module = SimpleNamespace(BigQueryWriteClient=_WriteClient)
+    owned = BigQueryConfig(connection_config={"project": "p"})
+    owned._connection_instance = cast("Any", SimpleNamespace(close=lambda: closed.append("owned")))
+    with patch.object(bigquery_config, "BigQueryStorageWriteModule", module):
+        owned.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+    owned.close_pool()
+
+    assert closed == ["write", "owned"]
+
+    supplied_client = SimpleNamespace(close=lambda: closed.append("supplied"))
+    supplied = BigQueryConfig(connection_config={"project": "p"}, connection_instance=cast("Any", supplied_client))
+    supplied.close_pool()
+
+    assert "supplied" not in closed

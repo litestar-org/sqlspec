@@ -1,5 +1,5 @@
 """Litestar integration for aiomysql adapter."""
 
-from sqlspec.adapters.aiomysql.litestar.store import AiomysqlStore
+from sqlspec.adapters.aiomysql.litestar.store import AiomysqlLitestarConfig, AiomysqlStore
 
-__all__ = ("AiomysqlStore",)
+__all__ = ("AiomysqlLitestarConfig", "AiomysqlStore")

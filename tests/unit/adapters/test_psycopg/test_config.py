@@ -441,3 +441,108 @@ def test_psycopg_async_provide_session_tracks_promoted_statement_config() -> Non
 
     assert callable(session_config)
     assert session_config().dialect == "pgvector"
+
+
+def test_sync_create_connection_does_not_create_a_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A standalone connection must not build or consume the pool."""
+    sentinel = MagicMock()
+    connect = MagicMock(return_value=sentinel)
+    monkeypatch.setattr("psycopg.Connection.connect", connect)
+    config = PsycopgSyncConfig(connection_config={"host": "localhost", "min_size": 1, "max_size": 1})
+
+    connection = config.create_connection()
+
+    assert connection is sentinel
+    assert config.connection_instance is None
+    assert "min_size" not in connect.call_args.kwargs
+    assert "max_size" not in connect.call_args.kwargs
+    assert "timeout" not in connect.call_args.kwargs
+
+
+def test_sync_create_connection_applies_the_connection_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pool applies on_connection_create through configure; the standalone path must too."""
+    seen: list[object] = []
+    sentinel = MagicMock()
+    monkeypatch.setattr("psycopg.Connection.connect", MagicMock(return_value=sentinel))
+    config = PsycopgSyncConfig(
+        connection_config={"host": "localhost"}, driver_features={"on_connection_create": seen.append}
+    )
+
+    config.create_connection()
+
+    assert seen == [sentinel]
+
+
+class _RecordingPoolCtx:
+    """Stands in for the psycopg pool's connection context manager."""
+
+    def __init__(self, released: "list[tuple[object, object, object]]") -> None:
+        self._released = released
+
+    def __enter__(self) -> object:
+        return object()
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        self._released.append((exc_type, exc_val, exc_tb))
+
+
+def _pooled_config(
+    monkeypatch: pytest.MonkeyPatch, released: "list[tuple[object, object, object]]"
+) -> PsycopgSyncConfig:
+    class _Pool:
+        def connection(self) -> _RecordingPoolCtx:
+            return _RecordingPoolCtx(released)
+
+    config = PsycopgSyncConfig(connection_config={"host": "localhost"})
+    monkeypatch.setattr(PsycopgSyncConfig, "provide_pool", lambda _self, *_a, **_k: _Pool())
+    monkeypatch.setattr("psycopg.Connection.connect", MagicMock(side_effect=AssertionError("must not bypass the pool")))
+    return config
+
+
+def test_sync_connection_context_uses_the_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """provide_connection must go through the pool, not open an uncounted connection."""
+    released: list[tuple[object, object, object]] = []
+    config = _pooled_config(monkeypatch, released)
+
+    with config.provide_connection():
+        pass
+
+    assert released == [(None, None, None)]
+
+
+def test_sync_connection_context_forwards_the_exception_to_the_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pool needs the exception so it can roll back or discard the connection."""
+    released: list[tuple[object, object, object]] = []
+    config = _pooled_config(monkeypatch, released)
+
+    with pytest.raises(RuntimeError), config.provide_connection():
+        raise RuntimeError
+
+    exc_type, exc_val, _ = released[0]
+    assert exc_type is RuntimeError
+    assert isinstance(exc_val, RuntimeError)
+
+
+def test_sync_session_uses_the_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """provide_session must go through the pool so connections stay counted."""
+    released: list[tuple[object, object, object]] = []
+    config = _pooled_config(monkeypatch, released)
+    handler = psycopg_config._PsycopgSyncSessionConnectionHandler(config)
+
+    connection = handler.acquire_connection()
+    handler.release_connection(connection)
+
+    assert released == [(None, None, None)]
+
+
+def test_sync_session_forwards_the_exception_to_the_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed session must tell the pool so it can roll back or discard."""
+    released: list[tuple[object, object, object]] = []
+    config = _pooled_config(monkeypatch, released)
+    handler = psycopg_config._PsycopgSyncSessionConnectionHandler(config)
+    error = RuntimeError("boom")
+
+    connection = handler.acquire_connection()
+    handler.release_connection(connection, exc_type=RuntimeError, exc_val=error, exc_tb=None)
+
+    assert released == [(RuntimeError, error, None)]

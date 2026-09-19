@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     class AiomysqlModuleProtocol(Protocol):
         async def create_pool(self, **kwargs: Any) -> "AiomysqlPool": ...
 
+        async def connect(self, **kwargs: Any) -> "AiomysqlConnection": ...
+
     class AiomysqlFieldTypeProtocol(Protocol):
         JSON: int
 
@@ -127,7 +129,7 @@ class AiomysqlSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Awaitable[AiomysqlConnection]]",
-        release_connection: "Callable[[AiomysqlConnection], Awaitable[None]]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AiomysqlDriver], AiomysqlDriver]",
@@ -153,6 +155,6 @@ class AiomysqlSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            await self._release_connection(self._connection)
+            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None

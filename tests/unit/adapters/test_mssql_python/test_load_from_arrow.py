@@ -1,4 +1,4 @@
-"""mssql_python load_from_arrow wiring over BulkCopy."""
+"""mssql_python load_from_arrow wiring over the native Arrow bulk copy."""
 
 from typing import Any, cast
 
@@ -18,6 +18,7 @@ _CAPS: dict[str, Any] = {
 class _FakeCursor:
     def __init__(self) -> None:
         self.bulkcopy_calls: list[tuple[str, list[Any], dict[str, Any]]] = []
+        self.arrow_calls: list[tuple[str, Any, dict[str, Any]]] = []
         self.execute_calls: list[str] = []
         self.rowcount = 0
 
@@ -25,6 +26,10 @@ class _FakeCursor:
         materialized = list(rows)
         self.bulkcopy_calls.append((target_table, materialized, kwargs))
         return {"rows_copied": len(materialized)}
+
+    def bulkcopy_arrow(self, table_name: str, source: Any, **kwargs: Any) -> dict[str, Any]:
+        self.arrow_calls.append((table_name, source, kwargs))
+        return {"rows_copied": source.num_rows}
 
     def execute(self, sql: str, *_args: Any) -> None:
         self.execute_calls.append(sql)
@@ -47,18 +52,30 @@ class _FakeConnection:
         pass
 
 
-def test_sync_load_from_arrow_uses_bulkcopy() -> None:
+def test_sync_load_from_arrow_uses_the_native_arrow_bulk_copy() -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    table = pa.table({"id": [1, 2], "name": ["a", "b"]})
+
+    job = driver.load_from_arrow("orders", table)
+
+    assert job.telemetry["rows_processed"] == 2
+    target, source, kwargs = conn._cursor.arrow_calls[0]
+    assert target == "orders"
+    assert source is table
+    assert kwargs["column_mappings"] == ["id", "name"]
+    assert conn._cursor.bulkcopy_calls == []
+    assert conn._cursor.execute_calls == []
+
+
+def test_sync_load_from_arrow_skips_an_empty_table() -> None:
     conn = _FakeConnection()
     driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
 
-    job = driver.load_from_arrow("orders", pa.table({"id": [1, 2], "name": ["a", "b"]}))
+    driver.load_from_arrow("orders", pa.table({"id": pa.array([], type=pa.int64())}))
 
-    assert job.telemetry["rows_processed"] == 2
-    target, rows, kwargs = conn._cursor.bulkcopy_calls[0]
-    assert target == "orders"
-    assert rows == [(1, "a"), (2, "b")]
-    assert kwargs["column_mappings"] == ["id", "name"]
-    assert conn._cursor.execute_calls == []
+    assert conn._cursor.arrow_calls == []
+    assert conn._cursor.bulkcopy_calls == []
 
 
 def test_sync_load_from_arrow_overwrite_deletes_first() -> None:
@@ -67,8 +84,8 @@ def test_sync_load_from_arrow_overwrite_deletes_first() -> None:
 
     driver.load_from_arrow("dbo.orders", pa.table({"id": [1]}), overwrite=True)
 
-    assert conn._cursor.execute_calls == ['DELETE FROM "dbo"."orders"']
-    assert conn._cursor.bulkcopy_calls
+    assert conn._cursor.execute_calls == ["DELETE FROM [dbo].[orders]"]
+    assert conn._cursor.arrow_calls
 
 
 def test_sync_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
@@ -77,5 +94,5 @@ def test_sync_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
 
     driver.load_from_arrow('"dbo.schema"."orders.table"', pa.table({"id": [1]}), overwrite=True)
 
-    assert conn._cursor.execute_calls == ['DELETE FROM "dbo.schema"."orders.table"']
-    assert conn._cursor.bulkcopy_calls
+    assert conn._cursor.execute_calls == ["DELETE FROM [dbo.schema].[orders.table]"]
+    assert conn._cursor.arrow_calls

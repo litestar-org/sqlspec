@@ -146,7 +146,7 @@ class MysqlConnectorSyncSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], MysqlConnectorSyncConnection]",
-        release_connection: "Callable[[MysqlConnectorSyncConnection], None]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MysqlConnectorSyncDriver], MysqlConnectorSyncDriver]",
@@ -172,7 +172,7 @@ class MysqlConnectorSyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection)
+            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
 
@@ -193,7 +193,7 @@ class MysqlConnectorAsyncSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Awaitable[MysqlConnectorAsyncConnection]]",
-        release_connection: "Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[MysqlConnectorAsyncDriver], MysqlConnectorAsyncDriver]",
@@ -219,6 +219,6 @@ class MysqlConnectorAsyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            await self._release_connection(self._connection)
+            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None

@@ -275,15 +275,6 @@ def parse_extension_stem(stem: str) -> "tuple[str, str] | None":
     return match.group("name"), match.group("version")
 
 
-def _try_parse_version(version_str: str) -> "MigrationVersion | None":
-    """Parse version string, returning None for invalid versions."""
-    try:
-        return parse_version(version_str)
-    except ValueError:
-        logger.warning("Skipping invalid migration version: %s", version_str)
-        return None
-
-
 def generate_timestamp_version() -> str:
     """Generate new timestamp version in UTC.
 
@@ -395,6 +386,15 @@ def generate_conversion_map(migrations: "list[tuple[str, Path]]") -> "dict[str, 
             next_seq += 1
 
     return conversion_map
+
+
+def _try_parse_version(version_str: str) -> "MigrationVersion | None":
+    """Parse version string, returning None for invalid versions."""
+    try:
+        return parse_version(version_str)
+    except ValueError:
+        logger.warning("Skipping invalid migration version: %s", version_str)
+        return None
 
 
 def _format_sequential_version(value: "int | str") -> str:

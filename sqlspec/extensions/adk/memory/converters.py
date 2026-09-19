@@ -144,7 +144,6 @@ def memory_entry_to_record(
 
     content_dict = entry.content.model_dump(exclude_none=True, mode="json")
 
-    # Merge entry-level and call-level metadata
     merged_metadata: dict[str, Any] | None = None
     if entry.custom_metadata or extra_metadata:
         merged_metadata = {}
@@ -155,7 +154,6 @@ def memory_entry_to_record(
 
     now = datetime.now(timezone.utc)
 
-    # Parse timestamp from entry if available
     timestamp = now
     if entry.timestamp:
         try:

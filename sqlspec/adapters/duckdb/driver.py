@@ -107,10 +107,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._data_dictionary: DuckDBDataDictionary | None = None
         self._transaction_active = False
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def dispatch_execute(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with data handling.
 
@@ -228,10 +224,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(_DuckDBStreamSource(self._open_stream_reader, sql, prepared_parameters, chunk_size))
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def begin(self) -> None:
         """Begin a database transaction."""
         try:
@@ -317,10 +309,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return DuckDBExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -395,10 +383,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
             raise RuntimeError(msg)  # pragma: no cover
 
         return arrow_result
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -529,10 +513,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "DuckDBDataDictionary":
         """Get the data dictionary for this driver.
@@ -543,10 +523,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = DuckDBDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE / INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def _native_storage_job(
         self,

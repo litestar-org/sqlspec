@@ -48,38 +48,6 @@ __all__ = ("BaseAsyncExceptionHandler", "BaseSyncExceptionHandler")
 _AsyncResultT = TypeVar("_AsyncResultT")
 
 
-async def _run_with_async_exception_handler(
-    exc_handler: "AsyncExceptionHandler",
-    operation: "Callable[..., Awaitable[_AsyncResultT]]",
-    *args: Any,
-    **kwargs: Any,
-) -> "_AsyncResultT | None":
-    """Run an async operation without inheriting an active exception state."""
-    await exc_handler.__aenter__()
-    result: _AsyncResultT | None = None
-    error: BaseException | None = None
-    traceback: TracebackType | None = None
-    ambient_exception = sys.exc_info()[1]
-    try:
-        operation_awaitable = operation(*args, **kwargs)
-        if ambient_exception is None:
-            result = await operation_awaitable
-        else:
-            result = await asyncio.ensure_future(operation_awaitable)
-    except BaseException as caught:
-        error = caught
-        traceback = caught.__traceback__
-
-    if error is None:
-        await exc_handler.__aexit__(None, None, None)
-        return result
-
-    suppressed = await exc_handler.__aexit__(type(error), error, traceback)
-    if not suppressed:
-        raise error.with_traceback(traceback)
-    return None
-
-
 @mypyc_attr(allow_interpreted_subclasses=True)
 class BaseAsyncExceptionHandler:
     """Base async exception handler using the deferred exception pattern."""
@@ -146,3 +114,35 @@ class BaseSyncExceptionHandler:
         """
         _ = (exc_type, exc_val)
         return False
+
+
+async def _run_with_async_exception_handler(
+    exc_handler: "AsyncExceptionHandler",
+    operation: "Callable[..., Awaitable[_AsyncResultT]]",
+    *args: Any,
+    **kwargs: Any,
+) -> "_AsyncResultT | None":
+    """Run an async operation without inheriting an active exception state."""
+    await exc_handler.__aenter__()
+    result: _AsyncResultT | None = None
+    error: BaseException | None = None
+    traceback: TracebackType | None = None
+    ambient_exception = sys.exc_info()[1]
+    try:
+        operation_awaitable = operation(*args, **kwargs)
+        if ambient_exception is None:
+            result = await operation_awaitable
+        else:
+            result = await asyncio.ensure_future(operation_awaitable)
+    except BaseException as caught:
+        error = caught
+        traceback = caught.__traceback__
+
+    if error is None:
+        await exc_handler.__aexit__(None, None, None)
+        return result
+
+    suppressed = await exc_handler.__aexit__(type(error), error, traceback)
+    if not suppressed:
+        raise error.with_traceback(traceback)
+    return None

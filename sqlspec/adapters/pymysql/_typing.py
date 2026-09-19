@@ -87,7 +87,7 @@ class PyMysqlSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], PyMysqlConnection]",
-        release_connection: "Callable[[PyMysqlConnection], None]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PyMysqlDriver], PyMysqlDriver]",
@@ -113,6 +113,6 @@ class PyMysqlSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection)
+            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None

@@ -6,11 +6,13 @@ from typing import Any, cast, get_type_hints
 import pytest
 
 import sqlspec.adapters.mssql_python.pool as _mssql_pool
+from sqlspec.adapters.mssql_python._typing import MssqlPythonSessionContext
 from sqlspec.adapters.mssql_python.config import (
     MssqlPythonConfig,
     MssqlPythonConnectionParams,
     _normalize_mssql_python_init,
 )
+from sqlspec.adapters.mssql_python.core import build_connection_config
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 
 
@@ -283,3 +285,47 @@ def test_sync_config_delegates_to_shared_init_helper() -> None:
 
     assert sync_config.connection_config == {"server": "localhost"}
     assert sync_config._user_connection_hook is hook
+
+
+def test_token_provider_reaches_connect() -> None:
+    """An Azure Entra ID token provider must be forwarded, not silently dropped."""
+
+    def _token_provider() -> tuple[str, int]:
+        return ("token", 0)
+
+    _, connect_kwargs = build_connection_config({"server": "sql.example.test", "token_provider": _token_provider})
+
+    assert connect_kwargs["token_provider"] is _token_provider
+
+
+def test_token_provider_is_a_declared_connection_parameter() -> None:
+    """The typed parameters must cover every connect keyword the driver accepts."""
+    assert "token_provider" in MssqlPythonConnectionParams.__annotations__
+
+
+def test_failed_session_rolls_back_before_release() -> None:
+    """A session exiting with an exception must roll back rather than leave work open."""
+    calls: list[str] = []
+
+    class _Connection:
+        def cursor(self) -> object:
+            return object()
+
+        def rollback(self) -> None:
+            calls.append("rollback")
+
+        def commit(self) -> None:
+            calls.append("commit")
+
+    context = MssqlPythonSessionContext(
+        acquire_connection=cast("Any", _Connection),
+        release_connection=lambda _conn, **_kwargs: calls.append("release"),
+        statement_config=MssqlPythonConfig().statement_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with pytest.raises(RuntimeError), context:
+        raise RuntimeError
+
+    assert calls == ["rollback", "release"]

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite.core import (
+    SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT,
     SqliteStreamSource,
     build_insert_statement,
     collect_rows,
@@ -98,10 +99,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: SqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -223,10 +220,6 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def begin(self) -> None:
         """Begin a database transaction.
 
@@ -240,6 +233,15 @@ class SqliteDriver(SyncDriverAdapterBase):
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
 
+    def _in_autocommit_mode(self) -> bool:
+        """Report whether the connection runs in sqlite3's autocommit mode.
+
+        Under that mode ``Connection.commit`` and ``Connection.rollback`` are
+        no-ops, so a manually started transaction has to be ended with an
+        explicit statement.
+        """
+        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and self.connection.autocommit is True
+
     def commit(self) -> None:
         """Commit the current transaction.
 
@@ -247,6 +249,10 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be committed
         """
         try:
+            if self._in_autocommit_mode():
+                if self.connection.in_transaction:
+                    self.connection.execute("COMMIT")
+                return
             self.connection.commit()
         except sqlite3.Error as e:
             msg = f"Failed to commit transaction: {e}"
@@ -259,6 +265,10 @@ class SqliteDriver(SyncDriverAdapterBase):
             SQLSpecError: If transaction cannot be rolled back
         """
         try:
+            if self._in_autocommit_mode():
+                if self.connection.in_transaction:
+                    self.connection.execute("ROLLBACK")
+                return
             self.connection.rollback()
         except sqlite3.Error as e:
             msg = f"Failed to rollback transaction: {e}"
@@ -289,10 +299,6 @@ class SqliteDriver(SyncDriverAdapterBase):
             Exception handler with deferred exception pattern for mypyc compatibility.
         """
         return SqliteExceptionHandler()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -374,10 +380,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "SqliteDataDictionary":
         """Get the data dictionary for this driver.
@@ -388,10 +390,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = SqliteDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect SQLite rows for the direct execution path."""

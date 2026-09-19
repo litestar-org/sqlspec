@@ -192,10 +192,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._transaction_active = False
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def _compiled_sql(
         self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
     ) -> "tuple[str, object]":
@@ -347,10 +343,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(AdbcSelectStreamSource(self, sql, prepared_parameters))
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def begin(self) -> None:
         """Begin database transaction.
 
@@ -457,10 +449,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         return AdbcExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -494,7 +482,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        # Prepare statement
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
@@ -569,10 +556,6 @@ class AdbcDriver(SyncDriverAdapterBase):
             raise RuntimeError(msg)  # pragma: no cover
 
         return arrow_result
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -660,10 +643,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "AdbcDataDictionary":
         """Get the data dictionary for this driver.
@@ -674,10 +653,6 @@ class AdbcDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AdbcDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: "AdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect ADBC rows for the direct execution path."""

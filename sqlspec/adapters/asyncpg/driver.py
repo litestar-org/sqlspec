@@ -3,6 +3,7 @@
 import re
 from collections import OrderedDict
 from collections.abc import Mapping
+from contextlib import suppress
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -94,7 +95,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     and caching, and parameter processing with type coercion.
     """
 
-    __slots__ = ("_data_dictionary", "_prepared_statements")
+    __slots__ = ("_data_dictionary", "_prepared_statements", "_transaction")
     dialect = "postgres"
 
     def __init__(
@@ -111,10 +112,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AsyncpgDataDictionary | None = None
         self._prepared_statements: OrderedDict[str, AsyncpgPreparedStatement] = OrderedDict()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
+        self._transaction: Any = None
 
     async def dispatch_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -212,33 +210,58 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         return None
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def begin(self) -> None:
-        """Begin a database transaction."""
+        """Begin a database transaction.
 
+        Uses asyncpg's own transaction handle so the driver and the connection
+        agree on transaction state. A second call is a no-op rather than a
+        savepoint, matching the other adapters and leaving nested
+        ``transaction()`` blocks to the savepoint handling in the driver base.
+
+        asyncpg claims the connection for a transaction before it issues BEGIN
+        and does not release the claim when BEGIN fails, which would turn the
+        next attempt into a savepoint whose commit releases rather than commits.
+        The claim is therefore released here.
+        """
+        if self._transaction is not None:
+            return
+        transaction = self.connection.transaction()
         try:
-            await self.connection.execute("BEGIN")
+            await transaction.start()
         except AsyncpgPostgresError as e:
+            self._release_failed_transaction_claim(transaction)
             msg = f"Failed to begin async transaction: {e}"
             raise SQLSpecError(msg) from e
+        self._transaction = transaction
+
+    def _release_failed_transaction_claim(self, transaction: Any) -> None:
+        """Clear the connection's transaction claim left by a failed start."""
+        with suppress(Exception):
+            if getattr(self.connection, "_top_xact", None) is transaction:
+                self.connection._top_xact = None
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-
+        transaction = self._transaction
+        self._transaction = None
         try:
-            await self.connection.execute("COMMIT")
+            if transaction is not None:
+                await transaction.commit()
+            else:
+                await self.connection.execute("COMMIT")
         except AsyncpgPostgresError as e:
             msg = f"Failed to commit async transaction: {e}"
             raise SQLSpecError(msg) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-
+        transaction = self._transaction
+        self._transaction = None
         try:
-            await self.connection.execute("ROLLBACK")
+            if transaction is not None:
+                await transaction.rollback()
+            else:
+                await self.connection.execute("ROLLBACK")
         except AsyncpgPostgresError as e:
             msg = f"Failed to rollback async transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -284,10 +307,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Handle database exceptions with PostgreSQL error codes."""
         return AsyncpgExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
@@ -297,10 +316,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -437,10 +452,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "AsyncpgDataDictionary":
         """Get the data dictionary for this driver.
@@ -451,19 +462,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AsyncpgDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
-    def collect_rows(self, cursor: "AsyncpgConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        """Collect asyncpg rows for the direct execution path."""
-        data, column_names = collect_rows(fetched)
-        return data, column_names, len(data)
-
-    def resolve_rowcount(self, cursor: "AsyncpgConnection") -> int:
-        """Resolve rowcount from asyncpg status for the direct execution path."""
-        return parse_status(cursor)
 
     @staticmethod
     def _copy_target(table: str) -> "tuple[str, str | None, str]":

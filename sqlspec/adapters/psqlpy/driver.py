@@ -4,7 +4,6 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
-import inspect
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
@@ -12,14 +11,12 @@ from sqlspec.adapters.psqlpy.core import (
     _DML_COUNT_COLUMN,
     PsqlpyStreamSource,
     _dml_count_query,
-    build_insert_statement,
+    coerce_json_columns,
     coerce_numeric_for_write,
-    coerce_records_for_execute_many,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
-    encode_records_for_binary_copy,
     extract_rows_affected,
     format_execute_many_parameters,
     format_table_identifier,
@@ -31,7 +28,6 @@ from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -43,8 +39,6 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
-
-logger = get_logger("sqlspec.adapters.psqlpy")
 
 
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
@@ -94,10 +88,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsqlpyDataDictionary | None = None
         self._transaction_active = False
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
@@ -194,10 +184,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def begin(self) -> None:
         """Begin a database transaction."""
 
@@ -246,6 +232,37 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """Reset the PostgreSQL search path after non-transactional migration SQL."""
         await self.connection.execute("RESET search_path")
 
+    async def _resolve_json_columns(self, schema_name: "str | None", table_name: str) -> "set[str]":
+        """Return the destination columns the database reports as json or jsonb.
+
+        Args:
+            schema_name: Destination schema, or None for the current search path.
+            table_name: Destination table name.
+
+        The relation is resolved the way the server would resolve it in a query,
+        so a table shadowed on the search path contributes no columns, and only
+        the one relation it names is inspected. A column typed as a domain is
+        read through to the type the domain is built on.
+
+        Returns:
+            Names of columns typed json or jsonb.
+        """
+        qualified = quote_identifier(table_name)
+        if schema_name is not None:
+            qualified = f"{quote_identifier(schema_name)}.{qualified}"
+        rows = await self.connection.fetch(
+            "SELECT a.attname AS column_name "
+            "FROM pg_attribute a "
+            "JOIN pg_type t ON t.oid = a.atttypid "
+            "LEFT JOIN pg_type b ON b.oid = t.typbasetype "
+            "WHERE a.attrelid = to_regclass($1) "
+            "AND a.attnum > 0 AND NOT a.attisdropped "
+            "AND COALESCE(b.typname, t.typname) IN ('json', 'jsonb')",
+            [qualified],
+        )
+        data, _ = collect_rows(rows)
+        return {str(row["column_name"]) for row in data}
+
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
         normalized_schema = normalize_identifier(schema, "postgres")
@@ -281,10 +298,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Exception handler context manager
         """
         return PsqlpyExceptionHandler()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -338,26 +351,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 copy_kwargs: dict[str, Any] = {"columns": columns}
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
-                try:
-                    copy_payload = encode_records_for_binary_copy(records)
-                    copy_operation = cursor.binary_copy_to_table(copy_payload, table_name, **copy_kwargs)
-                    if inspect.isawaitable(copy_operation):
-                        await copy_operation
-                except (TypeError, PsqlpyDatabaseError) as exc:
-                    logger.debug("Binary COPY not available for psqlpy; falling back to INSERT statements: %s", exc)
-                    insert_sql = build_insert_statement(table, columns)
-                    formatted_records = coerce_records_for_execute_many(records)
-                    try:
-                        insert_operation = cursor.execute_many(insert_sql, formatted_records)
-                        if inspect.isawaitable(insert_operation):
-                            await insert_operation
-                    except (PsqlpyDatabaseError, PsqlpyError) as fallback_exc:
-                        if "PyJSON must be dict, list, or tuple" not in str(fallback_exc):
-                            raise
-                        formatted_records = coerce_records_for_execute_many(records, parse_json_text=True)
-                        insert_operation = cursor.execute_many(insert_sql, formatted_records)
-                        if inspect.isawaitable(insert_operation):
-                            await insert_operation
+                json_columns = await self._resolve_json_columns(schema_name, table_name)
+                await cursor.copy_records_to_table(
+                    table_name, coerce_json_columns(records, columns, json_columns), **copy_kwargs
+                )
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
@@ -381,10 +378,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def prepare_driver_parameters(
         self,
@@ -434,10 +427,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = PsqlpyDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: "PsqlpyConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psqlpy rows for the direct execution path.

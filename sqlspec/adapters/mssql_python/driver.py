@@ -31,7 +31,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.text import quote_identifier, split_qualified_identifier
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -419,14 +419,16 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         """Load Arrow data into SQL Server via BulkCopy."""
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        columns, records = self._arrow_table_to_rows(arrow_table)
         if overwrite:
             exc_handler = self.handle_database_exceptions()
             with exc_handler, self.with_cursor(self.connection) as cursor:
                 cursor.execute(f"DELETE FROM {_quote_mssql_table(table)}")
             self._check_pending_exception(exc_handler)
-        if records:
-            self.bulk_copy(table, records, column_mappings=columns)
+        if arrow_table.num_rows:
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                cursor.bulkcopy_arrow(table, arrow_table, column_mappings=list(arrow_table.column_names))
+            self._check_pending_exception(exc_handler)
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
@@ -461,7 +463,13 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
 
 def _quote_mssql_table(table: str) -> str:
-    return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
+    """Bracket-quote each part of a qualified table name.
+
+    Bracket quoting stays valid whatever the session's ``QUOTED_IDENTIFIER``
+    setting is, unlike double quotes which parse as a string literal when it is
+    off.
+    """
+    return ".".join(_quote_tsql_identifier(part) for part in split_qualified_identifier(table))
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:

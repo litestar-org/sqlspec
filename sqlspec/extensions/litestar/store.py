@@ -63,7 +63,6 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         "manage_schema",
         "migrations_path",
         "pool_key",
-        "run_migrations",
         "session_key",
         "session_table",
     })

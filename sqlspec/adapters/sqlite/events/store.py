@@ -2,10 +2,23 @@
 
 from typing import Any
 
+from typing_extensions import NotRequired
+
 from sqlspec.adapters.sqlite.config import SqliteConfig, _apply_extension_pragmas, _extension_pragma_statements
+from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("SqliteEventQueueStore",)
+__all__ = ("SqliteEventQueueStore", "SqliteEventsConfig")
+
+
+class SqliteEventsConfig(EventsConfig):
+    """Sqlite events settings for queue storage and supported native transports."""
+
+    pragma_profile: NotRequired[bool]
+    """Apply the SQLite extension-store PRAGMA profile. Default: False."""
+
+    pragma_overrides: NotRequired[dict[str, str | int | bool]]
+    """Validated SQLite PRAGMA overrides applied after the optional profile."""
 
 
 class SqliteEventQueueStore(BaseEventQueueStore[SqliteConfig]):

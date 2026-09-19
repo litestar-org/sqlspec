@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from typing_extensions import Self
 
 import sqlspec.adapters.spanner.config as spanner_config
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
@@ -59,3 +60,89 @@ def test_provide_session_accepts_spanner_execution_overrides(monkeypatch: pytest
     assert captured["driver_features"]["timeout"] == 12.0
     assert config.driver_features["request_options"] is config_request_options
     assert "database_provider" not in captured["driver_features"]
+
+
+def test_close_pool_closes_the_database() -> None:
+    """Sessions go back before Database.close() releases the manager that owns them."""
+    calls: list[str] = []
+
+    class _Database:
+        def close(self) -> None:
+            calls.append("database")
+
+    class _Pool:
+        def close(self) -> None:
+            calls.append("pool")
+
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config._database = cast("Any", _Database())
+    config.connection_instance = cast("Any", _Pool())
+
+    config.close_pool()
+
+    assert calls == ["pool", "database"]
+    assert config._database is None
+
+
+def test_write_transactions_reuse_pooled_sessions() -> None:
+    """Two write transactions must check out from the pool, not create and delete sessions."""
+
+    class _Txn:
+        _transaction_id = "txn"
+
+        def __enter__(self) -> "Self":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+    class _Session:
+        def __init__(self) -> None:
+            self.create_calls = 0
+            self.delete_calls = 0
+
+        def create(self) -> None:
+            self.create_calls += 1
+
+        def delete(self) -> None:
+            self.delete_calls += 1
+
+        def transaction(self) -> _Txn:
+            return _Txn()
+
+    class _SessionsManager:
+        def __init__(self) -> None:
+            self.session = _Session()
+            self.checked_out = 0
+            self.returned = 0
+
+        def get_session(self, _transaction_type: object) -> _Session:
+            self.checked_out += 1
+            return self.session
+
+        def put_session(self, _session: object) -> None:
+            self.returned += 1
+
+    class _Database:
+        def __init__(self) -> None:
+            self.sessions_manager = _SessionsManager()
+
+    database = _Database()
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config.get_database = lambda: cast("Any", database)  # type: ignore[assignment]
+
+    with config.provide_connection(transaction=True):
+        pass
+    with config.provide_connection(transaction=True):
+        pass
+
+    assert database.sessions_manager.checked_out == 2
+    assert database.sessions_manager.returned == 2
+    assert database.sessions_manager.session.create_calls == 0
+    assert database.sessions_manager.session.delete_calls == 0

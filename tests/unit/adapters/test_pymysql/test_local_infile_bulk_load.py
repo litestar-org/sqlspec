@@ -24,10 +24,10 @@ def test_encode_records_always_ends_with_newline() -> None:
     assert payload.endswith(b"\n")
 
 
-def test_build_load_data_statement_exact_string() -> None:
-    statement = build_load_data_statement("orders", ["id", "name"], "/tmp/data.tsv")
+def test_build_load_data_statement_binds_the_filename() -> None:
+    statement = build_load_data_statement("orders", ["id", "name"])
     assert statement == (
-        "LOAD DATA LOCAL INFILE '/tmp/data.tsv' INTO TABLE `orders` "
+        "LOAD DATA LOCAL INFILE %s INTO TABLE `orders` "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         "LINES TERMINATED BY '\\n' (`id`, `name`)"
     )
@@ -43,3 +43,8 @@ def test_config_gate_raises_when_local_infile_disabled() -> None:
 def test_config_gate_allows_when_local_infile_enabled() -> None:
     config = PyMysqlConfig(connection_config={"allow_local_infile": True})
     assert config.driver_features["enable_local_infile_bulk_load"] is True
+
+
+def test_build_load_data_statement_never_embeds_a_path() -> None:
+    """The statement carries a placeholder, so no path text can be escaped or injected."""
+    assert "LOAD DATA LOCAL INFILE %s INTO TABLE" in build_load_data_statement("orders", ["id"])

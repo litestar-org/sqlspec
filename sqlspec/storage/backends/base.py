@@ -37,25 +37,6 @@ class _ExhaustedSentinel:
 _EXHAUSTED = _ExhaustedSentinel()
 
 
-def _next_or_sentinel(iterator: "Iterator[Any]") -> "Any":
-    """Get next item or return sentinel if exhausted."""
-    try:
-        return next(iterator)
-    except StopIteration:
-        return _EXHAUSTED
-
-
-def _read_chunk_or_sentinel(file_obj: Any, chunk_size: int) -> Any:
-    """Read a chunk from a file-like object or return sentinel if exhausted."""
-    try:
-        chunk = file_obj.read(chunk_size)
-        if not chunk:
-            return _EXHAUSTED
-    except EOFError:
-        return _EXHAUSTED
-    return chunk
-
-
 class AsyncArrowBatchIterator:
     """Async iterator wrapper for sync Arrow batch iterators."""
 
@@ -334,3 +315,22 @@ class ObjectStoreBase:
     ) -> "AsyncIterator[ArrowRecordBatch]":
         """Stream Arrow record batches from storage asynchronously."""
         raise NotImplementedError
+
+
+def _next_or_sentinel(iterator: "Iterator[Any]") -> "Any":
+    """Get next item or return sentinel if exhausted."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _EXHAUSTED
+
+
+def _read_chunk_or_sentinel(file_obj: Any, chunk_size: int) -> Any:
+    """Read a chunk from a file-like object or return sentinel if exhausted."""
+    try:
+        chunk = file_obj.read(chunk_size)
+        if not chunk:
+            return _EXHAUSTED
+    except EOFError:
+        return _EXHAUSTED
+    return chunk

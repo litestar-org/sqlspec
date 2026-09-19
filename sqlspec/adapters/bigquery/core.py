@@ -5,6 +5,7 @@ import datetime
 import importlib
 import io
 from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ from sqlspec.core import (
     ParameterProfile,
     ParameterStyle,
     StatementConfig,
+    TypedParameter,
     build_null_pruning_transform,
     build_statement_config_from_profile,
 )
@@ -35,9 +37,9 @@ from sqlspec.exceptions import (
     _classify_timeout_or_cancellation,
 )
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_errors, has_value_attribute
+from sqlspec.utils.type_guards import has_errors
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -87,83 +89,6 @@ HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 COLUMN_CACHE_MAX_SIZE = 256
 _CONNECTION_NAME_PARTS = 3
-
-
-def _resolve_export_format(format_hint: "StorageFormat | None") -> str | None:
-    """Map the Arrow writer's format default to a native export format."""
-    if format_hint is None or format_hint == "parquet":
-        return "PARQUET"
-    if format_hint == "csv":
-        return "CSV"
-    if format_hint in {"json", "jsonl"}:
-        return "JSON"
-    return None
-
-
-def _build_export_statement(sql: str, uri: str, export_format: str, connection: str | None) -> str:
-    """Wrap compiled SQL without changing its bound query parameters."""
-    connection_clause = ""
-    if connection is not None:
-        parts = connection.split(".")
-        if len(parts) != _CONNECTION_NAME_PARTS or any(
-            not part or not all(char.isascii() and (char.isalnum() or char in "-_") for char in part) for part in parts
-        ):
-            msg = "native_export_connection must be a project.location.connection identifier"
-            raise ImproperConfigurationError(msg)
-        connection_clause = f" WITH CONNECTION `{connection}`"
-    options = f"uri='{uri}', format='{export_format}', overwrite=true"
-    if export_format == "CSV":
-        options += ", header=true"
-    return f"EXPORT DATA{connection_clause} OPTIONS ({options}) AS {sql}"
-
-
-def _build_export_uri(uri: str, format_hint: "StorageFormat | None" = None) -> str:
-    """Build a single-leaf-wildcard URI from a resolved storage destination.
-
-    The filename suffix is preserved independently of the selected encoding.
-    Directory destinations receive a filename matching the actual format.
-    """
-    format_name = _resolve_export_format(format_hint)
-    if format_name is None:
-        msg = "Unsupported native BigQuery export format."
-        raise ImproperConfigurationError(msg)
-    if not uri.isprintable() or any(character in uri for character in ("'", '"', "\\", "?", "#")):
-        msg = "BigQuery export URI contains unsafe characters."
-        raise ImproperConfigurationError(msg)
-
-    parsed = urlparse(uri)
-    scheme = "gs" if parsed.scheme == "gcs" else parsed.scheme
-    authority = parsed.netloc
-    if (
-        scheme not in {"gs", "s3", "azure"}
-        or not authority
-        or any(not (character.isalnum() or character in ".-_") for character in authority)
-    ):
-        msg = "BigQuery export requires a supported URI with a valid storage authority."
-        raise ImproperConfigurationError(msg)
-
-    path = parsed.path
-    if scheme == "azure":
-        account = authority.removesuffix(".blob.core.windows.net")
-        container = path.lstrip("/").split("/", 1)[0]
-        if account == authority or not account or not container or "*" in container:
-            msg = "BigQuery Azure export requires an account-qualified Blob Storage URI and container."
-            raise ImproperConfigurationError(msg)
-        if path.count("/") == 1:
-            path += "/"
-
-    parent, _, leaf = path.rpartition("/")
-    if "*" in parent or path.count("*") > 1:
-        msg = "BigQuery export URI must contain at most one wildcard, in the leaf object name."
-        raise ImproperConfigurationError(msg)
-    if "*" not in leaf:
-        if not leaf:
-            extension = "jsonl" if format_name == "JSON" else format_name.lower()
-            leaf = f"part-*.{extension}"
-        else:
-            stem, separator, suffix = leaf.rpartition(".")
-            leaf = f"{stem}-*.{suffix}" if stem and separator and suffix else f"{leaf}-*"
-    return f"{scheme}://{authority}{parent}/{leaf}"
 
 
 DEFAULT_REQUEST_TIMEOUT = 120.0
@@ -306,12 +231,13 @@ def build_inlined_script(
 logger = get_logger("sqlspec.adapters.bigquery.core")
 
 
-def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") -> "list[BigQueryParam]":
+def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | None" = None) -> "list[BigQueryParam]":
     """Create BigQuery QueryParameter objects from parameters.
 
     Args:
         parameters: Dict of named parameters or list of positional parameters
-        json_serializer: Function to serialize dict/list to JSON string
+        json_serializer: Serializer used to normalize JSON values before the
+            client encodes them, so types the stdlib encoder rejects still work.
 
     Returns:
         List of BigQuery QueryParameter objects
@@ -324,8 +250,18 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str]") 
     if isinstance(parameters, dict):
         for name, value in parameters.items():
             param_name_for_bq = name.lstrip("@")
-            actual_value = value.value if has_value_attribute(value) else value
-            param_type, array_element_type = _query_parameter_type(actual_value)
+            if _is_query_parameter(value):
+                bq_parameters.append(cast("BigQueryParam", value))
+                continue
+            declared_type: type[Any] | None = None
+            if type(value) is TypedParameter:
+                declared_type = value.original_type
+                actual_value = value.value
+            elif isinstance(value, Enum):
+                actual_value = value.value
+            else:
+                actual_value = value
+            param_type, array_element_type = _query_parameter_type(actual_value, declared_type)
 
             if param_type == "ARRAY" and array_element_type:
                 bq_parameters.append(_create_array_parameter(param_name_for_bq, actual_value, array_element_type))
@@ -817,6 +753,83 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     return _create_bigquery_error(error, status_code, SQLSpecError, "error")
 
 
+def _resolve_export_format(format_hint: "StorageFormat | None") -> str | None:
+    """Map the Arrow writer's format default to a native export format."""
+    if format_hint is None or format_hint == "parquet":
+        return "PARQUET"
+    if format_hint == "csv":
+        return "CSV"
+    if format_hint in {"json", "jsonl"}:
+        return "JSON"
+    return None
+
+
+def _build_export_statement(sql: str, uri: str, export_format: str, connection: str | None) -> str:
+    """Wrap compiled SQL without changing its bound query parameters."""
+    connection_clause = ""
+    if connection is not None:
+        parts = connection.split(".")
+        if len(parts) != _CONNECTION_NAME_PARTS or any(
+            not part or not all(char.isascii() and (char.isalnum() or char in "-_") for char in part) for part in parts
+        ):
+            msg = "native_export_connection must be a project.location.connection identifier"
+            raise ImproperConfigurationError(msg)
+        connection_clause = f" WITH CONNECTION `{connection}`"
+    options = f"uri='{uri}', format='{export_format}', overwrite=true"
+    if export_format == "CSV":
+        options += ", header=true"
+    return f"EXPORT DATA{connection_clause} OPTIONS ({options}) AS {sql}"
+
+
+def _build_export_uri(uri: str, format_hint: "StorageFormat | None" = None) -> str:
+    """Build a single-leaf-wildcard URI from a resolved storage destination.
+
+    The filename suffix is preserved independently of the selected encoding.
+    Directory destinations receive a filename matching the actual format.
+    """
+    format_name = _resolve_export_format(format_hint)
+    if format_name is None:
+        msg = "Unsupported native BigQuery export format."
+        raise ImproperConfigurationError(msg)
+    if not uri.isprintable() or any(character in uri for character in ("'", '"', "\\", "?", "#")):
+        msg = "BigQuery export URI contains unsafe characters."
+        raise ImproperConfigurationError(msg)
+
+    parsed = urlparse(uri)
+    scheme = "gs" if parsed.scheme == "gcs" else parsed.scheme
+    authority = parsed.netloc
+    if (
+        scheme not in {"gs", "s3", "azure"}
+        or not authority
+        or any(not (character.isalnum() or character in ".-_") for character in authority)
+    ):
+        msg = "BigQuery export requires a supported URI with a valid storage authority."
+        raise ImproperConfigurationError(msg)
+
+    path = parsed.path
+    if scheme == "azure":
+        account = authority.removesuffix(".blob.core.windows.net")
+        container = path.lstrip("/").split("/", 1)[0]
+        if account == authority or not account or not container or "*" in container:
+            msg = "BigQuery Azure export requires an account-qualified Blob Storage URI and container."
+            raise ImproperConfigurationError(msg)
+        if path.count("/") == 1:
+            path += "/"
+
+    parent, _, leaf = path.rpartition("/")
+    if "*" in parent or path.count("*") > 1:
+        msg = "BigQuery export URI must contain at most one wildcard, in the leaf object name."
+        raise ImproperConfigurationError(msg)
+    if "*" not in leaf:
+        if not leaf:
+            extension = "jsonl" if format_name == "JSON" else format_name.lower()
+            leaf = f"part-*.{extension}"
+        else:
+            stem, separator, suffix = leaf.rpartition(".")
+            leaf = f"{stem}-*.{suffix}" if stem and separator and suffix else f"{leaf}-*"
+    return f"{scheme}://{authority}{parent}/{leaf}"
+
+
 class _BigQueryRow(Protocol):
     def items(self) -> "Iterable[tuple[str, object]]": ...
 
@@ -929,19 +942,29 @@ def _create_array_parameter(name: str, value: Any, array_type: str) -> "BigQuery
     return cast("BigQueryParam", bigquery.ArrayQueryParameter(name, array_type, [] if value is None else list(value)))
 
 
-def _create_json_parameter(name: str, value: Any, json_serializer: "Callable[[Any], str]") -> "BigQueryParam":
-    """Create BigQuery JSON parameter as STRING type.
+def _create_json_parameter(
+    name: str, value: Any, json_serializer: "Callable[[Any], str] | None" = None
+) -> "BigQueryParam":
+    """Create a BigQuery JSON parameter.
+
+    The client encodes JSON parameters itself with the standard library, which
+    rejects values such as UUID and Decimal. The configured serializer is used
+    to normalize the value first, then the result is decoded back into plain
+    containers so the client encodes a JSON object rather than a JSON string.
 
     Args:
         name: Parameter name.
         value: JSON-serializable value.
-        json_serializer: Function to serialize to JSON string.
+        json_serializer: Serializer to normalize the value with.
 
     Returns:
-        ScalarQueryParameter with STRING type.
+        ScalarQueryParameter with JSON type.
     """
     bigquery = _load_bigquery_module()
-    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "STRING", json_serializer(value)))
+    normalized = value
+    if json_serializer is not None:
+        normalized = from_json(json_serializer(value))
+    return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "JSON", normalized))
 
 
 def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
@@ -959,6 +982,21 @@ def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQuer
     return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, param_type, value))
 
 
+def _is_query_parameter(value: Any) -> bool:
+    """Return whether the value is already a BigQuery query parameter.
+
+    Args:
+        value: Candidate parameter value.
+
+    Returns:
+        True when the value is a prebuilt BigQuery parameter object.
+    """
+    bigquery = _load_bigquery_module()
+    return isinstance(
+        value, (bigquery.ScalarQueryParameter, bigquery.ArrayQueryParameter, bigquery.StructQueryParameter)
+    )
+
+
 def _load_bigquery_module() -> Any:
     global _BIGQUERY_MODULE
     if _BIGQUERY_MODULE is None:
@@ -968,16 +1006,22 @@ def _load_bigquery_module() -> Any:
     return _BIGQUERY_MODULE
 
 
-def _query_parameter_type(value: Any) -> "tuple[str | None, str | None]":
+def _query_parameter_type(value: Any, declared_type: "type[Any] | None" = None) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
     Args:
         value: Python value to determine BigQuery type for
+        declared_type: Type declared on the parameter, used for NULL values
+            where the runtime type carries no information.
 
     Returns:
         Tuple of (parameter_type, array_element_type)
     """
     if value is None:
+        if declared_type is not None and declared_type in _BQ_TYPE_MAP:
+            return _BQ_TYPE_MAP[declared_type]
+        if declared_type is datetime.datetime:
+            return ("TIMESTAMP", None)
         return ("STRING", None)
 
     value_type = type(value)

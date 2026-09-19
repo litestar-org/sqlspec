@@ -207,6 +207,61 @@ def default_statement_observer(event: StatementEvent) -> None:
     _emit_otel_statement_log(event, _DEFAULT_LOGGING_CONFIG)
 
 
+def create_event(
+    *,
+    sql: str,
+    parameters: Any,
+    driver: str,
+    adapter: str,
+    bind_key: "str | None",
+    operation: str,
+    execution_mode: "str | None",
+    is_many: bool,
+    is_script: bool,
+    rows_affected: "int | None",
+    duration_s: float,
+    correlation_id: "str | None",
+    storage_backend: "str | None" = None,
+    started_at: float | None = None,
+    db_system: "str | None" = None,
+    sql_hash: "str | None" = None,
+    sql_truncated: bool = False,
+    sql_original_length: "int | None" = None,
+    transaction_state: "str | None" = None,
+    prepared_statement: "bool | None" = None,
+    trace_id: "str | None" = None,
+    span_id: "str | None" = None,
+    sampled: bool = True,
+) -> StatementEvent:
+    """Factory helper for runtime statement events."""
+
+    return StatementEvent(
+        sql=sql,
+        parameters=parameters,
+        driver=driver,
+        adapter=adapter,
+        bind_key=bind_key,
+        db_system=db_system,
+        operation=operation,
+        execution_mode=execution_mode,
+        is_many=is_many,
+        is_script=is_script,
+        rows_affected=rows_affected,
+        duration_s=duration_s,
+        started_at=started_at if started_at is not None else time(),
+        correlation_id=correlation_id,
+        storage_backend=storage_backend,
+        sql_hash=sql_hash,
+        sql_truncated=sql_truncated,
+        sql_original_length=sql_original_length,
+        transaction_state=transaction_state,
+        prepared_statement=prepared_statement,
+        trace_id=trace_id,
+        span_id=span_id,
+        sampled=sampled,
+    )
+
+
 def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConfig") -> None:
     sql_preview, sql_truncated, sql_length = _truncate_text(event.sql, max_chars=logging_config.sql_truncation_length)
     if event.sql_original_length is not None:
@@ -297,58 +352,3 @@ def _maybe_truncate_parameters(parameters: Any, *, max_items: int) -> tuple[Any,
             return parameters, False
         return parameters[:max_items], True
     return parameters, False
-
-
-def create_event(
-    *,
-    sql: str,
-    parameters: Any,
-    driver: str,
-    adapter: str,
-    bind_key: "str | None",
-    operation: str,
-    execution_mode: "str | None",
-    is_many: bool,
-    is_script: bool,
-    rows_affected: "int | None",
-    duration_s: float,
-    correlation_id: "str | None",
-    storage_backend: "str | None" = None,
-    started_at: float | None = None,
-    db_system: "str | None" = None,
-    sql_hash: "str | None" = None,
-    sql_truncated: bool = False,
-    sql_original_length: "int | None" = None,
-    transaction_state: "str | None" = None,
-    prepared_statement: "bool | None" = None,
-    trace_id: "str | None" = None,
-    span_id: "str | None" = None,
-    sampled: bool = True,
-) -> StatementEvent:
-    """Factory helper for runtime statement events."""
-
-    return StatementEvent(
-        sql=sql,
-        parameters=parameters,
-        driver=driver,
-        adapter=adapter,
-        bind_key=bind_key,
-        db_system=db_system,
-        operation=operation,
-        execution_mode=execution_mode,
-        is_many=is_many,
-        is_script=is_script,
-        rows_affected=rows_affected,
-        duration_s=duration_s,
-        started_at=started_at if started_at is not None else time(),
-        correlation_id=correlation_id,
-        storage_backend=storage_backend,
-        sql_hash=sql_hash,
-        sql_truncated=sql_truncated,
-        sql_original_length=sql_original_length,
-        transaction_state=transaction_state,
-        prepared_statement=prepared_statement,
-        trace_id=trace_id,
-        span_id=span_id,
-        sampled=sampled,
-    )

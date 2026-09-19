@@ -182,12 +182,33 @@ def connection_is_thin(connection: object) -> bool:
 
 
 def supports_direct_path_load(connection: object) -> bool:
-    """Return whether a connection exposes Thin-mode direct path load."""
+    """Return whether a connection supports direct path load.
+
+    The declared ``oracledb>=3.4`` floor guarantees the API on a real
+    ``oracledb`` connection, but a proxy or test double may not carry it, and
+    the documented behaviour is to fall back rather than raise.
+
+    Args:
+        connection: The connection about to be used for ingestion.
+
+    Returns:
+        True when the connection is Thin-mode and exposes the API.
+    """
     return connection_is_thin(connection) and hasattr(connection, "direct_path_load")
 
 
 def supports_df_batches(connection: object) -> bool:
-    """Return whether a connection exposes DataFrame batch fetches."""
+    """Return whether a connection exposes DataFrame batch fetches.
+
+    ``fetch_df_batches`` landed in python-oracledb 3.0, below the declared
+    floor, but a proxy or test double may still not carry it.
+
+    Args:
+        connection: The connection about to be used for Arrow batch fetches.
+
+    Returns:
+        True when the connection exposes the API.
+    """
     return hasattr(connection, "fetch_df_batches")
 
 
@@ -630,7 +651,16 @@ def resolve_row_metadata(
 class OracleSyncStreamSource:
     """Compiled chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_fetch_lobs", "_parameters", "_sql")
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_cursor",
+        "_driver",
+        "_fetch_lobs",
+        "_parameters",
+        "_requires_lob_coercion",
+        "_sql",
+    )
 
     def __init__(
         self,
@@ -647,6 +677,7 @@ class OracleSyncStreamSource:
         self._fetch_lobs = fetch_lobs
         self._cursor: OracleSyncRawCursor | None = None
         self._column_names: list[str] | None = None
+        self._requires_lob_coercion: bool | None = None
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -683,9 +714,31 @@ class OracleSyncStreamSource:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names, _ = self._driver._resolve_row_metadata(cursor.description)
+            column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
-        return rows_to_dicts(rows, column_names)
+            self._requires_lob_coercion = requires_lob_coercion
+        if self._caller_wants_locators():
+            return rows_to_dicts(rows, column_names)
+        coerced_rows, column_names = collect_sync_rows(
+            rows,
+            cursor.description,
+            self._driver.driver_features,
+            column_names=column_names,
+            requires_lob_coercion=self._requires_lob_coercion,
+        )
+        return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
+
+    def _caller_wants_locators(self) -> bool:
+        """Report whether the caller asked to receive LOB locators.
+
+        ``fetch_lobs=True`` is a documented escape hatch for reading a LOB
+        incrementally, so coercing under it would remove the only reason to ask
+        for it.
+        """
+        fetch_lobs = self._fetch_lobs
+        if fetch_lobs is None:
+            fetch_lobs = self._driver.driver_features.get("fetch_lobs")
+        return bool(fetch_lobs)
 
     def close(self, error: bool = False) -> None:
         cursor = self._cursor
@@ -698,7 +751,16 @@ class OracleSyncStreamSource:
 class OracleAsyncStreamSource:
     """Compiled async chunk source streaming dict rows from an oracledb cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_fetch_lobs", "_parameters", "_sql")
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_cursor",
+        "_driver",
+        "_fetch_lobs",
+        "_parameters",
+        "_requires_lob_coercion",
+        "_sql",
+    )
 
     def __init__(
         self,
@@ -715,6 +777,7 @@ class OracleAsyncStreamSource:
         self._fetch_lobs = fetch_lobs
         self._cursor: OracleAsyncRawCursor | None = None
         self._column_names: list[str] | None = None
+        self._requires_lob_coercion: bool | None = None
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -751,9 +814,31 @@ class OracleAsyncStreamSource:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names, _ = self._driver._resolve_row_metadata(cursor.description)
+            column_names, requires_lob_coercion = self._driver._resolve_row_metadata(cursor.description)
             self._column_names = column_names
-        return rows_to_dicts(rows, column_names)
+            self._requires_lob_coercion = requires_lob_coercion
+        if self._caller_wants_locators():
+            return rows_to_dicts(rows, column_names)
+        coerced_rows, column_names = await collect_async_rows(
+            rows,
+            cursor.description,
+            self._driver.driver_features,
+            column_names=column_names,
+            requires_lob_coercion=self._requires_lob_coercion,
+        )
+        return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
+
+    def _caller_wants_locators(self) -> bool:
+        """Report whether the caller asked to receive LOB locators.
+
+        ``fetch_lobs=True`` is a documented escape hatch for reading a LOB
+        incrementally, so coercing under it would remove the only reason to ask
+        for it.
+        """
+        fetch_lobs = self._fetch_lobs
+        if fetch_lobs is None:
+            fetch_lobs = self._driver.driver_features.get("fetch_lobs")
+        return bool(fetch_lobs)
 
     async def close(self, error: bool = False) -> None:
         cursor = self._cursor

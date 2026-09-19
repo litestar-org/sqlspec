@@ -918,6 +918,21 @@ FilterTypes: TypeAlias = (
 )
 
 
+def canonicalize_filters(filters: "abc.Sequence[StatementFilter]") -> "tuple[StatementFilter, ...]":
+    """Deduplicate and sort filters by type and field name for consistent hashing.
+
+    Args:
+        filters: Sequence of StatementFilter objects
+
+    Returns:
+        Canonically sorted tuple of unique filters
+    """
+    unique_filters: dict[tuple[Any, ...], StatementFilter] = {}
+    for filter_ in filters:
+        unique_filters.setdefault(_canonical_filter_key(filter_), filter_)
+    return tuple(sorted(unique_filters.values(), key=_filter_sort_key))
+
+
 def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str, str]":
     """Sort key for canonicalizing filters by type, field name, and value."""
     class_name = type(f).__name__
@@ -949,18 +964,3 @@ def _stable_filter_key_part(value: Any) -> Any:
 
 def _canonical_filter_key(f: "StatementFilter") -> "tuple[Any, ...]":
     return tuple(_stable_filter_key_part(item) for item in f.get_cache_key())
-
-
-def canonicalize_filters(filters: "abc.Sequence[StatementFilter]") -> "tuple[StatementFilter, ...]":
-    """Deduplicate and sort filters by type and field name for consistent hashing.
-
-    Args:
-        filters: Sequence of StatementFilter objects
-
-    Returns:
-        Canonically sorted tuple of unique filters
-    """
-    unique_filters: dict[tuple[Any, ...], StatementFilter] = {}
-    for filter_ in filters:
-        unique_filters.setdefault(_canonical_filter_key(filter_), filter_)
-    return tuple(sorted(unique_filters.values(), key=_filter_sort_key))

@@ -66,21 +66,6 @@ else:
         _VISIBILITY_LOOKUP["AQMSG_INVISIBLE"] = AQMSG_INVISIBLE
 
 
-def _resolve_visibility_setting(value: Any) -> "int | None":
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if not isinstance(value, str):
-        msg = f"Invalid aq_visibility value: {value!r}. Expected int or AQMSG_* string."
-        raise ImproperConfigurationError(msg)
-    visibility = _VISIBILITY_LOOKUP.get(value)
-    if visibility is None:
-        msg = f"Invalid aq_visibility value: {value!r}. Expected one of: {sorted(_VISIBILITY_LOOKUP)}"
-        raise ImproperConfigurationError(msg)
-    return visibility
-
-
 class OracleSyncAQEventBackend:
     """Oracle AQ backend for sync Oracle adapters."""
 
@@ -260,6 +245,51 @@ class OracleAsyncTxEventQEventBackend(OracleAsyncAQEventBackend):
     backend_name = "txeventq"
 
 
+def create_event_backend(
+    config: "OracleAsyncConfig | OracleSyncConfig", backend_name: str, extension_settings: "dict[str, Any]"
+) -> "OracleSyncAQEventBackend | OracleAsyncAQEventBackend | None":
+    """EventChannel factory for the Oracle AQ backend."""
+    is_async = config.is_async
+    match (backend_name, is_async):
+        case ("aq", False):
+            try:
+                return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case ("aq", True):
+            try:
+                return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case ("txeventq", False):
+            try:
+                return OracleSyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case ("txeventq", True):
+            try:
+                return OracleAsyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case _:
+            return None
+
+
+def _resolve_visibility_setting(value: Any) -> "int | None":
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        msg = f"Invalid aq_visibility value: {value!r}. Expected int or AQMSG_* string."
+        raise ImproperConfigurationError(msg)
+    visibility = _VISIBILITY_LOOKUP.get(value)
+    if visibility is None:
+        msg = f"Invalid aq_visibility value: {value!r}. Expected one of: {sorted(_VISIBILITY_LOOKUP)}"
+        raise ImproperConfigurationError(msg)
+    return visibility
+
+
 def _get_publish_queue(connection: Any, channel: str, queue_name: str) -> Any:
     """Acquire a queue handle for a one-shot publish."""
     if not _ORACLEDB_AVAILABLE:
@@ -309,33 +339,3 @@ def _parse_message(channel: str, payload: Any) -> EventMessage:
         lease_expires_at=None,
         created_at=timestamp,
     )
-
-
-def create_event_backend(
-    config: "OracleAsyncConfig | OracleSyncConfig", backend_name: str, extension_settings: "dict[str, Any]"
-) -> "OracleSyncAQEventBackend | OracleAsyncAQEventBackend | None":
-    """EventChannel factory for the Oracle AQ backend."""
-    is_async = config.is_async
-    match (backend_name, is_async):
-        case ("aq", False):
-            try:
-                return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case ("aq", True):
-            try:
-                return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case ("txeventq", False):
-            try:
-                return OracleSyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case ("txeventq", True):
-            try:
-                return OracleAsyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case _:
-            return None

@@ -105,6 +105,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         "_max_batch_bytes",
         "_max_binary_size_val",
         "_max_text_size_val",
+        "_payload_text_encoding",
         "_query_timeout_sec_val",
         "_transaction_active",
         "_use_concurrent_fetch",
@@ -134,6 +135,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._max_binary_size_val: int | None = features.get("max_binary_size")
         self._max_text_size_val: int | None = features.get("max_text_size")
         self._query_timeout_sec_val: int | None = features.get("query_timeout_sec")
+        self._payload_text_encoding: Any = features.get("payload_text_encoding")
         self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
         self.dialect = statement_dialect
         self._data_dictionary: ArrowOdbcDataDictionary | None = None
@@ -385,6 +387,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         }
         if self._query_timeout_sec_val is not None:
             kwargs["query_timeout_sec"] = self._query_timeout_sec_val
+        if self._payload_text_encoding is not None:
+            kwargs["payload_text_encoding"] = self._payload_text_encoding
         return self.connection.read_arrow_batches(**kwargs)
 
     def _chunk_size(self) -> int:

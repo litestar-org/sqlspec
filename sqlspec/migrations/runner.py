@@ -481,6 +481,10 @@ class BaseMigrationRunner:
     ) -> bool:
         """Determine if migration should run in a transaction.
 
+        An explicit per-migration directive takes precedence over the config's
+        transactional-DDL capability, so a data migration can still run
+        atomically on a backend that restricts DDL in transactions.
+
         Args:
             migration: Migration metadata dictionary.
             config: The database configuration instance.
@@ -488,11 +492,11 @@ class BaseMigrationRunner:
         Returns:
             True if migration should be wrapped in a transaction.
         """
-        if not config.supports_transactional_ddl:
-            return False
-
         if migration.get("transactional") is not None:
             return bool(migration["transactional"])
+
+        if not config.supports_transactional_ddl:
+            return False
 
         migration_config = cast("dict[str, Any]", config.migration_config) or {}
         return bool(migration_config.get("transactional", True))

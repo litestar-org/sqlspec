@@ -1,12 +1,20 @@
 import base64
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
+import pytest
 import uuid_utils
+from google.cloud.spanner_v1 import param_types
 from google.cloud.spanner_v1.data_types import JsonObject
 
-from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, spanner_json, spanner_to_uuid
+from sqlspec.adapters.spanner.type_converter import (
+    coerce_params_for_spanner,
+    infer_spanner_param_types,
+    spanner_json,
+    spanner_to_uuid,
+)
 from sqlspec.core import TypedParameter
 
 
@@ -139,3 +147,58 @@ def test_spanner_uuid_conversion_disabled() -> None:
     assert coerced is params
     assert coerced["stdlib_id"] is stdlib_uuid
     assert coerced["utils_id"] is utils_uuid
+
+
+def test_typed_null_parameter_is_given_a_spanner_type() -> None:
+    """Spanner rejects an untyped NULL, so a declared type must survive to inference."""
+    types = infer_spanner_param_types({"value": TypedParameter(None, str)})
+
+    assert types["value"] == param_types.STRING
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected_name"),
+    [(bool, "BOOL"), (int, "INT64"), (float, "FLOAT64"), (str, "STRING"), (bytes, "BYTES")],
+)
+def test_typed_null_covers_the_scalar_types(declared: type, expected_name: str) -> None:
+    types = infer_spanner_param_types({"value": TypedParameter(None, declared)})
+
+    assert types["value"] == getattr(param_types, expected_name)
+
+
+def test_bare_null_parameter_is_omitted_so_spanner_infers_it() -> None:
+    """An ordinary None must keep working; Spanner infers the type from the query."""
+    assert infer_spanner_param_types({"value": None}) == {}
+
+
+def test_bare_null_does_not_suppress_its_siblings() -> None:
+    """Only the untyped NULL is omitted, not the whole parameter set."""
+    types = infer_spanner_param_types({"id": "x", "email": None})
+
+    assert set(types) == {"id"}
+
+
+def test_typed_null_covers_decimal_and_uuid() -> None:
+    """The types the parameter pipeline auto-wraps must all be resolvable."""
+    assert infer_spanner_param_types({"amount": TypedParameter(None, Decimal)})["amount"] == param_types.NUMERIC
+    assert infer_spanner_param_types({"ident": TypedParameter(None, UUID)})["ident"] == param_types.STRING
+
+
+def test_typed_null_with_an_unmappable_type_is_omitted() -> None:
+    """An unmappable declared type falls back to Spanner's own inference."""
+    assert infer_spanner_param_types({"value": TypedParameter(None, object)}) == {}
+
+
+def test_typed_non_null_parameter_still_infers_from_its_value() -> None:
+    """Wrapping a real value must not change the inferred type."""
+    types = infer_spanner_param_types({"value": TypedParameter("alice", str)})
+
+    assert types["value"] == param_types.STRING
+
+
+@pytest.mark.parametrize("uuid_value", [UUID("12345678-1234-5678-1234-567812345678"), uuid_utils.uuid4()])
+def test_a_uuid_parameter_declares_string_before_coercion(uuid_value: Any) -> None:
+    """Types are inferred from the raw parameters, so UUID must be recognised there."""
+    types = infer_spanner_param_types({"id": uuid_value})
+
+    assert types["id"] == param_types.STRING

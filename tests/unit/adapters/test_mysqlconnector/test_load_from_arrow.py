@@ -22,14 +22,16 @@ _CAPS: dict[str, Any] = {
 class _FakeSyncCursor:
     def __init__(self) -> None:
         self.execute_calls: list[str] = []
+        self.execute_parameters: list[Any] = []
         self.executemany_calls: list[tuple[str, list[Any]]] = []
         self.loaded_payload: bytes | None = None
         self.rowcount = 0
 
-    def execute(self, sql: str, *_args: Any) -> None:
+    def execute(self, sql: str, parameters: Any = None) -> None:
         self.execute_calls.append(sql)
+        self.execute_parameters.append(parameters)
         if sql.startswith("LOAD DATA"):
-            self.loaded_payload = Path(sql.split("'")[1]).read_bytes()
+            self.loaded_payload = Path(parameters[0]).read_bytes()
 
     def executemany(self, sql: str, params: Any) -> None:
         self.executemany_calls.append((sql, [tuple(row) for row in params]))
@@ -49,14 +51,16 @@ class _FakeSyncConnection:
 class _FakeAsyncCursor:
     def __init__(self) -> None:
         self.execute_calls: list[str] = []
+        self.execute_parameters: list[Any] = []
         self.executemany_calls: list[tuple[str, list[Any]]] = []
         self.loaded_payload: bytes | None = None
         self.rowcount = 0
 
-    async def execute(self, sql: str, *_args: Any) -> None:
+    async def execute(self, sql: str, parameters: Any = None) -> None:
         self.execute_calls.append(sql)
+        self.execute_parameters.append(parameters)
         if sql.startswith("LOAD DATA"):
-            self.loaded_payload = await anyio.Path(sql.split("'")[1]).read_bytes()
+            self.loaded_payload = await anyio.Path(parameters[0]).read_bytes()
 
     async def executemany(self, sql: str, params: Any) -> None:
         self.executemany_calls.append((sql, [tuple(row) for row in params]))
@@ -167,3 +171,37 @@ async def test_async_load_from_storage_reads_parquet_and_delegates(tmp_path: Pat
 
     assert job.telemetry["rows_processed"] == 2
     assert conn._cursor.executemany_calls[0][1] == [(1, "a"), (2, "b")]
+
+
+def test_sync_load_from_arrow_binds_the_infile_path_as_a_parameter() -> None:
+    """The temp file name must travel as a bound parameter, never inside the SQL text."""
+    conn = _FakeSyncConnection()
+    config = MysqlConnectorSyncConfig(connection_config={"local_infile": True})
+    driver = MysqlConnectorSyncDriver(
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
+    )
+
+    driver.load_from_arrow("orders", pa.table({"id": [1], "name": ["a"]}))
+
+    statement = conn._cursor.execute_calls[0]
+    parameters = conn._cursor.execute_parameters[0]
+    assert "LOAD DATA LOCAL INFILE %s INTO TABLE" in statement
+    assert isinstance(parameters, tuple)
+    assert parameters[0].endswith(".tsv")
+    assert parameters[0] not in statement
+
+
+async def test_async_load_from_arrow_binds_the_infile_path_as_a_parameter() -> None:
+    """The async path must bind the filename too."""
+    conn = _FakeAsyncConnection()
+    config = MysqlConnectorAsyncConfig(connection_config={"local_infile": True})
+    driver = MysqlConnectorAsyncDriver(
+        connection=cast("Any", conn), driver_features={**config.driver_features, "storage_capabilities": _CAPS}
+    )
+
+    await driver.load_from_arrow("orders", pa.table({"id": [1], "name": ["a"]}))
+
+    statement = conn._cursor.execute_calls[0]
+    parameters = conn._cursor.execute_parameters[0]
+    assert "LOAD DATA LOCAL INFILE %s INTO TABLE" in statement
+    assert parameters[0] not in statement

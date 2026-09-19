@@ -1,8 +1,10 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from asyncpg import Connection, Record
+from asyncpg import connect as asyncpg_connect
 from asyncpg import create_pool as asyncpg_create_pool
 from asyncpg.connection import ConnectionMeta
 from asyncpg.pool import Pool, PoolConnectionProxy, PoolConnectionProxyMeta
@@ -60,6 +62,16 @@ __all__ = (
     "register_pgvector_support",
 )
 
+
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
+    "init",
+    "max_inactive_connection_lifetime",
+    "max_queries",
+    "max_size",
+    "min_size",
+    "reset",
+    "setup",
+})
 
 logger = get_logger(__name__)
 
@@ -315,8 +327,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features)
         self._user_connection_hook: Callable[[AsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -406,7 +416,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         from google.cloud.sql.connector import Connector  # type: ignore[import-untyped,unused-ignore]
 
-        self._cloud_sql_connector = Connector()
+        if self._cloud_sql_connector is None:
+            self._cloud_sql_connector = Connector()
 
         user = config.get("user")
         password = config.get("password")
@@ -425,7 +436,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         """
         from google.cloud.alloydb.connector import AsyncConnector  # type: ignore[import-untyped,unused-ignore]
 
-        self._alloydb_connector = AsyncConnector()
+        if self._alloydb_connector is None:
+            self._alloydb_connector = AsyncConnector()
 
         user = config.get("user")
         password = config.get("password")
@@ -513,16 +525,33 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             self._alloydb_connector = None
 
     async def create_connection(self) -> "AsyncpgConnection":
-        """Create a single async connection from the pool.
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection parameters and init hook the
+        pool applies, consumes no pool slot, and must be closed by the caller.
 
         Returns:
             An AsyncPG connection instance.
         """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        return await pool.acquire()
+        config = build_connection_config(self.connection_config)
+        for key in _POOL_ONLY_CONFIG_KEYS:
+            config.pop(key, None)
+
+        if self.driver_features.get("enable_cloud_sql", False):
+            self._setup_cloud_sql_connector(config)
+        elif self.driver_features.get("enable_alloydb", False):
+            self._setup_alloydb_connector(config)
+
+        connect = config.pop("connect", None)
+        connection = await connect() if connect is not None else await asyncpg_connect(**config)
+        init = self.connection_config.get("init", self._init_connection)
+        try:
+            await init(connection)
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
+        return cast("AsyncpgConnection", connection)
 
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any

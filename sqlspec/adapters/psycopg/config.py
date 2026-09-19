@@ -1,6 +1,7 @@
 """Psycopg database configuration with direct field-based configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from psycopg import Connection as PsycopgConnection
@@ -62,6 +63,23 @@ __all__ = (
 
 PsycopgSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 _ALLOYDB_DIRECT_CONNECTION_KEYS = ("conninfo", "host", "hostaddr", "port", "user", "password", "dbname", "db")
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
+    "check",
+    "close_returns",
+    "configure",
+    "max_idle",
+    "max_lifetime",
+    "max_size",
+    "max_waiting",
+    "min_size",
+    "name",
+    "num_workers",
+    "open",
+    "reconnect_failed",
+    "reconnect_timeout",
+    "reset",
+    "timeout",
+})
 _ALLOYDB_CONNECTOR_PACKAGE = "google-cloud-alloydb-connector"
 
 
@@ -169,46 +187,6 @@ class PsycopgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
 
 
-def _make_alloydb_connection_class(
-    *,
-    connector: Any,
-    instance_uri: str,
-    enable_iam_auth: bool,
-    ip_type: str,
-    user: str | None,
-    password: str | None,
-    database: str | None,
-) -> "type[PsycopgConnection[Any]]":
-    """Build a psycopg connection class backed by the AlloyDB connector."""
-
-    class _AlloyDBPsycopgConnection(PsycopgConnection[Any]):
-        @classmethod
-        def connect(
-            cls,
-            conninfo: str = "",
-            *,
-            autocommit: bool = False,
-            prepare_threshold: int | None = 5,
-            context: "AdaptContext | None" = None,
-            row_factory: "RowFactory[Any] | None" = None,
-            cursor_factory: "type[Cursor[Any]] | None" = None,
-            **kwargs: str | int | None,
-        ) -> Self:
-            _ = (cls, conninfo, autocommit, prepare_threshold, context, row_factory, cursor_factory)
-            connector_kwargs = dict(kwargs)
-            connector_kwargs["enable_iam_auth"] = enable_iam_auth
-            connector_kwargs["ip_type"] = ip_type
-            if user is not None:
-                connector_kwargs["user"] = user
-            if password is not None:
-                connector_kwargs["password"] = password
-            if database is not None:
-                connector_kwargs["db"] = database
-            return cast("Self", connector.connect(instance_uri, "psycopg", **connector_kwargs))
-
-    return _AlloyDBPsycopgConnection
-
-
 class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Psycopg connections."""
 
@@ -218,45 +196,28 @@ class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
         super().__init__(config)
 
     def __enter__(self) -> "PsycopgSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgSyncConnection", self._ctx.__enter__())
-        # Fallback for no pool
-        self._ctx = self._config.create_connection()
-        return cast("PsycopgSyncConnection", self._ctx)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("PsycopgSyncConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._config.connection_instance and self._ctx:
-            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
-        if self._ctx:
-            self._ctx.close()
-        return None
+        if self._ctx is None:
+            return None
+        return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
 
 
 class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_conn",)
-
-    def __init__(self, config: "PsycopgSyncConfig") -> None:
-        super().__init__(config)
-        self._conn: PsycopgSyncConnection | None = None
+    __slots__ = ()
 
     def acquire_connection(self) -> "PsycopgSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgSyncConnection", self._ctx.__enter__())
-        self._conn = self._config.create_connection()
-        return cast("PsycopgSyncConnection", self._conn)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("PsycopgSyncConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "PsycopgSyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
             self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
-            return
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
 
 
 @mypyc_attr(native_class=False)
@@ -367,7 +328,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         """Setup AlloyDB connector and configure psycopg-pool connection_class."""
         from google.cloud.alloydb.connector import Connector  # type: ignore[import-untyped,unused-ignore]
 
-        self._alloydb_connector = Connector()
+        if self._alloydb_connector is None:
+            self._alloydb_connector = Connector()
 
         user = config.get("user")
         password = config.get("password")
@@ -487,15 +449,44 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 self._alloydb_connector.close()
                 self._alloydb_connector = None
 
+    def _connection_kwargs(self) -> "tuple[type[Any], str, dict[str, Any]]":
+        """Split the pooled configuration into standalone connect arguments.
+
+        Returns:
+            The connection class, the conninfo string, and the connect kwargs.
+        """
+        all_config = {k: v for k, v in self.connection_config.items() if k not in _POOL_ONLY_CONFIG_KEYS}
+        connection_class = all_config.pop("connection_class", None) or PsycopgConnection
+        conninfo = all_config.pop("conninfo", None)
+        all_config.update(all_config.pop("kwargs", {}))
+        if self.driver_features.get("enable_alloydb", False):
+            if conninfo is not None:
+                all_config["conninfo"] = conninfo
+            alloydb_parameters: dict[str, Any] = {}
+            self._setup_alloydb_connector(all_config, alloydb_parameters)
+            connection_class = alloydb_parameters["connection_class"]
+            conninfo = None
+        return cast("type[Any]", connection_class), str(conninfo or ""), all_config
+
     def create_connection(self) -> "PsycopgSyncConnection":
-        """Create a single connection (not from pool).
+        """Open a standalone connection owned by the caller.
+
+        The connection is not bound to the pool, so closing it actually closes
+        it and consumes no pool slot.
 
         Returns:
             A psycopg Connection instance.
         """
-        if self.connection_instance is None:
-            self.connection_instance = self.create_pool()
-        return cast("PsycopgSyncConnection", self.connection_instance.getconn())  # pyright: ignore
+        connection_class, conninfo, connection_kwargs = self._connection_kwargs()
+        connection = connection_class.connect(conninfo, **connection_kwargs)
+        configure = self.connection_config.get("configure", self._configure_connection)
+        try:
+            configure(cast("PsycopgSyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                connection.close()
+            raise
+        return cast("PsycopgSyncConnection", connection)
 
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
@@ -776,15 +767,37 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         finally:
             self.connection_instance = None
 
+    def _connection_kwargs(self) -> "tuple[type[Any], str, dict[str, Any]]":
+        """Split the pooled configuration into standalone connect arguments.
+
+        Returns:
+            The connection class, the conninfo string, and the connect kwargs.
+        """
+        all_config = {k: v for k, v in self.connection_config.items() if k not in _POOL_ONLY_CONFIG_KEYS}
+        connection_class = all_config.pop("connection_class", None) or PsycopgAsyncConnection
+        conninfo = all_config.pop("conninfo", None)
+        all_config.update(all_config.pop("kwargs", {}))
+        return cast("type[Any]", connection_class), str(conninfo or ""), all_config
+
     async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
-        """Create a single async connection (not from pool).
+        """Open a standalone connection owned by the caller.
+
+        The connection is not bound to the pool, so closing it actually closes
+        it and consumes no pool slot.
 
         Returns:
             A psycopg AsyncConnection instance.
         """
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        return cast("PsycopgAsyncConnection", await self.connection_instance.getconn())  # pyright: ignore
+        connection_class, conninfo, connection_kwargs = self._connection_kwargs()
+        connection = await connection_class.connect(conninfo, **connection_kwargs)
+        configure = self.connection_config.get("configure", self._configure_async_connection)
+        try:
+            await configure(cast("PsycopgAsyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
+        return cast("PsycopgAsyncConnection", connection)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for PsycopgAsyncConfig types.
@@ -843,3 +856,43 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """Return polling defaults for PostgreSQL queue fallback."""
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+
+def _make_alloydb_connection_class(
+    *,
+    connector: Any,
+    instance_uri: str,
+    enable_iam_auth: bool,
+    ip_type: str,
+    user: str | None,
+    password: str | None,
+    database: str | None,
+) -> "type[PsycopgConnection[Any]]":
+    """Build a psycopg connection class backed by the AlloyDB connector."""
+
+    class _AlloyDBPsycopgConnection(PsycopgConnection[Any]):
+        @classmethod
+        def connect(
+            cls,
+            conninfo: str = "",
+            *,
+            autocommit: bool = False,
+            prepare_threshold: int | None = 5,
+            context: "AdaptContext | None" = None,
+            row_factory: "RowFactory[Any] | None" = None,
+            cursor_factory: "type[Cursor[Any]] | None" = None,
+            **kwargs: str | int | None,
+        ) -> Self:
+            _ = (cls, conninfo, autocommit, prepare_threshold, context, row_factory, cursor_factory)
+            connector_kwargs = dict(kwargs)
+            connector_kwargs["enable_iam_auth"] = enable_iam_auth
+            connector_kwargs["ip_type"] = ip_type
+            if user is not None:
+                connector_kwargs["user"] = user
+            if password is not None:
+                connector_kwargs["password"] = password
+            if database is not None:
+                connector_kwargs["db"] = database
+            return cast("Self", connector.connect(instance_uri, "psycopg", **connector_kwargs))
+
+    return _AlloyDBPsycopgConnection

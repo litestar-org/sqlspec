@@ -99,37 +99,6 @@ def extract_column_name(column: str | exp.Column) -> str:
     return "column"
 
 
-def _merge_sql_parameters(sql_obj: Any, builder: Any) -> None:
-    """Merge parameters from SQL object into builder.
-
-    Args:
-        sql_obj: SQL object with parameters attribute
-        builder: Builder instance with add_parameter method
-    """
-    if not (builder and has_expression_and_parameters(sql_obj) and has_parameter_builder(builder)):
-        return
-
-    for param_name, param_value in sql_obj.parameters.items():
-        builder.add_parameter(param_value, name=param_name)
-
-
-def _is_simple_identifier(value: str) -> bool:
-    stripped = value.strip()
-    if not _SIMPLE_IDENTIFIER_RE.fullmatch(stripped):
-        return False
-    return "." in stripped or stripped.lower() not in _BARE_KEYWORDS
-
-
-def _simple_column_expression(value: str) -> exp.Column:
-    parts = value.strip().split(".")
-    identifiers = [exp.Identifier(this=part, quoted=False) for part in parts]
-    if len(parts) == 1:
-        return exp.Column(this=identifiers[0])
-    if len(parts) == QUALIFIED_IDENTIFIER_PARTS:
-        return exp.Column(this=identifiers[1], table=identifiers[0])
-    return exp.Column(this=identifiers[2], table=identifiers[1], db=identifiers[0])
-
-
 def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | None = None) -> exp.Expr:
     """Parse a column input that might be a complex expression.
 
@@ -448,3 +417,34 @@ def _normalize_dialect(dialect: "DialectType | None") -> str | None:
     else:
         name = type(dialect).__name__.lower()
     return {"mssql": "tsql", "mariadb": "mysql", "cockroachdb": "postgres"}.get(name, name)
+
+
+def _merge_sql_parameters(sql_obj: Any, builder: Any) -> None:
+    """Merge parameters from SQL object into builder.
+
+    Args:
+        sql_obj: SQL object with parameters attribute
+        builder: Builder instance with add_parameter method
+    """
+    if not (builder and has_expression_and_parameters(sql_obj) and has_parameter_builder(builder)):
+        return
+
+    for param_name, param_value in sql_obj.parameters.items():
+        builder.add_parameter(param_value, name=param_name)
+
+
+def _is_simple_identifier(value: str) -> bool:
+    stripped = value.strip()
+    if not _SIMPLE_IDENTIFIER_RE.fullmatch(stripped):
+        return False
+    return "." in stripped or stripped.lower() not in _BARE_KEYWORDS
+
+
+def _simple_column_expression(value: str) -> exp.Column:
+    parts = value.strip().split(".")
+    identifiers = [exp.Identifier(this=part, quoted=False) for part in parts]
+    if len(parts) == 1:
+        return exp.Column(this=identifiers[0])
+    if len(parts) == QUALIFIED_IDENTIFIER_PARTS:
+        return exp.Column(this=identifiers[1], table=identifiers[0])
+    return exp.Column(this=identifiers[2], table=identifiers[1], db=identifiers[0])

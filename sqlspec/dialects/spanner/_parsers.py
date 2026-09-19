@@ -48,10 +48,6 @@ _INTERLEAVE_PATTERN: Final["re.Pattern[str]"] = re.compile(
 )
 
 
-def _normalize_on_delete_value(on_delete: str) -> str:
-    return " ".join(on_delete.upper().split())
-
-
 def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, in_parent: bool = True) -> exp.Property:
     """Build the canonical interleave property node."""
     if not in_parent:
@@ -60,6 +56,52 @@ def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, 
     if on_delete is not None:
         values.append(exp.Literal.string(_normalize_on_delete_value(on_delete)))
     return exp.Property(this=exp.Literal.string(_INTERLEAVE_NAME), value=exp.Tuple(expressions=values))
+
+
+def register_spanner_property_parsers() -> None:
+    """Install Spanner property parsers on the BigQuery and Postgres parser classes."""
+    for parser_class in (BigQueryParser, PostgresParser):
+        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
+            continue
+        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
+        for key, handler in (
+            ("INTERLEAVE", _parse_interleave),
+            ("ROW", _parse_row_deletion_policy),
+            ("TTL", _parse_ttl),
+        ):
+            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
+        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
+        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
+
+
+def extract_interleave_property(sql: str) -> "tuple[str, exp.Property | None]":
+    """Strip an INTERLEAVE clause out of raw DDL, returning the repaired SQL and property."""
+    match = _INTERLEAVE_PATTERN.search(sql)
+    if match is None:
+        return sql, None
+
+    parent = exp.to_table(match.group("parent").strip())
+    on_delete = match.group("on_delete")
+    in_parent = match.group("parent_keyword") is not None
+    interleave_property = build_interleave_property(parent, on_delete, in_parent=in_parent)
+    repaired_sql = f"{sql[: match.start()]} {sql[match.end() :]}".strip()
+    return repaired_sql, interleave_property
+
+
+def attach_create_property(create: exp.Create, property_expression: exp.Property) -> exp.Create:
+    """Insert a property at the front of a CREATE statement's property list."""
+    properties = create.args.get("properties")
+    if isinstance(properties, exp.Properties):
+        expressions = list(properties.expressions)
+        expressions.insert(0, property_expression)
+        properties.set("expressions", expressions)
+    else:
+        create.set("properties", exp.Properties(expressions=[property_expression]))
+    return create
+
+
+def _normalize_on_delete_value(on_delete: str) -> str:
+    return " ".join(on_delete.upper().split())
 
 
 def _build_row_deletion_property(column: exp.Expr, interval: exp.Expr) -> exp.Property:
@@ -138,45 +180,3 @@ def _build_property_entry(handler: Any, original: Any) -> Any:
         return None
 
     return _entry
-
-
-def register_spanner_property_parsers() -> None:
-    """Install Spanner property parsers on the BigQuery and Postgres parser classes."""
-    for parser_class in (BigQueryParser, PostgresParser):
-        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
-            continue
-        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
-        for key, handler in (
-            ("INTERLEAVE", _parse_interleave),
-            ("ROW", _parse_row_deletion_policy),
-            ("TTL", _parse_ttl),
-        ):
-            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
-        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
-        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
-
-
-def extract_interleave_property(sql: str) -> "tuple[str, exp.Property | None]":
-    """Strip an INTERLEAVE clause out of raw DDL, returning the repaired SQL and property."""
-    match = _INTERLEAVE_PATTERN.search(sql)
-    if match is None:
-        return sql, None
-
-    parent = exp.to_table(match.group("parent").strip())
-    on_delete = match.group("on_delete")
-    in_parent = match.group("parent_keyword") is not None
-    interleave_property = build_interleave_property(parent, on_delete, in_parent=in_parent)
-    repaired_sql = f"{sql[: match.start()]} {sql[match.end() :]}".strip()
-    return repaired_sql, interleave_property
-
-
-def attach_create_property(create: exp.Create, property_expression: exp.Property) -> exp.Create:
-    """Insert a property at the front of a CREATE statement's property list."""
-    properties = create.args.get("properties")
-    if isinstance(properties, exp.Properties):
-        expressions = list(properties.expressions)
-        expressions.insert(0, property_expression)
-        properties.set("expressions", expressions)
-    else:
-        create.set("properties", exp.Properties(expressions=[property_expression]))
-    return create

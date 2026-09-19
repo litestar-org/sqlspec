@@ -186,65 +186,7 @@ def shutdown_default_async_executor(wait: bool = False) -> None:
         _default_async_executor_pid = None
 
 
-def _ensure_managed_async_executor_locked(current_pid: int) -> concurrent.futures.ThreadPoolExecutor:
-    global _managed_async_executor, _managed_async_executor_pid, _managed_async_executor_resolved_max_workers
-    max_workers = _resolve_managed_async_thread_limit()
-    if (
-        _managed_async_executor is None
-        or _managed_async_executor_pid != current_pid
-        or _managed_async_executor_resolved_max_workers != max_workers
-    ):
-        if _managed_async_executor is not None:
-            _managed_async_executor.shutdown(wait=False)
-        _managed_async_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_workers, thread_name_prefix=_ASYNC_THREAD_NAME_PREFIX
-        )
-        _managed_async_executor_pid = current_pid
-        _managed_async_executor_resolved_max_workers = max_workers
-    return _managed_async_executor
-
-
-def _validate_async_thread_executor(executor: object) -> "concurrent.futures.ThreadPoolExecutor | None":
-    if executor is None or isinstance(executor, concurrent.futures.ThreadPoolExecutor):
-        return executor
-    msg = "async_ executors must be concurrent.futures.ThreadPoolExecutor instances to preserve contextvars"
-    raise TypeError(msg)
-
-
-def _resolve_managed_async_thread_limit() -> int:
-    if _managed_async_executor_max_workers is None:
-        max_workers = get_env(ASYNC_THREAD_LIMIT_ENV, DEFAULT_ASYNC_THREAD_LIMIT)()
-    else:
-        max_workers = _managed_async_executor_max_workers
-    return max(1, max_workers)
-
-
 atexit.register(shutdown_default_async_executor)
-
-
-class _RunWrapper(Generic[ParamSpecT, ReturnT]):
-    __slots__ = ("__dict__", "_function")
-
-    def __init__(self, async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> None:
-        self._function = async_function
-        functools.update_wrapper(self, async_function)
-
-    def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
-        partial_f = functools.partial(self._function, *args, **kwargs)
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is not None:
-            if loop.is_running():
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, partial_f())
-                    return future.result()
-            return asyncio.run(partial_f())
-        if uvloop and sys.platform != "win32":
-            return uvloop.run(partial_f())  # pyright: ignore[reportUnknownMemberType]
-        return asyncio.run(partial_f())
 
 
 def run_(async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> "Callable[ParamSpecT, ReturnT]":
@@ -326,6 +268,96 @@ def ensure_async_(function: "Callable[ParamSpecT, Any]") -> "Callable[ParamSpecT
         return function
 
     return _EnsureAsyncWrapper(function)
+
+
+def with_ensure_async_(
+    obj: "AbstractContextManager[T] | AbstractAsyncContextManager[T]",
+) -> "AbstractAsyncContextManager[T]":
+    """Convert a context manager to an async one if it is not already.
+
+    Args:
+        obj: The context manager to convert.
+
+    Returns:
+        An async context manager that runs the original context manager.
+    """
+    if isinstance(obj, AbstractContextManager):
+        return cast("AbstractAsyncContextManager[T]", _ContextManagerWrapper(obj))
+    return obj
+
+
+async def get_next(iterable: Any, default: Any = NO_VALUE, *args: Any) -> Any:  # pragma: no cover
+    """Return the next item from an async iterator.
+
+    Args:
+        iterable: An async iterable.
+        default: An optional default value to return if the iterable is empty.
+        *args: The remaining args
+
+    Returns:
+        The next value of the iterable.
+    """
+    if isinstance(default, NoValue):
+        return await anext(iterable)
+    return await anext(iterable, default)
+
+
+def _ensure_managed_async_executor_locked(current_pid: int) -> concurrent.futures.ThreadPoolExecutor:
+    global _managed_async_executor, _managed_async_executor_pid, _managed_async_executor_resolved_max_workers
+    max_workers = _resolve_managed_async_thread_limit()
+    if (
+        _managed_async_executor is None
+        or _managed_async_executor_pid != current_pid
+        or _managed_async_executor_resolved_max_workers != max_workers
+    ):
+        if _managed_async_executor is not None:
+            _managed_async_executor.shutdown(wait=False)
+        _managed_async_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix=_ASYNC_THREAD_NAME_PREFIX
+        )
+        _managed_async_executor_pid = current_pid
+        _managed_async_executor_resolved_max_workers = max_workers
+    return _managed_async_executor
+
+
+def _validate_async_thread_executor(executor: object) -> "concurrent.futures.ThreadPoolExecutor | None":
+    if executor is None or isinstance(executor, concurrent.futures.ThreadPoolExecutor):
+        return executor
+    msg = "async_ executors must be concurrent.futures.ThreadPoolExecutor instances to preserve contextvars"
+    raise TypeError(msg)
+
+
+def _resolve_managed_async_thread_limit() -> int:
+    if _managed_async_executor_max_workers is None:
+        max_workers = get_env(ASYNC_THREAD_LIMIT_ENV, DEFAULT_ASYNC_THREAD_LIMIT)()
+    else:
+        max_workers = _managed_async_executor_max_workers
+    return max(1, max_workers)
+
+
+class _RunWrapper(Generic[ParamSpecT, ReturnT]):
+    __slots__ = ("__dict__", "_function")
+
+    def __init__(self, async_function: "Callable[ParamSpecT, Coroutine[Any, Any, ReturnT]]") -> None:
+        self._function = async_function
+        functools.update_wrapper(self, async_function)
+
+    def __call__(self, *args: "ParamSpecT.args", **kwargs: "ParamSpecT.kwargs") -> "ReturnT":
+        partial_f = functools.partial(self._function, *args, **kwargs)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            if loop.is_running():
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, partial_f())
+                    return future.result()
+            return asyncio.run(partial_f())
+        if uvloop and sys.platform != "win32":
+            return uvloop.run(partial_f())  # pyright: ignore[reportUnknownMemberType]
+        return asyncio.run(partial_f())
 
 
 class _AwaitWrapper(Generic[ParamSpecT, ReturnT]):
@@ -428,35 +460,3 @@ class _ContextManagerWrapper(Generic[T]):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         return self._cm.__exit__(exc_type, exc_val, exc_tb)
-
-
-def with_ensure_async_(
-    obj: "AbstractContextManager[T] | AbstractAsyncContextManager[T]",
-) -> "AbstractAsyncContextManager[T]":
-    """Convert a context manager to an async one if it is not already.
-
-    Args:
-        obj: The context manager to convert.
-
-    Returns:
-        An async context manager that runs the original context manager.
-    """
-    if isinstance(obj, AbstractContextManager):
-        return cast("AbstractAsyncContextManager[T]", _ContextManagerWrapper(obj))
-    return obj
-
-
-async def get_next(iterable: Any, default: Any = NO_VALUE, *args: Any) -> Any:  # pragma: no cover
-    """Return the next item from an async iterator.
-
-    Args:
-        iterable: An async iterable.
-        default: An optional default value to return if the iterable is empty.
-        *args: The remaining args
-
-    Returns:
-        The next value of the iterable.
-    """
-    if isinstance(default, NoValue):
-        return await anext(iterable)
-    return await anext(iterable, default)

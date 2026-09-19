@@ -1657,3 +1657,28 @@ async def test_async_execute_downgrade_prefers_migration_schema_directive(tmp_pa
 
     driver.has_schema.assert_awaited_once_with("directive_schema")
     driver.set_migration_session_schema.assert_called_once_with("directive_schema")
+
+
+class _NonTransactionalDdlConfig(_RunnerConfig):
+    supports_transactional_ddl = False
+
+
+@pytest.mark.parametrize(
+    ("directive", "expected"), [(True, True), (False, False)], ids=["explicit-true", "explicit-false"]
+)
+def test_explicit_transactional_directive_overrides_capability(tmp_path: Path, directive: bool, expected: bool) -> None:
+    """A migration that names its transaction mode wins over the backend capability flag."""
+    runner = _sync_runner(tmp_path, {})
+    config = _NonTransactionalDdlConfig({})
+    migration = cast("LoadedMigrationMetadata", {**_migration(tmp_path / "0001.sql", None), "transactional": directive})
+
+    assert runner.should_use_transaction(migration, cast("Any", config)) is expected
+
+
+def test_capability_still_decides_without_a_directive(tmp_path: Path) -> None:
+    """With no per-migration directive the backend capability flag governs."""
+    runner = _sync_runner(tmp_path, {})
+    migration = _migration(tmp_path / "0001.sql", None)
+
+    assert runner.should_use_transaction(migration, cast("Any", _NonTransactionalDdlConfig({}))) is False
+    assert runner.should_use_transaction(migration, cast("Any", _RunnerConfig({}))) is True

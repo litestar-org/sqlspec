@@ -3,13 +3,32 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 
 
-__all__ = ("PsqlpyStore",)
+__all__ = ("PsqlpyLitestarConfig", "PsqlpyStore")
+
+
+class PsqlpyLitestarConfig(LitestarConfig):
+    """Psqlpy-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    fillfactor: NotRequired[int]
+    """Table fillfactor. Default: 80."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """Table autovacuum vacuum scale factor."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """Table autovacuum analyze scale factor."""
 
 
 class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):

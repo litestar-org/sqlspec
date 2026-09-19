@@ -159,10 +159,24 @@ def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def build_load_data_statement(table: str, columns: "list[str]", file_path: str) -> str:
+def build_load_data_statement(table: str, columns: "list[str]") -> str:
+    """Build native LOAD DATA SQL with a bound filename.
+
+    mysql-connector substitutes only ``%s`` and leaves every other percent sign
+    alone, so identifiers are emitted verbatim; doubling them the way the
+    pymysql family requires would corrupt a name containing a percent sign.
+
+    Args:
+        table: Destination table identifier.
+        columns: Destination column names.
+
+    Returns:
+        SQL with one positional filename placeholder.
+    """
+    table_sql = format_identifier(table)
     column_list = ", ".join(format_identifier(column) for column in columns)
     return (
-        f"LOAD DATA LOCAL INFILE '{file_path}' INTO TABLE {format_identifier(table)} "
+        f"LOAD DATA LOCAL INFILE %s INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         f"LINES TERMINATED BY '\\n' ({column_list})"
     )

@@ -160,14 +160,6 @@ _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
 ))
 
 
-def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize PyMySQL local-infile aliases to the native connection flag."""
-    config = dict(connection_config)
-    allow_local_infile = bool(config.pop("allow_local_infile", False))
-    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
-    return config
-
-
 class _PyMysqlCloudSqlConnector:
     __slots__ = ("_config", "_database", "_driver_kwargs", "_password", "_user")
 
@@ -203,7 +195,7 @@ class _PyMysqlCloudSqlConnector:
         if self._password:
             conn_kwargs["password"] = self._password
         if self._database:
-            conn_kwargs["db"] = self._database
+            conn_kwargs["database"] = self._database
 
         return cast("PyMysqlConnection", connector.connect(**conn_kwargs))
 
@@ -254,6 +246,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
         connection_config.setdefault("local_infile", False)
+        connection_config.setdefault("charset", "utf8mb4")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -346,8 +339,16 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
             self._cloud_sql_connector = None
 
     def create_connection(self) -> PyMysqlConnection:
-        pool = self.provide_pool()
-        return pool.acquire()
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same parameters and creation hook the pool
+        applies, but it is not the pool's thread-local connection, so closing it
+        leaves the pool usable.
+
+        Returns:
+            PyMysqlConnection: A newly opened connection.
+        """
+        return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
@@ -367,3 +368,11 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+
+def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize PyMySQL local-infile aliases to the native connection flag."""
+    config = dict(connection_config)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
+    return config

@@ -7,7 +7,7 @@ Tests cover:
 """
 
 from typing import Any, cast, get_args, get_origin
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from typing_extensions import NotRequired
@@ -342,3 +342,19 @@ def test_cockroach_asyncpg_driver_features_typed_dict_accepts_event_features() -
     features: CockroachAsyncpgDriverFeatures = {"enable_events": True, "events_backend": "poll_queue"}
     assert features["enable_events"] is True
     assert features["events_backend"] == "poll_queue"
+
+
+async def test_create_connection_consumes_no_pool_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A standalone connection must not be taken out of the pool."""
+    sentinel = MagicMock()
+    connect = AsyncMock(return_value=sentinel)
+    monkeypatch.setattr("sqlspec.adapters.cockroach_asyncpg.config.asyncpg_connect", connect)
+    monkeypatch.setattr(CockroachAsyncpgConfig, "_init_connection", AsyncMock())
+    config = CockroachAsyncpgConfig(connection_config={"host": "localhost", "min_size": 1, "max_size": 1})
+
+    connection = await config.create_connection()
+
+    assert connection is sentinel
+    assert config.connection_instance is None
+    assert "min_size" not in connect.call_args.kwargs
+    assert "max_size" not in connect.call_args.kwargs

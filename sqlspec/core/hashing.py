@@ -62,29 +62,6 @@ def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) ->
     return hash(tuple(components))
 
 
-def _hash_value(value: Any, _seen: "set[int]") -> int:
-    """Hash different value types.
-
-    Args:
-        value: Value to hash (can be Expression, list, dict, or primitive)
-        _seen: Set of seen object IDs to handle circular references
-
-    Returns:
-        Hash of the value
-    """
-    if isinstance(value, exp.Expr):
-        return hash_expression(value, _seen)
-    if isinstance(value, list):
-        return hash(tuple(_hash_value(v, _seen) for v in value))
-    if isinstance(value, dict):
-        items = sorted((k, _hash_value(v, _seen)) for k, v in value.items())
-        return hash(tuple(items))
-    if isinstance(value, tuple):
-        return hash(tuple(_hash_value(v, _seen) for v in value))
-
-    return hash(value)
-
-
 def hash_parameters(
     positional_parameters: "list[Any] | None" = None,
     named_parameters: "dict[str, Any] | None" = None,
@@ -279,3 +256,26 @@ def _freeze_cache_value(value: Any) -> Any:
     except TypeError:
         return repr(value)
     return value
+
+
+def _hash_value(value: Any, _seen: "set[int]") -> int:
+    """Hash different value types.
+
+    Args:
+        value: Value to hash (can be Expression, list, dict, or primitive)
+        _seen: Set of seen object IDs to handle circular references
+
+    Returns:
+        Hash of the value
+    """
+    if isinstance(value, exp.Expr):
+        return hash_expression(value, _seen)
+    if isinstance(value, list):
+        return hash(tuple(_hash_value(v, _seen) for v in value))
+    if isinstance(value, dict):
+        items = sorted((k, _hash_value(v, _seen)) for k, v in value.items())
+        return hash(tuple(items))
+    if isinstance(value, tuple):
+        return hash(tuple(_hash_value(v, _seen) for v in value))
+
+    return hash(value)

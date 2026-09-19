@@ -31,51 +31,6 @@ _MIN_LISTENER_POOL_SIZE = 2
 _MAX_SEEN_MARKERS = 1_024
 
 
-class _MarkerDrainState:
-    __slots__ = ("_pending", "_recovering", "_seen")
-
-    def __init__(self) -> None:
-        self._pending: dict[str, int] = {}
-        self._recovering: set[str] = set()
-        self._seen: dict[tuple[str, str], None] = {}
-
-    def take(self, channel: str) -> bool:
-        if channel in self._recovering:
-            return True
-        pending = self._pending.get(channel, 0)
-        if pending <= 0:
-            return False
-        if pending == 1:
-            self._pending.pop(channel, None)
-        else:
-            self._pending[channel] = pending - 1
-        return True
-
-    def register(self, channel: str, marker_id: "str | None", batch_size: int) -> "tuple[bool, bool]":
-        is_new = marker_id is None or (channel, marker_id) not in self._seen
-        if is_new:
-            if marker_id is not None:
-                if len(self._seen) >= _MAX_SEEN_MARKERS:
-                    self._seen.pop(next(iter(self._seen)))
-                self._seen[(channel, marker_id)] = None
-            self._pending[channel] = self._pending.get(channel, 0) + max(batch_size, 1)
-        return is_new, self.take(channel)
-
-    def begin_recovery(self, channel: str) -> None:
-        if channel not in self._recovering and len(self._recovering) >= _MAX_SEEN_MARKERS:
-            self._recovering.pop()
-        self._recovering.add(channel)
-
-    def clear(self, channel: str) -> None:
-        self._pending.pop(channel, None)
-        self._recovering.discard(channel)
-
-    def reset(self) -> None:
-        self._pending.clear()
-        self._recovering.clear()
-        self._seen.clear()
-
-
 class AsyncpgHybridEventsBackend:
     """Hybrid backend combining durable queue with LISTEN/NOTIFY wakeups."""
 
@@ -346,6 +301,51 @@ def create_event_backend(
                 return None
         case _:
             return None
+
+
+class _MarkerDrainState:
+    __slots__ = ("_pending", "_recovering", "_seen")
+
+    def __init__(self) -> None:
+        self._pending: dict[str, int] = {}
+        self._recovering: set[str] = set()
+        self._seen: dict[tuple[str, str], None] = {}
+
+    def take(self, channel: str) -> bool:
+        if channel in self._recovering:
+            return True
+        pending = self._pending.get(channel, 0)
+        if pending <= 0:
+            return False
+        if pending == 1:
+            self._pending.pop(channel, None)
+        else:
+            self._pending[channel] = pending - 1
+        return True
+
+    def register(self, channel: str, marker_id: "str | None", batch_size: int) -> "tuple[bool, bool]":
+        is_new = marker_id is None or (channel, marker_id) not in self._seen
+        if is_new:
+            if marker_id is not None:
+                if len(self._seen) >= _MAX_SEEN_MARKERS:
+                    self._seen.pop(next(iter(self._seen)))
+                self._seen[(channel, marker_id)] = None
+            self._pending[channel] = self._pending.get(channel, 0) + max(batch_size, 1)
+        return is_new, self.take(channel)
+
+    def begin_recovery(self, channel: str) -> None:
+        if channel not in self._recovering and len(self._recovering) >= _MAX_SEEN_MARKERS:
+            self._recovering.pop()
+        self._recovering.add(channel)
+
+    def clear(self, channel: str) -> None:
+        self._pending.pop(channel, None)
+        self._recovering.discard(channel)
+
+    def reset(self) -> None:
+        self._pending.clear()
+        self._recovering.clear()
+        self._seen.clear()
 
 
 def _validate_listener_pool_capacity(config: "AsyncpgConfig") -> None:

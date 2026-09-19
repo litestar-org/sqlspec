@@ -113,7 +113,7 @@ class SyncPoolSessionFactory:
     def release_connection(self, _conn: Any, **kwargs: Any) -> None:
         if self._ctx is None:
             return
-        self._ctx.__exit__(None, None, None)
+        self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
         self._ctx = None
 
 
@@ -183,10 +183,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             logger, logging.DEBUG, "migration.schema.validation.noop", schema=schema, driver=type(self).__name__
         )
         return True
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS - The Execution Engine
-    # ─────────────────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _check_pending_exception(exc_handler: SyncExceptionHandler) -> None:
@@ -518,10 +514,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         finally:
             self._release_pooled_statement(statement)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT - Required Abstract Methods
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @abstractmethod
     def begin(self) -> None:
         """Begin a database transaction on the current connection."""
@@ -589,10 +581,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             The handler stores mapped exceptions in pending_exception rather than
             raising from __exit__ to avoid ABI boundary violations.
         """
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PUBLIC API - Core Execution Methods
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def execute(
         self,
@@ -684,10 +672,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PUBLIC API - Query Methods (select/fetch variants)
-    # ─────────────────────────────────────────────────────────────────────────────
 
     @overload
     def select(
@@ -1276,10 +1260,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             **kwargs,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -1372,10 +1352,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             arrow_schema=arrow_schema,
             **kwargs,
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ROW STREAMING API
-    # ─────────────────────────────────────────────────────────────────────────────
 
     @overload
     def select_stream(
@@ -1494,10 +1470,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         _ = (statement, chunk_size)
         return None
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack sequentially using the adapter's primitives."""
         if not isinstance(stack, StatementStack):
@@ -1561,10 +1533,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 raise
 
         return tuple(results)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -1668,10 +1636,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         arrow_table = self._records_to_arrow_table(prepared_records, columns)
         return self.load_from_arrow(table, arrow_table, overwrite=overwrite)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def convert_to_dialect(
         self, statement: "Statement", to_dialect: "DialectType | None" = None, pretty: bool = DEFAULT_PRETTY
     ) -> str:
@@ -1686,10 +1650,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQL string in target dialect.
         """
         return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def _connection_in_transaction(self) -> bool:
         """Check if the connection is inside a transaction.

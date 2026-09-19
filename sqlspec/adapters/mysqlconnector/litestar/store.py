@@ -3,6 +3,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+import mysql.connector
+from typing_extensions import NotRequired
+
+from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -11,12 +15,25 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorAsyncConfig, MysqlConnectorSyncConfig
 
-__all__ = ("MysqlConnectorAsyncStore", "MysqlConnectorSyncStore")
+__all__ = ("MysqlConnectorAsyncStore", "MysqlConnectorLitestarConfig", "MysqlConnectorSyncStore")
 
 logger = get_logger("sqlspec.adapters.mysqlconnector.litestar.store")
 
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+
+
+class MysqlConnectorLitestarConfig(LitestarConfig):
+    """MysqlConnector-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    table_options: NotRequired[str]
+    """Table DDL options."""
+
+    index_options: NotRequired[str]
+    """Index DDL options."""
 
 
 class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
@@ -42,7 +59,6 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         await self.reconcile_schema(assume_existing=True)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        import mysql.connector
 
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -121,7 +137,6 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             await conn.commit()
 
     async def delete_all(self) -> None:
-        import mysql.connector
 
         sql = f"DELETE FROM {self._table_name}"
 
@@ -141,7 +156,6 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             raise
 
     async def exists(self, key: str) -> bool:
-        import mysql.connector
 
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -290,7 +304,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        import mysql.connector
 
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -369,7 +382,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             conn.commit()
 
     def _delete_all(self) -> None:
-        import mysql.connector
 
         sql = f"DELETE FROM {self._table_name}"
 
@@ -389,7 +401,6 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             raise
 
     def _exists(self, key: str) -> bool:
-        import mysql.connector
 
         sql = f"""
         SELECT 1 FROM {self._table_name}

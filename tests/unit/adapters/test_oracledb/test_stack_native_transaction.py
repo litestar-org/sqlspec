@@ -19,8 +19,9 @@ class _FakeOpResult:
 
 
 class _FakePipelineConnection:
-    def __init__(self, results: "list[_FakeOpResult]") -> None:
+    def __init__(self, results: "list[_FakeOpResult]", transaction_in_progress: bool = False) -> None:
         self._results = results
+        self.transaction_in_progress = transaction_in_progress
         self.commit_count = 0
         self.rollback_count = 0
         self.begin_count = 0
@@ -89,6 +90,19 @@ async def test_native_stack_inside_user_transaction_does_not_commit() -> None:
     driver = OracleAsyncDriver(cast("Any", connection))
     await driver.begin()
     connection.commit_count = 0
+
+    await driver._execute_stack_native(_stack(), continue_on_error=True)
+
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 0
+
+
+@pytest.mark.anyio
+async def test_native_stack_inside_an_implicit_transaction_does_not_commit() -> None:
+    """DML issued before the stack opens a transaction the stack does not own."""
+    results = [_FakeOpResult(), _FakeOpResult()]
+    connection = _FakePipelineConnection(results, transaction_in_progress=True)
+    driver = OracleAsyncDriver(cast("Any", connection))
 
     await driver._execute_stack_native(_stack(), continue_on_error=True)
 

@@ -3,6 +3,7 @@
 from typing import Any, cast
 
 import pyarrow as pa
+import pytest
 
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 
@@ -48,16 +49,6 @@ class _DPLConnection:
             "column_names": column_names,
             "data": data,
         })
-
-    def cursor(self) -> _FakeRawCursor:
-        return self._cursor
-
-
-class _NoDPLConnection:
-    def __init__(self) -> None:
-        self.thin = True
-        self.username = "SCOTT"
-        self._cursor = _FakeRawCursor()
 
     def cursor(self) -> _FakeRawCursor:
         return self._cursor
@@ -127,17 +118,6 @@ def test_direct_path_load_can_be_disabled() -> None:
     driver.load_from_arrow("MYTAB", _arrow())
 
     assert conn.dpl_calls == []
-    assert len(conn._cursor.executemany_calls) == 1
-
-
-def test_missing_direct_path_load_api_falls_back() -> None:
-    conn = _NoDPLConnection()
-    driver = OracleSyncDriver(
-        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": True}
-    )
-
-    driver.load_from_arrow("MYTAB", _arrow())
-
     assert len(conn._cursor.executemany_calls) == 1
 
 
@@ -251,3 +231,101 @@ async def test_async_overwrite_truncates_before_direct_path_load() -> None:
 
     assert conn.execute_calls and conn.execute_calls[0].startswith("TRUNCATE TABLE")
     assert len(conn.dpl_calls) == 1
+
+
+def test_direct_path_load_receives_the_arrow_table_itself() -> None:
+    """The native path takes Arrow directly; no Python tuples are materialized."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    table = _arrow()
+
+    driver.load_from_arrow("MYTAB", table)
+
+    data = conn.dpl_calls[0]["data"]
+    assert data is table
+    assert conn.dpl_calls[0]["column_names"] == ["id", "name"]
+
+
+def test_direct_path_load_ingests_the_same_values_as_the_executemany_path() -> None:
+    """Switching to the native path must not change what is ingested."""
+    table = _arrow()
+
+    native = _DPLConnection(thin=True, username="SCOTT")
+    OracleSyncDriver(cast("Any", native), driver_features={"storage_capabilities": _CAPS}).load_from_arrow(
+        "MYTAB", table
+    )
+
+    fallback = _DPLConnection(thin=True, username="SCOTT")
+    OracleSyncDriver(
+        cast("Any", fallback), driver_features={"storage_capabilities": _CAPS, "enable_direct_path_load": False}
+    ).load_from_arrow("MYTAB", table)
+
+    ingested_natively = list(zip(*[column.to_pylist() for column in native.dpl_calls[0]["data"].columns]))
+    _, ingested_by_fallback = fallback._cursor.executemany_calls[0]
+    assert ingested_natively == [tuple(row) for row in ingested_by_fallback]
+
+
+def test_empty_arrow_table_skips_both_ingest_paths() -> None:
+    """An empty table must not issue a load on either branch."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow("MYTAB", pa.table({"id": pa.array([], type=pa.int64())}))
+
+    assert conn.dpl_calls == []
+    assert conn._cursor.executemany_calls == []
+
+
+def test_nested_arrow_columns_use_the_insert_path() -> None:
+    """oracledb cannot convert nested Arrow types, so those tables take the tuple path."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    nested = pa.table({"id": [1], "tags": pa.array([["north", "east"]])})
+
+    driver.load_from_arrow("MYTAB", nested)
+
+    assert conn.dpl_calls == []
+    assert len(conn._cursor.executemany_calls) == 1
+
+
+def test_flat_arrow_columns_still_use_direct_path_load() -> None:
+    """A flat schema keeps the native zero-copy path."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow("MYTAB", _arrow())
+
+    assert len(conn.dpl_calls) == 1
+    assert conn._cursor.executemany_calls == []
+
+
+@pytest.mark.parametrize(
+    "arrow_type",
+    [pa.date32(), pa.time64("us"), pa.duration("s"), pa.null(), pa.float16(), pa.dictionary(pa.int8(), pa.string())],
+    ids=["date32", "time64", "duration", "null", "float16", "dictionary"],
+)
+def test_unconvertible_scalar_columns_use_the_insert_path(arrow_type: "pa.DataType") -> None:
+    """A conversion oracledb cannot perform fails part way through, so it is avoided."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow("MYTAB", pa.table({"c": pa.array([None], type=arrow_type)}))
+
+    assert conn.dpl_calls == []
+    assert len(conn._cursor.executemany_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "arrow_type",
+    [pa.int64(), pa.float64(), pa.bool_(), pa.string(), pa.binary(), pa.timestamp("us"), pa.decimal128(10, 2)],
+    ids=["int64", "float64", "bool", "string", "binary", "timestamp", "decimal128"],
+)
+def test_convertible_scalar_columns_keep_the_native_path(arrow_type: "pa.DataType") -> None:
+    """The types oracledb does convert must still take the zero-copy path."""
+    conn = _DPLConnection(thin=True, username="SCOTT")
+    driver = OracleSyncDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    driver.load_from_arrow("MYTAB", pa.table({"c": pa.array([None], type=arrow_type)}))
+
+    assert len(conn.dpl_calls) == 1
+    assert conn._cursor.executemany_calls == []

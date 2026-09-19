@@ -1,8 +1,10 @@
 """CockroachDB AsyncPG configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
 from asyncpg import Record
+from asyncpg import connect as asyncpg_connect
 from asyncpg import create_pool as asyncpg_create_pool
 from typing_extensions import NotRequired
 
@@ -18,6 +20,7 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgPool,
     CockroachAsyncpgSessionContext,
 )
+from sqlspec.adapters.cockroach_asyncpg.core import validate_follower_read_staleness
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -43,6 +46,16 @@ __all__ = (
     "CockroachAsyncpgPoolConfig",
     "CockroachAsyncpgTargetSessionAttrs",
 )
+
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
+    "init",
+    "max_inactive_connection_lifetime",
+    "max_queries",
+    "max_size",
+    "min_size",
+    "reset",
+    "setup",
+})
 
 
 CockroachAsyncpgTargetSessionAttrs = Literal["any", "primary", "standby", "read-write", "read-only", "prefer-standby"]
@@ -98,6 +111,16 @@ class _NativeStorageCSVOptions(TypedDict):
     nullas: NotRequired[str]
     nullif: NotRequired[str]
     skip: NotRequired[int]
+
+
+def _validate_follower_read_features(driver_features: "dict[str, Any]") -> None:
+    staleness = driver_features.get("default_staleness")
+    if staleness is None:
+        return
+    if not isinstance(staleness, str):
+        msg = "default_staleness must be a string."
+        raise ImproperConfigurationError(msg)
+    driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
 
 
 def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
@@ -169,7 +192,7 @@ class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "CockroachAsyncpgConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 
@@ -186,7 +209,7 @@ class CockroachAsyncpgConfig(
 
     driver_type: "ClassVar[type[CockroachAsyncpgDriver]]" = CockroachAsyncpgDriver
     connection_type: "ClassVar[type[CockroachAsyncpgConnection]]" = CockroachAsyncpgConnection  # type: ignore[assignment]
-    supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_transactional_ddl: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -222,9 +245,8 @@ class CockroachAsyncpgConfig(
 
         driver_features.setdefault("enable_native_storage", False)
         _validate_native_storage_options(driver_features)
+        _validate_follower_read_features(driver_features)
         driver_features.setdefault("enable_auto_retry", True)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features)
         self._user_connection_hook: Callable[[CockroachAsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -269,9 +291,27 @@ class CockroachAsyncpgConfig(
         self.connection_instance = None
 
     async def create_connection(self) -> "CockroachAsyncpgConnection":
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        return cast("CockroachAsyncpgConnection", await self.connection_instance.acquire())
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection settings and init hook the
+        pool applies, consumes no pool slot, and must be closed by the caller.
+
+        Returns:
+            A CockroachDB asyncpg connection.
+        """
+        config = build_connection_config(self.connection_config)
+        for key in _POOL_ONLY_CONFIG_KEYS:
+            config.pop(key, None)
+        connect = config.pop("connect", None)
+        connection = await connect() if connect is not None else await asyncpg_connect(**config)
+        init = self.connection_config.get("init", self._init_connection)
+        try:
+            await init(connection)
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
+        return cast("CockroachAsyncpgConnection", connection)
 
     def provide_session(
         self,
@@ -286,7 +326,7 @@ class CockroachAsyncpgConfig(
         if follower_reads is not None:
             driver_features["enable_follower_reads"] = follower_reads
         if staleness is not None:
-            driver_features["default_staleness"] = staleness
+            driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
 
         return CockroachAsyncpgSessionContext(
             acquire_connection=factory.acquire_connection,

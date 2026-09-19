@@ -67,7 +67,7 @@ _CONNECTION_STRING_KEYS: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = 
     (("ip_address_preference", "ipaddresspreference"), "IpAddressPreference", False),
     (("packet_size", "packetsize", "packet size"), "PacketSize", False),
 )
-_CONNECT_KWARG_KEYS: Final[set[str]] = {"autocommit", "attrs_before", "native_uuid"}
+_CONNECT_KWARG_KEYS: Final[set[str]] = {"autocommit", "attrs_before", "native_uuid", "token_provider"}
 _CONNECT_TIMEOUT_KEYS: Final[tuple[str, ...]] = ("timeout", "connection_timeout", "login_timeout", "command_timeout")
 _POOL_CONFIG_KEYS: Final[set[str]] = {"pool_size", "pool_idle_timeout", "pool_enabled"}
 _IGNORED_CONNECTION_CONFIG_KEYS: Final[set[str]] = {

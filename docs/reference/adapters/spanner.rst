@@ -71,6 +71,12 @@ or ``provide_write_session()``.
 Configuration
 =============
 
+With ``google-cloud-spanner==3.71.0``, closing a database that used multiplexed
+sessions can wait up to ten minutes for the SDK's maintenance thread. The
+`upstream shutdown fix <https://github.com/googleapis/google-cloud-python/pull/18317>`_
+is merged but has not yet been released. Allow for this delay during application
+shutdown until a fixed SDK is available.
+
 .. autoclass:: sqlspec.adapters.spanner.SpannerSyncConfig
    :members:
    :show-inheritance:
@@ -113,5 +119,23 @@ Data Dictionary
 ===============
 
 .. autoclass:: sqlspec.adapters.spanner.data_dictionary.SpannerDataDictionary
+   :members:
+   :show-inheritance:
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.spanner.litestar.SpannerLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKRetentionConfig
    :members:
    :show-inheritance:

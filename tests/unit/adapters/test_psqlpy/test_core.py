@@ -14,9 +14,7 @@ from sqlspec.adapters.psqlpy import core as psqlpy_core
 from sqlspec.adapters.psqlpy.core import (
     build_statement_config,
     coerce_numeric_for_write,
-    coerce_records_for_execute_many,
     collect_rows,
-    encode_records_for_binary_copy,
     format_execute_many_parameters,
     get_parameter_casts,
     prepare_parameters_with_casts,
@@ -164,48 +162,6 @@ def test_format_execute_many_parameters_handles_scalar_input() -> None:
     assert formatted == [[5]]
 
 
-def test_coerce_records_for_execute_many_delegates_to_formatter() -> None:
-    """coerce_records_for_execute_many should keep behavior via shared formatter."""
-    records = [(1.25, "x"), (3, "y")]
-    formatted = coerce_records_for_execute_many(records)
-    assert formatted[0][0] == Decimal("1.25")
-    assert formatted[1] == [3, "y"]
-
-
-def test_coerce_records_for_execute_many_parses_json_text_values() -> None:
-    """JSON object and array text from Arrow rows should become psqlpy JSON values."""
-    records = [(1, '{"name":"alpha"}', '["north","east"]', "plain")]
-    unparsed = coerce_records_for_execute_many(records)
-    formatted = coerce_records_for_execute_many(records, parse_json_text=True)
-    assert unparsed == [[1, '{"name":"alpha"}', '["north","east"]', "plain"]]
-    assert formatted == [[1, {"name": "alpha"}, ["north", "east"], "plain"]]
-
-
-def test_encode_records_for_binary_copy_preserves_copy_format() -> None:
-    """The public copy encoder should keep the same escaped wire payload."""
-    records = [("plain", "needs\tescape", "line\nbreak", None, True, b"bytes")]
-    payload = encode_records_for_binary_copy(records)
-    assert payload == b"plain\tneeds\\tescape\tline\\nbreak\t\\\\N\tt\tbytes\n"
-
-
-def test_encode_records_for_binary_copy_uses_global_string_writer(monkeypatch) -> None:
-    """The copy encoder should read the cached StringWriter type directly."""
-
-    class StubStringWriter:
-        def __init__(self) -> None:
-            self._parts: list[str] = []
-
-        def write(self, value: str) -> None:
-            self._parts.append(value)
-
-        def getvalue(self) -> str:
-            return "".join(self._parts)
-
-    monkeypatch.setattr(psqlpy_core, "_STRING_WRITER_TYPE", StubStringWriter)
-    payload = encode_records_for_binary_copy([("plain", "line\nbreak")])
-    assert payload == b"plain\tline\\nbreak\n"
-
-
 def test_format_table_identifier_preserves_quoted_dots() -> None:
     assert psqlpy_core.format_table_identifier('"analytics.schema"."orders.table"') == (
         '"analytics.schema"."orders.table"'
@@ -214,7 +170,6 @@ def test_format_table_identifier_preserves_quoted_dots() -> None:
 
 def test_optional_dependency_globals_are_resolved_at_import_time() -> None:
     assert hasattr(psqlpy_core, "_JSONB_TYPE")
-    assert hasattr(psqlpy_core, "_STRING_WRITER_TYPE")
 
 
 def test_collect_rows_names_from_first_row() -> None:

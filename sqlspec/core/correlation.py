@@ -83,7 +83,6 @@ class CorrelationExtractor:
         if auto_trace_headers:
             headers.extend(self.DEFAULT_HEADERS)
 
-        # Remove duplicates while preserving order
         self._headers = tuple(dict.fromkeys(headers))
         self._max_length = max_length if max_length is not None else self.DEFAULT_MAX_LENGTH
 

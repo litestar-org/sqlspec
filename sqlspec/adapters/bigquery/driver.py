@@ -157,10 +157,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._use_query_and_wait = bool(features.get("use_query_and_wait", False))
         self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
 
@@ -310,10 +306,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             is_script_result=True,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def begin(self) -> None:
         """Begin transaction - BigQuery doesn't support transactions."""
 
@@ -368,10 +360,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
         return BigQueryExceptionHandler()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_arrow(
         self,
@@ -459,7 +447,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 )
                 raise ImproperConfigurationError(msg) from RuntimeError(msg)
 
-            # Fallback to conversion path
             result: ArrowResult = super().select_to_arrow(
                 statement,
                 *parameters,
@@ -472,12 +459,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
             )
             return result
 
-        # Use native path with Storage API
-        # Prepare statement
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
 
-        # Get compiled SQL and parameters
         sql, driver_params = self._compiled_sql(prepared_statement, config)
 
         exc_handler = self.handle_database_exceptions()
@@ -489,7 +473,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs()
             )  # Wait for completion
 
-            # Native Arrow via Storage API
             arrow_table = query_job.to_arrow()
 
             arrow_result = build_arrow_result_from_table(
@@ -508,10 +491,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
             raise RuntimeError(msg)  # pragma: no cover
 
         return arrow_result
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -681,10 +660,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, source_telemetry)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "BigQueryDataDictionary":
         """Get the data dictionary for this driver.
@@ -695,10 +670,6 @@ class BigQueryDriver(SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = BigQueryDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE / INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect BigQuery rows for the direct execution path."""
@@ -769,8 +740,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 
-        credentials = getattr(self.connection, "_credentials", None)
-        client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
+        provider = self.driver_features.get("_storage_write_client_provider")
+        if provider is not None:
+            client = provider(self.connection)
+        else:
+            credentials = getattr(self.connection, "_credentials", None)
+            client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
         write_stream = client.create_write_stream(
             parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)

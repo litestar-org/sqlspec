@@ -59,37 +59,6 @@ _ODBC_COLUMN_PARTIAL_WARNING: Final = (
 )
 
 
-def _arrow_type_to_sql(data_type: Any) -> str:
-    import pyarrow as pa
-
-    types = pa.types
-    if types.is_boolean(data_type):
-        return "BOOLEAN"
-    if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):
-        return "SMALLINT"
-    if types.is_int32(data_type) or types.is_uint32(data_type):
-        return "INTEGER"
-    if types.is_int64(data_type) or types.is_uint64(data_type):
-        return "BIGINT"
-    if types.is_float16(data_type) or types.is_float32(data_type):
-        return "REAL"
-    if types.is_float64(data_type):
-        return "DOUBLE"
-    if types.is_decimal(data_type):
-        return _ARROW_DECIMAL_FORMAT.format(precision=data_type.precision, scale=data_type.scale)
-    if types.is_string(data_type) or types.is_large_string(data_type):
-        return "VARCHAR"
-    if types.is_binary(data_type) or types.is_large_binary(data_type) or types.is_fixed_size_binary(data_type):
-        return "VARBINARY"
-    if types.is_date(data_type):
-        return "DATE"
-    if types.is_time(data_type):
-        return "TIME"
-    if types.is_timestamp(data_type):
-        return "TIMESTAMP"
-    return str(data_type).upper()
-
-
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     """Runtime-dialect data dictionary for generic ODBC connections."""
@@ -330,3 +299,34 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         except SQLFileNotFoundError:
             return False
         return True
+
+
+def _arrow_type_to_sql(data_type: Any) -> str:
+    import pyarrow as pa
+
+    types = pa.types
+    if types.is_boolean(data_type):
+        return "BOOLEAN"
+    if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):
+        return "SMALLINT"
+    if types.is_int32(data_type) or types.is_uint32(data_type):
+        return "INTEGER"
+    if types.is_int64(data_type) or types.is_uint64(data_type):
+        return "BIGINT"
+    if types.is_float16(data_type) or types.is_float32(data_type):
+        return "REAL"
+    if types.is_float64(data_type):
+        return "DOUBLE"
+    if types.is_decimal(data_type):
+        return _ARROW_DECIMAL_FORMAT.format(precision=data_type.precision, scale=data_type.scale)
+    if types.is_string(data_type) or types.is_large_string(data_type):
+        return "VARCHAR"
+    if types.is_binary(data_type) or types.is_large_binary(data_type) or types.is_fixed_size_binary(data_type):
+        return "VARBINARY"
+    if types.is_date(data_type):
+        return "DATE"
+    if types.is_time(data_type):
+        return "TIME"
+    if types.is_timestamp(data_type):
+        return "TIMESTAMP"
+    return str(data_type).upper()

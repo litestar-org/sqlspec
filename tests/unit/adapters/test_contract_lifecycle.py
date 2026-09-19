@@ -1,8 +1,24 @@
 """Unit tests for the driver lifecycle (pooling / connection-hook) contract wiring."""
 
+from contextlib import suppress
+from importlib import import_module
+from typing import Any
+
 import pytest
 
+from sqlspec.core import StatementConfig as SQLSpecStatementConfig
 from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_case
+
+_SESSION_CONTEXTS = (
+    ("sqlspec.adapters.sqlite._typing", "SqliteSessionContext"),
+    ("sqlspec.adapters.duckdb._typing", "DuckDBSessionContext"),
+    ("sqlspec.adapters.pymysql._typing", "PyMysqlSessionContext"),
+    ("sqlspec.adapters.pymssql._typing", "PymssqlSessionContext"),
+    ("sqlspec.adapters.mssql_python._typing", "MssqlPythonSessionContext"),
+    ("sqlspec.adapters.adbc._typing", "AdbcSessionContext"),
+    ("sqlspec.adapters.arrow_odbc._typing", "ArrowOdbcSessionContext"),
+    ("sqlspec.adapters.bigquery._typing", "BigQuerySessionContext"),
+)
 
 POOLING_CASES = (
     "sqlite-sync",
@@ -57,3 +73,25 @@ def test_lifecycle_flags_require_config_factory() -> None:
             assert case.config_factory_fixture is not None, (
                 f"{case.id} declares a config-factory feature without a config_factory_fixture"
             )
+
+
+def test_session_contexts_forward_exception_info_to_release() -> None:
+    """Every adapter session context must hand its exception triple to connection release."""
+    offenders: list[str] = []
+    for module_name, context_name in _SESSION_CONTEXTS:
+        context_class = getattr(import_module(module_name), context_name)
+        recorded: list[dict[str, Any]] = []
+        context = context_class(
+            acquire_connection=lambda: object(),
+            release_connection=lambda _conn, **kwargs: recorded.append(kwargs),
+            statement_config=SQLSpecStatementConfig(),
+            driver_features={},
+            prepare_driver=lambda driver: driver,
+        )
+        with suppress(RuntimeError):
+            with context:
+                raise RuntimeError
+        if not recorded or recorded[0].get("exc_type") is not RuntimeError:
+            offenders.append(f"{module_name}.{context_name}")
+
+    assert offenders == []

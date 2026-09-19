@@ -1,9 +1,25 @@
 """Psqlpy event queue store."""
 
+from typing_extensions import NotRequired
+
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
+from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("PsqlpyEventQueueStore",)
+__all__ = ("PsqlpyEventQueueStore", "PsqlpyEventsConfig")
+
+
+class PsqlpyEventsConfig(EventsConfig):
+    """Psqlpy events settings for queue storage and supported native transports."""
+
+    fillfactor: NotRequired[int]
+    """PostgreSQL queue-table fillfactor; omitted to use the server default."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """PostgreSQL queue vacuum threshold fraction; omitted to use the server default."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """PostgreSQL queue analyze threshold fraction; omitted to use the server default."""
 
 
 class PsqlpyEventQueueStore(BaseEventQueueStore[PsqlpyConfig]):

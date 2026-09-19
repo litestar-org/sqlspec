@@ -53,41 +53,6 @@ AQMSG_VISIBLE: "int | None" = _AQMSG_VISIBLE
 DB_TYPE_JSON: Any = _DB_TYPE_JSON
 
 
-def _resolve_payload_type() -> Any:
-    """Pick the payload-type argument for ``connection.queue()`` JSON payloads."""
-    if DB_TYPE_JSON is not None:
-        return "JSON"
-    return AQMSG_PAYLOAD_TYPE_JSON
-
-
-def _apply_deq_options(
-    queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float
-) -> None:
-    """Configure a queue's dequeue options in place (python-oracledb 4.x API)."""
-    options = queue.deqoptions
-    options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
-    if visibility is not None:
-        options.visibility = visibility
-    elif default_visibility is not None:
-        options.visibility = default_visibility
-
-
-def _channel_queue_name(template: str, channel: str) -> str:
-    """Apply a queue-name template (supports ``{channel}`` substitution)."""
-    if isinstance(template, str) and "{" in template:
-        with contextlib.suppress(Exception):
-            return template.format(channel=channel.upper())
-    return template
-
-
-def _resolve_wait_seconds(poll_interval: float, ceiling: int) -> float:
-    """Cap the caller's poll_interval at the configured aq_wait_seconds ceiling."""
-    interval = max(float(poll_interval), 0.0)
-    if ceiling <= 0:
-        return interval
-    return min(interval, float(ceiling))
-
-
 class OracleSyncAQHub:
     """Per-channel persistent queue-handle cache for sync Oracle AQ."""
 
@@ -346,3 +311,38 @@ class OracleAsyncAQHub:
 
     def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
         return self.shutdown()
+
+
+def _resolve_payload_type() -> Any:
+    """Pick the payload-type argument for ``connection.queue()`` JSON payloads."""
+    if DB_TYPE_JSON is not None:
+        return "JSON"
+    return AQMSG_PAYLOAD_TYPE_JSON
+
+
+def _apply_deq_options(
+    queue: Any, visibility: "int | None", default_visibility: "int | None", wait_seconds: float
+) -> None:
+    """Configure a queue's dequeue options in place (python-oracledb 4.x API)."""
+    options = queue.deqoptions
+    options.wait = 0 if wait_seconds <= 0 else ceil(wait_seconds)
+    if visibility is not None:
+        options.visibility = visibility
+    elif default_visibility is not None:
+        options.visibility = default_visibility
+
+
+def _channel_queue_name(template: str, channel: str) -> str:
+    """Apply a queue-name template (supports ``{channel}`` substitution)."""
+    if isinstance(template, str) and "{" in template:
+        with contextlib.suppress(Exception):
+            return template.format(channel=channel.upper())
+    return template
+
+
+def _resolve_wait_seconds(poll_interval: float, ceiling: int) -> float:
+    """Cap the caller's poll_interval at the configured aq_wait_seconds ceiling."""
+    interval = max(float(poll_interval), 0.0)
+    if ceiling <= 0:
+        return interval
+    return min(interval, float(ceiling))

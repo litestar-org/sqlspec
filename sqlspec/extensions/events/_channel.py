@@ -18,6 +18,7 @@ from sqlspec.extensions.events._models import EventMessage
 from sqlspec.extensions.events._names import normalize_event_channel_name
 from sqlspec.extensions.events._protocols import AsyncEventBackendProtocol, SyncEventBackendProtocol
 from sqlspec.extensions.events._queue import SyncTableEventQueue, build_queue_backend
+from sqlspec.extensions.events._store import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import has_span_attribute
 from sqlspec.utils.uuids import uuid4
@@ -814,6 +815,7 @@ def _resolve_event_backend(
     Returns:
         Tuple of resolved backend and backend label.
     """
+    _validate_adapter_event_settings(extension_settings, adapter_name)
     queue_backend = build_queue_backend(config, extension_settings, adapter_name=adapter_name, hints=hints)
     backend_name = _resolve_backend_name(config, extension_settings, adapter_name)
     native_backend = load_native_backend(config, backend_name, extension_settings, adapter_name=adapter_name)
@@ -832,6 +834,33 @@ def _resolve_event_backend(
     if isinstance(native_backend, protocol_type):
         return native_backend, cast("str", native_backend.backend_name)
     return native_backend, backend_name or "poll_queue"
+
+
+def _validate_adapter_event_settings(settings: "dict[str, Any]", adapter_name: "str | None") -> None:
+    """Apply the adapter store's accepted keys to native and polling channels."""
+    if adapter_name is None:
+        return
+    module_name = f"sqlspec.adapters.{adapter_name}.events.store"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        if error.name not in {module_name, module_name.rsplit(".", 1)[0]}:
+            raise
+        return
+    allowed = BaseEventQueueStore.extension_config_options
+    for name in getattr(module, "__all__", ()):
+        store_type = cast("type[BaseEventQueueStore[Any]]", getattr(module, name))
+        if (
+            isinstance(store_type, type)
+            and issubclass(store_type, BaseEventQueueStore)
+            and store_type.__module__ == module_name
+        ):
+            allowed = allowed | store_type.extension_config_options
+    unsupported = sorted(set(settings).difference(allowed))
+    if unsupported:
+        keys = ", ".join(repr(key) for key in unsupported)
+        msg = f"Unsupported events configuration key(s) for {adapter_name}: {keys}"
+        raise ImproperConfigurationError(msg)
 
 
 def _start_event_span(

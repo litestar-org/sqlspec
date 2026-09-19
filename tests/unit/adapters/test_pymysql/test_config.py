@@ -1,13 +1,19 @@
 """PyMySQL adapter configuration tests."""
 
 import ssl
+import threading
 from collections.abc import Mapping
 from typing import get_args, get_origin, get_type_hints
+from unittest.mock import MagicMock
 
 import pytest
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams
+from sqlspec.adapters.pymysql.core import create_mapped_exception
+from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
+from sqlspec.exceptions import DatabaseConnectionError
 
 
 def _unwrap_not_required(annotation: object) -> object:
@@ -135,3 +141,50 @@ def test_create_pool_preserves_ssl_context_and_flat_tls_options() -> None:
     assert pool._connection_parameters["ssl_verify_cert"] is True
     assert pool._connection_parameters["ssl_verify_identity"] is True
     assert pool._connection_parameters["ssl_disabled"] is False
+
+
+def test_charset_defaults_to_utf8mb4() -> None:
+    """Bulk load already assumes utf8mb4, so the connection must agree by default."""
+    assert PyMysqlConfig().connection_config["charset"] == "utf8mb4"
+
+
+def test_explicit_charset_is_preserved() -> None:
+    """The default must not override a caller's choice."""
+    assert PyMysqlConfig(connection_config={"charset": "latin1"}).connection_config["charset"] == "latin1"
+
+
+def test_ssl_connection_error_maps_to_a_connection_error() -> None:
+    """An SSL handshake failure must not surface as a generic error."""
+    mapped = create_mapped_exception(PyMysqlMySQLError(2026, "SSL connection error"))
+
+    assert isinstance(mapped, DatabaseConnectionError)
+
+
+def test_pool_close_closes_connections_opened_on_other_threads() -> None:
+    """close() must reach connections opened by worker threads, not just the caller's."""
+    created: list[MagicMock] = []
+
+    def _factory() -> MagicMock:
+        connection = MagicMock()
+        created.append(connection)
+        return connection
+
+    pool = PyMysqlConnectionPool({"host": "localhost"}, connection_factory=_factory)
+    barrier = threading.Barrier(3)
+
+    def _open() -> None:
+        pool.acquire()
+        barrier.wait()
+
+    workers = [threading.Thread(target=_open) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join()
+
+    assert len(created) == 2
+
+    pool.close()
+
+    assert [connection.close.call_count for connection in created] == [1, 1]

@@ -11,11 +11,11 @@ interpreted adapter sources can feed compiled stream classes):
 
 import builtins
 import contextlib
-import inspect
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast, overload
 
 from typing_extensions import Self
 
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ class SyncRowSource(Protocol):
 
     def fetch_chunk(self) -> "list[dict[str, Any]]": ...
 
-    def close(self) -> None: ...
+    def close(self, error: bool = False) -> None: ...
 
 
 class AsyncRowSource(Protocol):
@@ -56,35 +56,30 @@ class AsyncRowSource(Protocol):
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]": ...
 
-    async def close(self) -> None: ...
-
-
-def _close_sync_source(source: SyncRowSource, error: bool) -> None:
-    """Close a source while preserving the original no-argument contract."""
-    close = source.close
-    try:
-        inspect.signature(close).bind(error=error)
-    except (TypeError, ValueError):
-        close()
-        return
-    cast("Any", close)(error=error)
-
-
-async def _close_async_source(source: AsyncRowSource, error: bool) -> None:
-    """Close an async source while preserving the original no-argument contract."""
-    close = source.close
-    try:
-        inspect.signature(close).bind(error=error)
-    except (TypeError, ValueError):
-        await close()
-        return
-    await cast("Any", close)(error=error)
+    async def close(self, error: bool = False) -> None: ...
 
 
 def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[str, Any]]":
-    """Zip positional rows with column names into dict rows."""
-    if not column_names:
+    """Return dict rows unchanged and zip positional rows with column names.
+
+    Args:
+        rows: Rows fetched from the cursor.
+        column_names: Column names from the cursor description.
+
+    Returns:
+        Rows as dictionaries.
+
+    Raises:
+        SQLSpecError: If positional rows arrive without column metadata, which
+            would otherwise be indistinguishable from the end of the stream.
+    """
+    if not rows:
         return []
+    if isinstance(rows[0], dict):
+        return list(rows)
+    if not column_names:
+        msg = "Cannot map positional rows to dictionaries without column metadata."
+        raise SQLSpecError(msg)
     return [dict(zip(column_names, row, strict=False)) for row in rows]
 
 
@@ -167,7 +162,7 @@ class SyncRowStream(Generic[RowT]):
         self._buffer = []
         self._buffer_index = 0
         with contextlib.suppress(Exception):
-            _close_sync_source(self._source, error)
+            self._source.close(error=error)
 
 
 class AsyncRowStream(Generic[RowT]):
@@ -249,7 +244,7 @@ class AsyncRowStream(Generic[RowT]):
         self._buffer = []
         self._buffer_index = 0
         with contextlib.suppress(Exception):
-            await _close_async_source(self._source, error)
+            await self._source.close(error=error)
 
 
 class EagerSyncRowSource:

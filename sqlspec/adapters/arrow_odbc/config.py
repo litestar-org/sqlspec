@@ -1,10 +1,17 @@
 """arrow-odbc database configuration."""
 
+import threading
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcSessionContext, arrow_odbc_connect
+from sqlspec.adapters.arrow_odbc._typing import (
+    ArrowOdbcConnection,
+    ArrowOdbcSessionContext,
+    TextEncoding,
+    arrow_odbc_connect,
+    enable_odbc_connection_pooling,
+)
 from sqlspec.adapters.arrow_odbc.core import (
     apply_driver_features,
     build_connection_config,
@@ -30,6 +37,31 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 __all__ = ("ArrowOdbcConfig", "ArrowOdbcConnectionParams", "ArrowOdbcDriverFeatures")
+
+
+_DRIVER_POOLING_ENABLED = False
+_DRIVER_POOLING_LOCK = threading.Lock()
+
+
+def _apply_driver_pooling(requested: bool) -> None:
+    """Apply the ODBC driver manager's process-global connection pooling switch.
+
+    The upstream switch can only be turned on once, before the first connection
+    in the process. Declining it is therefore not a decision that can be latched:
+    only an opt-in is recorded, and a later configuration that does not ask for
+    pooling simply inherits it.
+
+    Args:
+        requested: Whether this configuration asks for driver-level pooling.
+    """
+    global _DRIVER_POOLING_ENABLED
+    if not requested:
+        return
+    with _DRIVER_POOLING_LOCK:
+        if _DRIVER_POOLING_ENABLED:
+            return
+        enable_odbc_connection_pooling()
+        _DRIVER_POOLING_ENABLED = True
 
 
 class ArrowOdbcConnectionParams(TypedDict):
@@ -64,24 +96,14 @@ class ArrowOdbcDriverFeatures(TypedDict):
     max_binary_size: NotRequired[int]
     fetch_concurrently: NotRequired[bool]
     query_timeout_sec: NotRequired[int]
+    payload_text_encoding: NotRequired["TextEncoding"]
+    enable_driver_pooling: NotRequired[bool]
     connection_string: NotRequired[str]
     dbms_name: NotRequired[str]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[ArrowOdbcConnection], None]]"
-
-
-def _apply_json_serializer_override(statement_config: "StatementConfig", features: dict[str, Any]) -> "StatementConfig":
-    serializer = cast("Callable[[Any], str] | None", features.get("json_serializer"))
-    deserializer = cast("Callable[[str], Any] | None", features.get("json_deserializer"))
-    if serializer is to_json and deserializer is from_json:
-        return statement_config
-    return statement_config.replace(
-        parameter_config=statement_config.parameter_config.with_json_serializers(
-            serializer or to_json, deserializer=deserializer
-        )
-    )
 
 
 class ArrowOdbcConnectionContext(SyncPoolConnectionContext):
@@ -194,6 +216,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         """Create and return a new arrow-odbc connection."""
         if self.connection_instance is not None:
             return cast("ArrowOdbcConnection", self.connection_instance)
+        _apply_driver_pooling(bool(self.driver_features.get("enable_driver_pooling", False)))
         connection_string, connect_kwargs = build_connection_config(self.connection_config)
         try:
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))
@@ -238,6 +261,18 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return polling defaults suitable for generic ODBC sources."""
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
+
+
+def _apply_json_serializer_override(statement_config: "StatementConfig", features: dict[str, Any]) -> "StatementConfig":
+    serializer = cast("Callable[[Any], str] | None", features.get("json_serializer"))
+    deserializer = cast("Callable[[str], Any] | None", features.get("json_deserializer"))
+    if serializer is to_json and deserializer is from_json:
+        return statement_config
+    return statement_config.replace(
+        parameter_config=statement_config.parameter_config.with_json_serializers(
+            serializer or to_json, deserializer=deserializer
+        )
+    )
 
 
 def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:

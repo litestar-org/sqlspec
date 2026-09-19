@@ -133,7 +133,15 @@ class OraclePipelineDriver(Protocol):
 
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
-PIPELINE_MIN_DATABASE_MAJOR: int = 26
+"""Lowest python-oracledb version that supports pipelining."""
+
+PIPELINE_MIN_DATABASE_MAJOR: int = 23
+"""Lowest Oracle Database major version pipelining is used on.
+
+This is a policy threshold for when pipelining is worth the round trips, not a
+correctness guard: python-oracledb self-gates through ``supports_pipelining()``
+and falls back to sequential execution on databases that cannot pipeline.
+"""
 
 
 class OraclePipelineMixin:
@@ -349,10 +357,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
@@ -486,10 +490,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def begin(self) -> None:
         """Begin a database transaction.
@@ -630,10 +630,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleSyncExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -720,10 +716,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             arrow_schema=arrow_schema,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack using Oracle's pipeline when available."""
         if not isinstance(stack, StatementStack) or not stack:
@@ -739,10 +731,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             return super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -785,21 +773,26 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 cursor.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            use_direct_path = self.driver_features.get(
-                "enable_direct_path_load", True
-            ) is not False and supports_direct_path_load(self.connection)
+        use_direct_path = (
+            self.driver_features.get("enable_direct_path_load", True) is not False
+            and supports_direct_path_load(self.connection)
+            and _arrow_schema_supports_direct_path(arrow_table)
+        )
+        if arrow_table.num_rows:
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
                 with exc_handler:
                     self.connection.direct_path_load(
-                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_names=list(arrow_table.column_names),
+                        data=arrow_table,
                     )
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
             else:
+                columns, records = self._arrow_table_to_rows(arrow_table)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
                 with self.with_cursor(self.connection) as cursor, exc_handler:
@@ -824,10 +817,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "OracledbSyncDataDictionary":
         """Get the data dictionary for this driver.
@@ -838,10 +827,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = OracledbSyncDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle sync rows for the direct execution path."""
@@ -860,12 +845,14 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
+        """Report whether a transaction is open on the connection.
 
-        Oracle does not expose native transaction state through this predicate,
-        so it is tracked via a flag toggled in begin/commit/rollback.
+        Oracle opens a transaction implicitly on the first DML, which the
+        ownership flag alone cannot see, while ``begin()`` sets the flag without
+        issuing SQL, which the native predicate alone cannot see. Both signals
+        are required.
         """
-        return self._transaction_active
+        return self._transaction_active or bool(self.connection.transaction_in_progress)
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
@@ -1066,10 +1053,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
@@ -1205,10 +1188,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return self.create_execution_result(
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def begin(self) -> None:
         """Begin a database transaction.
@@ -1352,10 +1331,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return OracleAsyncExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # ARROW API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def select_to_arrow(
         self,
         statement: "Statement | QueryBuilder",
@@ -1442,10 +1417,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             arrow_schema=arrow_schema,
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
@@ -1463,10 +1434,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return await self._execute_stack_native(stack, continue_on_error=continue_on_error)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -1509,21 +1476,26 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 await self.connection.execute(statement)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            use_direct_path = self.driver_features.get(
-                "enable_direct_path_load", True
-            ) is not False and supports_direct_path_load(self.connection)
+        use_direct_path = (
+            self.driver_features.get("enable_direct_path_load", True) is not False
+            and supports_direct_path_load(self.connection)
+            and _arrow_schema_supports_direct_path(arrow_table)
+        )
+        if arrow_table.num_rows:
             if use_direct_path:
                 schema_name, table_name = _resolve_direct_path_target(self.connection, table)
                 exc_handler = self.handle_database_exceptions()
                 async with exc_handler:
                     await self.connection.direct_path_load(
-                        schema_name=schema_name, table_name=table_name, column_names=columns, data=records
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_names=list(arrow_table.column_names),
+                        data=arrow_table,
                     )
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
             else:
+                columns, records = self._arrow_table_to_rows(arrow_table)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
                 async with self.with_cursor(self.connection) as cursor, exc_handler:
@@ -1550,10 +1522,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "OracledbAsyncDataDictionary":
         """Get the data dictionary for this driver.
@@ -1565,20 +1533,16 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             self._data_dictionary = OracledbAsyncDataDictionary()
         return self._data_dictionary
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle async rows for the direct execution path.
 
         Falls back to the standard async dispatch path when rows contain async
         LOB locators, because those must be read with ``collect_async_rows``.
         """
+        column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
         if fetched and any(_row_has_async_readable(row) for row in fetched):
             msg = "Oracle async LOB locators require async row collection"
             raise NotImplementedError(msg)
-        column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
         data, column_names = collect_sync_rows(
             cast("list[Any] | None", fetched),
             cursor.description,
@@ -1593,12 +1557,14 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return resolve_rowcount(cursor)
 
     def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
+        """Report whether a transaction is open on the connection.
 
-        Oracle does not expose native transaction state through this predicate,
-        so it is tracked via a flag toggled in begin/commit/rollback.
+        Oracle opens a transaction implicitly on the first DML, which the
+        ownership flag alone cannot see, while ``begin()`` sets the flag without
+        issuing SQL, which the native predicate alone cannot see. Both signals
+        are required.
         """
-        return self._transaction_active
+        return self._transaction_active or bool(self.connection.transaction_in_progress)
 
     def _detect_oracledb_version(self) -> "tuple[int, int, int]":
         return ORACLEDB_VERSION
@@ -1798,6 +1764,40 @@ class _CompiledStackOperation(NamedTuple):
     method: str
     returns_rows: bool
     summary: str
+
+
+def _arrow_schema_supports_direct_path(arrow_table: Any) -> bool:
+    """Report whether every column maps to a type direct path load can ingest.
+
+    This is an allow-list rather than a nested-type check. oracledb converts a
+    limited set of Arrow types, and a conversion it cannot perform fails part
+    way through the load, so anything unrecognized takes the insert path.
+
+    Args:
+        arrow_table: The Arrow table about to be ingested.
+
+    Returns:
+        True when every column type is known to be convertible.
+    """
+    ensure_pyarrow()
+    import pyarrow as pa
+
+    for field in arrow_table.schema:
+        data_type = field.type
+        supported = (
+            pa.types.is_integer(data_type)
+            or (pa.types.is_floating(data_type) and not pa.types.is_float16(data_type))
+            or pa.types.is_boolean(data_type)
+            or pa.types.is_string(data_type)
+            or pa.types.is_large_string(data_type)
+            or pa.types.is_binary(data_type)
+            or pa.types.is_large_binary(data_type)
+            or pa.types.is_timestamp(data_type)
+            or pa.types.is_decimal128(data_type)
+        )
+        if not supported:
+            return False
+    return True
 
 
 def _resolve_direct_path_target(connection: Any, table: str) -> tuple[str, str]:

@@ -3,9 +3,16 @@
 from typing import Any, get_type_hints
 from unittest.mock import MagicMock
 
+from adbc_driver_bigquery import DatabaseOptions
+
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.config import AdbcConnectionParams
-from sqlspec.adapters.adbc.core import build_connection_config, resolve_driver_name_from_config
+from sqlspec.adapters.adbc.core import (
+    build_connection_config,
+    resolve_driver_connect_func,
+    resolve_driver_name_from_config,
+)
+from sqlspec.core import ParameterStyle
 
 
 def _resolve_driver_name(config: AdbcConfig) -> str:
@@ -119,17 +126,18 @@ def test_connection_config_dict_moves_bigquery_fields_into_db_kwargs() -> None:
     assert "project_id" not in resolved
     assert "dataset_id" not in resolved
     assert "token" not in resolved
-    assert resolved["db_kwargs"]["project_id"] == "test-project"
-    assert resolved["db_kwargs"]["dataset_id"] == "test-dataset"
-    assert resolved["db_kwargs"]["token"] == "token"
+    assert resolved["db_kwargs"][DatabaseOptions.PROJECT_ID.value] == "test-project"
+    assert resolved["db_kwargs"][DatabaseOptions.DATASET_ID.value] == "test-dataset"
+    assert resolved["db_kwargs"][DatabaseOptions.AUTH_REFRESH_TOKEN.value] == "token"
+    assert "adbc.bigquery.sql.token" not in resolved["db_kwargs"]
 
 
 def test_connection_config_dict_moves_bigquery_fields_for_bq_alias() -> None:
     """Move BigQuery fields into db_kwargs when using the bq alias."""
     config = AdbcConfig(connection_config={"driver_name": "bq", "project_id": "p", "dataset_id": "d"})
     resolved = _get_connection_config_dict(config)
-    assert resolved["db_kwargs"]["project_id"] == "p"
-    assert resolved["db_kwargs"]["dataset_id"] == "d"
+    assert resolved["db_kwargs"][DatabaseOptions.PROJECT_ID.value] == "p"
+    assert resolved["db_kwargs"][DatabaseOptions.DATASET_ID.value] == "d"
 
 
 def test_connection_config_dict_moves_bigquery_fields_for_bigquery_uri() -> None:
@@ -138,8 +146,8 @@ def test_connection_config_dict_moves_bigquery_fields_for_bigquery_uri() -> None
     resolved = _get_connection_config_dict(config)
     assert "project_id" not in resolved
     assert "dataset_id" not in resolved
-    assert resolved["db_kwargs"]["project_id"] == "p"
-    assert resolved["db_kwargs"]["dataset_id"] == "d"
+    assert resolved["db_kwargs"][DatabaseOptions.PROJECT_ID.value] == "p"
+    assert resolved["db_kwargs"][DatabaseOptions.DATASET_ID.value] == "d"
 
 
 def test_connection_config_dict_preserves_db_kwargs_for_non_bigquery() -> None:
@@ -242,7 +250,7 @@ def test_legacy_entrypoint_alias_normalizes_to_entrypoint() -> None:
     """Legacy adbc_driver_manager_entrypoint should normalize to current entrypoint."""
     config = AdbcConfig(
         connection_config={
-            "driver_name": "postgres",
+            "driver_name": "/opt/lib/libadbc_driver_postgresql.so",
             "adbc_driver_manager_entrypoint": "PostgreSQL",
             "profile": "analytics",
         }
@@ -338,3 +346,67 @@ def test_gizmosql_supported_parameter_styles() -> None:
     # GizmoSQL (DuckDB backend) should support multiple styles
     supported = config.statement_config.parameter_config.supported_parameter_styles
     assert ParameterStyle.QMARK in supported
+
+
+def test_bigquery_options_use_the_installed_driver_constants() -> None:
+    """Every BigQuery option name must match the driver's own constant."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "bigquery", "project_id": "p", "dataset_id": "d", "token": "t"}
+    )
+
+    db_kwargs = _get_connection_config_dict(config)["db_kwargs"]
+
+    assert set(db_kwargs) <= {option.value for option in DatabaseOptions}
+
+
+def test_shared_object_driver_routes_through_the_driver_manager() -> None:
+    """A driver shared object is a filesystem path, not an importable module path."""
+    config = AdbcConfig(connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"})
+
+    assert _resolve_driver_name(config) == "adbc_driver_manager.dbapi.connect"
+
+    resolved = _get_connection_config_dict(config)
+
+    assert resolved["driver"] == "/opt/lib/libadbc_driver_postgresql.so"
+    assert "driver_name" not in resolved
+
+
+def test_shared_object_driver_connect_func_is_the_driver_manager() -> None:
+    """Resolving the connect function must not try to import the path as a module."""
+    import adbc_driver_manager.dbapi
+
+    connect_func = resolve_driver_connect_func("/opt/lib/libadbc_driver_postgresql.dylib", None)
+
+    assert connect_func is adbc_driver_manager.dbapi.connect
+
+
+def test_entrypoint_is_stripped_for_dedicated_drivers() -> None:
+    """Dedicated dbapi modules reject entrypoint, so it must not reach them."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:", "entrypoint": "foo"})
+
+    assert "entrypoint" not in _get_connection_config_dict(config)
+
+
+def test_entrypoint_is_preserved_on_the_driver_manager_route() -> None:
+    """The driver manager is the only consumer of entrypoint."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so", "entrypoint": "PostgreSQL"}
+    )
+
+    assert _get_connection_config_dict(config)["entrypoint"] == "PostgreSQL"
+
+
+def test_shared_object_driver_keeps_its_dialect() -> None:
+    """Routing through the driver manager must not erase the dialect the path names."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so", "uri": "postgresql://host/db"}
+    )
+
+    assert config.statement_config.dialect == "postgres"
+
+
+def test_shared_object_driver_keeps_its_parameter_style() -> None:
+    """A PostgreSQL shared object must not be given SQLite's qmark placeholders."""
+    config = AdbcConfig(connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"})
+
+    assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC

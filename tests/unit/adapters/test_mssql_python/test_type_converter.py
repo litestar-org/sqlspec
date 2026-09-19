@@ -2,6 +2,8 @@
 
 from uuid import UUID
 
+import pyarrow as pa
+
 from sqlspec.adapters.mssql_python.type_converter import MssqlPythonTypeConverter, mssql_type_to_arrow
 
 
@@ -52,3 +54,13 @@ def test_mssql_type_converter_public_all() -> None:
 
     assert "MssqlPythonTypeConverter" in mssql_python.__all__
     assert "mssql_type_to_arrow" in mssql_python.__all__
+
+
+def test_tsql_time_maps_to_arrow_time64() -> None:
+    """T-SQL TIME is a clock time, not the rowversion binary type."""
+    assert mssql_type_to_arrow("time") == pa.time64("us")
+
+
+def test_tsql_timestamp_remains_the_rowversion_binary_type() -> None:
+    """TIMESTAMP is a T-SQL rowversion alias and must stay binary."""
+    assert mssql_type_to_arrow("timestamp") == pa.binary()

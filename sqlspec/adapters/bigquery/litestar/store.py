@@ -3,6 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -10,7 +13,23 @@ if TYPE_CHECKING:
     from sqlspec.adapters.bigquery.config import BigQueryConfig
 
 
-__all__ = ("BigQueryStore",)
+__all__ = ("BigQueryLitestarConfig", "BigQueryStore")
+
+
+class BigQueryLitestarConfig(LitestarConfig):
+    """BigQuery-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    partitioning: NotRequired[bool]
+    """Partition sessions by expiration date. Default: False."""
+
+    partition_expiration_days: NotRequired[int]
+    """Partition expiration in days."""
+
+    require_partition_filter: NotRequired[bool]
+    """Require a partition filter for session queries."""
 
 
 class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):

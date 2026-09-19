@@ -80,22 +80,6 @@ _MYSQL_TYPE_CODE_TOKENS: Final[dict[int, str]] = {
 }
 
 
-def _resolve_column_types(description: Any) -> "dict[str, str] | None":
-    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
-
-    Returns ``None`` when the cursor has no description or reports no
-    recognizable type codes.
-    """
-    if not description:
-        return None
-    column_types: dict[str, str] = {}
-    for col in description:
-        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
-        if token is not None:
-            column_types[col[0]] = token
-    return column_types or None
-
-
 class AiomysqlExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiomysql (MySQL) database exceptions.
 
@@ -232,10 +216,6 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def begin(self) -> None:
         """Begin a database transaction.
 
@@ -243,8 +223,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             SQLSpecError: If transaction initialization fails
         """
         try:
-            async with AiomysqlCursor(self.connection) as cursor:
-                await cursor.execute("BEGIN")
+            await self.connection.begin()
         except AiomysqlPymysqlMySQLError as e:
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -301,10 +280,6 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """
         return AiomysqlExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def select_to_storage(
         self,
         statement: "SQL | str",
@@ -359,10 +334,10 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
                     tmp.write(payload)
                     tmp_name = tmp.name
                 try:
-                    load_sql = build_load_data_statement(table, columns, tmp_name)
+                    load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     async with exc_handler, self.with_cursor(self.connection) as cursor:
-                        await cursor.execute(load_sql)
+                        await cursor.execute(load_sql, (tmp_name,))
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:
@@ -401,10 +376,6 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "AiomysqlDataDictionary":
         """Get the data dictionary for this driver.
@@ -415,10 +386,6 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AiomysqlDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect aiomysql rows for the direct execution path."""
@@ -439,6 +406,22 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             True when the server reports an open transaction.
         """
         return bool(self.connection.get_transaction_status())
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map MySQL cursor column FIELD_TYPE codes to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable type codes.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _MYSQL_TYPE_CODE_TOKENS.get(col[1])
+        if token is not None:
+            column_types[col[0]] = token
+    return column_types or None
 
 
 register_driver_profile("aiomysql", driver_profile)

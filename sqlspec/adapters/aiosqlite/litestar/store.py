@@ -3,17 +3,33 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import NotRequired
+
 from sqlspec.adapters.aiosqlite.config import _apply_extension_pragmas, _extension_pragma_statements
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 
-__all__ = ("AiosqliteStore",)
+__all__ = ("AiosqliteLitestarConfig", "AiosqliteStore")
 
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
+
+
+class AiosqliteLitestarConfig(LitestarConfig):
+    """Aiosqlite-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    pragma_profile: NotRequired[bool]
+    """Apply the extension-store PRAGMA profile. Default: False."""
+
+    pragma_overrides: NotRequired[dict[str, str | int | bool]]
+    """Validated PRAGMA overrides applied during schema preparation."""
 
 
 class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):

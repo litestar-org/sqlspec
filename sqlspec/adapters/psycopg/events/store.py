@@ -1,9 +1,28 @@
 """Psycopg event queue stores for sync and async drivers."""
 
+from typing_extensions import NotRequired
+
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
+from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("PsycopgAsyncEventQueueStore", "PsycopgSyncEventQueueStore")
+__all__ = ("PsycopgAsyncEventQueueStore", "PsycopgEventsConfig", "PsycopgSyncEventQueueStore")
+
+
+class PsycopgEventsConfig(EventsConfig):
+    """Psycopg events settings for queue storage and supported native transports."""
+
+    fillfactor: NotRequired[int]
+    """PostgreSQL queue-table fillfactor; omitted to use the server default."""
+
+    autovacuum_vacuum_scale_factor: NotRequired[float]
+    """PostgreSQL queue vacuum threshold fraction; omitted to use the server default."""
+
+    autovacuum_analyze_scale_factor: NotRequired[float]
+    """PostgreSQL queue analyze threshold fraction; omitted to use the server default."""
+
+    listener_queue_capacity: NotRequired[int]
+    """Maximum buffered notifications per native listener; omitted for an unbounded queue."""
 
 
 class PsycopgSyncEventQueueStore(BaseEventQueueStore[PsycopgSyncConfig]):
@@ -18,6 +37,7 @@ class PsycopgSyncEventQueueStore(BaseEventQueueStore[PsycopgSyncConfig]):
         "autovacuum_analyze_scale_factor",
         "autovacuum_vacuum_scale_factor",
         "fillfactor",
+        "listener_queue_capacity",
     })
 
     def _column_types(self) -> "tuple[str, str, str]":
@@ -45,6 +65,7 @@ class PsycopgAsyncEventQueueStore(BaseEventQueueStore[PsycopgAsyncConfig]):
         "autovacuum_analyze_scale_factor",
         "autovacuum_vacuum_scale_factor",
         "fillfactor",
+        "listener_queue_capacity",
     })
 
     def _column_types(self) -> "tuple[str, str, str]":
