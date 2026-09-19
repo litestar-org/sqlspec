@@ -52,10 +52,31 @@ def test_connection_string_keeps_explicit_odbc_fields() -> None:
 
 
 def test_explicit_field_outranks_the_same_option_inside_the_connection_string() -> None:
-    """ODBC honours a repeated keyword's first occurrence, so the explicit field must lead."""
+    """Explicit field replaces matching option inside connection string with key deduplication."""
     connection_string, _ = build_connection_config({"connection_string": "Database=prod", "database": "staging"})
 
-    assert connection_string.index("Database=staging") < connection_string.index("Database=prod")
+    assert "Database=staging" in connection_string
+    assert "Database=prod" not in connection_string
+    assert connection_string.lower().count("database=") == 1
+
+
+def test_build_connection_config_merges_port_with_connection_string_server() -> None:
+    """Discrete port must be attached to the server defined in connection_string."""
+    connection_string, _ = build_connection_config({"connection_string": "Server=host;UID=u;PWD=p;", "port": 1433})
+
+    assert "Server=host,1433" in connection_string
+
+
+def test_build_connection_config_discrete_server_overrides_connection_string() -> None:
+    """Discrete server must override server in connection_string."""
+    connection_string, _ = build_connection_config({
+        "connection_string": "Server=oldhost;UID=u;PWD=p;",
+        "server": "newhost",
+        "port": 14333,
+    })
+
+    assert "Server=newhost,14333" in connection_string
+    assert "oldhost" not in connection_string
 
 
 def test_an_already_braced_value_is_not_quoted_again() -> None:
