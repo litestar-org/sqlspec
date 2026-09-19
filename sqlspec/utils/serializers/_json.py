@@ -105,14 +105,6 @@ def _default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
     if _UUID_UTILS_TYPE is not None:
         encoders[_UUID_UTILS_TYPE] = str
 
-    with contextlib.suppress(ImportError):
-        # asyncpg returns UUIDs as `pgproto.UUID`, distinct from stdlib uuid.UUID.
-        # Registered here (not in the Litestar plugin) so every framework
-        # consumer — and direct sqlspec users — handles asyncpg results.
-        from asyncpg.pgproto import pgproto  # pyright: ignore[reportMissingImports]
-
-        encoders[pgproto.UUID] = str
-
     return encoders
 
 
@@ -134,6 +126,11 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
             if self._loaded:
                 return
             optional_encoders: dict[type, Callable[[Any], Any]] = {}
+            with contextlib.suppress(ImportError):
+                # Register driver UUIDs for direct consumers as well as frameworks.
+                from asyncpg.pgproto import pgproto  # pyright: ignore[reportMissingImports]
+
+                optional_encoders[pgproto.UUID] = str
             if NUMPY_INSTALLED:
                 ndarray = cast("type[Any]", import_optional_attr("numpy", "ndarray"))
                 generic = cast("type[Any]", import_optional_attr("numpy", "generic"))
