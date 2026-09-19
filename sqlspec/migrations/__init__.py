@@ -7,6 +7,8 @@ and driver system for database versioning.
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
+from sqlspec import _COMPILED
+
 if TYPE_CHECKING:
     from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands, create_migration_commands
     from sqlspec.migrations.loaders import (
@@ -92,3 +94,9 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted(set(globals()) | _EXPORTS.keys())
+
+
+if _COMPILED:
+    for _name in __all__:
+        if _name not in globals():
+            __getattr__(_name)

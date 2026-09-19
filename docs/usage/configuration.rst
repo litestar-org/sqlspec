@@ -5,6 +5,10 @@ SQLSpec configuration is centered around adapter-specific config objects. Each c
 captures connection parameters, optional pooling settings, and extension-specific
 options for framework integrations.
 
+Pure-Python installations load public exports on first access. Compiled wheels
+retain eager exports so concurrent imports cannot observe partially initialized
+native modules. Both builds preserve the same public objects and static types.
+
 Core Configuration
 ------------------
 

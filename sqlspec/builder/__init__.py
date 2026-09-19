@@ -7,6 +7,8 @@ parameter binding and validation.
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
+from sqlspec import _COMPILED
+
 if TYPE_CHECKING:
     from sqlspec.builder._base import BuiltQuery, ExpressionBuilder, QueryBuilder
     from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
@@ -281,3 +283,9 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted(set(globals()) | set(__all__))
+
+
+if _COMPILED:
+    for _name in __all__:
+        if _name not in globals():
+            __getattr__(_name)

@@ -14,8 +14,9 @@ Unreleased
 
 **Changed:**
 
-* Importing SQLSpec no longer loads unused query builders or migration commands.
-  Public import paths stay the same.
+* Pure-Python installations defer unused query builders and migration commands.
+  Compiled wheels retain eager exports to preserve safe concurrent imports.
+  Public import paths, typing, and mypyc compilation support stay the same.
 * Configs build migration commands and custom trackers on first use. Built-in
   checks still run when you create a config. Call
   ``config.get_migration_commands()`` at startup to check custom tracker setup

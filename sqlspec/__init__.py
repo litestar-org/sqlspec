@@ -14,17 +14,20 @@ _warnings.filterwarnings(
 del _warnings
 
 from importlib import import_module
+from importlib.machinery import EXTENSION_SUFFIXES
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.__metadata__ import __version__
+from sqlspec.utils import logging as _logging
 from sqlspec.utils.logging import suppress_erroneous_sqlglot_log_messages
+
+_COMPILED = (_logging.__file__ or "").endswith(tuple(EXTENSION_SUFFIXES))
 
 if TYPE_CHECKING:
     from sqlspec import (
         adapters,
         base,
         builder,
-        config,
         core,
         dialects,
         driver,
@@ -32,10 +35,11 @@ if TYPE_CHECKING:
         extensions,
         loader,
         migrations,
-        observability,
         typing,
         utils,
     )
+    from sqlspec import config as config
+    from sqlspec import observability as observability
     from sqlspec.base import SQLSpec
     from sqlspec.builder import (
         Column,
@@ -289,3 +293,11 @@ def __getattr__(name: str) -> Any:
 
 def __dir__() -> list[str]:
     return sorted(set(globals()) | _EXPORTS.keys())
+
+
+# Native cross-module initialization is not protected by Python import locks.
+# Retain eager exports in compiled wheels until mypyc supports lazy concurrency.
+if _COMPILED:
+    for _name in __all__:
+        if _name not in globals():
+            __getattr__(_name)

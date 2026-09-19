@@ -1,3 +1,6 @@
+__all__ = ("test_migration_warmup",)
+
+
 def test_migration_warmup() -> None:
     # start-example
     from sqlspec.adapters.sqlite import SqliteConfig
