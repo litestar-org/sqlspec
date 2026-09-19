@@ -20,6 +20,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
@@ -184,57 +185,6 @@ def _append_port(server: str, port: Any) -> str:
     return f"{server},{port_str}"
 
 
-def _parse_odbc_connection_string(conn_str: str) -> list[tuple[str, str]]:
-    """Parse an ODBC connection string into key-value pairs."""
-    pairs: list[tuple[str, str]] = []
-    i = 0
-    n = len(conn_str)
-    while i < n:
-        while i < n and conn_str[i] in " ;":
-            i += 1
-        if i >= n:
-            break
-        eq = conn_str.find("=", i)
-        if eq == -1:
-            break
-        key = conn_str[i:eq].strip()
-        i = eq + 1
-        while i < n and conn_str[i] in " \t":
-            i += 1
-        if i >= n:
-            pairs.append((key, ""))
-            break
-        if conn_str[i] == "{":
-            val_chars = ["{"]
-            i += 1
-            while i < n:
-                ch = conn_str[i]
-                if ch == "}":
-                    if i + 1 < n and conn_str[i + 1] == "}":
-                        val_chars.append("}}")
-                        i += 2
-                    else:
-                        val_chars.append("}")
-                        i += 1
-                        break
-                else:
-                    val_chars.append(ch)
-                    i += 1
-            pairs.append((key, "".join(val_chars)))
-            while i < n and conn_str[i] != ";":
-                i += 1
-            if i < n and conn_str[i] == ";":
-                i += 1
-        else:
-            semi = conn_str.find(";", i)
-            if semi == -1:
-                pairs.append((key, conn_str[i:].strip()))
-                break
-            pairs.append((key, conn_str[i:semi].strip()))
-            i = semi + 1
-    return pairs
-
-
 def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Build arrow-odbc connection arguments with explicit-field precedence and key deduplication.
 
@@ -269,7 +219,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
             return str(connection_string), connect_kwargs
 
         options: dict[str, tuple[str, str]] = {}
-        for raw_key, raw_value in _parse_odbc_connection_string(str(connection_string)):
+        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
             canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
             options[canonical_key.lower()] = (canonical_key, raw_value)
 
