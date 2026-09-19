@@ -15,7 +15,8 @@ Unreleased
 **Changed:**
 
 * Pure-Python installations defer unused query builders and migration commands.
-  Compiled wheels retain eager exports to preserve safe concurrent imports.
+  Compiled wheels retain eager exports to preserve concurrent access after
+  package initialization.
   Public import paths, typing, and mypyc compilation support stay the same.
 * Configs build migration commands and custom trackers on first use. Built-in
   checks still run when you create a config. Call

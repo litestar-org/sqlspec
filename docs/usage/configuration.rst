@@ -6,8 +6,8 @@ captures connection parameters, optional pooling settings, and extension-specifi
 options for framework integrations.
 
 Pure-Python installations load public exports on first access. Compiled wheels
-retain eager exports so concurrent imports cannot observe partially initialized
-native modules. Both builds preserve the same public objects and static types.
+retain eager exports to preserve concurrent access after package initialization.
+Both builds preserve the same public objects and static types.
 
 Core Configuration
 ------------------
