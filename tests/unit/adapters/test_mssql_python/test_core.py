@@ -3,11 +3,7 @@
 import pytest
 
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE
-from sqlspec.adapters.mssql_python.core import (
-    _parse_odbc_connection_string,
-    build_connection_config,
-    create_mapped_exception,
-)
+from sqlspec.adapters.mssql_python.core import build_connection_config, create_mapped_exception
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -15,6 +11,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_odbc_connection_string
 
 
 def test_build_connection_config_uses_supplied_connection_string() -> None:
@@ -247,7 +244,7 @@ def test_build_connection_config_extra_dict_and_arbitrary_options() -> None:
 
 def test_parse_odbc_connection_string_edge_cases() -> None:
     """Parser handles leading/duplicate semicolons, empty values, trailing tokens, and unclosed braces."""
-    parsed = _parse_odbc_connection_string("; ;Server=host; ;Key= ;Driver={ODBC Driver} ;EmptyKey=  ")
+    parsed = parse_odbc_connection_string("; ;Server=host; ;Key= ;Driver={ODBC Driver} ;EmptyKey=  ")
     parsed_dict = dict(parsed)
 
     assert parsed_dict["Server"] == "host"
@@ -255,6 +252,6 @@ def test_parse_odbc_connection_string_edge_cases() -> None:
     assert parsed_dict["Driver"] == "{ODBC Driver}"
     assert parsed_dict["EmptyKey"] == ""
 
-    assert _parse_odbc_connection_string("Incomplete={no_close") == [("Incomplete", "{no_close")]
-    assert _parse_odbc_connection_string("Server=host;  ") == [("Server", "host")]
-    assert _parse_odbc_connection_string("DanglingToken") == []
+    assert parse_odbc_connection_string("Incomplete={no_close") == [("Incomplete", "{no_close")]
+    assert parse_odbc_connection_string("Server=host;  ") == [("Server", "host")]
+    assert parse_odbc_connection_string("DanglingToken") == []
