@@ -162,6 +162,31 @@ def _pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
     return {**connection_kwargs, **pool_kwargs}
 
 
+def build_connection_config(
+    connection_config: "AsyncmyPoolParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize asyncmy connection configuration, parsing DSN and mapping aliases."""
+    config = _normalize_connection_config(connection_config)
+    dsn = (
+        config.pop("dsn", None)
+        or config.pop("url", None)
+        or config.pop("connection_string", None)
+    )
+    user_alias = config.pop("username", None)
+    if user_alias is not None and "user" not in config:
+        config["user"] = user_alias
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = parse_mysql_dsn(dsn)
+        for key, value in dsn_params.items():
+            if key == "database" and "db" in config:
+                continue
+            config.setdefault(key, value)
+    config.setdefault("host", "localhost")
+    config.setdefault("port", 3306)
+    config.setdefault("charset", "utf8mb4")
+    return config
+
+
 class AsyncmyDriverFeatures(TypedDict):
     """Asyncmy driver feature flags.
 
@@ -407,27 +432,3 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
 
-
-def build_connection_config(
-    connection_config: "AsyncmyPoolParams | dict[str, Any] | Mapping[str, Any] | None",
-) -> dict[str, Any]:
-    """Normalize asyncmy connection configuration, parsing DSN and mapping aliases."""
-    config = _normalize_connection_config(connection_config)
-    dsn = (
-        config.pop("dsn", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
-    user_alias = config.pop("username", None)
-    if user_alias is not None and "user" not in config:
-        config["user"] = user_alias
-    if dsn is not None and isinstance(dsn, str):
-        dsn_params = parse_mysql_dsn(dsn)
-        for key, value in dsn_params.items():
-            if key == "database" and "db" in config:
-                continue
-            config.setdefault(key, value)
-    config.setdefault("host", "localhost")
-    config.setdefault("port", 3306)
-    config.setdefault("charset", "utf8mb4")
-    return config

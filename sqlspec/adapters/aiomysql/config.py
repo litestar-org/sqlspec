@@ -159,6 +159,30 @@ class AiomysqlDriverFeatures(TypedDict):
     enable_local_infile_bulk_load: NotRequired[bool]
 
 
+def build_connection_config(
+    connection_config: "AiomysqlPoolParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize aiomysql connection configuration, parsing DSN and mapping aliases."""
+    config = normalize_connection_config(connection_config)
+    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if user_alias is not None and "user" not in config:
+        config["user"] = user_alias
+    db_alias = config.pop("database", None)
+    if db_alias is not None and "db" not in config:
+        config["db"] = db_alias
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = parse_mysql_dsn(dsn)
+        if "database" in dsn_params and "db" not in dsn_params:
+            dsn_params["db"] = dsn_params.pop("database")
+        for key, value in dsn_params.items():
+            config.setdefault(key, value)
+    config.setdefault("host", "localhost")
+    config.setdefault("port", 3306)
+    config.setdefault("charset", "utf8mb4")
+    return _normalize_local_infile(config)
+
+
 class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
     __slots__ = ("_ctx",)
 
@@ -374,26 +398,3 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
 
-
-def build_connection_config(
-    connection_config: "AiomysqlPoolParams | dict[str, Any] | Mapping[str, Any] | None",
-) -> dict[str, Any]:
-    """Normalize aiomysql connection configuration, parsing DSN and mapping aliases."""
-    config = normalize_connection_config(connection_config)
-    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
-    user_alias = config.pop("username", None)
-    if user_alias is not None and "user" not in config:
-        config["user"] = user_alias
-    db_alias = config.pop("database", None)
-    if db_alias is not None and "db" not in config:
-        config["db"] = db_alias
-    if dsn is not None and isinstance(dsn, str):
-        dsn_params = parse_mysql_dsn(dsn)
-        if "database" in dsn_params and "db" not in dsn_params:
-            dsn_params["db"] = dsn_params.pop("database")
-        for key, value in dsn_params.items():
-            config.setdefault(key, value)
-    config.setdefault("host", "localhost")
-    config.setdefault("port", 3306)
-    config.setdefault("charset", "utf8mb4")
-    return _normalize_local_infile(config)
