@@ -31,7 +31,8 @@ from sqlspec.core.config_runtime import (
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
-from sqlspec.migrations import AsyncMigrationTracker, SyncMigrationTracker, create_migration_commands
+from sqlspec.migrations import create_migration_commands
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import ConnectionT, PoolT
 from sqlspec.utils.logging import get_logger
