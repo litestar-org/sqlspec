@@ -902,9 +902,11 @@ with ThreadPoolExecutor(max_workers=len(exports)) as pool:
 """
     else:
         script += """
-# Concurrent child imports are supported after their parent package initializes.
-# Racing the initial parent import itself already fails in baseline native wheels.
-importlib.import_module("sqlspec")
+# Initialize every actual parent, including nested packages such as sqlspec.core.
+# Racing parent initialization against its child already fails in baseline native wheels.
+for package, _, defining_module in exports:
+    importlib.import_module(package)
+    importlib.import_module(defining_module.rpartition(".")[0])
 barrier = Barrier(len(exports))
 
 def resolve(index):
