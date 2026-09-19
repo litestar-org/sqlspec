@@ -206,35 +206,6 @@ class TypedParameter:
         return (TypedParameter, (self.value, self.original_type, self.semantic_name))
 
 
-class _TupleAdapter:
-    __slots__ = ("_as_list", "_serializer")
-
-    def __init__(self, serializer: "Callable[[Any], str]", as_list: bool) -> None:
-        self._serializer = serializer
-        self._as_list = as_list
-
-    def __call__(self, value: Any) -> "Any":
-        if self._as_list:
-            return self._serializer(list(value))
-        return self._serializer(value)
-
-
-def _wrap_parameter_by_type(value: Any, semantic_name: "str | None" = None) -> Any:
-    if isinstance(value, bool):
-        return TypedParameter(value, bool, semantic_name)
-    if isinstance(value, Decimal):
-        return TypedParameter(value, Decimal, semantic_name)
-    if isinstance(value, datetime):
-        return TypedParameter(value, datetime, semantic_name)
-    if isinstance(value, date):
-        return TypedParameter(value, date, semantic_name)
-    if isinstance(value, time):
-        return TypedParameter(value, time, semantic_name)
-    if isinstance(value, bytes):
-        return TypedParameter(value, bytes, semantic_name)
-    return value
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterInfo:
     """Metadata describing a single detected SQL parameter."""
@@ -620,3 +591,32 @@ def wrap_with_type(value: Any, semantic_name: "str | None" = None) -> Any:
     if value is None:
         return None
     return _wrap_parameter_by_type(value, semantic_name)
+
+
+class _TupleAdapter:
+    __slots__ = ("_as_list", "_serializer")
+
+    def __init__(self, serializer: "Callable[[Any], str]", as_list: bool) -> None:
+        self._serializer = serializer
+        self._as_list = as_list
+
+    def __call__(self, value: Any) -> "Any":
+        if self._as_list:
+            return self._serializer(list(value))
+        return self._serializer(value)
+
+
+def _wrap_parameter_by_type(value: Any, semantic_name: "str | None" = None) -> Any:
+    if isinstance(value, bool):
+        return TypedParameter(value, bool, semantic_name)
+    if isinstance(value, Decimal):
+        return TypedParameter(value, Decimal, semantic_name)
+    if isinstance(value, datetime):
+        return TypedParameter(value, datetime, semantic_name)
+    if isinstance(value, date):
+        return TypedParameter(value, date, semantic_name)
+    if isinstance(value, time):
+        return TypedParameter(value, time, semantic_name)
+    if isinstance(value, bytes):
+        return TypedParameter(value, bytes, semantic_name)
+    return value

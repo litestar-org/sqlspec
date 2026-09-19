@@ -10,12 +10,14 @@ from sqlspec.exceptions import (
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
+    IntegrityError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
     SQLSpecError,
+    TransactionError,
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import from_json, to_json
@@ -61,6 +63,7 @@ _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("snowflake", ("snowflake",)),
 )
 _ARROW_ODBC_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"Native error:\s*(-?\d+)")
+_ODBC_PUNCTUATION: Final[str] = "[]{}(),;?*=!@"
 _SQL_SERVER_DIAGNOSTIC_MARKERS: Final[tuple[str, ...]] = ("sql server", "msodbcsql")
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     2601: (UniqueViolationError, "unique constraint violation"),
@@ -75,6 +78,18 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     8114: (DataError, "data conversion error"),
     1105: (OperationalError, "operational error"),
     102: (SQLParsingError, "syntax error"),
+}
+_ARROW_ODBC_SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"State:\s*([0-9A-Z]{5})")
+_SQLSTATE_CLASS_CODE_LEN: Final[int] = 2
+_SQLSTATE_CLASS_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "08": (DatabaseConnectionError, "connection error"),
+    "22": (DataError, "data error"),
+    "23": (IntegrityError, "integrity constraint violation"),
+    "28": (PermissionDeniedError, "invalid authorization"),
+    "40": (TransactionError, "transaction rollback"),
+    "42": (SQLParsingError, "syntax error or access rule violation"),
+    "53": (OperationalError, "insufficient resources"),
+    "57": (OperationalError, "operator intervention"),
 }
 
 
@@ -101,6 +116,13 @@ def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> S
                 error_class, description = mapping
                 return error_class(f"ODBC SQL Server error {error_number}: {description}. Original error: {error}")
 
+    sqlstate = _extract_sqlstate(message)
+    if sqlstate is not None:
+        mapped = _SQLSTATE_CLASS_MAPPING.get(sqlstate[:_SQLSTATE_CLASS_CODE_LEN])
+        if mapped is not None:
+            error_class, description = mapped
+            return error_class(f"ODBC error {sqlstate}: {description}. Original error: {error}")
+
     if "Incorrect syntax near" in message:
         return SQLParsingError(f"ODBC SQL parsing error. Original error: {error}")
     return SQLSpecError(f"ODBC database error. Original error: {error}")
@@ -125,7 +147,19 @@ def apply_driver_features(
 
 
 def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Build arrow-odbc connection arguments using the 10.4 keyword names."""
+    """Build arrow-odbc connection arguments using the 10.4 keyword names.
+
+    Individual ODBC fields and ``extra`` entries are emitted first and an
+    explicit ``connection_string`` follows them, so a field set on the config
+    wins over the same option written inside the string. ODBC resolves a
+    repeated keyword in favour of its first occurrence.
+
+    Args:
+        params: Raw connection configuration.
+
+    Returns:
+        The ODBC connection string and the ``connect`` keyword arguments.
+    """
     config = dict(params)
     extra = config.pop("extra", None)
     if isinstance(extra, dict):
@@ -137,8 +171,6 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     connect_kwargs = {key: config.pop(key) for key in tuple(config) if key in _CONNECT_KWARG_KEYS}
     connection_string = config.pop("connection_string", None)
-    if connection_string is not None:
-        return str(connection_string), connect_kwargs
 
     parts: list[str] = []
     consumed: set[str] = set()
@@ -146,13 +178,19 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         value = config.get(key)
         if value is None:
             continue
-        parts.append(f"{option_name}={_format_connection_value(value)}")
+        parts.append(f"{option_name}={_format_connection_value(option_name, value)}")
         consumed.add(key)
 
     for key, value in config.items():
         if key in consumed or value is None:
             continue
-        parts.append(f"{key}={_format_connection_value(value)}")
+        parts.append(f"{key}={_format_connection_value(key, value)}")
+
+    if connection_string is not None:
+        suffix = str(connection_string)
+        if not parts:
+            return suffix, connect_kwargs
+        return ";".join(parts) + ";" + suffix, connect_kwargs
 
     if not parts:
         msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
@@ -199,6 +237,11 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     }
 
 
+def _extract_sqlstate(message: str) -> "str | None":
+    match = _ARROW_ODBC_SQLSTATE_PATTERN.search(message)
+    return match.group(1) if match is not None else None
+
+
 def _extract_error_number(error: Exception) -> "int | None":
     match = _ARROW_ODBC_ERROR_NUMBER_PATTERN.search(str(error))
     if match is None:
@@ -218,10 +261,40 @@ def _is_sql_server_diagnostic(message: str) -> bool:
     return any(marker in lowered for marker in _SQL_SERVER_DIAGNOSTIC_MARKERS)
 
 
-def _format_connection_value(value: Any) -> str:
+def _format_connection_value(option_name: str, value: Any) -> str:
+    """Render a value for an ODBC connection string.
+
+    A value the caller already brace-quoted is emitted unchanged, since the
+    braced driver spelling is the usual way to write one. Any other value that
+    carries edge whitespace or a character ODBC treats as punctuation is
+    wrapped in braces so it cannot be read as the start of another keyword.
+
+    Args:
+        option_name: The connection string keyword this value belongs to.
+        value: The configured value.
+
+    Returns:
+        The value rendered for inclusion in the connection string.
+
+    Raises:
+        ImproperConfigurationError: If the value contains a closing brace that
+            does not terminate an already-quoted value. ODBC defines no escape
+            for one, so quoting it would silently truncate the value.
+    """
     if isinstance(value, bool):
         return "yes" if value else "no"
-    return str(value)
+    text = str(value)
+    if len(text) > 1 and text.startswith("{") and text.endswith("}") and text.count("}") == 1:
+        return text
+    if "}" in text:
+        msg = (
+            f"The arrow-odbc value for {option_name!r} contains a closing brace, "
+            "which an ODBC connection string cannot represent."
+        )
+        raise ImproperConfigurationError(msg)
+    if text and text == text.strip() and not any(character in text for character in _ODBC_PUNCTUATION):
+        return text
+    return "{" + text + "}"
 
 
 driver_profile = build_profile()

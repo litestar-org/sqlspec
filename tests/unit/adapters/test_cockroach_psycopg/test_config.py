@@ -9,7 +9,7 @@ Tests cover:
 """
 
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,6 +19,7 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgDriverFeatures,
     CockroachPsycopgRetryConfig,
     CockroachPsycopgSyncConfig,
+    CockroachPsycopgSyncDriver,
     CockroachPsycopgSyncSessionContext,
 )
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
@@ -260,7 +261,7 @@ def test_cockroach_psycopg_sync_config_bind_key_configuration() -> None:
 
 def test_cockroach_psycopg_sync_config_class_attributes() -> None:
     """Config should have correct class attributes."""
-    assert CockroachPsycopgSyncConfig.supports_transactional_ddl is True
+    assert CockroachPsycopgSyncConfig.supports_transactional_ddl is False
     assert CockroachPsycopgSyncConfig.supports_native_arrow_export is True
     assert CockroachPsycopgSyncConfig.supports_native_arrow_import is True
 
@@ -277,7 +278,7 @@ def test_cockroach_psycopg_sync_session_context_resolves_callable_statement_conf
 
     ctx = CockroachPsycopgSyncSessionContext(
         acquire_connection=lambda: connection,
-        release_connection=lambda _connection: None,
+        release_connection=lambda _connection, **_kwargs: None,
         statement_config=statement_config_factory,
         driver_features={},
         prepare_driver=lambda driver: driver,
@@ -369,7 +370,7 @@ async def test_cockroach_psycopg_async_session_context_resolves_callable_stateme
     async def acquire_connection() -> object:
         return connection
 
-    async def release_connection(_connection: object) -> None:
+    async def release_connection(_connection: object, **_kwargs: object) -> None:
         return None
 
     ctx = CockroachPsycopgAsyncSessionContext(
@@ -454,7 +455,7 @@ async def test_cockroach_psycopg_async_pool_forwards_lifecycle_options() -> None
 
 def test_cockroach_psycopg_async_config_class_attributes() -> None:
     """Config should have correct class attributes."""
-    assert CockroachPsycopgAsyncConfig.supports_transactional_ddl is True
+    assert CockroachPsycopgAsyncConfig.supports_transactional_ddl is False
     assert CockroachPsycopgAsyncConfig.supports_native_arrow_export is True
     assert CockroachPsycopgAsyncConfig.supports_native_arrow_import is True
 
@@ -524,3 +525,106 @@ def test_cockroach_psycopg_config_rejects_unused_uuid_preference(
     """Raw driver feature mappings should not keep unused UUID preference silently."""
     with pytest.raises(ImproperConfigurationError, match="prefer_uuid_keys"):
         config_type(driver_features={"prefer_uuid_keys": True})
+
+
+def test_cockroach_psycopg_cluster_option_is_folded_into_libpq_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_pool(_conninfo: str, **kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", _fake_pool)
+    config = CockroachPsycopgSyncConfig(connection_config={"host": "localhost", "cluster": "brave-hippo-42"})
+
+    config.create_pool()
+
+    assert captured["kwargs"]["options"] == "--cluster=brave-hippo-42"
+    assert "cluster" not in captured["kwargs"]
+
+
+def test_cockroach_psycopg_cluster_option_appends_to_existing_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_pool(_conninfo: str, **kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", _fake_pool)
+    config = CockroachPsycopgSyncConfig(
+        connection_config={"host": "localhost", "options": "-c statement_timeout=5s", "cluster": "brave-hippo-42"}
+    )
+
+    config.create_pool()
+
+    assert captured["kwargs"]["options"] == "-c statement_timeout=5s --cluster=brave-hippo-42"
+
+
+def test_cockroach_psycopg_create_connection_does_not_create_a_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = MagicMock()
+    connect = MagicMock(return_value=sentinel)
+    monkeypatch.setattr("psycopg.crdb.CrdbConnection.connect", connect)
+    config = CockroachPsycopgSyncConfig(connection_config={"host": "localhost", "min_size": 1, "max_size": 1})
+
+    connection = config.create_connection()
+
+    assert connection is sentinel
+    assert config.connection_instance is None
+    assert "min_size" not in connect.call_args.kwargs
+    assert "max_size" not in connect.call_args.kwargs
+
+
+def test_cockroach_psycopg_create_connection_applies_the_connection_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[object] = []
+    sentinel = MagicMock()
+    monkeypatch.setattr("psycopg.crdb.CrdbConnection.connect", MagicMock(return_value=sentinel))
+    config = CockroachPsycopgSyncConfig(
+        connection_config={"host": "localhost"}, driver_features={"on_connection_create": seen.append}
+    )
+
+    config.create_connection()
+
+    assert seen == [sentinel]
+
+
+@pytest.mark.parametrize("staleness", ["'-10s'", "follower_read_timestamp()", "with_max_staleness('10s')"])
+def test_cockroach_psycopg_accepts_valid_follower_read_staleness(staleness: str) -> None:
+    config = CockroachPsycopgSyncConfig(driver_features={"enable_follower_reads": True, "default_staleness": staleness})
+
+    assert config.driver_features["default_staleness"] == staleness
+
+
+@pytest.mark.parametrize("staleness", ["-10s", "now(); DROP TABLE users", "'-10s'; SELECT 1", 42])
+def test_cockroach_psycopg_rejects_invalid_follower_read_staleness(staleness: Any) -> None:
+    with pytest.raises(ImproperConfigurationError, match="default_staleness"):
+        CockroachPsycopgSyncConfig(driver_features={"enable_follower_reads": True, "default_staleness": staleness})
+
+
+def test_cockroach_psycopg_provide_session_rejects_invalid_staleness() -> None:
+    config = CockroachPsycopgSyncConfig()
+
+    with pytest.raises(ImproperConfigurationError, match="default_staleness"):
+        config.provide_session(follower_reads=True, staleness="now(); DROP TABLE users")
+
+
+def test_cockroach_psycopg_follower_reads_apply_once_at_transaction_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "_connection_in_transaction", lambda _self: False)
+    driver = CockroachPsycopgSyncDriver(
+        connection=connection, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+
+    driver.begin()
+
+    assert connection.execute.call_count == 1
+    assert connection.execute.call_args.args[0] == "SET TRANSACTION AS OF SYSTEM TIME '-10s'"
+
+
+def test_cockroach_psycopg_follower_reads_stay_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "_connection_in_transaction", lambda _self: False)
+    driver = CockroachPsycopgSyncDriver(connection=connection, driver_features={"default_staleness": "'-10s'"})
+
+    driver.begin()
+
+    assert connection.execute.call_count == 0

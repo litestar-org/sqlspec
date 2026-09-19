@@ -36,9 +36,17 @@ handler returns ``None`` for values it does not own.
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from oracledb import DB_TYPE_CHAR, DB_TYPE_NCHAR, DB_TYPE_NVARCHAR, DB_TYPE_VARCHAR
-
-from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, DB_TYPE_JSON, DB_TYPE_LONG, DB_TYPE_LONG_RAW
+from sqlspec.adapters.oracledb._typing import (
+    DB_TYPE_BLOB,
+    DB_TYPE_CHAR,
+    DB_TYPE_CLOB,
+    DB_TYPE_JSON,
+    DB_TYPE_LONG,
+    DB_TYPE_LONG_RAW,
+    DB_TYPE_NCHAR,
+    DB_TYPE_NVARCHAR,
+    DB_TYPE_VARCHAR,
+)
 from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
 from sqlspec.data_dictionary.dialects.oracle import (
     ORACLE_JSON_STORAGE_BLOB_JSON,
@@ -48,7 +56,10 @@ from sqlspec.data_dictionary.dialects.oracle import (
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection as AsyncConnection
+    from sqlspec.adapters.oracledb._typing import OracleAsyncRawCursor as AsyncCursor
+    from sqlspec.adapters.oracledb._typing import OracleSyncConnection as Connection
+    from sqlspec.adapters.oracledb._typing import OracleSyncRawCursor as Cursor
 
 __all__ = (
     "chain_input_handler",

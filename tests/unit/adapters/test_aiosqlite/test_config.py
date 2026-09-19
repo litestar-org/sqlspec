@@ -239,3 +239,54 @@ def test_runtime_keys_removed_from_driver_features() -> None:
     assert "pragmas" not in config.driver_features
     assert "extensions" not in config.driver_features
     assert config.driver_features["enable_custom_adapters"] is False
+
+
+async def test_create_connection_consumes_no_pool_slot(tmp_path: Path) -> None:
+    """A standalone connection must leave the pool's full capacity available."""
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "slots.sqlite"), "pool_size": 1})
+    try:
+        standalone = await config.create_connection()
+        try:
+            pool = await config.provide_pool()
+
+            assert pool.checked_out() == 0
+
+            async with config.provide_connection() as pooled:
+                assert pooled is not standalone
+                await pooled.execute("SELECT 1")
+        finally:
+            await standalone.close()
+    finally:
+        await config.close_pool()
+
+
+async def test_create_connection_is_not_tracked_by_the_pool(tmp_path: Path) -> None:
+    """A caller-owned connection must not appear in the pool's registry."""
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "registry.sqlite"), "pool_size": 1})
+    try:
+        pool = await config.provide_pool()
+        before = pool.size()
+        standalone = await config.create_connection()
+        try:
+            assert pool.size() == before
+        finally:
+            await standalone.close()
+    finally:
+        await config.close_pool()
+
+
+async def test_create_connection_applies_the_configured_row_factory(tmp_path: Path) -> None:
+    """The standalone path must not skip the pool's runtime setup."""
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "factory.sqlite")}, driver_features={"row_factory": "dict"}
+    )
+    try:
+        connection = await config.create_connection()
+        try:
+            cursor = await connection.execute("SELECT 1 AS probe")
+            rows = await cursor.fetchall()
+            assert [dict(row) if not isinstance(row, dict) else row for row in rows] == [{"probe": 1}]
+        finally:
+            await connection.close()
+    finally:
+        await config.close_pool()

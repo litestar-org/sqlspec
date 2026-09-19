@@ -1,12 +1,12 @@
 """Unit tests for psycopg ADK store sync wrappers."""
 
 from datetime import datetime, timezone
-from typing import Any, cast, get_args, get_origin
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 from psycopg.types.json import Jsonb
-from typing_extensions import NotRequired, Self
+from typing_extensions import Self
 
 from sqlspec.adapters.psycopg.adk import (
     PsycopgADKConfig,
@@ -15,7 +15,7 @@ from sqlspec.adapters.psycopg.adk import (
     PsycopgSyncADKMemoryStore,
     PsycopgSyncADKStore,
 )
-from sqlspec.config import ADKConfig
+from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig
 
 
 def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
@@ -127,22 +127,15 @@ def _build_store(
     return store, cursor, connection
 
 
-def test_psycopg_adk_config_types_adapter_local_optimizations() -> None:
-    """Psycopg ADK optimization switches live on the adapter-local extension config."""
+async def test_psycopg_typed_memory_tuning_reaches_schema() -> None:
+    settings = PsycopgADKConfig(vector_index_type="ivfflat", vector_dimensions=512)
+    config = PsycopgAsyncConfig(extension_config={"adk": settings})
+    store = PsycopgAsyncADKMemoryStore(config)
 
-    assert cast("Any", ADKConfig).__optional_keys__ <= cast("Any", PsycopgADKConfig).__optional_keys__
-    assert cast("Any", PsycopgADKConfig).__optional_keys__ - cast("Any", ADKConfig).__optional_keys__ == {
-        "autovacuum_analyze_scale_factor",
-        "autovacuum_vacuum_scale_factor",
-        "enable_event_generated_columns",
-        "enable_covering_indexes",
-        "fillfactor",
-    }
+    ddl = await store._memory_table_ddl()
 
-    for feature_name in ("enable_event_generated_columns", "enable_covering_indexes"):
-        annotation = cast("Any", PsycopgADKConfig.__annotations__[feature_name])
-        assert get_origin(annotation) is NotRequired
-        assert get_args(annotation) == (bool,)
+    assert "embedding VECTOR(512)" in ddl
+    assert "USING ivfflat (embedding vector_cosine_ops)" in ddl
 
 
 async def test_psycopg_async_adk_events_table_uses_plain_schema_by_default() -> None:

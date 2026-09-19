@@ -45,3 +45,17 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.aiomysql.data_dictionary.AiomysqlDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.aiomysql.litestar.AiomysqlLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.aiomysql.adk.AiomysqlADKConfig
+   :members:
+   :show-inheritance:

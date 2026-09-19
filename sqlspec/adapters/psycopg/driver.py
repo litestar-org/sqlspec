@@ -4,7 +4,6 @@ from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack
 from typing import TYPE_CHECKING, Any, cast
 
-import psycopg
 from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg._typing import (
@@ -17,6 +16,7 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncCursor,
     PsycopgSyncSessionContext,
 )
+from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
 from sqlspec.adapters.psycopg.core import (
     TRANSACTION_STATUS_IDLE,
     PipelineCursorEntry,
@@ -105,23 +105,6 @@ _PSYCOPG_OID_TOKENS: "dict[int, str]" = {
     2950: "string",
     3802: "string",
 }
-
-
-def _resolve_column_types(description: Any) -> "dict[str, str] | None":
-    """Map psycopg cursor column OIDs to neutral Arrow type tokens.
-
-    Returns ``None`` when the cursor has no description or reports no
-    recognizable OIDs, so callers can pass the result straight through
-    without adding a code path for the empty case.
-    """
-    if not description:
-        return None
-    column_types: dict[str, str] = {}
-    for col in description:
-        token = _PSYCOPG_OID_TOKENS.get(col.type_code)
-        if token is not None:
-            column_types[col.name] = token
-    return column_types or None
 
 
 def pipeline_operation_failed(cursor: Any, statement: "SQL") -> bool:
@@ -238,10 +221,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         self._data_dictionary: PsycopgSyncDataDictionary | None = None
         self._restore_autocommit = False
         self._transaction_active = False
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -383,10 +362,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         if self._connection_in_transaction():
@@ -465,10 +440,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgSyncExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def execute_stack(self, stack: "StatementStack", *, continue_on_error: bool = False) -> "tuple[StackResult, ...]":
         """Execute a StatementStack using psycopg pipeline mode when supported."""
 
@@ -486,10 +457,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             return super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return self._execute_stack_pipeline(stack, prepared_ops)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def select_to_storage(
         self,
@@ -570,10 +537,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "PsycopgSyncDataDictionary":
@@ -689,10 +652,6 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
         return results
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE / INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def _resolve_column_names(self, description: Any) -> list[str]:
         """Resolve psycopg column names for row materialization paths."""
         if not description:
@@ -766,10 +725,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         self._data_dictionary: PsycopgAsyncDataDictionary | None = None
         self._restore_autocommit = False
         self._transaction_active = False
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement (async).
@@ -911,10 +866,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             data=None, rows_affected=rows_affected, statement=statement, metadata={"copy_operation": "FILE"}
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def begin(self) -> None:
         """Begin a database transaction on the current connection."""
         if self._connection_in_transaction():
@@ -996,10 +947,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         """Handle database-specific exceptions and wrap them appropriately."""
         return PsycopgAsyncExceptionHandler()
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STACK EXECUTION METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
@@ -1019,10 +966,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
 
         return await self._execute_stack_pipeline(stack, prepared_ops)
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -1105,10 +1048,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     @property
     def data_dictionary(self) -> "PsycopgAsyncDataDictionary":
@@ -1224,10 +1163,6 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             raise _stack_pipeline_sync_error(type(self).__name__, sync_error) from sync_error
         return results
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE / INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     def _resolve_column_names(self, description: Any) -> list[str]:
         """Resolve psycopg column names for row materialization paths."""
         if not description:
@@ -1289,3 +1224,20 @@ def _stack_pipeline_sync_error(adapter: str, cause: "Exception") -> "StackExecut
 
 
 register_driver_profile("psycopg", driver_profile)
+
+
+def _resolve_column_types(description: Any) -> "dict[str, str] | None":
+    """Map psycopg cursor column OIDs to neutral Arrow type tokens.
+
+    Returns ``None`` when the cursor has no description or reports no
+    recognizable OIDs, so callers can pass the result straight through
+    without adding a code path for the empty case.
+    """
+    if not description:
+        return None
+    column_types: dict[str, str] = {}
+    for col in description:
+        token = _PSYCOPG_OID_TOKENS.get(col.type_code)
+        if token is not None:
+            column_types[col.name] = token
+    return column_types or None

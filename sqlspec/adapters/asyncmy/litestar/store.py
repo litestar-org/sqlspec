@@ -3,7 +3,11 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from typing_extensions import NotRequired
+
+from sqlspec.adapters.asyncmy._typing import AsyncmyProgrammingError
 from sqlspec.adapters.asyncmy.core import resolve_rowcount
+from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -11,12 +15,25 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
 
-__all__ = ("AsyncmyStore",)
+__all__ = ("AsyncmyLitestarConfig", "AsyncmyStore")
 
 logger = get_logger("sqlspec.adapters.asyncmy.litestar.store")
 
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+
+
+class AsyncmyLitestarConfig(LitestarConfig):
+    """Asyncmy-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    table_options: NotRequired[str]
+    """Table DDL options."""
+
+    index_options: NotRequired[str]
+    """Index DDL options."""
 
 
 class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
@@ -69,7 +86,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        import asyncmy
 
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
@@ -100,7 +116,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                         await conn.commit()
 
                 return bytes(data_value)
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except AsyncmyProgrammingError as e:  # pyright: ignore
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -144,7 +160,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
-        import asyncmy
 
         sql = f"DELETE FROM {self._table_name}"
 
@@ -153,7 +168,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                 await cursor.execute(sql)
                 await conn.commit()
             self._log_delete_all()
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except AsyncmyProgrammingError as e:  # pyright: ignore
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -168,7 +183,6 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
         Returns:
             True if the session exists and is not expired.
         """
-        import asyncmy
 
         sql = f"""
         SELECT 1 FROM {self._table_name}
@@ -181,7 +195,7 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
-        except asyncmy.errors.ProgrammingError as e:  # pyright: ignore
+        except AsyncmyProgrammingError as e:  # pyright: ignore
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

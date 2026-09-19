@@ -2,12 +2,11 @@
 
 import asyncio
 import random
-import sqlite3
 from typing import TYPE_CHECKING, Any, cast
 
-import aiosqlite
-
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import (
     AiosqliteStreamSource,
     _execute_and_resolve_metadata,
@@ -97,10 +96,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AiosqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def dispatch_execute(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
@@ -211,10 +206,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # TRANSACTION MANAGEMENT
-    # ─────────────────────────────────────────────────────────────────────────────
-
     async def begin(self) -> None:
         """Begin a database transaction."""
         try:
@@ -253,10 +244,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     def handle_database_exceptions(self) -> "AiosqliteExceptionHandler":
         """Handle AIOSQLite-specific exceptions."""
         return AiosqliteExceptionHandler()
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # STORAGE API METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     async def select_to_storage(
         self,
@@ -340,10 +327,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    # ─────────────────────────────────────────────────────────────────────────────
-    # UTILITY METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
-
     @property
     def data_dictionary(self) -> "AiosqliteDataDictionary":
         """Get the data dictionary for this driver.
@@ -354,10 +337,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if self._data_dictionary is None:
             self._data_dictionary = AiosqliteDataDictionary()
         return self._data_dictionary
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # PRIVATE/INTERNAL METHODS
-    # ─────────────────────────────────────────────────────────────────────────────
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect aiosqlite rows for the direct execution path."""

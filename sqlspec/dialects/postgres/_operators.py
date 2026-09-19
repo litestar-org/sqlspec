@@ -46,23 +46,6 @@ PG_TEXTSEARCH_OPERATOR_TOKENS: Final[dict[str, TokenType]] = {"<@>": TokenType.R
 _REGISTERED = False
 
 
-def _build_operator_factory(operator: str) -> Callable[[exp.Expr | None, exp.Expr | None], exp.Operator]:
-    def _factory(this: exp.Expr | None, expression: exp.Expr | None) -> exp.Operator:
-        node = exp.Operator(this=this, expression=expression, operator=operator)
-        node.meta[_CUSTOM_OPERATOR_META_KEY] = operator
-        return node
-
-    return _factory
-
-
-def _parse_pg_textsearch_operator(
-    _parser: PostgresParser, this: exp.Expr | None, expression: exp.Expr | None
-) -> exp.Operator:
-    node = exp.Operator(this=this, expression=expression, operator="<@>")
-    node.meta[_CUSTOM_OPERATOR_META_KEY] = "<@>"
-    return node
-
-
 def register_postgres_extension_operators() -> None:
     """Patch the compiled Postgres parser with PostgreSQL extension operators."""
     global _REGISTERED
@@ -93,3 +76,20 @@ def postgres_extension_operator(expression: exp.Operator) -> str:
     if isinstance(operator, str):
         return operator
     return expression.text("operator")
+
+
+def _build_operator_factory(operator: str) -> Callable[[exp.Expr | None, exp.Expr | None], exp.Operator]:
+    def _factory(this: exp.Expr | None, expression: exp.Expr | None) -> exp.Operator:
+        node = exp.Operator(this=this, expression=expression, operator=operator)
+        node.meta[_CUSTOM_OPERATOR_META_KEY] = operator
+        return node
+
+    return _factory
+
+
+def _parse_pg_textsearch_operator(
+    _parser: PostgresParser, this: exp.Expr | None, expression: exp.Expr | None
+) -> exp.Operator:
+    node = exp.Operator(this=this, expression=expression, operator="<@>")
+    node.meta[_CUSTOM_OPERATOR_META_KEY] = "<@>"
+    return node

@@ -305,8 +305,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[AiosqliteConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -353,17 +351,16 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
         return namespace
 
     async def create_connection(self) -> "AiosqliteConnection":
-        """Create a single async connection from the pool.
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same parameters, PRAGMAs, and runtime setup
+        the pool applies, consumes no pool slot, and must be closed by the caller.
 
         Returns:
-            An aiosqlite connection instance.
+            A newly opened aiosqlite connection.
         """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        pool_connection = await pool.acquire()
-        return pool_connection.connection
+        pool = await self.provide_pool()
+        return await pool.new_connection()
 
     async def provide_pool(self) -> AiosqliteConnectionPool:
         """Provide async pool instance.

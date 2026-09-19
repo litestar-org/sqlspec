@@ -18,6 +18,7 @@ Input conversion handles:
 
 import base64
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
@@ -46,40 +47,11 @@ _uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
 if _uuid_utils_uuid is not None:
     _UUID_TYPES = (UUID, _uuid_utils_uuid)
 
+_STRING_PARAM_TYPES: "tuple[type[Any], ...]" = (str, *_UUID_TYPES)
+
 UUID_BYTE_LENGTH: int = 16
 _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
 _JSON_OBJECT_TYPE: "type[Any] | None" = None
-
-
-def _get_param_types() -> "SpannerParamTypesProtocol":
-    global _SPANNER_PARAM_TYPES
-    if _SPANNER_PARAM_TYPES is None:
-        from google.cloud.spanner_v1 import param_types
-
-        _SPANNER_PARAM_TYPES = cast("SpannerParamTypesProtocol", param_types)
-    return _SPANNER_PARAM_TYPES
-
-
-def _get_json_object_type() -> "type[Any]":
-    global _JSON_OBJECT_TYPE
-    if _JSON_OBJECT_TYPE is None:
-        from google.cloud.spanner_v1 import JsonObject
-
-        _JSON_OBJECT_TYPE = JsonObject
-    return _JSON_OBJECT_TYPE
-
-
-def _json_param_type() -> Any:
-    """Get Spanner JSON param type with fallback to STRING.
-
-    Returns:
-        JSON param type or STRING as fallback.
-    """
-    param_types = _get_param_types()
-    try:
-        return param_types.JSON
-    except AttributeError:
-        return param_types.STRING
 
 
 def bytes_to_spanner(value: "bytes | None") -> "bytes | None":
@@ -230,6 +202,19 @@ def coerce_params_for_spanner(
     return coerced if changed else params
 
 
+_NULL_PARAM_TYPE_NAMES: "dict[type[Any], str]" = {
+    bool: "BOOL",
+    int: "INT64",
+    float: "FLOAT64",
+    str: "STRING",
+    bytes: "BYTES",
+    datetime: "TIMESTAMP",
+    date: "DATE",
+    Decimal: "NUMERIC",
+    UUID: "STRING",
+}
+
+
 def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
     """Infer Spanner param_types from Python values.
 
@@ -246,14 +231,19 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
     json_object_type = _get_json_object_type()
     types: dict[str, Any] = {}
     json_type = _json_param_type()
-    for key, value in params.items():
-        if isinstance(value, bool):
+    for key, raw_value in params.items():
+        value = raw_value.value if type(raw_value) is TypedParameter else raw_value
+        if value is None:
+            null_type = _null_param_type(raw_value, param_types)
+            if null_type is not None:
+                types[key] = null_type
+        elif isinstance(value, bool):
             types[key] = param_types.BOOL
         elif isinstance(value, int):
             types[key] = param_types.INT64
         elif isinstance(value, float):
             types[key] = param_types.FLOAT64
-        elif isinstance(value, str):
+        elif isinstance(value, _STRING_PARAM_TYPES):
             types[key] = param_types.STRING
         elif isinstance(value, bytes):
             types[key] = param_types.BYTES
@@ -280,3 +270,56 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             elif isinstance(first, bool):
                 types[key] = param_types.Array(param_types.BOOL)
     return types
+
+
+def _null_param_type(raw_value: Any, param_types: "SpannerParamTypesProtocol") -> "Any | None":
+    """Resolve the Spanner type for a NULL parameter, when one is declared.
+
+    Spanner offers no ANY type, so a NULL can only be typed from a declared
+    Python type on a :class:`TypedParameter`. Without one the entry is omitted
+    and Spanner infers the type from the surrounding query, which is what it
+    does for an ordinary ``None`` binding.
+
+    Args:
+        raw_value: The parameter as supplied, before coercion.
+        param_types: The Spanner param_types module.
+
+    Returns:
+        The Spanner param type, or None when no type is declared.
+    """
+    declared = raw_value.original_type if type(raw_value) is TypedParameter else None
+    if declared is None:
+        return None
+    resolver = _NULL_PARAM_TYPE_NAMES.get(declared)
+    return getattr(param_types, resolver) if resolver is not None else None
+
+
+def _get_param_types() -> "SpannerParamTypesProtocol":
+    global _SPANNER_PARAM_TYPES
+    if _SPANNER_PARAM_TYPES is None:
+        from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
+
+        _SPANNER_PARAM_TYPES = cast("SpannerParamTypesProtocol", param_types)
+    return _SPANNER_PARAM_TYPES
+
+
+def _get_json_object_type() -> "type[Any]":
+    global _JSON_OBJECT_TYPE
+    if _JSON_OBJECT_TYPE is None:
+        from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
+
+        _JSON_OBJECT_TYPE = JsonObject
+    return _JSON_OBJECT_TYPE
+
+
+def _json_param_type() -> Any:
+    """Get Spanner JSON param type with fallback to STRING.
+
+    Returns:
+        JSON param type or STRING as fallback.
+    """
+    param_types = _get_param_types()
+    try:
+        return param_types.JSON
+    except AttributeError:
+        return param_types.STRING

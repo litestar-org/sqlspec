@@ -8,13 +8,21 @@ from pathlib import Path
 import pytest
 
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
+from sqlspec.adapters.aiosqlite._typing import AiosqliteSessionContext
+from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.adapters.sqlite._typing import SqliteSessionContext
+from sqlspec.driver._sync import SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 
 class _BoomError(Exception):
     pass
+
+
+async def _acquire_nothing() -> object:
+    return object()
 
 
 def _committed_ids(config: "SqliteConfig | AiosqliteConfig") -> list[int]:
@@ -336,3 +344,117 @@ def test_sync_service_transaction_inside_driver_transaction(sync_config: SqliteC
                     session.execute("INSERT INTO items (id) VALUES (4)")
                     raise _BoomError
     assert _committed_ids(sync_config) == [3]
+
+
+def test_sync_session_context_forwards_exception_to_release(sync_config: SqliteConfig) -> None:
+    released: list[dict[str, object]] = []
+
+    context = SqliteSessionContext(
+        acquire_connection=lambda: object(),
+        release_connection=lambda _conn, **kwargs: released.append(kwargs),
+        statement_config=sync_config.statement_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with pytest.raises(_BoomError), context:
+        raise _BoomError
+
+    assert released == [{"exc_type": _BoomError, "exc_val": released[0]["exc_val"], "exc_tb": released[0]["exc_tb"]}]
+    assert isinstance(released[0]["exc_val"], _BoomError)
+    assert released[0]["exc_tb"] is not None
+
+
+async def test_async_session_context_forwards_exception_to_release(async_config: AiosqliteConfig) -> None:
+    released: list[dict[str, object]] = []
+
+    async def _release(_conn: object, **kwargs: object) -> None:
+        released.append(kwargs)
+
+    context = AiosqliteSessionContext(
+        acquire_connection=_acquire_nothing,
+        release_connection=_release,
+        statement_config=async_config.statement_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with pytest.raises(_BoomError):
+        async with context:
+            raise _BoomError
+
+    assert isinstance(released[0]["exc_val"], _BoomError)
+    assert released[0]["exc_type"] is _BoomError
+    assert released[0]["exc_tb"] is not None
+
+
+def test_sync_session_factory_forwards_exception_to_pool_context() -> None:
+    recorded: list[tuple[object, object, object]] = []
+
+    class _RecordingCtx:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+            recorded.append((exc_type, exc_val, exc_tb))
+
+    class _RecordingPool:
+        def get_connection(self) -> _RecordingCtx:
+            return _RecordingCtx()
+
+    class _RecordingConfig:
+        def provide_pool(self) -> _RecordingPool:
+            return _RecordingPool()
+
+    factory = SyncPoolSessionFactory(_RecordingConfig())
+    connection = factory.acquire_connection()
+    error = _BoomError()
+    factory.release_connection(connection, exc_type=_BoomError, exc_val=error, exc_tb=None)
+
+    assert recorded == [(_BoomError, error, None)]
+
+
+def test_failed_sqlite_session_leaves_transaction_uncommitted(sync_config: SqliteConfig) -> None:
+    with pytest.raises(_BoomError), sync_config.provide_session() as session:
+        session.begin()
+        session.execute("INSERT INTO items (id) VALUES (1)")
+        raise _BoomError
+
+    assert _committed_ids(sync_config) == []
+
+
+def test_failed_duckdb_session_keeps_an_in_memory_connection() -> None:
+    """An in-memory database lives in its connection, so a failed session must not discard it."""
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as session:
+            session.execute_script("CREATE TABLE items (id INTEGER)")
+        pool = config.provide_pool()
+        assert pool.size() == 1
+
+        with pytest.raises(_BoomError), config.provide_session():
+            raise _BoomError
+
+        assert pool.size() == 1
+        with config.provide_session() as session:
+            assert session.execute("SELECT id FROM items").get_data() == []
+    finally:
+        config.close_pool()
+
+
+def test_failed_duckdb_session_discards_a_file_connection(tmp_path: Path) -> None:
+    """A file-backed connection holds DuckDB's file lock, which a failed session must release."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "items.duckdb")})
+    try:
+        with config.provide_session() as session:
+            session.execute_script("CREATE TABLE items (id INTEGER)")
+        pool = config.provide_pool()
+
+        with pytest.raises(_BoomError), config.provide_session():
+            raise _BoomError
+
+        assert pool.size() == 0
+        with config.provide_session() as session:
+            assert session.execute("SELECT id FROM items").get_data() == []
+    finally:
+        config.close_pool()

@@ -16,6 +16,8 @@ from asyncmy.connection import MySQLResult as _AsyncmyResult  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
 from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
+from asyncmy.cursors import SSCursor as AsyncmySSCursor
+from asyncmy.errors import ProgrammingError as AsyncmyProgrammingError
 from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
 from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper  # pyright: ignore
 
@@ -39,7 +41,7 @@ if TYPE_CHECKING:
         def close(self) -> None: ...
 
     class AsyncmyModuleProtocol(Protocol):
-        def connect(self, *args: Any, **kwargs: Any) -> "AsyncmyConnection": ...
+        async def connect(self, *args: Any, **kwargs: Any) -> "AsyncmyConnection": ...
 
         async def create_pool(self, **kwargs: Any) -> "AsyncmyPool": ...
 
@@ -74,7 +76,9 @@ __all__ = (
     "AsyncmyModule",
     "AsyncmyMySQLError",
     "AsyncmyPool",
+    "AsyncmyProgrammingError",
     "AsyncmyRawCursor",
+    "AsyncmySSCursor",
     "AsyncmySessionContext",
     "asyncmy_local_infile",
 )
@@ -126,7 +130,7 @@ class AsyncmySessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Awaitable[AsyncmyConnection]]",
-        release_connection: "Callable[[AsyncmyConnection], Awaitable[None]]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AsyncmyDriver], AsyncmyDriver]",
@@ -152,31 +156,9 @@ class AsyncmySessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            await self._release_connection(self._connection)
+            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
-
-
-class _AsyncmyLocalInfileResult(_AsyncmyResult):
-    """Normalize the upstream filename handoff while retaining its native sender."""
-
-    __slots__ = ("_filename",)
-
-    def __init__(self, connection: Any, filename: str) -> None:
-        super().__init__(connection)
-        self._filename = filename
-
-    async def _read_load_local_packet(self, first_packet: Any) -> None:
-        request = _LoadLocalPacketWrapper(first_packet).filename
-        if not self.connection._local_infile or os.fsdecode(request) != self._filename:
-            msg = "MySQL requested an unexpected LOCAL INFILE payload."
-            raise SQLSpecError(msg)
-        await _LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
-        packet = await self.connection.read_packet()
-        if not packet.is_ok_packet():
-            msg = "MySQL did not acknowledge the LOCAL INFILE payload."
-            raise SQLSpecError(msg)
-        self._read_ok_packet(packet)  # type: ignore[attr-defined]
 
 
 @contextlib.contextmanager
@@ -224,3 +206,25 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
             del raw._read_query_result
         else:
             raw._read_query_result = previous
+
+
+class _AsyncmyLocalInfileResult(_AsyncmyResult):
+    """Normalize the upstream filename handoff while retaining its native sender."""
+
+    __slots__ = ("_filename",)
+
+    def __init__(self, connection: Any, filename: str) -> None:
+        super().__init__(connection)
+        self._filename = filename
+
+    async def _read_load_local_packet(self, first_packet: Any) -> None:
+        request = _LoadLocalPacketWrapper(first_packet).filename
+        if not self.connection._local_infile or os.fsdecode(request) != self._filename:
+            msg = "MySQL requested an unexpected LOCAL INFILE payload."
+            raise SQLSpecError(msg)
+        await _LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
+        packet = await self.connection.read_packet()
+        if not packet.is_ok_packet():
+            msg = "MySQL did not acknowledge the LOCAL INFILE payload."
+            raise SQLSpecError(msg)
+        self._read_ok_packet(packet)  # type: ignore[attr-defined]

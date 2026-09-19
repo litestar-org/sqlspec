@@ -1,9 +1,9 @@
 """CockroachDB configuration using psycopg."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+import re
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 
-from psycopg import crdb as psycopg_crdb
-from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
@@ -12,7 +12,14 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
 )
-from sqlspec.adapters.cockroach_psycopg.core import apply_driver_features, build_statement_config
+from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgAsyncConnectionPool as AsyncConnectionPool
+from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgConnectionPool as ConnectionPool
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_crdb as psycopg_crdb
+from sqlspec.adapters.cockroach_psycopg.core import (
+    apply_driver_features,
+    build_statement_config,
+    validate_follower_read_staleness,
+)
 from sqlspec.adapters.cockroach_psycopg.driver import (
     CockroachPsycopgAsyncDriver,
     CockroachPsycopgAsyncExceptionHandler,
@@ -44,23 +51,6 @@ __all__ = (
 )
 
 default_statement_config = build_statement_config()
-
-
-def _validate_driver_features(driver_features: "CockroachPsycopgDriverFeatures | dict[str, Any] | None") -> None:
-    if driver_features and "prefer_uuid_keys" in driver_features:
-        msg = "CockroachDB psycopg driver_features no longer supports unused 'prefer_uuid_keys'."
-        raise ImproperConfigurationError(msg)
-
-
-def _validate_native_storage_autocommit(connection_config: "dict[str, Any]", driver_features: "dict[str, Any]") -> None:
-    if not driver_features.get("enable_native_storage"):
-        return
-    autocommit = connection_config.get("autocommit")
-    if autocommit is None:
-        autocommit = connection_config.get("kwargs", {}).get("autocommit")
-    if autocommit is not True:
-        msg = "enable_native_storage requires connection_config autocommit=True."
-        raise ImproperConfigurationError(msg)
 
 
 class CockroachPsycopgConnectionConfig(TypedDict):
@@ -117,23 +107,6 @@ class _NativeStorageCSVOptions(TypedDict):
     skip: NotRequired[int]
 
 
-def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
-    if "native_storage_csv_options" not in driver_features:
-        return
-    options = driver_features["native_storage_csv_options"]
-    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
-        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
-        raise ImproperConfigurationError(msg)
-    for key in ("nullas", "nullif"):
-        if key in options and not isinstance(options[key], str):
-            msg = "native_storage_csv_options nullas and nullif must be strings."
-            raise ImproperConfigurationError(msg)
-    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
-        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
-        raise ImproperConfigurationError(msg)
-    driver_features["native_storage_csv_options"] = dict(options)
-
-
 class CockroachPsycopgDriverFeatures(TypedDict):
     """CockroachDB driver feature configuration.
 
@@ -173,44 +146,28 @@ class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
         super().__init__(config)
 
     def __enter__(self) -> "CockroachSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("CockroachSyncConnection", self._ctx.__enter__())
-        self._ctx = self._config.create_connection()
-        return cast("CockroachSyncConnection", self._ctx)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("CockroachSyncConnection", self._ctx.__enter__())
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._config.connection_instance and self._ctx:
-            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
-        if self._ctx:
-            self._ctx.close()
-        return None
+        if self._ctx is None:
+            return None
+        return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
 
 
 class _CockroachPsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_conn",)
-
-    def __init__(self, config: "CockroachPsycopgSyncConfig") -> None:
-        super().__init__(config)
-        self._conn: CockroachSyncConnection | None = None
+    __slots__ = ()
 
     def acquire_connection(self) -> "CockroachSyncConnection":
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("CockroachSyncConnection", self._ctx.__enter__())
-        self._conn = self._config.create_connection()
-        return cast("CockroachSyncConnection", self._conn)
+        self._ctx = self._config.provide_pool().connection()
+        return cast("CockroachSyncConnection", self._ctx.__enter__())
 
     def release_connection(self, _conn: "CockroachSyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            self._ctx.__exit__(None, None, None)
+            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
-            return
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
 
 
 class CockroachPsycopgSyncConfig(
@@ -220,7 +177,7 @@ class CockroachPsycopgSyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgSyncDriver]]" = CockroachPsycopgSyncDriver
     connection_type: "ClassVar[type[CockroachSyncConnection]]" = CockroachSyncConnection
-    supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_transactional_ddl: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -259,10 +216,9 @@ class CockroachPsycopgSyncConfig(
 
         driver_features.setdefault("enable_native_storage", False)
         _validate_native_storage_options(driver_features)
+        _validate_follower_read_features(driver_features)
         _validate_native_storage_autocommit(connection_config, driver_features)
         driver_features.setdefault("enable_auto_retry", True)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[CockroachSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
@@ -306,6 +262,7 @@ class CockroachPsycopgSyncConfig(
         conninfo = all_config.pop("conninfo", None)
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
+        _apply_cluster_option(all_config)
         if conninfo:
             return ConnectionPool(
                 conninfo, kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
@@ -331,9 +288,21 @@ class CockroachPsycopgSyncConfig(
             self.connection_instance = None
 
     def create_connection(self) -> "CockroachSyncConnection":
-        if self.connection_instance is None:
-            self.connection_instance = self.create_pool()
-        return cast("CockroachSyncConnection", self.connection_instance.getconn())
+        """Open a standalone connection owned by the caller.
+
+        Returns:
+            A connection that is not bound to the pool and can be closed directly.
+        """
+        conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
+        connection = psycopg_crdb.CrdbConnection.connect(conninfo, **connection_kwargs)
+        configure = self.connection_config.get("configure", self._configure_connection)
+        try:
+            configure(cast("CockroachSyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                connection.close()
+            raise
+        return cast("CockroachSyncConnection", connection)
 
     def provide_session(
         self,
@@ -348,7 +317,7 @@ class CockroachPsycopgSyncConfig(
         if follower_reads is not None:
             driver_features["enable_follower_reads"] = follower_reads
         if staleness is not None:
-            driver_features["default_staleness"] = staleness
+            driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
 
         return CockroachPsycopgSyncSessionContext(
             acquire_connection=handler.acquire_connection,
@@ -424,7 +393,7 @@ class _CockroachPsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "CockroachAsyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 
@@ -435,7 +404,7 @@ class CockroachPsycopgAsyncConfig(
 
     driver_type: "ClassVar[type[CockroachPsycopgAsyncDriver]]" = CockroachPsycopgAsyncDriver
     connection_type: "ClassVar[type[CockroachAsyncConnection]]" = CockroachAsyncConnection
-    supports_transactional_ddl: "ClassVar[bool]" = True
+    supports_transactional_ddl: "ClassVar[bool]" = False
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = True
     supports_native_arrow_import: "ClassVar[bool]" = True
@@ -474,10 +443,9 @@ class CockroachPsycopgAsyncConfig(
 
         driver_features.setdefault("enable_native_storage", False)
         _validate_native_storage_options(driver_features)
+        _validate_follower_read_features(driver_features)
         _validate_native_storage_autocommit(connection_config, driver_features)
         driver_features.setdefault("enable_auto_retry", True)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[CockroachAsyncConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -522,6 +490,7 @@ class CockroachPsycopgAsyncConfig(
         conninfo = all_config.pop("conninfo", None)
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
+        _apply_cluster_option(all_config)
         if conninfo:
             pool = AsyncConnectionPool(
                 conninfo, kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
@@ -553,9 +522,21 @@ class CockroachPsycopgAsyncConfig(
             self.connection_instance = None
 
     async def create_connection(self) -> "CockroachAsyncConnection":
-        if self.connection_instance is None:
-            self.connection_instance = await self.create_pool()
-        return cast("CockroachAsyncConnection", await self.connection_instance.getconn())
+        """Open a standalone connection owned by the caller.
+
+        Returns:
+            A connection that is not bound to the pool and can be closed directly.
+        """
+        conninfo, connection_kwargs = _standalone_connection_kwargs(dict(self.connection_config))
+        connection = await psycopg_crdb.AsyncCrdbConnection.connect(conninfo, **connection_kwargs)
+        configure = self.connection_config.get("configure", self._configure_async_connection)
+        try:
+            await configure(cast("CockroachAsyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
+        return cast("CockroachAsyncConnection", connection)
 
     def provide_session(
         self,
@@ -570,7 +551,7 @@ class CockroachPsycopgAsyncConfig(
         if follower_reads is not None:
             driver_features["enable_follower_reads"] = follower_reads
         if staleness is not None:
-            driver_features["default_staleness"] = staleness
+            driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
 
         return CockroachPsycopgAsyncSessionContext(
             acquire_connection=handler.acquire_connection,
@@ -600,3 +581,109 @@ class CockroachPsycopgAsyncConfig(
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
+    "check",
+    "close_returns",
+    "configure",
+    "max_idle",
+    "max_lifetime",
+    "max_size",
+    "max_waiting",
+    "min_size",
+    "name",
+    "num_workers",
+    "open",
+    "reconnect_failed",
+    "reconnect_timeout",
+    "reset",
+    "timeout",
+})
+
+
+def _standalone_connection_kwargs(connection_config: "dict[str, Any]") -> "tuple[str, dict[str, Any]]":
+    """Split a pooled connection config into conninfo plus connect keyword arguments.
+
+    Args:
+        connection_config: The adapter's normalized connection configuration.
+
+    Returns:
+        The conninfo string and the keyword arguments accepted by ``connect``.
+    """
+    all_config = {k: v for k, v in connection_config.items() if k not in _POOL_ONLY_CONFIG_KEYS}
+    conninfo = all_config.pop("conninfo", "")
+    all_config.update(all_config.pop("kwargs", {}))
+    all_config.update(all_config.pop("extra", {}))
+    _apply_cluster_option(all_config)
+    return str(conninfo or ""), all_config
+
+
+_CLUSTER_NAME_PATTERN: "re.Pattern[str]" = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _apply_cluster_option(connection_kwargs: "dict[str, Any]") -> None:
+    """Fold a CockroachDB Cloud cluster name into the libpq options string.
+
+    ``cluster`` is not a libpq connection parameter; multi-tenant routing is
+    expressed through ``options=--cluster=<name>``.
+
+    Raises:
+        ImproperConfigurationError: If the name carries anything but the
+            characters a cluster name may contain. The value is interpolated
+            into an options string, where whitespace would start a new option.
+    """
+    cluster = connection_kwargs.pop("cluster", None)
+    if not cluster:
+        return
+    name = str(cluster)
+    if _CLUSTER_NAME_PATTERN.fullmatch(name) is None:
+        msg = f"CockroachDB cluster name {name!r} may contain only letters, digits, hyphens, underscores, and periods."
+        raise ImproperConfigurationError(msg)
+    routing = f"--cluster={name}"
+    existing = connection_kwargs.get("options")
+    connection_kwargs["options"] = f"{existing} {routing}" if existing else routing
+
+
+def _validate_driver_features(driver_features: "CockroachPsycopgDriverFeatures | dict[str, Any] | None") -> None:
+    if driver_features and "prefer_uuid_keys" in driver_features:
+        msg = "CockroachDB psycopg driver_features no longer supports unused 'prefer_uuid_keys'."
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_native_storage_autocommit(connection_config: "dict[str, Any]", driver_features: "dict[str, Any]") -> None:
+    if not driver_features.get("enable_native_storage"):
+        return
+    autocommit = connection_config.get("autocommit")
+    if autocommit is None:
+        autocommit = connection_config.get("kwargs", {}).get("autocommit")
+    if autocommit is not True:
+        msg = "enable_native_storage requires connection_config autocommit=True."
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_follower_read_features(driver_features: "dict[str, Any]") -> None:
+    staleness = driver_features.get("default_staleness")
+    if staleness is None:
+        return
+    if not isinstance(staleness, str):
+        msg = "default_staleness must be a string."
+        raise ImproperConfigurationError(msg)
+    driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
+
+
+def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
+    if "native_storage_csv_options" not in driver_features:
+        return
+    options = driver_features["native_storage_csv_options"]
+    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
+        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
+        raise ImproperConfigurationError(msg)
+    for key in ("nullas", "nullif"):
+        if key in options and not isinstance(options[key], str):
+            msg = "native_storage_csv_options nullas and nullif must be strings."
+            raise ImproperConfigurationError(msg)
+    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
+        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
+        raise ImproperConfigurationError(msg)
+    driver_features["native_storage_csv_options"] = dict(options)

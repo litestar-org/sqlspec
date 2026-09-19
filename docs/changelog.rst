@@ -9,6 +9,70 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+----------
+
+**Changed:**
+
+* Use the types in each adapter's Litestar and Events package to tune its tables.
+  Shared settings stay in ``sqlspec.config``. The ``extension_config`` layout stays
+  the same. ADK vector, BM25, and ScaNN keys move to the asyncpg and psycopg ADK types.
+  BigQuery uses a boolean for ``partitioning``; Oracle uses a mapping.
+* Extension stores and event channels reject keys they cannot use. Remove the unused
+  ``run_migrations`` key from extension settings. Run migrations with the commands
+  and ``migration_config``. The Events ``listener_queue_capacity`` key is for
+  asyncpg and psycopg.
+* ``create_connection()`` returns a connection the caller owns on the adapters that
+  previously handed back a pooled one. It consumes no pool slot and must be closed
+  by the caller.
+* The MySQL adapters connect with ``utf8mb4`` unless a charset is configured, matching
+  the character set their bulk-load path already declares.
+* CockroachDB reports that it does not support transactional DDL. A schema migration
+  runs without a wrapping transaction unless it carries its own ``transactional``
+  directive.
+* DuckDB ``extension_flags`` are applied as database startup settings, so an
+  unrecognized flag is reported when the database opens instead of being ignored.
+* Streaming row sources take an ``error`` flag when they close, and mapping rows to
+  dictionaries reports a missing column description rather than returning no rows.
+* ``sqlspec.exceptions.TransactionRetryError`` and
+  ``sqlspec.utils.type_guards.has_value_attribute`` are removed, along with
+  ``build_insert_statement``, ``coerce_records_for_execute_many``, and
+  ``encode_records_for_binary_copy`` from the psqlpy adapter. Serialization failures
+  are reported as ``SerializationConflictError``.
+
+**Added:**
+
+* The arrow-odbc adapter accepts individual ODBC connection fields alongside a
+  connection string, and the asyncmy adapter accepts ``stmt_cache_size``.
+* Bulk ingestion uses each driver's native Arrow path where one exists.
+
+**Fixed:**
+
+* Driver exception handling uses native error classes through adapter facades.
+  SQL Server and Arrow ODBC no longer fall back to catching every exception when
+  a driver error export is missing.
+* Oracle AQ visibility accepts ``DEQ_IMMEDIATE`` and ``DEQ_ON_COMMIT`` names.
+  The previously advertised ``AQMSG_*`` names do not exist in python-oracledb.
+  Omitting visibility continues to use the driver's default.
+* DuckDB reports failed commits to the caller. It also closes the file-backed
+  connection when a commit fails.
+* PostgreSQL and CockroachDB close new connections if a setup hook fails or the
+  task is cancelled. This prevents a leak before the caller can take ownership.
+* A DuckDB session that exits with an exception no longer discards an in-memory
+  database, and opening a standalone connection no longer resets the storage setup
+  already prepared for the thread.
+* CockroachDB retries a transaction only for a genuine serialization conflict, and an
+  error that escapes a failed rollback keeps the cause that identifies it.
+* Oracle returns the same value types whether or not a statement was already cached.
+* Spanner declares a parameter type for UUID values.
+* ODBC connection values that are already quoted are passed through unchanged, and an
+  error code is read only from the driver's own diagnostic field.
+
+**Requirements:**
+
+* The ``duckdb`` extra installs ``pyarrow``. Minimum versions are raised for
+  ``oracledb`` (3.4), ``psqlpy`` (0.12.1), and ``mssql-python`` (1.13).
+
 v0.63.1 - Slotted service subclass compatibility
 ------------------------------------------------
 
@@ -886,8 +950,8 @@ v0.56.0
 * New ``SchemaTarget`` and ``SchemaEnsureResult`` types plus sync and async
   schema checks can create missing tables and add columns. Use
   ``ensure_schema_sync()`` or ``ensure_schema_async()`` for each driver mode.
-  ADK, Litestar session, and durable event stores expose ``manage_schema``,
-  ``create_schema``, and ``run_migrations`` controls for this lifecycle.
+  Stores use ``manage_schema`` and ``create_schema`` for these checks.
+  Run migrations as a separate step.
 * Oracle ADK, durable event, and Litestar session tables now share opt-in
   compression, partitioning, In-Memory, and table-option configuration.
 * BigQuery session and queue partition options and CockroachDB session hash

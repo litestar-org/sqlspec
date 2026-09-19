@@ -2,12 +2,12 @@
 
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
-from psycopg import errors
-from psycopg import sql as pg_sql
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgJsonb as Jsonb
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_errors as errors
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_sql as pg_sql
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,

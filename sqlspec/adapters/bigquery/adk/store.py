@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 from sqlspec.adapters.bigquery.config import BigQueryConfig
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -213,7 +214,6 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return f" AND {qualified_column} IS NOT NULL"
 
     def _run_query(self, sql: str, parameters: "Iterable[Any] | None" = None) -> "list[dict[str, Any]]":
-        from google.cloud import bigquery
 
         client = self._config.create_connection()
         job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
@@ -221,12 +221,10 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return [dict(row) for row in job.result()]
 
     def _query_param(self, name: str, value: Any, *, bq_type: str = "STRING") -> Any:
-        from google.cloud import bigquery
 
         return bigquery.ScalarQueryParameter(name, bq_type, value)
 
     def _json_param(self, name: str, value: "dict[str, Any] | None") -> Any:
-        from google.cloud import bigquery
 
         return bigquery.ScalarQueryParameter(name, "JSON", to_json(value) if value is not None else None)
 

@@ -42,7 +42,9 @@ Supported Backends
      - ``bigquery``, ``bq``
      - ``adbc_driver_bigquery``
      - Named ``@`` parameters; ``project_id``, ``dataset_id``, and ``token``
-       are lifted into ``db_kwargs``.
+       are lifted into ``db_kwargs`` under the driver's own option names.
+       A driver given as a path to a shared library is loaded through the
+       ADBC driver manager, and ``entrypoint`` applies only on that route.
    * - Snowflake
      - ``snowflake``, ``sf``
      - ``adbc_driver_snowflake``

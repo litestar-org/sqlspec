@@ -1,10 +1,12 @@
 """CockroachDB session stores for Litestar integration using psycopg."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
-from psycopg.rows import dict_row
+from typing_extensions import NotRequired
 
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -12,7 +14,23 @@ if TYPE_CHECKING:
     from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgAsyncConfig, CockroachPsycopgSyncConfig
 
 
-__all__ = ("CockroachPsycopgAsyncStore", "CockroachPsycopgSyncStore")
+__all__ = ("CockroachPsycopgAsyncStore", "CockroachPsycopgLitestarConfig", "CockroachPsycopgSyncStore")
+
+
+class CockroachPsycopgLitestarConfig(LitestarConfig):
+    """CockroachPsycopg-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    enable_hash_sharded_indexes: NotRequired[bool]
+    """Enable hash-sharded session indexes."""
+
+    hash_shard_bucket_count: NotRequired[int]
+    """Number of hash index buckets."""
+
+    ttl_expiration_expression: NotRequired[Literal[False, "expires_at"]]
+    """Enable row-level TTL using expires_at, or disable it with False."""
 
 
 class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]):

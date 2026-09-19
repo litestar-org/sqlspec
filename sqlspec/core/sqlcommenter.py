@@ -73,21 +73,6 @@ class SQLCommenterContext:
             cls._var.set(previous)
 
 
-def _encode_key(key: str) -> str:
-    """URL-encode a key (single quotes become ``%27``)."""
-    return quote(key, safe="")
-
-
-def _encode_value(value: str) -> str:
-    """URL-encode a value and wrap in single quotes."""
-    return f"'{quote(value, safe='')}'"
-
-
-def _decode(raw: str) -> str:
-    """Reverse URL-encoding."""
-    return unquote(raw)
-
-
 def generate_comment(attrs: Mapping[str, str | None]) -> str:
     """Serialize attributes into a sqlcommenter comment body.
 
@@ -105,13 +90,6 @@ def generate_comment(attrs: Mapping[str, str | None]) -> str:
             continue
         pairs.append(f"{_encode_key(key)}={_encode_value(value)}")
     return ",".join(pairs)
-
-
-def _is_sqlcommenter_comment(comment: str) -> bool:
-    """Check whether a comment string looks like a sqlcommenter payload."""
-    stripped = comment.strip()
-    # sqlcommenter comments have key='value' pairs
-    return "='" in stripped and stripped.endswith("'")
 
 
 def append_comment(expression: exp.Expr, attrs: Mapping[str, str | None]) -> exp.Expr:
@@ -132,47 +110,6 @@ def append_comment(expression: exp.Expr, attrs: Mapping[str, str | None]) -> exp
         return expression
     expression.add_comments([comment_body])
     return expression
-
-
-def _append_comment(sql: str, attrs: Mapping[str, str | None]) -> str:
-    """Append a sqlcommenter block to rendered SQL text."""
-    comment_body = generate_comment(attrs)
-    if not comment_body:
-        return sql
-
-    stripped_sql = sql.rstrip()
-    if not stripped_sql:
-        return sql
-    trailing_whitespace = sql[len(stripped_sql) :]
-    comment = f"/* {comment_body} */"
-
-    if stripped_sql.endswith(";"):
-        before_semicolon = stripped_sql[:-1]
-        statement = before_semicolon.rstrip()
-        semicolon_padding = before_semicolon[len(statement) :]
-        return f"{statement} {comment}{semicolon_padding};{trailing_whitespace}"
-
-    return f"{stripped_sql} {comment}{trailing_whitespace}"
-
-
-def _comment_attributes(
-    static_attrs: Mapping[str, str | None], *, enable_traceparent: bool, enable_context: bool
-) -> dict[str, str | None]:
-    """Resolve static and dynamic sqlcommenter attributes for the current call."""
-    merged: dict[str, str | None] = {}
-    if enable_context:
-        ctx_attrs = SQLCommenterContext.get()
-        if ctx_attrs:
-            merged.update(ctx_attrs)
-        correlation_id = CorrelationContext.get()
-        if correlation_id and "correlation_id" not in merged:
-            merged["correlation_id"] = correlation_id
-    merged.update(static_attrs)
-    if enable_traceparent:
-        trace_id, span_id = get_trace_context()
-        if trace_id and span_id:
-            merged["traceparent"] = _traceparent(trace_id, span_id)
-    return merged
 
 
 def parse_comment(expression: exp.Expr) -> tuple[exp.Expr, dict[str, str]]:
@@ -217,6 +154,102 @@ def parse_comment(expression: exp.Expr) -> tuple[exp.Expr, dict[str, str]]:
         expression.comments = None
 
     return expression, attrs
+
+
+def create_sqlcommenter_statement_transformer(
+    *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False, enable_context: bool = False
+) -> Callable[[exp.Expr, Any], tuple[exp.Expr, Any]]:
+    """Create a ``statement_transformer`` that adds sqlcommenter comments to the AST.
+
+    Static attributes are pre-serialized at creation time. When
+    ``enable_traceparent`` or ``enable_context`` is True, dynamic attributes
+    are resolved per invocation.
+
+    Args:
+        attributes: Static key-value pairs to include in every comment.
+        enable_traceparent: If True, auto-populate ``traceparent`` from the
+            current OpenTelemetry span context on each invocation.
+        enable_context: If True, read request-scoped attributes from
+            :class:`SQLCommenterContext` and merge them with static attributes.
+
+    Returns:
+        A callable suitable for ``StatementConfig(statement_transformers=[...])``.
+    """
+    static_attrs: dict[str, str | None] = dict(attributes) if attributes else {}
+    is_dynamic = enable_traceparent or enable_context
+
+    if not is_dynamic and not static_attrs:
+        return _NOOP_SQLCOMMENTER_TRANSFORMER
+
+    if not is_dynamic:
+        return _StaticSQLCommenterTransformer(static_attrs)
+
+    return _DynamicSQLCommenterTransformer(
+        static_attrs, enable_traceparent=enable_traceparent, enable_context=enable_context
+    )
+
+
+def _encode_key(key: str) -> str:
+    """URL-encode a key (single quotes become ``%27``)."""
+    return quote(key, safe="")
+
+
+def _encode_value(value: str) -> str:
+    """URL-encode a value and wrap in single quotes."""
+    return f"'{quote(value, safe='')}'"
+
+
+def _decode(raw: str) -> str:
+    """Reverse URL-encoding."""
+    return unquote(raw)
+
+
+def _is_sqlcommenter_comment(comment: str) -> bool:
+    """Check whether a comment string looks like a sqlcommenter payload."""
+    stripped = comment.strip()
+    # sqlcommenter comments have key='value' pairs
+    return "='" in stripped and stripped.endswith("'")
+
+
+def _append_comment(sql: str, attrs: Mapping[str, str | None]) -> str:
+    """Append a sqlcommenter block to rendered SQL text."""
+    comment_body = generate_comment(attrs)
+    if not comment_body:
+        return sql
+
+    stripped_sql = sql.rstrip()
+    if not stripped_sql:
+        return sql
+    trailing_whitespace = sql[len(stripped_sql) :]
+    comment = f"/* {comment_body} */"
+
+    if stripped_sql.endswith(";"):
+        before_semicolon = stripped_sql[:-1]
+        statement = before_semicolon.rstrip()
+        semicolon_padding = before_semicolon[len(statement) :]
+        return f"{statement} {comment}{semicolon_padding};{trailing_whitespace}"
+
+    return f"{stripped_sql} {comment}{trailing_whitespace}"
+
+
+def _comment_attributes(
+    static_attrs: Mapping[str, str | None], *, enable_traceparent: bool, enable_context: bool
+) -> dict[str, str | None]:
+    """Resolve static and dynamic sqlcommenter attributes for the current call."""
+    merged: dict[str, str | None] = {}
+    if enable_context:
+        ctx_attrs = SQLCommenterContext.get()
+        if ctx_attrs:
+            merged.update(ctx_attrs)
+        correlation_id = CorrelationContext.get()
+        if correlation_id and "correlation_id" not in merged:
+            merged["correlation_id"] = correlation_id
+    merged.update(static_attrs)
+    if enable_traceparent:
+        trace_id, span_id = get_trace_context()
+        if trace_id and span_id:
+            merged["traceparent"] = _traceparent(trace_id, span_id)
+    return merged
 
 
 def _traceparent(trace_id: str, span_id: str) -> str:
@@ -264,36 +297,3 @@ class _DynamicSQLCommenterTransformer:
 
 
 _NOOP_SQLCOMMENTER_TRANSFORMER: Final = _NoOpSQLCommenterTransformer()
-
-
-def create_sqlcommenter_statement_transformer(
-    *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False, enable_context: bool = False
-) -> Callable[[exp.Expr, Any], tuple[exp.Expr, Any]]:
-    """Create a ``statement_transformer`` that adds sqlcommenter comments to the AST.
-
-    Static attributes are pre-serialized at creation time. When
-    ``enable_traceparent`` or ``enable_context`` is True, dynamic attributes
-    are resolved per invocation.
-
-    Args:
-        attributes: Static key-value pairs to include in every comment.
-        enable_traceparent: If True, auto-populate ``traceparent`` from the
-            current OpenTelemetry span context on each invocation.
-        enable_context: If True, read request-scoped attributes from
-            :class:`SQLCommenterContext` and merge them with static attributes.
-
-    Returns:
-        A callable suitable for ``StatementConfig(statement_transformers=[...])``.
-    """
-    static_attrs: dict[str, str | None] = dict(attributes) if attributes else {}
-    is_dynamic = enable_traceparent or enable_context
-
-    if not is_dynamic and not static_attrs:
-        return _NOOP_SQLCOMMENTER_TRANSFORMER
-
-    if not is_dynamic:
-        return _StaticSQLCommenterTransformer(static_attrs)
-
-    return _DynamicSQLCommenterTransformer(
-        static_attrs, enable_traceparent=enable_traceparent, enable_context=enable_context
-    )

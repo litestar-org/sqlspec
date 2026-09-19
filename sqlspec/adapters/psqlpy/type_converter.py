@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from sqlspec.typing import PGVECTOR_INSTALLED
 
 if TYPE_CHECKING:
-    from psqlpy import Connection
+    from sqlspec.adapters.psqlpy._typing import PsqlpyConnection as Connection
 
 __all__ = ("register_pgvector",)
 

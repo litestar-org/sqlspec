@@ -54,12 +54,14 @@ def psycopg_session(psycopg_sync_config: "PsycopgSyncConfig") -> "Generator[Psyc
 
 async def test_psycopg_async_connection(psycopg_async_config: "PsycopgAsyncConfig") -> None:
     """Test async connection components."""
-    async with await psycopg_async_config.create_connection() as conn:
+    standalone = await psycopg_async_config.create_connection()
+    async with standalone as conn:
         assert conn is not None
         async with conn.cursor() as cur:
             await cur.execute("SELECT 1 AS id")
             result = cast("tuple[Any, ...]", await cur.fetchone())
             assert result[0] == 1
+    assert standalone.closed
 
     async with psycopg_async_config.provide_connection() as conn:
         assert conn is not None
@@ -77,12 +79,14 @@ def test_psycopg_sync_connection(postgres_service: "PostgresService") -> None:
     )
     sync_config = PsycopgSyncConfig(connection_config={"conninfo": conninfo})
     try:
-        with sync_config.create_connection() as conn:
+        standalone = sync_config.create_connection()
+        with standalone as conn:
             assert conn is not None
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 as id")
                 result = cast("tuple[Any, ...]", cur.fetchone())
                 assert result[0] == 1
+        assert standalone.closed
     finally:
         sync_config.close_pool()
 

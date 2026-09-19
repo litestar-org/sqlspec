@@ -13,16 +13,18 @@ as a follow-up.
 import array
 from typing import TYPE_CHECKING, Any, cast
 
-import oracledb as _oracledb
-
-from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR
+from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
+from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR, OracleSparseVector
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from oracledb import AsyncConnection, AsyncCursor, Connection, Cursor
+    from sqlspec.adapters.oracledb._typing import OracleAsyncConnection as AsyncConnection
+    from sqlspec.adapters.oracledb._typing import OracleAsyncRawCursor as AsyncCursor
+    from sqlspec.adapters.oracledb._typing import OracleSyncConnection as Connection
+    from sqlspec.adapters.oracledb._typing import OracleSyncRawCursor as Cursor
 
-SPARSE_VECTOR_TYPE: "type[object] | None" = getattr(_oracledb, "SparseVector", None)
+SPARSE_VECTOR_TYPE = OracleSparseVector
 
 __all__ = (
     "DTYPE_TO_ARRAY_CODE",
@@ -114,6 +116,40 @@ def numpy_converter_out(value: "array.array[Any]") -> Any:
     return np.array(value, copy=True, dtype=value.typecode)
 
 
+def numpy_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
+    """Public input type handler for vector payloads."""
+    return _input_type_handler(cursor, value, arraysize)
+
+
+def numpy_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
+    """Public output type handler for VECTOR columns."""
+    return _output_type_handler(cursor, metadata)
+
+
+def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
+    """Register vector type handlers on an Oracle connection.
+
+    Enables automatic conversion between Python sequence types and Oracle
+    VECTOR columns, chaining to any handler already installed so it keeps
+    firing for values the vector handler does not claim. Works for both sync
+    and async connections.
+
+    Args:
+        connection: Oracle connection (sync or async).
+    """
+    try:
+        existing_input = connection.inputtypehandler
+    except AttributeError:
+        existing_input = None
+    try:
+        existing_output = connection.outputtypehandler
+    except AttributeError:
+        existing_output = None
+
+    connection.inputtypehandler = chain_input_handler(_input_type_handler, existing_input)
+    connection.outputtypehandler = chain_output_handler(_output_type_handler, existing_output)
+
+
 def _is_vector_payload(value: Any) -> bool:
     """Return True if the value should be claimed by the vector input handler.
 
@@ -122,7 +158,7 @@ def _is_vector_payload(value: Any) -> bool:
     JSON handler owns. ``bool`` is excluded explicitly because it is a subclass
     of ``int`` but is owned by the JSON path.
     """
-    if SPARSE_VECTOR_TYPE is not None and isinstance(value, SPARSE_VECTOR_TYPE):
+    if isinstance(value, SPARSE_VECTOR_TYPE):
         return False
     if isinstance(value, array.array):
         return True
@@ -215,26 +251,3 @@ def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
 
     msg = f"Invalid vector_return_format: {fmt!r}; expected one of {sorted(_VECTOR_RETURN_FORMATS)}"
     raise ValueError(msg)
-
-
-def numpy_input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: int) -> Any:
-    """Public input type handler for vector payloads."""
-    return _input_type_handler(cursor, value, arraysize)
-
-
-def numpy_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:
-    """Public output type handler for VECTOR columns."""
-    return _output_type_handler(cursor, metadata)
-
-
-def register_numpy_handlers(connection: "Connection | AsyncConnection") -> None:
-    """Register vector type handlers on an Oracle connection.
-
-    Enables automatic conversion between Python sequence types and Oracle
-    VECTOR columns. Works for both sync and async connections.
-
-    Args:
-        connection: Oracle connection (sync or async).
-    """
-    connection.inputtypehandler = numpy_input_type_handler
-    connection.outputtypehandler = numpy_output_type_handler

@@ -36,47 +36,6 @@ DEFAULT_DECIMAL_MODE: str = "preserve"
 _DECIMAL_NORMALIZER_DISPATCHER = TypeDispatcher["Callable[['_DecimalNormalizer', Any], Any]"]()
 
 
-def _decimal_identity(value: "decimal.Decimal") -> "decimal.Decimal":
-    return value
-
-
-def _decimal_to_string(value: "decimal.Decimal") -> str:
-    return str(value)
-
-
-def _decimal_to_float(value: "decimal.Decimal") -> float:
-    return float(value)
-
-
-@final
-class _JsonListConverter:
-    __slots__ = ("_preserve_arrays", "_serializer")
-
-    def __init__(self, serializer: "Callable[[Any], str]", preserve_arrays: bool) -> None:
-        self._serializer = serializer
-        self._preserve_arrays = preserve_arrays
-
-    def __call__(self, value: "list[Any]") -> Any:
-        if not value:
-            return value
-        if self._preserve_arrays and not should_json_encode_sequence(value):
-            return value
-        return self._serializer(value)
-
-
-@final
-class _JsonTupleConverter:
-    __slots__ = ("_list_converter",)
-
-    def __init__(self, list_converter: _JsonListConverter) -> None:
-        self._list_converter = list_converter
-
-    def __call__(self, value: "tuple[Any, ...]") -> Any:
-        if not value:
-            return value
-        return self._list_converter(list(value))
-
-
 @final
 class _DecimalNormalizer:
     __slots__ = ("_decimal_converter",)
@@ -185,14 +144,6 @@ def build_nested_decimal_normalizer(*, mode: str = DEFAULT_DECIMAL_MODE) -> "Cal
     return _DecimalNormalizer(decimal_converter)
 
 
-def _uuid_to_string(value: object) -> str:
-    return str(value)
-
-
-def _uuid_utils_to_stdlib(value: _UUIDLike) -> UUID:
-    return uuid_from_int(value.int)
-
-
 def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[Any], Any]]":
     """Return coercions for UUID parameter binding.
 
@@ -215,3 +166,52 @@ def build_uuid_coercions(*, native: bool = False) -> "dict[type[Any], Callable[[
         coercions[uuid_utils_uuid] = _uuid_utils_to_stdlib if native else _uuid_to_string
 
     return coercions
+
+
+def _decimal_identity(value: "decimal.Decimal") -> "decimal.Decimal":
+    return value
+
+
+def _decimal_to_string(value: "decimal.Decimal") -> str:
+    return str(value)
+
+
+def _decimal_to_float(value: "decimal.Decimal") -> float:
+    return float(value)
+
+
+@final
+class _JsonListConverter:
+    __slots__ = ("_preserve_arrays", "_serializer")
+
+    def __init__(self, serializer: "Callable[[Any], str]", preserve_arrays: bool) -> None:
+        self._serializer = serializer
+        self._preserve_arrays = preserve_arrays
+
+    def __call__(self, value: "list[Any]") -> Any:
+        if not value:
+            return value
+        if self._preserve_arrays and not should_json_encode_sequence(value):
+            return value
+        return self._serializer(value)
+
+
+@final
+class _JsonTupleConverter:
+    __slots__ = ("_list_converter",)
+
+    def __init__(self, list_converter: _JsonListConverter) -> None:
+        self._list_converter = list_converter
+
+    def __call__(self, value: "tuple[Any, ...]") -> Any:
+        if not value:
+            return value
+        return self._list_converter(list(value))
+
+
+def _uuid_to_string(value: object) -> str:
+    return str(value)
+
+
+def _uuid_utils_to_stdlib(value: _UUIDLike) -> UUID:
+    return uuid_from_int(value.int)

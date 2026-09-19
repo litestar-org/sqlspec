@@ -48,51 +48,6 @@ MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
 
 
-class _ExpressionParameterizer:
-    __slots__ = ("_builder",)
-
-    def __init__(self, builder: "QueryBuilder") -> None:
-        self._builder = builder
-
-    def __call__(self, node: exp.Expr) -> exp.Expr:
-        if isinstance(node, exp.Literal):
-            if node.this in {True, False, None}:
-                return node
-
-            parent = node.parent
-            if isinstance(parent, exp.Array) and has_vector_distance_ancestor(node):
-                return node
-
-            value = node.this
-            if node.is_number and isinstance(node.this, str):
-                try:
-                    value = float(node.this) if "." in node.this or "e" in node.this.lower() else int(node.this)
-                except ValueError:
-                    value = node.this
-
-            param_name = self._builder.add_parameter_for_expression(value, context="where")
-            return exp.Placeholder(this=param_name)
-        return node
-
-
-class _PlaceholderReplacer:
-    __slots__ = ("_param_mapping",)
-
-    def __init__(self, param_mapping: dict[str, str]) -> None:
-        self._param_mapping = param_mapping
-
-    def __call__(self, node: exp.Expr) -> exp.Expr:
-        if isinstance(node, exp.Placeholder) and str(node.this) in self._param_mapping:
-            return exp.Placeholder(this=self._param_mapping[str(node.this)])
-        return node
-
-
-def _unquote_identifier(node: exp.Expr) -> exp.Expr:
-    if isinstance(node, exp.Identifier):
-        node.set("quoted", False)
-    return node
-
-
 logger = get_logger(__name__)
 
 
@@ -998,7 +953,6 @@ class QueryBuilder:
     def _validate_update_from(self, expression: exp.Expr, dialect: DialectType) -> None:
         if not dialect or not any(node.args.get("from_") is not None for node in expression.find_all(exp.Update)):
             return
-        from sqlspec.data_dictionary import get_dialect_config
 
         dialect_name = (
             dialect.lower() if isinstance(dialect, str) else type(Dialect.get_or_raise(dialect)).__name__.lower()
@@ -1251,3 +1205,48 @@ class _BuilderCacheEntry:
     def __init__(self, expression: exp.Expr, dialect: "DialectType | None") -> None:
         self.expression = expression
         self.dialect = dialect
+
+
+class _ExpressionParameterizer:
+    __slots__ = ("_builder",)
+
+    def __init__(self, builder: "QueryBuilder") -> None:
+        self._builder = builder
+
+    def __call__(self, node: exp.Expr) -> exp.Expr:
+        if isinstance(node, exp.Literal):
+            if node.this in {True, False, None}:
+                return node
+
+            parent = node.parent
+            if isinstance(parent, exp.Array) and has_vector_distance_ancestor(node):
+                return node
+
+            value = node.this
+            if node.is_number and isinstance(node.this, str):
+                try:
+                    value = float(node.this) if "." in node.this or "e" in node.this.lower() else int(node.this)
+                except ValueError:
+                    value = node.this
+
+            param_name = self._builder.add_parameter_for_expression(value, context="where")
+            return exp.Placeholder(this=param_name)
+        return node
+
+
+class _PlaceholderReplacer:
+    __slots__ = ("_param_mapping",)
+
+    def __init__(self, param_mapping: dict[str, str]) -> None:
+        self._param_mapping = param_mapping
+
+    def __call__(self, node: exp.Expr) -> exp.Expr:
+        if isinstance(node, exp.Placeholder) and str(node.this) in self._param_mapping:
+            return exp.Placeholder(this=self._param_mapping[str(node.this)])
+        return node
+
+
+def _unquote_identifier(node: exp.Expr) -> exp.Expr:
+    if isinstance(node, exp.Identifier):
+        node.set("quoted", False)
+    return node

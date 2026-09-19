@@ -4,6 +4,7 @@ import contextlib
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from sqlspec.adapters.asyncmy._typing import AsyncmySSCursor as SSCursor
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
@@ -173,17 +174,22 @@ def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
 def build_load_data_statement(table: str, columns: "list[str]") -> str:
     """Build native LOAD DATA SQL with a bound filename.
 
+    The filename is bound by name because asyncmy sends a positional sequence
+    through its server-side prepared path once a statement cache is configured,
+    which neither collapses the doubled percent signs below nor takes part in
+    the local-infile filename handoff.
+
     Args:
         table: Destination table identifier.
         columns: Destination column names.
 
     Returns:
-        SQL with one positional filename placeholder.
+        SQL with one named filename placeholder.
     """
     table_sql = format_identifier(table).replace("%", "%%")
     column_sql = ", ".join(quote_backtick_identifier(column).replace("%", "%%") for column in columns)
     return (
-        f"LOAD DATA LOCAL INFILE %s INTO TABLE {table_sql} "
+        f"LOAD DATA LOCAL INFILE %(sqlspec_infile_path)s INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         f"LINES TERMINATED BY '\\n' ({column_sql})"
     )
@@ -221,7 +227,6 @@ class AsyncmyStreamSource:
         self._driver._check_pending_exception(handler)
 
     async def _start(self) -> None:
-        from asyncmy.cursors import SSCursor
 
         cursor = self._driver.connection.cursor(SSCursor)
         self._cursor = cursor

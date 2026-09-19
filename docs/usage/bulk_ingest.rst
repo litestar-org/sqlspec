@@ -161,7 +161,10 @@ Some fast paths are opt-in because they read local files or change semantics:
 - **Oracle direct path load** is the default bulk-ingest transport in Thin mode.
   Set ``enable_direct_path_load=False`` to force ``executemany``. Connections
   that do not expose the Direct Path Load API, including Thick-mode connections,
-  silently fall back to ``executemany``.
+  silently fall back to ``executemany``. Tables whose Arrow columns use types
+  the driver cannot convert -- nested types, dates, times, durations and
+  dictionary-encoded columns among them -- also fall back, because a conversion
+  the driver refuses can leave a load partly written.
 - **BigQuery Storage Write API** (``enable_storage_write_api``) streams Arrow
   rows for ``load_from_arrow`` appends and falls back to the Parquet load job
   when the Storage client is unavailable; ``overwrite=True`` always uses a

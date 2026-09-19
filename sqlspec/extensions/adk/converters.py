@@ -32,11 +32,6 @@ __all__ = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Session converters
-# ---------------------------------------------------------------------------
-
-
 def session_to_record(session: "Session") -> StoredSession:
     """Convert ADK Session to database record.
 
@@ -103,11 +98,6 @@ def record_to_session(record: StoredSession, events: "list[StoredEvent]") -> "Se
     return session
 
 
-# ---------------------------------------------------------------------------
-# Event converters  (full-event JSON storage)
-# ---------------------------------------------------------------------------
-
-
 def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str) -> StoredEvent:
     """Convert ADK Event to database record using full-event JSON storage.
 
@@ -153,11 +143,6 @@ def record_to_event(record: "StoredEvent") -> "Event":
     event_data.setdefault("invocation_id", record["invocation_id"])
     event_data.setdefault("timestamp", record["timestamp"].timestamp())
     return Event.model_validate(event_data)
-
-
-# ---------------------------------------------------------------------------
-# Scoped-state helpers
-# ---------------------------------------------------------------------------
 
 
 def filter_temp_state(state: "dict[str, Any]") -> "dict[str, Any]":

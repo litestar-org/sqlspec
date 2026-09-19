@@ -88,14 +88,6 @@ def _expr_like_exp(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr
     return exp.Like(this=col, expression=placeholder)
 
 
-def _expr_like_method(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return cast("exp.Expr", col.like(placeholder))
-
-
-def _expr_ilike(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
-    return cast("exp.Expr", col.ilike(placeholder))
-
-
 _SIMPLE_OPERATOR_MAP: dict[str, Any] = {
     "=": expr_eq,
     "==": expr_eq,
@@ -231,20 +223,6 @@ class WindowFunctionBuilder:
         return cast("exp.Alias", exp.alias_(self.build(), alias))
 
 
-def _ensure_select_expression(
-    mixin: "SQLBuilderProtocol", *, error_message: str, initialize: bool = True
-) -> exp.Select:
-    expression = mixin.get_expression()
-    if expression is None and initialize:
-        mixin.set_expression(exp.Select())
-        expression = mixin.get_expression()
-
-    if not isinstance(expression, exp.Select):
-        raise SQLBuilderError(error_message)
-
-    return expression
-
-
 @trait
 class SelectClauseMixin:
     """Mixin providing SELECT clause methods."""
@@ -267,7 +245,6 @@ class SelectClauseMixin:
         """Replace currently selected columns with new ones."""
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="Cannot add columns to non-SELECT expression.")
-        # Clear existing expressions
         select_expr.set("expressions", [])
         for column in columns:
             column_expr = column.expression if isinstance(column, Case) else parse_column_expression(column, builder)
@@ -1150,27 +1127,6 @@ class SetOperationMixin:
 TABLE_HINT_PATTERN: Final[str] = r"\b{}\b(\s+AS\s+\w+)?"
 
 
-def _parse_hint_expression(hint: Any, dialect: "DialectType | str | None") -> exp.Expr:
-    try:
-        hint_str = str(hint)
-        hint_expr: exp.Expr | None = exp.maybe_parse(hint_str, dialect=dialect)
-        return hint_expr or exp.Anonymous(this=hint_str)
-    except Exception:
-        return exp.Anonymous(this=str(hint))
-
-
-class _TableHintReplacer:
-    __slots__ = ("_hint", "_table")
-
-    def __init__(self, hint: str, table: str) -> None:
-        self._hint = hint
-        self._table = table
-
-    def __call__(self, match: "re.Match[str]") -> str:
-        alias_part = match.group(1) or ""
-        return f"/*+ {self._hint} */ {self._table}{alias_part}"
-
-
 class Select(
     QueryBuilder,
     WhereClauseMixin,
@@ -1407,3 +1363,46 @@ class Select(
         select_expr.set("locks", current_locks)
 
         return self
+
+
+def _expr_like_method(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
+    return cast("exp.Expr", col.like(placeholder))
+
+
+def _expr_ilike(col: "exp.Expr", placeholder: "exp.Placeholder") -> "exp.Expr":
+    return cast("exp.Expr", col.ilike(placeholder))
+
+
+def _ensure_select_expression(
+    mixin: "SQLBuilderProtocol", *, error_message: str, initialize: bool = True
+) -> exp.Select:
+    expression = mixin.get_expression()
+    if expression is None and initialize:
+        mixin.set_expression(exp.Select())
+        expression = mixin.get_expression()
+
+    if not isinstance(expression, exp.Select):
+        raise SQLBuilderError(error_message)
+
+    return expression
+
+
+def _parse_hint_expression(hint: Any, dialect: "DialectType | str | None") -> exp.Expr:
+    try:
+        hint_str = str(hint)
+        hint_expr: exp.Expr | None = exp.maybe_parse(hint_str, dialect=dialect)
+        return hint_expr or exp.Anonymous(this=hint_str)
+    except Exception:
+        return exp.Anonymous(this=str(hint))
+
+
+class _TableHintReplacer:
+    __slots__ = ("_hint", "_table")
+
+    def __init__(self, hint: str, table: str) -> None:
+        self._hint = hint
+        self._table = table
+
+    def __call__(self, match: "re.Match[str]") -> str:
+        alias_part = match.group(1) or ""
+        return f"/*+ {self._hint} */ {self._table}{alias_part}"

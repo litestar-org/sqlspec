@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionExecuteError, PsqlpyDatabaseError
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -938,19 +939,11 @@ def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[StoredMemory]":
 
 
 def _is_psqlpy_database_error(exc: Exception) -> bool:
-    try:
-        import psqlpy.exceptions
-    except ImportError:
-        return False
-    return isinstance(exc, psqlpy.exceptions.DatabaseError)
+    return isinstance(exc, PsqlpyDatabaseError)
 
 
 def _is_table_missing_error(exc: Exception) -> bool:
-    try:
-        import psqlpy.exceptions
-    except ImportError:
-        return False
-    if not isinstance(exc, (psqlpy.exceptions.DatabaseError, psqlpy.exceptions.ConnectionExecuteError)):
+    if not isinstance(exc, (PsqlpyDatabaseError, PsqlpyConnectionExecuteError)):
         return False
     error_msg = str(exc).lower()
     return "does not exist" in error_msg or "relation" in error_msg

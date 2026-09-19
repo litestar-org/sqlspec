@@ -3,18 +3,34 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import NotRequired
+
 from sqlspec.adapters.sqlite.config import _apply_extension_pragmas, _extension_pragma_statements
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-__all__ = ("SQLiteStore",)
+__all__ = ("SQLiteStore", "SqliteLitestarConfig")
 
 
 SECONDS_PER_DAY = 86400.0
 JULIAN_EPOCH = 2440587.5
+
+
+class SqliteLitestarConfig(LitestarConfig):
+    """Sqlite-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    pragma_profile: NotRequired[bool]
+    """Apply the extension-store PRAGMA profile. Default: False."""
+
+    pragma_overrides: NotRequired[dict[str, str | int | bool]]
+    """Validated PRAGMA overrides applied during schema preparation."""
 
 
 class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):

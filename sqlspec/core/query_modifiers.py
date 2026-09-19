@@ -55,11 +55,6 @@ _DATABASE_QUALIFIED_PARTS: Final[int] = 3
 _CATALOG_QUALIFIED_PARTS: Final[int] = 4
 
 
-# =============================================================================
-# Expression Factories
-# =============================================================================
-
-
 def expr_eq(col: exp.Expr, placeholder: exp.Placeholder) -> exp.Expr:
     """Create equality expression: column = :param."""
     return exp.EQ(this=col, expression=placeholder)
@@ -121,11 +116,6 @@ def expr_is_not_null(col: exp.Expr, _placeholder: exp.Placeholder) -> exp.Expr:
     return exp.Not(this=exp.Is(this=col, expression=exp.null()))
 
 
-# =============================================================================
-# Column Parsing
-# =============================================================================
-
-
 def parse_column_for_condition(column: str | exp.Column | exp.Expr) -> exp.Expr:
     """Parse column specification for use in conditions.
 
@@ -177,11 +167,6 @@ def extract_column_name(column: str | exp.Column | exp.Expr) -> str:
         return str(column.name)
 
     return "column"
-
-
-# =============================================================================
-# Condition Builders
-# =============================================================================
 
 
 def create_condition(
@@ -272,11 +257,6 @@ def create_not_exists_condition(subquery: exp.Expr) -> exp.Expr:
         NOT EXISTS expression
     """
     return exp.Not(this=exp.Exists(this=subquery))
-
-
-# =============================================================================
-# Expression Modifiers
-# =============================================================================
 
 
 def apply_where(expression: "exp.Expr", condition: exp.Expr) -> "exp.Expr":
@@ -396,11 +376,6 @@ def apply_select_only(expression: "exp.Expr", columns: "tuple[str | exp.Expr, ..
     return expression
 
 
-# =============================================================================
-# CTE Utilities
-# =============================================================================
-
-
 def safe_modify_with_cte(expression: "exp.Expr", modification_fn: "Callable[[exp.Expr], exp.Expr]") -> "exp.Expr":
     """Safely apply a modification, preserving CTEs at top level.
 
@@ -430,11 +405,6 @@ def safe_modify_with_cte(expression: "exp.Expr", modification_fn: "Callable[[exp
         result.set("with_", cte)
 
     return result
-
-
-# =============================================================================
-# Column Pruning
-# =============================================================================
 
 
 def apply_column_pruning(

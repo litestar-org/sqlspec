@@ -34,11 +34,6 @@ ARG_PAIR_COUNT = 2
 SINGLE_VALUE_COUNT = 1
 
 
-# ---------------------------------------------------------------------------
-# DELETE helpers
-# ---------------------------------------------------------------------------
-
-
 @trait
 class DeleteFromClauseMixin:
     """Mixin providing FROM clause support for DELETE builders."""
@@ -61,11 +56,6 @@ class DeleteFromClauseMixin:
         assert current_expr is not None
         current_expr.set("this", exp.to_table(table))
         return self
-
-
-# ---------------------------------------------------------------------------
-# INSERT helpers
-# ---------------------------------------------------------------------------
 
 
 @trait
@@ -244,11 +234,6 @@ class InsertFromSelectMixin:
             msg = "SelectBuilder must have a valid SELECT expression."
             raise SQLBuilderError(msg)
         return self
-
-
-# ---------------------------------------------------------------------------
-# UPDATE helpers
-# ---------------------------------------------------------------------------
 
 
 @trait

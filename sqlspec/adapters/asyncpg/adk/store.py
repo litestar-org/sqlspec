@@ -2,9 +2,9 @@
 
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-import asyncpg
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.config import ADKConfig, AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -42,6 +42,21 @@ class AsyncpgADKConfig(ADKConfig):
 
     autovacuum_analyze_scale_factor: NotRequired[float]
     """Optional event-table autovacuum analyze scale factor."""
+
+    vector_index_type: NotRequired[Literal["hnsw", "ivfflat", "scann"]]
+    """Vector index algorithm for memory embeddings ('hnsw', 'ivfflat', 'scann'). Default: 'hnsw'."""
+
+    vector_dimensions: NotRequired[int]
+    """Dimensionality of embedding vectors (e.g. 768 for gemini-embedding-001 with MRL). Default: 768."""
+
+    enable_bm25: NotRequired[bool]
+    """Enable native BM25 full-text indexing. Requires the pg_textsearch extension. Default: False."""
+
+    scann_num_leaves: NotRequired[int]
+    """Number of partition leaves (clusters) for ScaNN tree quantization. Default: 100."""
+
+    scann_quantizer: NotRequired[str]
+    """Quantization method for ScaNN index ('SQ8', 'FP32'). Default: 'SQ8'."""
 
 
 class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
@@ -686,8 +701,6 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
 
         if not query and embedding is None:
             return []
-
-        from typing import cast
 
         limit_value = limit or self._max_results
         if scope_filter == "all":

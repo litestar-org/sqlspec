@@ -30,78 +30,6 @@ _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
 })
 
 
-def _placeholder_qmark(_: Any) -> str:
-    return "?"
-
-
-def _placeholder_numeric(index: Any) -> str:
-    return f"${int(index) + 1}"
-
-
-def _placeholder_named_colon(name: Any) -> str:
-    return f":{name}"
-
-
-def _placeholder_positional_colon(index: Any) -> str:
-    return f":{int(index) + 1}"
-
-
-def _placeholder_named_at(name: Any) -> str:
-    return f"@{name}"
-
-
-def _placeholder_named_dollar(name: Any) -> str:
-    return f"${name}"
-
-
-def _placeholder_named_pyformat(name: Any) -> str:
-    return f"%({name})s"
-
-
-def _placeholder_positional_pyformat(_: Any) -> str:
-    return "%s"
-
-
-def _ordered_parameter_info(param_info: "list[ParameterInfo]") -> "list[ParameterInfo]":
-    if len(param_info) < _ORDERED_PARAM_INFO_MIN_SIZE:
-        return param_info
-
-    previous_position = param_info[0].position
-    for param in param_info[1:]:
-        if param.position < previous_position:
-            return sorted(param_info, key=lambda item: item.position)
-        previous_position = param.position
-    return param_info
-
-
-def _single_parameter_style(param_info: "list[ParameterInfo]") -> "ParameterStyle | None":
-    if not param_info:
-        return None
-
-    style = param_info[0].style
-    for param in param_info[1:]:
-        if param.style != style:
-            return None
-    return style
-
-
-def _is_positional_style(style: "ParameterStyle") -> bool:
-    return style in _POSITIONAL_STYLES
-
-
-def _parameter_lookup_key(param: "ParameterInfo") -> str:
-    if param.style in _OCCURRENCE_KEYED_STYLES:
-        return f"{param.placeholder_text}_{param.ordinal}"
-    return param.placeholder_text
-
-
-def _named_parameter_name(param: "ParameterInfo") -> str:
-    param_name = param.name or f"param_{param.ordinal}"
-    if param_name.isdigit():
-        return f"param_{param.ordinal}"
-    return param_name
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterConverter:
     """Parameter style conversion helper."""
@@ -575,3 +503,75 @@ class ParameterConverter:
                 return parameters[unique_ordinal]
 
         return None
+
+
+def _placeholder_qmark(_: Any) -> str:
+    return "?"
+
+
+def _placeholder_numeric(index: Any) -> str:
+    return f"${int(index) + 1}"
+
+
+def _placeholder_named_colon(name: Any) -> str:
+    return f":{name}"
+
+
+def _placeholder_positional_colon(index: Any) -> str:
+    return f":{int(index) + 1}"
+
+
+def _placeholder_named_at(name: Any) -> str:
+    return f"@{name}"
+
+
+def _placeholder_named_dollar(name: Any) -> str:
+    return f"${name}"
+
+
+def _placeholder_named_pyformat(name: Any) -> str:
+    return f"%({name})s"
+
+
+def _placeholder_positional_pyformat(_: Any) -> str:
+    return "%s"
+
+
+def _ordered_parameter_info(param_info: "list[ParameterInfo]") -> "list[ParameterInfo]":
+    if len(param_info) < _ORDERED_PARAM_INFO_MIN_SIZE:
+        return param_info
+
+    previous_position = param_info[0].position
+    for param in param_info[1:]:
+        if param.position < previous_position:
+            return sorted(param_info, key=lambda item: item.position)
+        previous_position = param.position
+    return param_info
+
+
+def _single_parameter_style(param_info: "list[ParameterInfo]") -> "ParameterStyle | None":
+    if not param_info:
+        return None
+
+    style = param_info[0].style
+    for param in param_info[1:]:
+        if param.style != style:
+            return None
+    return style
+
+
+def _is_positional_style(style: "ParameterStyle") -> bool:
+    return style in _POSITIONAL_STYLES
+
+
+def _parameter_lookup_key(param: "ParameterInfo") -> str:
+    if param.style in _OCCURRENCE_KEYED_STYLES:
+        return f"{param.placeholder_text}_{param.ordinal}"
+    return param.placeholder_text
+
+
+def _named_parameter_name(param: "ParameterInfo") -> str:
+    param_name = param.name or f"param_{param.ordinal}"
+    if param_name.isdigit():
+        return f"param_{param.ordinal}"
+    return param_name

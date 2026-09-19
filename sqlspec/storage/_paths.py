@@ -77,39 +77,6 @@ def ensure_path_within_root(path: "str | Path", root: "str | Path") -> str:
 _GLOB_MAGIC: Final = re.compile(r"[*?\[]")
 
 
-def _glob_segment_regex(segment: str) -> str:
-    """Translate one glob path segment to regex source that never crosses ``/``."""
-    out: list[str] = []
-    index = 0
-    length = len(segment)
-    while index < length:
-        char = segment[index]
-        if char == "*":
-            out.append("[^/]*")
-            index += 1
-        elif char == "?":
-            out.append("[^/]")
-            index += 1
-        elif char == "[":
-            close = segment.find("]", index + 1)
-            body = segment[index + 1 : close] if close != -1 else ""
-            negated = body.startswith(("!", "^"))
-            if negated:
-                body = body[1:]
-            if close == -1 or not body:
-                out.append(re.escape(char))
-                index += 1
-                continue
-            escaped = body.replace("\\", "\\\\").replace("[", "\\[")
-            prefix = "^" if negated else ""
-            out.append(f"[{prefix}{escaped}]")
-            index = close + 1
-        else:
-            out.append(re.escape(char))
-            index += 1
-    return "".join(out)
-
-
 def extract_glob_static_prefix(pattern: str) -> str:
     """Return the literal directory prefix of a glob pattern.
 
@@ -241,3 +208,36 @@ def resolve_storage_path(
     clean_base = base_path.rstrip("/")
     clean_path = path_str.lstrip("/")
     return f"{clean_base}/{clean_path}"
+
+
+def _glob_segment_regex(segment: str) -> str:
+    """Translate one glob path segment to regex source that never crosses ``/``."""
+    out: list[str] = []
+    index = 0
+    length = len(segment)
+    while index < length:
+        char = segment[index]
+        if char == "*":
+            out.append("[^/]*")
+            index += 1
+        elif char == "?":
+            out.append("[^/]")
+            index += 1
+        elif char == "[":
+            close = segment.find("]", index + 1)
+            body = segment[index + 1 : close] if close != -1 else ""
+            negated = body.startswith(("!", "^"))
+            if negated:
+                body = body[1:]
+            if close == -1 or not body:
+                out.append(re.escape(char))
+                index += 1
+                continue
+            escaped = body.replace("\\", "\\\\").replace("[", "\\[")
+            prefix = "^" if negated else ""
+            out.append(f"[{prefix}{escaped}]")
+            index = close + 1
+        else:
+            out.append(re.escape(char))
+            index += 1
+    return "".join(out)

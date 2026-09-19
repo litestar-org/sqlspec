@@ -240,3 +240,17 @@ observed spans between 21.3 and 63.2 ms. Client imports produced none. Polling
 was every 20 ms with a 250 ms query timeout. These spans are sampled
 observations of one run, not exact table-offline durations, and repeated runs
 move both the probe counts and the spans.
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.litestar.CockroachPsycopgLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgADKConfig
+   :members:
+   :show-inheritance:

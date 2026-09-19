@@ -3,6 +3,7 @@
 from typing import Any, cast
 
 import pytest
+from mssql_python import Error as MssqlPythonError
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
@@ -47,7 +48,7 @@ class FakeConnection:
     @autocommit.setter
     def autocommit(self, value: bool) -> None:
         if value is self.fail_autocommit_value:
-            raise FakeMssqlError
+            raise MssqlPythonError("transaction failed", "")
         self._autocommit = value
         self.autocommit_values.append(value)
 
@@ -56,22 +57,17 @@ class FakeConnection:
 
     def commit(self) -> None:
         if self.fail_commit:
-            raise FakeMssqlError
+            raise MssqlPythonError("transaction failed", "")
         self.commits += 1
 
     def rollback(self) -> None:
         if self.fail_rollback:
-            raise FakeMssqlError
+            raise MssqlPythonError("transaction failed", "")
         self.rollbacks += 1
 
 
-class FakeMssqlError(Exception):
-    """Minimal mssql-python database error."""
-
-
-def test_mssql_python_sync_begin_uses_dbapi_transaction_and_tracks_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mssql_python_sync_begin_uses_dbapi_transaction_and_tracks_state() -> None:
     """Begin should track the DBAPI transaction without issuing transaction SQL."""
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
@@ -89,9 +85,8 @@ def test_mssql_python_sync_begin_uses_dbapi_transaction_and_tracks_state(monkeyp
 
 
 @pytest.mark.parametrize("method_name", ["commit", "rollback"])
-def test_mssql_python_transaction_restores_autocommit(method_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mssql_python_transaction_restores_autocommit(method_name: str) -> None:
     """Transactions entered from autocommit mode should restore that mode on completion."""
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     connection = FakeConnection(autocommit=True)
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
@@ -110,9 +105,8 @@ def test_mssql_python_transaction_restores_autocommit(method_name: str, monkeypa
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
-def test_mssql_python_repeated_begin_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mssql_python_repeated_begin_is_idempotent() -> None:
     """Repeated begin should preserve the original autocommit restoration decision."""
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     connection = FakeConnection(autocommit=True)
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
@@ -124,9 +118,8 @@ def test_mssql_python_repeated_begin_is_idempotent(monkeypatch: pytest.MonkeyPat
     assert connection.cursor_obj.calls == []
 
 
-def test_mssql_python_begin_failure_keeps_transaction_inactive(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mssql_python_begin_failure_keeps_transaction_inactive() -> None:
     """A failure while disabling autocommit should leave transaction state inactive."""
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     connection = FakeConnection(autocommit=True)
     connection.fail_autocommit_value = False
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
@@ -139,11 +132,8 @@ def test_mssql_python_begin_failure_keeps_transaction_inactive(monkeypatch: pyte
 
 
 @pytest.mark.parametrize("method_name", ["commit", "rollback"])
-def test_mssql_python_completion_failure_preserves_active_state(
-    method_name: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mssql_python_completion_failure_preserves_active_state(method_name: str) -> None:
     """A failed DBAPI completion should leave the transaction active and un-restored."""
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     connection = FakeConnection(autocommit=True)
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
     driver.begin()
@@ -158,11 +148,8 @@ def test_mssql_python_completion_failure_preserves_active_state(
 
 
 @pytest.mark.parametrize("method_name", ["commit", "rollback"])
-def test_mssql_python_restore_failure_reports_inactive_transaction(
-    method_name: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mssql_python_restore_failure_reports_inactive_transaction(method_name: str) -> None:
     """A restoration failure should surface after the DBAPI transaction has completed."""
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     connection = FakeConnection(autocommit=True)
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
     driver.begin()
@@ -175,9 +162,8 @@ def test_mssql_python_restore_failure_reports_inactive_transaction(
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
-def test_mssql_python_sync_rollback_tracks_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mssql_python_sync_rollback_tracks_state() -> None:
     """Rollback should delegate to the DBAPI connection and clear state."""
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.driver._MSSQL_ERROR", FakeMssqlError)
     connection = FakeConnection()
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 

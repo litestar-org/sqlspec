@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -218,7 +219,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        import mysql.connector
 
         try:
             async with self._config.provide_connection() as conn:
@@ -248,7 +248,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     await cursor.close()
 
             return _session_record_from_row(row) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -285,8 +285,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
 
-        import mysql.connector
-
         try:
             async with self._config.provide_connection() as conn:
                 cursor = await conn.cursor()
@@ -296,7 +294,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
             return [_session_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -395,7 +393,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
-        import mysql.connector
 
         if limit == 0:
             return []
@@ -426,7 +423,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
             return [_event_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -457,7 +454,6 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         )
 
     async def get_metadata(self, key: str) -> "str | None":
-        import mysql.connector
 
         sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
         try:
@@ -469,7 +465,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
             return str(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -574,7 +570,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get session by ID."""
-        import mysql.connector
 
         try:
             with self._config.provide_connection() as conn:
@@ -603,7 +598,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return _session_record_from_row(row) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -642,8 +637,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             self._session_table, app_name, user_id, column, direction, page_limit, page_offset
         )
 
-        import mysql.connector
-
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
@@ -653,7 +646,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return [_session_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -756,7 +749,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
         """Get events for a session."""
-        import mysql.connector
 
         if limit == 0:
             return []
@@ -787,7 +779,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return [_event_record_from_row(row) for row in rows]
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -824,7 +816,6 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        import mysql.connector
 
         sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
         try:
@@ -836,7 +827,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 finally:
                     cursor.close()
             return str(row[0]) if row is not None else None
-        except mysql.connector.Error as exc:
+        except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -1406,7 +1397,6 @@ async def _async_delete_before(
     threshold: "datetime",
     app_name: "str | None" = None,
 ) -> int:
-    import mysql.connector
 
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
     params: list[Any] = [threshold]
@@ -1422,7 +1412,7 @@ async def _async_delete_before(
             finally:
                 await cursor.close()
             await conn.commit()
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return 0
         raise
@@ -1433,7 +1423,6 @@ async def _async_delete_before(
 async def _async_state(
     store: MysqlConnectorAsyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
-    import mysql.connector
 
     sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
     try:
@@ -1445,7 +1434,7 @@ async def _async_state(
             finally:
                 await cursor.close()
         return _json_dict(row[0]) if row is not None else None
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return None
         raise
@@ -1468,7 +1457,6 @@ def _sync_delete_before(
     threshold: "datetime",
     app_name: "str | None" = None,
 ) -> int:
-    import mysql.connector
 
     sql = f"DELETE FROM {table_name} WHERE {column_name} < %s"
     params: list[Any] = [threshold]
@@ -1484,7 +1472,7 @@ def _sync_delete_before(
             finally:
                 cursor.close()
             conn.commit()
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return 0
         raise
@@ -1495,7 +1483,6 @@ def _sync_delete_before(
 def _sync_state(
     store: MysqlConnectorSyncADKStore, table_name: str, where_clause: str, params: "tuple[Any, ...]"
 ) -> "dict[str, Any] | None":
-    import mysql.connector
 
     sql = f"SELECT state FROM {table_name} WHERE {where_clause} LIMIT 1"
     try:
@@ -1507,7 +1494,7 @@ def _sync_state(
             finally:
                 cursor.close()
         return _json_dict(row[0]) if row is not None else None
-    except mysql.connector.Error as exc:
+    except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return None
         raise

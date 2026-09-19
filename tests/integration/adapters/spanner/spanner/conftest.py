@@ -1,9 +1,11 @@
 import logging
 import sys
 from collections.abc import Generator
+from datetime import timedelta
 from typing import TYPE_CHECKING, TextIO, cast
 
 import pytest
+from google.cloud.spanner_v1.database_sessions_manager import DatabaseSessionsManager
 
 from tests.integration.fixtures.spanner import drop_table_if_exists, run_ddl
 
@@ -12,6 +14,18 @@ if TYPE_CHECKING:
 
 
 pytestmark = pytest.mark.xdist_group("spanner")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def spanner_emulator_session_polling() -> Generator[None, None, None]:
+    """Shorten the SDK's uninterruptible maintenance sleep in emulator tests.
+
+    Remove this workaround when google-cloud-python#18317 is released.
+    Multiplexed sessions and real database cleanup remain enabled.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(DatabaseSessionsManager, "_MAINTENANCE_THREAD_POLLING_INTERVAL", timedelta(milliseconds=100))
+        yield
 
 
 class _FilteredWriter:

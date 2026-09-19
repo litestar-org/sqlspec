@@ -169,7 +169,7 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "AiomysqlConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 
@@ -251,11 +251,10 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
+        connection_config.setdefault("charset", "utf8mb4")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[AiomysqlConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -320,16 +319,15 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             self.connection_instance = None
 
     async def create_connection(self) -> AiomysqlConnection:
-        """Create a single async connection (not from pool).
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection settings and creation hook
+        the pool applies, consumes no pool slot, and must be closed by the caller.
 
         Returns:
             An aiomysql connection instance.
         """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        connection = cast("AiomysqlConnection", await pool.acquire())
+        connection = await aiomysql.connect(**self._connection_kwargs())
         await self._ensure_connection(connection)
         return connection
 

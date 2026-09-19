@@ -9,16 +9,22 @@ from typing import TYPE_CHECKING, Any
 
 import aiomysql as _aiomysql  # pyright: ignore
 from aiomysql import Connection  # pyright: ignore
+from aiomysql import Error as _AiomysqlError  # pyright: ignore
+from aiomysql import MySQLError as _AiomysqlMySQLError  # pyright: ignore
 from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
+from aiomysql import ProgrammingError as AiomysqlProgrammingError  # pyright: ignore
+from aiomysql import SSCursor as AiomysqlSSCursor
 from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
 from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
-from pymysql import err as _pymysql_err  # pyright: ignore
 from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
+
+    from pymysql.err import Error as _PymysqlError
+    from pymysql.err import MySQLError as _PymysqlMySQLError
 
     from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
     from sqlspec.core import StatementConfig
@@ -35,6 +41,8 @@ if TYPE_CHECKING:
     class AiomysqlModuleProtocol(Protocol):
         async def create_pool(self, **kwargs: Any) -> "AiomysqlPool": ...
 
+        async def connect(self, **kwargs: Any) -> "AiomysqlConnection": ...
+
     class AiomysqlFieldTypeProtocol(Protocol):
         JSON: int
 
@@ -44,8 +52,8 @@ if TYPE_CHECKING:
     AiomysqlDictCursor: TypeAlias = _AiomysqlDictCursor
     AiomysqlFieldType: TypeAlias = AiomysqlFieldTypeProtocol
     AiomysqlPool: TypeAlias = _AiomysqlPool
-    AiomysqlPymysqlError: TypeAlias = _pymysql_err.Error
-    AiomysqlPymysqlMySQLError: TypeAlias = _pymysql_err.MySQLError
+    AiomysqlPymysqlError: TypeAlias = _PymysqlError
+    AiomysqlPymysqlMySQLError: TypeAlias = _PymysqlMySQLError
 
 if not TYPE_CHECKING:
     AiomysqlConnection = Connection
@@ -54,8 +62,8 @@ if not TYPE_CHECKING:
     AiomysqlDictCursor = _AiomysqlDictCursor
     AiomysqlFieldType = _PYMYSQL_FIELD_TYPE
     AiomysqlPool = _AiomysqlPool
-    AiomysqlPymysqlError = _pymysql_err.Error
-    AiomysqlPymysqlMySQLError = _pymysql_err.MySQLError
+    AiomysqlPymysqlError = _AiomysqlError
+    AiomysqlPymysqlMySQLError = _AiomysqlMySQLError
 
 __all__ = (
     "AiomysqlConnection",
@@ -64,9 +72,11 @@ __all__ = (
     "AiomysqlFieldType",
     "AiomysqlModule",
     "AiomysqlPool",
+    "AiomysqlProgrammingError",
     "AiomysqlPymysqlError",
     "AiomysqlPymysqlMySQLError",
     "AiomysqlRawCursor",
+    "AiomysqlSSCursor",
     "AiomysqlSessionContext",
 )
 
@@ -127,7 +137,7 @@ class AiomysqlSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Awaitable[AiomysqlConnection]]",
-        release_connection: "Callable[[AiomysqlConnection], Awaitable[None]]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AiomysqlDriver], AiomysqlDriver]",
@@ -153,6 +163,6 @@ class AiomysqlSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            await self._release_connection(self._connection)
+            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None

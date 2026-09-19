@@ -13,7 +13,8 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional
 
 if TYPE_CHECKING:
-    from psycopg import AsyncConnection, Connection
+    from sqlspec.adapters.psycopg._typing import PsycopgConnection as Connection
+    from sqlspec.adapters.psycopg._typing import PsycopgNativeAsyncConnection as AsyncConnection
 
 __all__ = ("register_pgvector_async", "register_pgvector_sync")
 
@@ -32,7 +33,7 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
     Args:
         connection: Psycopg sync connection.
     """
-    from psycopg import ProgrammingError
+    from sqlspec.adapters.psycopg._typing import PsycopgProgrammingError as ProgrammingError
 
     pgvector_psycopg = _pgvector_psycopg
     if pgvector_psycopg is None:
@@ -57,7 +58,7 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
     Args:
         connection: Psycopg async connection.
     """
-    from psycopg import ProgrammingError
+    from sqlspec.adapters.psycopg._typing import PsycopgProgrammingError as ProgrammingError
 
     pgvector_psycopg = _pgvector_psycopg
     if pgvector_psycopg is None:
@@ -83,7 +84,7 @@ def _is_missing_vector_error(error: Exception) -> bool:
     Returns:
         True if error indicates vector type not found.
     """
-    from psycopg import errors
+    from sqlspec.adapters.psycopg._typing import psycopg_errors as errors
 
     message = str(error).lower()
     return (

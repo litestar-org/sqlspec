@@ -10,10 +10,10 @@ instead of lambdas for adapter registration.
 """
 
 import json
-import sqlite3
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -56,6 +56,35 @@ def json_converter(value: bytes, deserializer: "Callable[[str], Any] | None" = N
     return deserializer(value.decode("utf-8"))
 
 
+def register_type_handlers(
+    json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
+) -> None:
+    """Register custom type adapters and converters with sqlite3 module.
+
+    This function registers handlers globally for the sqlite3 module. It should be
+    called once during application initialization if custom type handling is needed.
+
+    Args:
+        json_serializer: Optional custom JSON serializer.
+        json_deserializer: Optional custom JSON deserializer.
+    """
+    dict_adapter = _make_json_adapter(json_serializer)
+    list_adapter = _make_json_adapter(json_serializer)
+    converter = _make_json_converter(json_deserializer)
+
+    sqlite3.register_adapter(dict, dict_adapter)
+    sqlite3.register_adapter(list, list_adapter)
+    sqlite3.register_converter(DEFAULT_JSON_TYPE, converter)
+
+
+def unregister_type_handlers() -> None:
+    """Unregister custom type handlers from sqlite3 module.
+
+    Note: sqlite3 module does not provide an official unregister API, so this
+    function is a no-op placeholder for API consistency with other adapters.
+    """
+
+
 def _make_json_adapter(serializer: "Callable[[Any], str] | None") -> "Callable[[Any], str]":
     """Create a JSON adapter function with bound serializer.
 
@@ -84,32 +113,3 @@ def _make_json_converter(deserializer: "Callable[[str], Any] | None") -> "Callab
         Converter function ready for sqlite3.register_converter.
     """
     return partial(json_converter, deserializer=deserializer)
-
-
-def register_type_handlers(
-    json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
-) -> None:
-    """Register custom type adapters and converters with sqlite3 module.
-
-    This function registers handlers globally for the sqlite3 module. It should be
-    called once during application initialization if custom type handling is needed.
-
-    Args:
-        json_serializer: Optional custom JSON serializer.
-        json_deserializer: Optional custom JSON deserializer.
-    """
-    dict_adapter = _make_json_adapter(json_serializer)
-    list_adapter = _make_json_adapter(json_serializer)
-    converter = _make_json_converter(json_deserializer)
-
-    sqlite3.register_adapter(dict, dict_adapter)
-    sqlite3.register_adapter(list, list_adapter)
-    sqlite3.register_converter(DEFAULT_JSON_TYPE, converter)
-
-
-def unregister_type_handlers() -> None:
-    """Unregister custom type handlers from sqlite3 module.
-
-    Note: sqlite3 module does not provide an official unregister API, so this
-    function is a no-op placeholder for API consistency with other adapters.
-    """

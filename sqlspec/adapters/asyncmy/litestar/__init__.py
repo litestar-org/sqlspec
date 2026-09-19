@@ -1,5 +1,5 @@
 """Litestar integration for AsyncMy adapter."""
 
-from sqlspec.adapters.asyncmy.litestar.store import AsyncmyStore
+from sqlspec.adapters.asyncmy.litestar.store import AsyncmyLitestarConfig, AsyncmyStore
 
-__all__ = ("AsyncmyStore",)
+__all__ = ("AsyncmyLitestarConfig", "AsyncmyStore")

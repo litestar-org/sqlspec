@@ -4,6 +4,7 @@ import contextlib
 from collections.abc import Callable, Sized
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from sqlspec.adapters.aiomysql._typing import AiomysqlSSCursor as SSCursor
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
@@ -154,10 +155,20 @@ def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def build_load_data_statement(table: str, columns: "list[str]", file_path: str) -> str:
-    column_list = ", ".join(format_identifier(column) for column in columns)
+def build_load_data_statement(table: str, columns: "list[str]") -> str:
+    """Build native LOAD DATA SQL with a bound filename.
+
+    Args:
+        table: Destination table identifier.
+        columns: Destination column names.
+
+    Returns:
+        SQL with one positional filename placeholder.
+    """
+    table_sql = format_identifier(table).replace("%", "%%")
+    column_list = ", ".join(format_identifier(column).replace("%", "%%") for column in columns)
     return (
-        f"LOAD DATA LOCAL INFILE '{file_path}' INTO TABLE {format_identifier(table)} "
+        f"LOAD DATA LOCAL INFILE %s INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         f"LINES TERMINATED BY '\\n' ({column_list})"
     )
@@ -195,7 +206,6 @@ class AiomysqlStreamSource:
         self._driver._check_pending_exception(handler)
 
     async def _start(self) -> None:
-        from aiomysql import SSCursor
 
         cursor = await self._driver.connection.cursor(SSCursor)
         self._cursor = cursor

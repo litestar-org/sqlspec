@@ -4,9 +4,9 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-import asyncmy
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.asyncmy._typing import AsyncmyProgrammingError
 from sqlspec.adapters.asyncmy.core import resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -131,7 +131,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 )
                 row = await cursor.fetchone()
                 return _session_record_from_row(row) if row is not None else None
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -172,7 +172,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
                 return [_session_record_from_row(row) for row in rows]
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -293,7 +293,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
                 return [_event_record_from_row(row) for row in rows]
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -311,7 +311,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return resolve_rowcount(cursor)
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -329,7 +329,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return resolve_rowcount(cursor)
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -347,7 +347,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return resolve_rowcount(cursor)
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -361,7 +361,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (app_name,))
                 row = await cursor.fetchone()
                 return _json_dict(row[0]) if row is not None else None
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -375,7 +375,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (app_name, user_id))
                 row = await cursor.fetchone()
                 return _json_dict(row[0]) if row is not None else None
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -403,7 +403,7 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
                 return str(row[0]) if row is not None else None
-        except asyncmy.errors.ProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
             if _is_mysql_table_missing(exc):
                 return None
             raise

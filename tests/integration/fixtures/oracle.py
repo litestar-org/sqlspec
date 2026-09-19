@@ -35,6 +35,8 @@ def _oracle_pool_params(oracle_service: "OracleService") -> "OraclePoolParams":
         password=oracle_service.password,
         min=1,
         max=5,
+        retry_count=5,
+        retry_delay=1,
     )
 
 
@@ -84,6 +86,8 @@ def oracle_aq_privileges(oracle_23ai_service: "OracleService") -> None:
             "service_name": oracle_23ai_service.service_name,
             "user": "system",
             "password": oracle_23ai_service.system_password,
+            "retry_count": 5,
+            "retry_delay": 1,
         }
     )
     grants = (f"GRANT aq_administrator_role, aq_user_role TO {app_user}", f"GRANT EXECUTE ON dbms_aq TO {app_user}")

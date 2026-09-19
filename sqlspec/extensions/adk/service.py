@@ -306,7 +306,6 @@ class SQLSpecSessionService(BaseSessionService):
             event=event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
         )
 
-        # --- Stale-session detection ---
         current_record = await self._call_store("get_session", session.app_name, session.user_id, session.id)
         if current_record is None:
             msg = f"Session {session.id} not found."
@@ -343,7 +342,6 @@ class SQLSpecSessionService(BaseSessionService):
             user_state = dict(await self._call_store("get_user_state", session.app_name, session.user_id) or {})
             user_state.update(user_state_delta)
 
-        # --- Persist event and state atomically ---
         updated_record = await self._call_store(
             "append_event_and_update_state",
             event_record,

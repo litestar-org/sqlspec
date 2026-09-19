@@ -937,3 +937,146 @@ async def test_coerce_large_parameters_async_positional_tuple_str_over_threshold
     )
     async_connection.createlob.assert_called_once_with(CLOB_TYPE, long_str)
     assert result[0] == 1
+
+
+class _FakeLob:
+    """Stands in for an oracledb LOB locator that must be read before use."""
+
+    def __init__(self, payload: str) -> None:
+        self._payload = payload
+        self.read_count = 0
+
+    def read(self) -> str:
+        self.read_count += 1
+        return self._payload
+
+
+class _AsyncFakeLob(_FakeLob):
+    async def read(self) -> str:  # type: ignore[override]
+        self.read_count += 1
+        return self._payload
+
+
+def _clob_description() -> "list[tuple[object, ...]]":
+    clob_type = MagicMock()
+    clob_type.name = "DB_TYPE_CLOB"
+    return [("id", MagicMock(name="NUMBER")), ("body", clob_type)]
+
+
+def test_sync_stream_chunks_coerce_lob_locators() -> None:
+    """Streamed chunks must carry read LOB values, not unreadable locators."""
+    locator = _FakeLob("chapter one")
+    cursor = MagicMock()
+    cursor.description = _clob_description()
+    cursor.fetchmany.return_value = [(1, locator)]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection))
+    source = OracleSyncStreamSource(driver, "SELECT id, body FROM docs", None, 100)
+    source.start()
+
+    chunk = source.fetch_chunk()
+
+    assert chunk == [{"id": 1, "body": "chapter one"}]
+    assert locator.read_count == 1
+
+
+async def test_async_stream_chunks_coerce_lob_locators() -> None:
+    """The async stream must read locators too."""
+    locator = _AsyncFakeLob("chapter two")
+    cursor = MagicMock()
+    cursor.description = _clob_description()
+    cursor.execute = AsyncMock()
+    cursor.fetchmany = AsyncMock(return_value=[(1, locator)])
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleAsyncDriver(cast("OracleAsyncConnection", connection))
+    source = OracleAsyncStreamSource(driver, "SELECT id, body FROM docs", None, 100)
+    await source.start()
+
+    chunk = await source.fetch_chunk()
+
+    assert chunk == [{"id": 1, "body": "chapter two"}]
+    assert locator.read_count == 1
+
+
+def test_sync_stream_resolves_the_coercion_flag_once_per_stream() -> None:
+    """Row metadata, including the coercion flag, is computed once and cached."""
+    cursor = MagicMock()
+    cursor.description = _clob_description()
+    cursor.fetchmany.side_effect = [[(1, _FakeLob("a"))], [(2, _FakeLob("b"))], []]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection))
+    resolve_calls: list[object] = []
+    original = OracleSyncDriver._resolve_row_metadata
+
+    def _counting(self: object, description: object) -> object:
+        resolve_calls.append(description)
+        return original(cast("OracleSyncDriver", self), description)
+
+    OracleSyncDriver._resolve_row_metadata = _counting  # type: ignore[assignment,method-assign]
+    try:
+        source = OracleSyncStreamSource(driver, "SELECT id, body FROM docs", None, 100)
+        source.start()
+        source.fetch_chunk()
+        source.fetch_chunk()
+    finally:
+        OracleSyncDriver._resolve_row_metadata = original  # type: ignore[method-assign]
+
+    assert len(resolve_calls) == 1
+
+
+def test_sync_stream_keeps_locators_when_fetch_lobs_is_requested() -> None:
+    """fetch_lobs=True is an escape hatch for reading a LOB incrementally."""
+    locator = _FakeLob("chapter one")
+    cursor = MagicMock()
+    cursor.description = _clob_description()
+    cursor.fetchmany.return_value = [(1, locator)]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection))
+    source = OracleSyncStreamSource(driver, "SELECT id, body FROM docs", None, 100, fetch_lobs=True)
+    source.start()
+
+    chunk = source.fetch_chunk()
+
+    assert chunk == [{"id": 1, "body": locator}]
+    assert locator.read_count == 0
+
+
+def test_sync_stream_keeps_locators_when_the_driver_feature_requests_them() -> None:
+    """The config-level flag means the same thing as the per-call keyword."""
+    locator = _FakeLob("chapter one")
+    cursor = MagicMock()
+    cursor.description = _clob_description()
+    cursor.fetchmany.return_value = [(1, locator)]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection), driver_features={"fetch_lobs": True})
+    source = OracleSyncStreamSource(driver, "SELECT id, body FROM docs", None, 100)
+    source.start()
+
+    chunk = source.fetch_chunk()
+
+    assert chunk == [{"id": 1, "body": locator}]
+    assert locator.read_count == 0
+
+
+async def test_async_stream_keeps_locators_when_fetch_lobs_is_requested() -> None:
+    """The async stream honours the same escape hatch."""
+    locator = _AsyncFakeLob("chapter two")
+    cursor = MagicMock()
+    cursor.description = _clob_description()
+    cursor.execute = AsyncMock()
+    cursor.fetchmany = AsyncMock(return_value=[(1, locator)])
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleAsyncDriver(cast("OracleAsyncConnection", connection))
+    source = OracleAsyncStreamSource(driver, "SELECT id, body FROM docs", None, 100, fetch_lobs=True)
+    await source.start()
+
+    chunk = await source.fetch_chunk()
+
+    assert chunk == [{"id": 1, "body": locator}]
+    assert locator.read_count == 0

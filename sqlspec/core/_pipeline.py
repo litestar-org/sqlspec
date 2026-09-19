@@ -56,79 +56,6 @@ _METRIC_KEYS: Final[tuple[str, ...]] = (
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class _PipelineMetrics:
-    __slots__ = ("_values",)
-
-    def __init__(self) -> None:
-        self._values = dict.fromkeys(_METRIC_KEYS, 0)
-
-    def update(self, stats: "dict[str, int]") -> None:
-        values = self._values
-        for key in _METRIC_KEYS:
-            values[key] = stats.get(key, 0)
-
-    def snapshot(self) -> "dict[str, int]":
-        return self._values.copy()
-
-    def reset(self) -> None:
-        values = self._values
-        for key in _METRIC_KEYS:
-            values[key] = 0
-
-
-@mypyc_attr(allow_interpreted_subclasses=False)
-class _StatementPipeline:
-    __slots__ = ("_metrics", "_processor", "dialect", "parameter_style")
-
-    def __init__(
-        self,
-        config: "StatementConfig",
-        cache_size: int,
-        parse_cache_size: int,
-        cache_enabled: bool,
-        record_metrics: bool,
-    ) -> None:
-        self._processor = SQLProcessor(
-            config,
-            max_cache_size=cache_size,
-            parse_cache_size=parse_cache_size,
-            parameter_cache_size=parse_cache_size,
-            validator_cache_size=parse_cache_size,
-            cache_enabled=cache_enabled,
-        )
-        self.dialect = str(config.dialect) if config.dialect else "default"
-        parameter_style = config.parameter_config.default_parameter_style
-        self.parameter_style = parameter_style.value if parameter_style else "unknown"
-        self._metrics = _PipelineMetrics() if record_metrics else None
-
-    def compile(
-        self,
-        sql: str,
-        parameters: Any,
-        is_many: bool,
-        record_metrics: bool,
-        expression: "exp.Expr | None" = None,
-        param_fingerprint: "Any | None" = None,
-    ) -> "CompiledSQL":
-        result = self._processor.compile(
-            sql, parameters, is_many=is_many, expression=expression, param_fingerprint=param_fingerprint
-        )
-        if record_metrics and self._metrics is not None:
-            self._metrics.update(self._processor.cache_stats)
-        return result
-
-    def reset(self) -> None:
-        self._processor.clear_cache()
-        if self._metrics is not None:
-            self._metrics.reset()
-
-    def metrics(self) -> "dict[str, int] | None":
-        if self._metrics is None:
-            return None
-        return self._metrics.snapshot()
-
-
-@mypyc_attr(allow_interpreted_subclasses=False)
 class StatementPipelineRegistry:
     __slots__ = ("_cache_enabled", "_max_pipelines", "_pipeline_cache_size", "_pipeline_parse_cache_size", "_pipelines")
 
@@ -257,3 +184,76 @@ def configure_statement_pipeline_cache(cache_size: int, parse_cache_size: int, c
 
 def get_statement_pipeline_metrics() -> "list[dict[str, Any]]":
     return _PIPELINE_REGISTRY.metrics()
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _PipelineMetrics:
+    __slots__ = ("_values",)
+
+    def __init__(self) -> None:
+        self._values: dict[str, int] = dict.fromkeys(_METRIC_KEYS, 0)
+
+    def update(self, stats: "dict[str, int]") -> None:
+        values = self._values
+        for key in _METRIC_KEYS:
+            values[key] = stats.get(key, 0)
+
+    def snapshot(self) -> "dict[str, int]":
+        return self._values.copy()
+
+    def reset(self) -> None:
+        values = self._values
+        for key in _METRIC_KEYS:
+            values[key] = 0
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _StatementPipeline:
+    __slots__ = ("_metrics", "_processor", "dialect", "parameter_style")
+
+    def __init__(
+        self,
+        config: "StatementConfig",
+        cache_size: int,
+        parse_cache_size: int,
+        cache_enabled: bool,
+        record_metrics: bool,
+    ) -> None:
+        self._processor = SQLProcessor(
+            config,
+            max_cache_size=cache_size,
+            parse_cache_size=parse_cache_size,
+            parameter_cache_size=parse_cache_size,
+            validator_cache_size=parse_cache_size,
+            cache_enabled=cache_enabled,
+        )
+        self.dialect = str(config.dialect) if config.dialect else "default"
+        parameter_style = config.parameter_config.default_parameter_style
+        self.parameter_style = parameter_style.value if parameter_style else "unknown"
+        self._metrics = _PipelineMetrics() if record_metrics else None
+
+    def compile(
+        self,
+        sql: str,
+        parameters: Any,
+        is_many: bool,
+        record_metrics: bool,
+        expression: "exp.Expr | None" = None,
+        param_fingerprint: "Any | None" = None,
+    ) -> "CompiledSQL":
+        result = self._processor.compile(
+            sql, parameters, is_many=is_many, expression=expression, param_fingerprint=param_fingerprint
+        )
+        if record_metrics and self._metrics is not None:
+            self._metrics.update(self._processor.cache_stats)
+        return result
+
+    def reset(self) -> None:
+        self._processor.clear_cache()
+        if self._metrics is not None:
+            self._metrics.reset()
+
+    def metrics(self) -> "dict[str, int] | None":
+        if self._metrics is None:
+            return None
+        return self._metrics.snapshot()

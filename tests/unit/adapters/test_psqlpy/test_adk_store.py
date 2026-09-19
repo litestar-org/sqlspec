@@ -151,3 +151,17 @@ async def test_psqlpy_list_sessions_rejects_invalid_options_before_connecting(op
         await store.list_sessions("app", **options)
 
     assert conn.calls == []
+
+
+@pytest.mark.parametrize("message, missing", [("relation sessions does not exist", True), ("syntax error", False)])
+def test_psqlpy_store_classifies_native_database_errors(message: str, missing: bool) -> None:
+    from psqlpy.exceptions import ConnectionExecuteError, DatabaseError
+
+    from sqlspec.adapters.psqlpy.adk.store import _is_psqlpy_database_error, _is_table_missing_error
+
+    database_error = DatabaseError(message)
+    assert _is_psqlpy_database_error(database_error) is True
+    assert _is_table_missing_error(database_error) is missing
+    assert _is_table_missing_error(ConnectionExecuteError(message)) is missing
+    assert _is_psqlpy_database_error(ValueError(message)) is False
+    assert _is_table_missing_error(ValueError(message)) is False

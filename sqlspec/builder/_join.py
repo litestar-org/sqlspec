@@ -23,106 +23,6 @@ if TYPE_CHECKING:
 __all__ = ("JoinBuilder", "JoinClauseMixin", "create_join_builder")
 
 
-def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr, "SQL"] | None) -> exp.Expr | None:
-    if on is None:
-        return None
-    if isinstance(on, str):
-        return exp.condition(on)
-    if has_expression_and_sql(on) or has_expression_and_parameters(on):
-
-        def parse_join_condition(sql_text: str) -> exp.Expr:
-            return exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.condition(sql_text)
-
-        return extract_sql_object_expression(on, builder=builder, parse_sql=parse_join_condition)
-    if isinstance(on, exp.Expr):
-        return on
-    return exp.condition(str(on))
-
-
-def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expr:
-    subquery_expression: exp.Expr
-    builder_table = cast("HasParameterBuilderProtocol", table)
-    parameters = builder_table.parameters
-
-    if isinstance(table, QueryBuilder):
-        subquery_expression = table._build_final_expression(copy=True)
-    else:
-        subquery_result = builder_table.build()
-        sql_text = subquery_result.sql if isinstance(subquery_result, BuiltQuery) else str(subquery_result)
-        subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
-
-    if parameters:
-        for param_name, param_value in parameters.items():
-            builder.add_parameter(param_value, name=param_name)
-
-    subquery_exp = exp.paren(subquery_expression)
-    return exp.alias_(subquery_exp, alias) if alias else subquery_exp
-
-
-def _parse_join_table(builder: "SQLBuilderProtocol", table: str | exp.Expr | Any, alias: str | None) -> exp.Expr:
-    if isinstance(table, str):
-        return parse_table_expression(table, alias, dialect=builder.dialect)
-    if has_parameter_builder(table):
-        return _table_from_builder(table, alias, builder)
-    if isinstance(table, exp.Expr):
-        return table
-    return cast("exp.Expr", table)
-
-
-def _join_for_type(table_expr: exp.Expr, on_expr: exp.Expr | None, join_type: str) -> exp.Join:
-    join_type_upper = join_type.upper()
-    if join_type_upper == "INNER":
-        return exp.Join(this=table_expr, on=on_expr)
-    if join_type_upper == "LEFT":
-        return exp.Join(this=table_expr, on=on_expr, side="LEFT")
-    if join_type_upper == "RIGHT":
-        return exp.Join(this=table_expr, on=on_expr, side="RIGHT")
-    if join_type_upper == "FULL":
-        return exp.Join(this=table_expr, on=on_expr, side="FULL", kind="OUTER")
-    if join_type_upper == "CROSS":
-        return exp.Join(this=table_expr, kind="CROSS")
-    msg = f"Unsupported join type: {join_type}"
-    raise SQLBuilderError(msg)
-
-
-def _apply_lateral_modifier(join_expr: exp.Join) -> None:
-    current_kind = join_expr.args.get("kind")
-    current_side = join_expr.args.get("side")
-
-    if current_kind == "CROSS":
-        join_expr.set("kind", "CROSS LATERAL")
-    elif current_kind == "OUTER" and current_side == "FULL":
-        join_expr.set("side", "FULL")
-        join_expr.set("kind", "OUTER LATERAL")
-    elif current_side:
-        join_expr.set("kind", f"{current_side} LATERAL")
-        join_expr.set("side", None)
-    else:
-        join_expr.set("kind", "LATERAL")
-
-
-def _attach_as_of_version(
-    table_expr: exp.Expr, alias: str | None, as_of: Any, as_of_type: str | None = None
-) -> exp.Expr:
-    register_version_generators()
-
-    inner_table = table_expr.copy()
-    target_alias = alias
-
-    if isinstance(inner_table, exp.Alias):
-        target_alias = inner_table.alias
-        inner_table = inner_table.this
-    elif isinstance(inner_table, exp.Table):
-        alias_expr = inner_table.args.get("alias")
-        if alias_expr is not None:
-            target_alias = alias_expr.this
-            inner_table.set("alias", None)
-
-    version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
-    inner_table.set("version", version)
-    return exp.alias_(inner_table, target_alias) if target_alias else inner_table
-
-
 def build_join_clause(
     builder: "SQLBuilderProtocol",
     table: str | exp.Expr | Any,
@@ -399,3 +299,103 @@ def create_join_builder(join_type: str, lateral: bool = False) -> "JoinBuilder":
         builder._as_of = None
         builder._as_of_type = None
         return builder
+
+
+def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr, "SQL"] | None) -> exp.Expr | None:
+    if on is None:
+        return None
+    if isinstance(on, str):
+        return exp.condition(on)
+    if has_expression_and_sql(on) or has_expression_and_parameters(on):
+
+        def parse_join_condition(sql_text: str) -> exp.Expr:
+            return exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.condition(sql_text)
+
+        return extract_sql_object_expression(on, builder=builder, parse_sql=parse_join_condition)
+    if isinstance(on, exp.Expr):
+        return on
+    return exp.condition(str(on))
+
+
+def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expr:
+    subquery_expression: exp.Expr
+    builder_table = cast("HasParameterBuilderProtocol", table)
+    parameters = builder_table.parameters
+
+    if isinstance(table, QueryBuilder):
+        subquery_expression = table._build_final_expression(copy=True)
+    else:
+        subquery_result = builder_table.build()
+        sql_text = subquery_result.sql if isinstance(subquery_result, BuiltQuery) else str(subquery_result)
+        subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
+
+    if parameters:
+        for param_name, param_value in parameters.items():
+            builder.add_parameter(param_value, name=param_name)
+
+    subquery_exp = exp.paren(subquery_expression)
+    return exp.alias_(subquery_exp, alias) if alias else subquery_exp
+
+
+def _parse_join_table(builder: "SQLBuilderProtocol", table: str | exp.Expr | Any, alias: str | None) -> exp.Expr:
+    if isinstance(table, str):
+        return parse_table_expression(table, alias, dialect=builder.dialect)
+    if has_parameter_builder(table):
+        return _table_from_builder(table, alias, builder)
+    if isinstance(table, exp.Expr):
+        return table
+    return cast("exp.Expr", table)
+
+
+def _join_for_type(table_expr: exp.Expr, on_expr: exp.Expr | None, join_type: str) -> exp.Join:
+    join_type_upper = join_type.upper()
+    if join_type_upper == "INNER":
+        return exp.Join(this=table_expr, on=on_expr)
+    if join_type_upper == "LEFT":
+        return exp.Join(this=table_expr, on=on_expr, side="LEFT")
+    if join_type_upper == "RIGHT":
+        return exp.Join(this=table_expr, on=on_expr, side="RIGHT")
+    if join_type_upper == "FULL":
+        return exp.Join(this=table_expr, on=on_expr, side="FULL", kind="OUTER")
+    if join_type_upper == "CROSS":
+        return exp.Join(this=table_expr, kind="CROSS")
+    msg = f"Unsupported join type: {join_type}"
+    raise SQLBuilderError(msg)
+
+
+def _apply_lateral_modifier(join_expr: exp.Join) -> None:
+    current_kind = join_expr.args.get("kind")
+    current_side = join_expr.args.get("side")
+
+    if current_kind == "CROSS":
+        join_expr.set("kind", "CROSS LATERAL")
+    elif current_kind == "OUTER" and current_side == "FULL":
+        join_expr.set("side", "FULL")
+        join_expr.set("kind", "OUTER LATERAL")
+    elif current_side:
+        join_expr.set("kind", f"{current_side} LATERAL")
+        join_expr.set("side", None)
+    else:
+        join_expr.set("kind", "LATERAL")
+
+
+def _attach_as_of_version(
+    table_expr: exp.Expr, alias: str | None, as_of: Any, as_of_type: str | None = None
+) -> exp.Expr:
+    register_version_generators()
+
+    inner_table = table_expr.copy()
+    target_alias = alias
+
+    if isinstance(inner_table, exp.Alias):
+        target_alias = inner_table.alias
+        inner_table = inner_table.this
+    elif isinstance(inner_table, exp.Table):
+        alias_expr = inner_table.args.get("alias")
+        if alias_expr is not None:
+            target_alias = alias_expr.this
+            inner_table.set("alias", None)
+
+    version = exp.Version(this=as_of_type or "TIMESTAMP", kind="AS OF", expression=exp.convert(as_of))
+    inner_table.set("version", version)
+    return exp.alias_(inner_table, target_alias) if target_alias else inner_table

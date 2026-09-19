@@ -2,9 +2,9 @@
 
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-import asyncpg
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore

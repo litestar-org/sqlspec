@@ -33,42 +33,6 @@ if TYPE_CHECKING:
 __all__ = ("Merge",)
 
 
-def _ensure_merge_expression(builder: "SQLBuilderProtocol") -> exp.Merge:
-    """Return the builder's MERGE expression, initializing it when absent.
-
-    Raises:
-        SQLBuilderError: If the builder state cannot provide a MERGE expression.
-    """
-    expression = builder.get_expression()
-    if expression is None or not isinstance(expression, exp.Merge):
-        builder.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
-        expression = builder.get_expression()
-    if not isinstance(expression, exp.Merge):
-        msg = "Merge builder is in an invalid state: expected a MERGE expression."
-        raise SQLBuilderError(msg)
-    return expression
-
-
-def _parse_merge_condition(
-    builder: "SQLBuilderProtocol", condition: "str | exp.Expr", condition_label: str, clause_label: str
-) -> exp.Expr:
-    """Parse a MERGE condition into a SQLGlot expression.
-
-    Raises:
-        SQLBuilderError: If a condition string cannot be parsed or the condition type is unsupported.
-    """
-    if isinstance(condition, str):
-        parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
-        if parsed_condition is None:
-            msg = f"Could not parse {condition_label}: {condition}"
-            raise SQLBuilderError(msg)
-        return parsed_condition
-    if isinstance(condition, exp.Expr):
-        return condition
-    msg = f"Unsupported condition type for {clause_label} clause: {type(condition)}"
-    raise SQLBuilderError(msg)
-
-
 MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
 _POSTGRES_TYPE_DISPATCHER = TypeDispatcher[str]()
 _ORACLE_TYPE_DISPATCHER = TypeDispatcher[str]()
@@ -430,20 +394,15 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             else:
                 source_expr = exp.paren(subquery_expression_source)
         elif isinstance(source, exp.Expr):
-            # Handle different expression types for MERGE USING
             if isinstance(source, exp.Select):
-                # Wrap SELECT in Subquery if alias provided
                 source_expr = exp.Subquery(this=source, alias=exp.to_identifier(alias)) if alias else exp.paren(source)
             elif isinstance(source, exp.Paren) and alias:
-                # Convert Paren to Subquery with alias
                 inner = source.this
                 source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(alias))
             elif isinstance(source, exp.Subquery) and alias:
-                # Update existing Subquery's alias
                 source.set("alias", exp.to_identifier(alias))
                 source_expr = source
             else:
-                # Table name or other expression - use standard aliasing
                 source_expr = exp.alias_(source, alias) if alias else source
         else:
             msg = f"Unsupported source type for USING clause: {type(source)}"
@@ -752,3 +711,39 @@ class Merge(
             if isinstance(then_expr, exp.Update):
                 then_expr.set("where", exp.Where(this=condition_expr))
                 when_expr.set("condition", None)
+
+
+def _ensure_merge_expression(builder: "SQLBuilderProtocol") -> exp.Merge:
+    """Return the builder's MERGE expression, initializing it when absent.
+
+    Raises:
+        SQLBuilderError: If the builder state cannot provide a MERGE expression.
+    """
+    expression = builder.get_expression()
+    if expression is None or not isinstance(expression, exp.Merge):
+        builder.set_expression(exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[])))
+        expression = builder.get_expression()
+    if not isinstance(expression, exp.Merge):
+        msg = "Merge builder is in an invalid state: expected a MERGE expression."
+        raise SQLBuilderError(msg)
+    return expression
+
+
+def _parse_merge_condition(
+    builder: "SQLBuilderProtocol", condition: "str | exp.Expr", condition_label: str, clause_label: str
+) -> exp.Expr:
+    """Parse a MERGE condition into a SQLGlot expression.
+
+    Raises:
+        SQLBuilderError: If a condition string cannot be parsed or the condition type is unsupported.
+    """
+    if isinstance(condition, str):
+        parsed_condition: exp.Expr | None = exp.maybe_parse(condition, dialect=builder.dialect)
+        if parsed_condition is None:
+            msg = f"Could not parse {condition_label}: {condition}"
+            raise SQLBuilderError(msg)
+        return parsed_condition
+    if isinstance(condition, exp.Expr):
+        return condition
+    msg = f"Unsupported condition type for {clause_label} clause: {type(condition)}"
+    raise SQLBuilderError(msg)

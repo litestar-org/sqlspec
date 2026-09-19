@@ -68,3 +68,21 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.aiosqlite.data_dictionary.AiosqliteDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.aiosqlite.litestar.AiosqliteLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.aiosqlite.events.AiosqliteEventsConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.aiosqlite.adk.AiosqliteADKConfig
+   :members:
+   :show-inheritance:

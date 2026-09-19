@@ -39,6 +39,8 @@ async def test_connection(mode: str, oracle_23ai_service: OracleService) -> None
         service_name=oracle_23ai_service.service_name,
         user=oracle_23ai_service.user,
         password=oracle_23ai_service.password,
+        retry_count=5,
+        retry_delay=1,
     )
     pooled_config = OraclePoolParams(**base_config)
     pooled_config["min"] = 1

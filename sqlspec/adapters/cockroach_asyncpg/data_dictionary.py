@@ -55,103 +55,6 @@ _COCKROACH_METADATA_DOMAINS = (
 _COCKROACH_SUPPORTED_DOMAINS = frozenset(_COCKROACH_METADATA_DOMAINS) - {"crdb_internal", "system"}
 
 
-def _cockroach_metadata_capability(domain: str) -> MetadataCapability:
-    if domain == "ddl":
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.LOSSY,
-            source=MetadataSource.INFORMATION_SCHEMA,
-            warnings=(
-                "CockroachDB DDL metadata is lossy unless SHOW-derived SQL is requested with quoted identifiers.",
-            ),
-        )
-    if domain == "crdb_internal":
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.UNSUPPORTED,
-            fidelity=MetadataFidelity.UNSUPPORTED,
-            source=MetadataSource.SYSTEM_VIEW,
-            risks=(MetadataRisk.VERSION_GATED, MetadataRisk.PRIVILEGED),
-            warnings=("crdb_internal metadata is disabled by default.",),
-        )
-    if domain == "system":
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.UNSUPPORTED,
-            fidelity=MetadataFidelity.UNSUPPORTED,
-            source=MetadataSource.SYSTEM_VIEW,
-            risks=(MetadataRisk.EXPENSIVE, MetadataRisk.PRIVILEGED),
-            warnings=("System metadata is opt-in and disabled by default.",),
-        )
-    if domain in _COCKROACH_SUPPORTED_DOMAINS:
-        return MetadataCapability(
-            domain=domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.PARTIAL,
-            source=MetadataSource.INFORMATION_SCHEMA,
-        )
-    return MetadataCapability.unsupported(domain)
-
-
-def _cockroach_metadata_profile(adapter: str, domains: Sequence[str] | None) -> MetadataCapabilityProfile:
-    requested_domains = _COCKROACH_METADATA_DOMAINS if domains is None else tuple(domains)
-    return MetadataCapabilityProfile(
-        "cockroachdb",
-        adapter=adapter,
-        capabilities=tuple(_cockroach_metadata_capability(domain) for domain in requested_domains),
-    )
-
-
-def _metadata_result(
-    domain: str, capability: MetadataCapability, rows: list[Any] | tuple[Any, ...] = ()
-) -> MetadataResult:
-    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
-
-
-def _row_value(row: object, key: str) -> object | None:
-    if isinstance(row, Mapping):
-        return row.get(key)
-    return getattr(row, key, None)
-
-
-def _cockroach_ddl_result_from_rows(
-    *,
-    dialect: str,
-    object_name: str,
-    object_type: str,
-    schema: str | None,
-    rows: tuple[object, ...],
-    warnings: tuple[str, ...] = (),
-) -> DDLResult:
-    row = rows[0] if rows else None
-    resolved_schema = _row_value(row, "schema_name") if row is not None else schema
-    ddl = _row_value(row, "ddl") if row is not None else None
-    row_warning = _row_value(row, "warning") if row is not None else None
-    result_warnings = warnings + ((str(row_warning),) if row_warning else ())
-    identity = ObjectIdentity(
-        name=object_name,
-        object_type=object_type,
-        schema=str(resolved_schema) if resolved_schema is not None else None,
-        dialect=dialect,
-        source=MetadataSource.INFORMATION_SCHEMA,
-    )
-    return DDLResult.lossy(
-        identity,
-        ddl=str(ddl) if ddl is not None else None,
-        source=MetadataSource.INFORMATION_SCHEMA,
-        warnings=result_warnings,
-    )
-
-
-def _cockroach_domain_sql(domain: str, query_name: str) -> "SQL":
-    query = get_data_dictionary_loader().get_domain_query("cockroachdb", domain, query_name)
-    if query.sql is None:
-        msg = f"Missing CockroachDB data-dictionary query: {domain}/{query_name}"
-        raise RuntimeError(msg)
-    return query.sql
-
-
 class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
     """CockroachDB async data dictionary (AsyncPG)."""
 
@@ -375,3 +278,100 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
         )
+
+
+def _cockroach_metadata_capability(domain: str) -> MetadataCapability:
+    if domain == "ddl":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.LOSSY,
+            source=MetadataSource.INFORMATION_SCHEMA,
+            warnings=(
+                "CockroachDB DDL metadata is lossy unless SHOW-derived SQL is requested with quoted identifiers.",
+            ),
+        )
+    if domain == "crdb_internal":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.VERSION_GATED, MetadataRisk.PRIVILEGED),
+            warnings=("crdb_internal metadata is disabled by default.",),
+        )
+    if domain == "system":
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.UNSUPPORTED,
+            fidelity=MetadataFidelity.UNSUPPORTED,
+            source=MetadataSource.SYSTEM_VIEW,
+            risks=(MetadataRisk.EXPENSIVE, MetadataRisk.PRIVILEGED),
+            warnings=("System metadata is opt-in and disabled by default.",),
+        )
+    if domain in _COCKROACH_SUPPORTED_DOMAINS:
+        return MetadataCapability(
+            domain=domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.PARTIAL,
+            source=MetadataSource.INFORMATION_SCHEMA,
+        )
+    return MetadataCapability.unsupported(domain)
+
+
+def _cockroach_metadata_profile(adapter: str, domains: Sequence[str] | None) -> MetadataCapabilityProfile:
+    requested_domains = _COCKROACH_METADATA_DOMAINS if domains is None else tuple(domains)
+    return MetadataCapabilityProfile(
+        "cockroachdb",
+        adapter=adapter,
+        capabilities=tuple(_cockroach_metadata_capability(domain) for domain in requested_domains),
+    )
+
+
+def _metadata_result(
+    domain: str, capability: MetadataCapability, rows: list[Any] | tuple[Any, ...] = ()
+) -> MetadataResult:
+    return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
+
+def _row_value(row: object, key: str) -> object | None:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _cockroach_ddl_result_from_rows(
+    *,
+    dialect: str,
+    object_name: str,
+    object_type: str,
+    schema: str | None,
+    rows: tuple[object, ...],
+    warnings: tuple[str, ...] = (),
+) -> DDLResult:
+    row = rows[0] if rows else None
+    resolved_schema = _row_value(row, "schema_name") if row is not None else schema
+    ddl = _row_value(row, "ddl") if row is not None else None
+    row_warning = _row_value(row, "warning") if row is not None else None
+    result_warnings = warnings + ((str(row_warning),) if row_warning else ())
+    identity = ObjectIdentity(
+        name=object_name,
+        object_type=object_type,
+        schema=str(resolved_schema) if resolved_schema is not None else None,
+        dialect=dialect,
+        source=MetadataSource.INFORMATION_SCHEMA,
+    )
+    return DDLResult.lossy(
+        identity,
+        ddl=str(ddl) if ddl is not None else None,
+        source=MetadataSource.INFORMATION_SCHEMA,
+        warnings=result_warnings,
+    )
+
+
+def _cockroach_domain_sql(domain: str, query_name: str) -> "SQL":
+    query = get_data_dictionary_loader().get_domain_query("cockroachdb", domain, query_name)
+    if query.sql is None:
+        msg = f"Missing CockroachDB data-dictionary query: {domain}/{query_name}"
+        raise RuntimeError(msg)
+    return query.sql

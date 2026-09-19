@@ -336,10 +336,6 @@ def attrs_define_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
     return _attrs_define_identity
 
 
-def _attrs_define_identity(cls: Any) -> Any:
-    return cls
-
-
 def attrs_field_stub(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
     """Placeholder implementation"""
     return None
@@ -751,3 +747,7 @@ def __dir__() -> "list[str]":
     """Expose the public surface for autocomplete and ``dir()``."""
 
     return sorted(set(globals()) | set(__all__))
+
+
+def _attrs_define_identity(cls: Any) -> Any:
+    return cls

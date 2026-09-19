@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._typing import DEQ_IMMEDIATE, DEQ_ON_COMMIT
 from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventMessage, parse_event_timestamp
@@ -22,63 +23,12 @@ __all__ = (
     "create_event_backend",
 )
 
-_ORACLEDB_AVAILABLE = False
-
-try:  # pragma: no cover
-    import oracledb as _oracledb
-
-    from sqlspec.adapters.oracledb._typing import DB_TYPE_JSON as _DB_TYPE_JSON
-except ImportError:  # pragma: no cover
-    _AQDequeueOptions = None
-    _AQMSG_INVISIBLE = None
-    _AQMSG_PAYLOAD_TYPE_JSON = None
-    _AQMSG_VISIBLE = None
-    _DB_TYPE_JSON = None
-else:  # pragma: no cover
-    _ORACLEDB_AVAILABLE = True
-    _AQDequeueOptions = getattr(_oracledb, "AQDequeueOptions", None)
-    _AQMSG_INVISIBLE = getattr(_oracledb, "AQMSG_INVISIBLE", None)
-    _AQMSG_PAYLOAD_TYPE_JSON = getattr(_oracledb, "AQMSG_PAYLOAD_TYPE_JSON", None)
-    _AQMSG_VISIBLE = getattr(_oracledb, "AQMSG_VISIBLE", None)
-
-AQDequeueOptions: Any = _AQDequeueOptions
-AQMSG_INVISIBLE: "int | None" = _AQMSG_INVISIBLE
-AQMSG_PAYLOAD_TYPE_JSON: Any = _AQMSG_PAYLOAD_TYPE_JSON
-AQMSG_VISIBLE: "int | None" = _AQMSG_VISIBLE
-DB_TYPE_JSON: Any = _DB_TYPE_JSON
-
 logger = get_logger("sqlspec.events.oracle")
 
 
 _DEFAULT_QUEUE_NAME = "SQLSPEC_EVENTS_QUEUE"
-_DEFAULT_VISIBILITY: "int | None"
-_VISIBILITY_LOOKUP: "dict[str, int]"
-
-if AQDequeueOptions is None:
-    _DEFAULT_VISIBILITY = None
-    _VISIBILITY_LOOKUP = {}
-else:
-    _DEFAULT_VISIBILITY = AQMSG_VISIBLE
-    _VISIBILITY_LOOKUP = {}
-    if _DEFAULT_VISIBILITY is not None:
-        _VISIBILITY_LOOKUP["AQMSG_VISIBLE"] = _DEFAULT_VISIBILITY
-    if AQMSG_INVISIBLE is not None:
-        _VISIBILITY_LOOKUP["AQMSG_INVISIBLE"] = AQMSG_INVISIBLE
-
-
-def _resolve_visibility_setting(value: Any) -> "int | None":
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if not isinstance(value, str):
-        msg = f"Invalid aq_visibility value: {value!r}. Expected int or AQMSG_* string."
-        raise ImproperConfigurationError(msg)
-    visibility = _VISIBILITY_LOOKUP.get(value)
-    if visibility is None:
-        msg = f"Invalid aq_visibility value: {value!r}. Expected one of: {sorted(_VISIBILITY_LOOKUP)}"
-        raise ImproperConfigurationError(msg)
-    return visibility
+_DEFAULT_VISIBILITY: int | None = None
+_VISIBILITY_LOOKUP = {"DEQ_IMMEDIATE": DEQ_IMMEDIATE, "DEQ_ON_COMMIT": DEQ_ON_COMMIT}
 
 
 class OracleSyncAQEventBackend:
@@ -97,9 +47,6 @@ class OracleSyncAQEventBackend:
         if config.is_async:
             msg = f"{type(self).__name__} requires a sync adapter"
             raise ImproperConfigurationError(msg)
-        if not _ORACLEDB_AVAILABLE:
-            msg = "oracledb"
-            raise MissingDependencyError(msg, install_package="oracledb")
         self._config = config
         self._runtime = config.get_observability_runtime()
         settings = settings or {}
@@ -181,9 +128,6 @@ class OracleAsyncAQEventBackend:
         if not config.is_async:
             msg = f"{type(self).__name__} requires an async adapter"
             raise ImproperConfigurationError(msg)
-        if not _ORACLEDB_AVAILABLE:
-            msg = "oracledb"
-            raise MissingDependencyError(msg, install_package="oracledb")
         self._config = config
         self._runtime = config.get_observability_runtime()
         settings = settings or {}
@@ -260,16 +204,57 @@ class OracleAsyncTxEventQEventBackend(OracleAsyncAQEventBackend):
     backend_name = "txeventq"
 
 
+def create_event_backend(
+    config: "OracleAsyncConfig | OracleSyncConfig", backend_name: str, extension_settings: "dict[str, Any]"
+) -> "OracleSyncAQEventBackend | OracleAsyncAQEventBackend | None":
+    """EventChannel factory for the Oracle AQ backend."""
+    is_async = config.is_async
+    match (backend_name, is_async):
+        case ("aq", False):
+            try:
+                return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case ("aq", True):
+            try:
+                return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case ("txeventq", False):
+            try:
+                return OracleSyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case ("txeventq", True):
+            try:
+                return OracleAsyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
+            except (ImproperConfigurationError, MissingDependencyError):
+                return None
+        case _:
+            return None
+
+
+def _resolve_visibility_setting(value: Any) -> "int | None":
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        msg = f"Invalid aq_visibility value: {value!r}. Expected int, DEQ_IMMEDIATE, or DEQ_ON_COMMIT."
+        raise ImproperConfigurationError(msg)
+    visibility = _VISIBILITY_LOOKUP.get(value)
+    if visibility is None:
+        msg = f"Invalid aq_visibility value: {value!r}. Expected one of: {sorted(_VISIBILITY_LOOKUP)}"
+        raise ImproperConfigurationError(msg)
+    return visibility
+
+
 def _get_publish_queue(connection: Any, channel: str, queue_name: str) -> Any:
     """Acquire a queue handle for a one-shot publish."""
-    if not _ORACLEDB_AVAILABLE:
-        msg = "oracledb"
-        raise MissingDependencyError(msg, install_package="oracledb")
     if isinstance(queue_name, str) and "{" in queue_name:
         with contextlib.suppress(Exception):
             queue_name = queue_name.format(channel=channel.upper())
-    payload_type = "JSON" if DB_TYPE_JSON is not None else AQMSG_PAYLOAD_TYPE_JSON
-    return connection.queue(queue_name, payload_type=payload_type)
+    return connection.queue(queue_name, payload_type="JSON")
 
 
 def _build_envelope(
@@ -309,33 +294,3 @@ def _parse_message(channel: str, payload: Any) -> EventMessage:
         lease_expires_at=None,
         created_at=timestamp,
     )
-
-
-def create_event_backend(
-    config: "OracleAsyncConfig | OracleSyncConfig", backend_name: str, extension_settings: "dict[str, Any]"
-) -> "OracleSyncAQEventBackend | OracleAsyncAQEventBackend | None":
-    """EventChannel factory for the Oracle AQ backend."""
-    is_async = config.is_async
-    match (backend_name, is_async):
-        case ("aq", False):
-            try:
-                return OracleSyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case ("aq", True):
-            try:
-                return OracleAsyncAQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case ("txeventq", False):
-            try:
-                return OracleSyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case ("txeventq", True):
-            try:
-                return OracleAsyncTxEventQEventBackend(config, extension_settings)  # type: ignore[arg-type]
-            except (ImproperConfigurationError, MissingDependencyError):
-                return None
-        case _:
-            return None

@@ -42,80 +42,6 @@ class PruneReport(TypedDict):
     table: str
 
 
-def _resolve_session_store(target: Any) -> Any:
-    """Resolve an ADK session store instance from target."""
-    if hasattr(target, "delete_idle_sessions") or hasattr(target, "delete_expired_events"):
-        return target
-    if hasattr(target, "extension_config") or hasattr(target, "provide_session"):
-        store_cls = _adk_adapter_store_class(target, "ADKStore")
-        return store_cls(target)
-    msg = f"Cannot resolve ADK session store from target of type {type(target).__name__}"
-    raise TypeError(msg)
-
-
-def _resolve_memory_store(target: Any) -> Any:
-    """Resolve an ADK memory store instance from target."""
-    if hasattr(target, "delete_entries_older_than"):
-        return target
-    if hasattr(target, "extension_config") or hasattr(target, "provide_session"):
-        store_cls = _adk_adapter_store_class(target, "ADKMemoryStore")
-        return store_cls(target)
-    msg = f"Cannot resolve ADK memory store from target of type {type(target).__name__}"
-    raise TypeError(msg)
-
-
-def _resolve_artifact_service(target: Any) -> Any:
-    """Resolve a storage-aware ADK artifact service instance from target.
-
-    Args:
-        target: Candidate artifact service.
-
-    Returns:
-        The artifact service.
-
-    Raises:
-        TypeError: If target does not expose both the retention method and its metadata store.
-    """
-    if hasattr(target, "delete_artifacts_older_than") and hasattr(target, "store"):
-        return target
-    msg = (
-        f"Cannot resolve ADK artifact service from target of type {type(target).__name__}. "
-        "Artifact pruning removes content objects as well as metadata rows, so it requires a "
-        "storage-aware artifact service rather than a database config or a bare metadata store."
-    )
-    raise TypeError(msg)
-
-
-def _ensure_positive_days(value: Any, parameter: str) -> int:
-    """Validate a retention age expressed in whole days.
-
-    Args:
-        value: Candidate age value.
-        parameter: Name of the keyword argument being validated.
-
-    Returns:
-        The validated age in days.
-
-    Raises:
-        ValueError: If the value is not a positive integer.
-    """
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        msg = f"{parameter} must be a positive integer, got {value!r}"
-        raise ValueError(msg)
-    return value
-
-
-async def _call_store_method(store: Any, method_name: str, *args: Any, **kwargs: Any) -> int:
-    """Call a store method handling both async and sync implementations."""
-    method = getattr(store, method_name)
-    result = method(*args, **kwargs)
-    if hasattr(result, "__await__"):
-        deleted = await result
-    else:
-        deleted = result
-    return int(deleted) if deleted is not None else 0
-
-
 async def prune_sessions(target: Any, *, idle_days: int = 30, app_name: str | None = None) -> PruneReport:
     """Prune sessions that have been idle longer than specified days.
 
@@ -257,3 +183,77 @@ prune_events_sync = await_(prune_events)
 prune_memory_sync = await_(prune_memory)
 prune_user_state_sync = await_(prune_user_state)
 prune_artifacts_sync = await_(prune_artifacts)
+
+
+def _resolve_session_store(target: Any) -> Any:
+    """Resolve an ADK session store instance from target."""
+    if hasattr(target, "delete_idle_sessions") or hasattr(target, "delete_expired_events"):
+        return target
+    if hasattr(target, "extension_config") or hasattr(target, "provide_session"):
+        store_cls = _adk_adapter_store_class(target, "ADKStore")
+        return store_cls(target)
+    msg = f"Cannot resolve ADK session store from target of type {type(target).__name__}"
+    raise TypeError(msg)
+
+
+def _resolve_memory_store(target: Any) -> Any:
+    """Resolve an ADK memory store instance from target."""
+    if hasattr(target, "delete_entries_older_than"):
+        return target
+    if hasattr(target, "extension_config") or hasattr(target, "provide_session"):
+        store_cls = _adk_adapter_store_class(target, "ADKMemoryStore")
+        return store_cls(target)
+    msg = f"Cannot resolve ADK memory store from target of type {type(target).__name__}"
+    raise TypeError(msg)
+
+
+def _resolve_artifact_service(target: Any) -> Any:
+    """Resolve a storage-aware ADK artifact service instance from target.
+
+    Args:
+        target: Candidate artifact service.
+
+    Returns:
+        The artifact service.
+
+    Raises:
+        TypeError: If target does not expose both the retention method and its metadata store.
+    """
+    if hasattr(target, "delete_artifacts_older_than") and hasattr(target, "store"):
+        return target
+    msg = (
+        f"Cannot resolve ADK artifact service from target of type {type(target).__name__}. "
+        "Artifact pruning removes content objects as well as metadata rows, so it requires a "
+        "storage-aware artifact service rather than a database config or a bare metadata store."
+    )
+    raise TypeError(msg)
+
+
+def _ensure_positive_days(value: Any, parameter: str) -> int:
+    """Validate a retention age expressed in whole days.
+
+    Args:
+        value: Candidate age value.
+        parameter: Name of the keyword argument being validated.
+
+    Returns:
+        The validated age in days.
+
+    Raises:
+        ValueError: If the value is not a positive integer.
+    """
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        msg = f"{parameter} must be a positive integer, got {value!r}"
+        raise ValueError(msg)
+    return value
+
+
+async def _call_store_method(store: Any, method_name: str, *args: Any, **kwargs: Any) -> int:
+    """Call a store method handling both async and sync implementations."""
+    method = getattr(store, method_name)
+    result = method(*args, **kwargs)
+    if hasattr(result, "__await__"):
+        deleted = await result
+    else:
+        deleted = result
+    return int(deleted) if deleted is not None else 0

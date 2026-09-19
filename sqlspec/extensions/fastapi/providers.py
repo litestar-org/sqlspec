@@ -124,20 +124,6 @@ def normalize_choice_field_types(choices: list[Any] | tuple[Any, ...] | type[Enu
     return cast("Any", typing.Literal).__getitem__(tuple(choices))
 
 
-class _SortFieldResolution(NamedTuple):
-    default_field: str
-    default_query_value: str
-    allowed_fields: frozenset[str]
-    inbound_aliases: dict[str, str]
-    field_display_names: dict[str, str]
-    allowed_display_names: tuple[str, ...]
-
-    def normalize(self, value: str | None) -> str | None:
-        if value is None:
-            return self.default_field
-        return self.inbound_aliases.get(value)
-
-
 # Keep FilterConfig field unions and provider signatures in sync with sqlspec.extensions.litestar.providers.
 class FilterConfig(TypedDict):
     """Configuration for generated FastAPI filter dependencies.
@@ -242,6 +228,20 @@ def provide_filters(
     dep = _configured_filter_aggregator(config, dep_defaults)
     dep_cache.add_dependencies(cache_key, dep)
     return dep
+
+
+class _SortFieldResolution(NamedTuple):
+    default_field: str
+    default_query_value: str
+    allowed_fields: frozenset[str]
+    inbound_aliases: dict[str, str]
+    field_display_names: dict[str, str]
+    allowed_display_names: tuple[str, ...]
+
+    def normalize(self, value: str | None) -> str | None:
+        if value is None:
+            return self.default_field
+        return self.inbound_aliases.get(value)
 
 
 def _configured_filter_aggregator(

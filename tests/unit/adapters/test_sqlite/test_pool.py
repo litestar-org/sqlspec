@@ -1,12 +1,13 @@
 """Unit tests for the SQLite thread-local connection pool."""
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
 
-from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool, _end_transaction
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite._typing import SqliteConnection
@@ -168,3 +169,147 @@ def test_get_connection_commits_open_transaction_on_clean_exit() -> None:
     assert count == 1
 
     pool.close()
+
+
+def test_close_closes_connections_opened_on_other_threads(tmp_path: Path) -> None:
+    """Connections opened by worker threads must not survive pool shutdown."""
+    pool = SqliteConnectionPool({"database": str(tmp_path / "threads.sqlite")})
+    opened: list[SqliteConnection] = []
+    barrier = threading.Barrier(3)
+
+    def _open() -> None:
+        opened.append(pool.acquire())
+        barrier.wait()
+
+    workers = [threading.Thread(target=_open) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join()
+
+    assert len({id(connection) for connection in opened}) == 2
+
+    pool.close()
+
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+
+
+def test_new_connection_is_independent_of_the_thread_local_connection(tmp_path: Path) -> None:
+    """A standalone connection must not be the one the pool hands out."""
+    pool = SqliteConnectionPool({"database": str(tmp_path / "standalone.sqlite")})
+    try:
+        pooled = pool.acquire()
+        standalone = pool.new_connection()
+
+        assert standalone is not pooled
+
+        standalone.close()
+
+        assert pool.acquire() is pooled
+        pooled.execute("SELECT 1")
+    finally:
+        pool.close()
+
+
+class _AutocommitConnection:
+    """Mimics a Python 3.12+ sqlite3 connection in autocommit mode."""
+
+    def __init__(self) -> None:
+        self.autocommit = True
+        self.in_transaction = True
+        self.statements: list[str] = []
+        self.commit_calls = 0
+        self.rollback_calls = 0
+
+    def execute(self, sql: str, parameters: object = ()) -> None:
+        _ = parameters
+        self.statements.append(sql)
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+
+
+@pytest.mark.parametrize(("commit", "statement"), [(True, "COMMIT"), (False, "ROLLBACK")], ids=["commit", "rollback"])
+def test_pool_ends_autocommit_transactions_with_an_explicit_statement(commit: bool, statement: str) -> None:
+    """The pool's own commit is a no-op in autocommit mode, exactly like the driver's."""
+    connection = _AutocommitConnection()
+
+    _end_transaction(cast("Any", connection), commit=commit, supports_autocommit=True)
+
+    assert connection.statements == [statement]
+    assert connection.commit_calls == 0
+    assert connection.rollback_calls == 0
+
+
+def test_pool_uses_the_dbapi_methods_outside_autocommit_mode() -> None:
+    """Legacy connections keep the DB-API path."""
+    connection = _AutocommitConnection()
+    connection.autocommit = False
+
+    _end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
+
+    assert connection.statements == []
+    assert connection.commit_calls == 1
+
+
+def test_pool_skips_ending_a_transaction_that_is_not_open() -> None:
+    connection = _AutocommitConnection()
+    connection.in_transaction = False
+
+    _end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
+
+    assert connection.statements == []
+    assert connection.commit_calls == 0
+
+
+def test_close_does_not_leave_other_threads_holding_a_closed_connection(tmp_path: Path) -> None:
+    """After shutdown a worker thread must get a fresh connection, not a dead one."""
+    pool = SqliteConnectionPool({"database": str(tmp_path / "generation.sqlite")})
+    results: list[str] = []
+    opened = threading.Event()
+    closed = threading.Event()
+
+    def _worker() -> None:
+        pool.acquire()
+        opened.set()
+        closed.wait(timeout=5)
+        try:
+            pool.acquire().execute("SELECT 1")
+            results.append("ok")
+        except Exception as exc:
+            results.append(type(exc).__name__)
+
+    worker = threading.Thread(target=_worker)
+    worker.start()
+    opened.wait(timeout=5)
+    pool.close()
+    closed.set()
+    worker.join(timeout=5)
+    pool.close()
+
+    assert results == ["ok"]
+
+
+def test_a_connection_from_a_retired_generation_is_closed_and_deregistered() -> None:
+    """Dropping the handle without closing it would leak the connection and its file lock."""
+    pool = SqliteConnectionPool({"database": ":memory:"})
+    try:
+        connection = pool.acquire()
+        registry = pool._connection_registry  # pyright: ignore[reportPrivateUsage]
+        assert connection in registry
+
+        pool._generation += 1  # pyright: ignore[reportPrivateUsage]
+        replacement = pool.acquire()
+
+        assert replacement is not connection
+        assert connection not in registry
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+    finally:
+        pool.close()

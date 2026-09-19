@@ -299,21 +299,6 @@ def _enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "Callable
 _DEFAULT_ENC_HOOK: Final["Callable[[Any], Any]"] = _enc_hook(DEFAULT_TYPE_ENCODERS)
 
 
-def _is_explicit_unsupported_error(exc: Exception) -> bool:
-    return "unsupported json value" in str(exc).lower()
-
-
-def _log_encode_fallback(exc: Exception) -> None:
-    fallback_name = "orjson" if ORJSON_INSTALLED else "standard library json"
-    logger.debug(
-        "Msgspec JSON encode failed with %s: %s; falling back to %s",
-        exc.__class__.__name__,
-        exc,
-        fallback_name,
-        exc_info=(type(exc), exc, exc.__traceback__),
-    )
-
-
 class JSONSerializer(Protocol):
     """Protocol for JSON serializer implementations."""
 
@@ -345,28 +330,6 @@ class BaseJSONSerializer:
 _orjson_fallback_serializer: "OrjsonSerializer | None" = None
 _stdlib_fallback_serializer: "StandardLibSerializer | None" = None
 _default_serializer: "JSONSerializer | None" = None
-
-
-def _orjson_fallback() -> "OrjsonSerializer":
-    global _orjson_fallback_serializer
-    if _orjson_fallback_serializer is None:
-        _orjson_fallback_serializer = OrjsonSerializer()
-    return _orjson_fallback_serializer
-
-
-def _stdlib_fallback() -> "StandardLibSerializer":
-    global _stdlib_fallback_serializer
-    if _stdlib_fallback_serializer is None:
-        _stdlib_fallback_serializer = StandardLibSerializer()
-    return _stdlib_fallback_serializer
-
-
-def _merge_type_encoders(type_encoders: "TypeEncodersMap | None") -> "Callable[[Any], Any]":
-    """Return an enc_hook bound to defaults merged with caller overrides."""
-    if not type_encoders:
-        return _DEFAULT_ENC_HOOK
-    merged: dict[type, Callable[[Any], Any]] = {**DEFAULT_TYPE_ENCODERS, **type_encoders}
-    return _enc_hook(merged)
 
 
 class MsgspecSerializer(BaseJSONSerializer):
@@ -511,3 +474,40 @@ def encode_json(data: Any, *, as_bytes: bool = False) -> "str | bytes":
 def decode_json(data: "str | bytes", *, decode_bytes: bool = True) -> Any:
     """Decode JSON input into Python data."""
     return get_default_serializer().decode(data, decode_bytes=decode_bytes)
+
+
+def _is_explicit_unsupported_error(exc: Exception) -> bool:
+    return "unsupported json value" in str(exc).lower()
+
+
+def _log_encode_fallback(exc: Exception) -> None:
+    fallback_name = "orjson" if ORJSON_INSTALLED else "standard library json"
+    logger.debug(
+        "Msgspec JSON encode failed with %s: %s; falling back to %s",
+        exc.__class__.__name__,
+        exc,
+        fallback_name,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+
+
+def _orjson_fallback() -> "OrjsonSerializer":
+    global _orjson_fallback_serializer
+    if _orjson_fallback_serializer is None:
+        _orjson_fallback_serializer = OrjsonSerializer()
+    return _orjson_fallback_serializer
+
+
+def _stdlib_fallback() -> "StandardLibSerializer":
+    global _stdlib_fallback_serializer
+    if _stdlib_fallback_serializer is None:
+        _stdlib_fallback_serializer = StandardLibSerializer()
+    return _stdlib_fallback_serializer
+
+
+def _merge_type_encoders(type_encoders: "TypeEncodersMap | None") -> "Callable[[Any], Any]":
+    """Return an enc_hook bound to defaults merged with caller overrides."""
+    if not type_encoders:
+        return _DEFAULT_ENC_HOOK
+    merged: dict[type, Callable[[Any], Any]] = {**DEFAULT_TYPE_ENCODERS, **type_encoders}
+    return _enc_hook(merged)

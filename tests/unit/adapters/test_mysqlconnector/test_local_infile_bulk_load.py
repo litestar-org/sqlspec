@@ -13,10 +13,10 @@ def test_encode_records_handles_none_bool_and_escapes() -> None:
     assert payload == b"hi\t\\N\t1\tx\\ty\na\\\\b\t42\t0\tline\\nbreak\n"
 
 
-def test_build_load_data_statement_exact_string() -> None:
-    statement = build_load_data_statement("orders", ["id", "name"], "/tmp/data.tsv")
+def test_build_load_data_statement_binds_the_filename() -> None:
+    statement = build_load_data_statement("orders", ["id", "name"])
     assert statement == (
-        "LOAD DATA LOCAL INFILE '/tmp/data.tsv' INTO TABLE `orders` "
+        "LOAD DATA LOCAL INFILE %s INTO TABLE `orders` "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         "LINES TERMINATED BY '\\n' (`id`, `name`)"
     )
@@ -40,3 +40,19 @@ def test_async_config_gate_raises_when_allow_local_infile_disabled() -> None:
 def test_async_config_gate_allows_when_allow_local_infile_enabled() -> None:
     config = MysqlConnectorAsyncConfig(connection_config={"allow_local_infile": True})
     assert config.driver_features["enable_local_infile_bulk_load"] is True
+
+
+def test_build_load_data_statement_never_embeds_a_path() -> None:
+    """The statement carries a placeholder, so no path text can be escaped or injected."""
+    statement = build_load_data_statement("orders", ["id"])
+
+    assert "LOAD DATA LOCAL INFILE %s INTO TABLE" in statement
+
+
+def test_build_load_data_statement_keeps_percent_in_identifiers() -> None:
+    """mysql-connector substitutes only %s, so doubling corrupts the identifier."""
+    statement = build_load_data_statement("pct%tbl", ["a%b"])
+
+    assert "`pct%tbl`" in statement
+    assert "`a%b`" in statement
+    assert "%%" not in statement

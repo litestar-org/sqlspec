@@ -7,12 +7,17 @@ from sqlspec.adapters.psycopg.events.backend import (
     PsycopgSyncHybridEventsBackend,
     create_event_backend,
 )
-from sqlspec.adapters.psycopg.events.store import PsycopgAsyncEventQueueStore, PsycopgSyncEventQueueStore
+from sqlspec.adapters.psycopg.events.store import (
+    PsycopgAsyncEventQueueStore,
+    PsycopgEventsConfig,
+    PsycopgSyncEventQueueStore,
+)
 
 __all__ = (
     "PsycopgAsyncEventQueueStore",
     "PsycopgAsyncEventsBackend",
     "PsycopgAsyncHybridEventsBackend",
+    "PsycopgEventsConfig",
     "PsycopgSyncEventQueueStore",
     "PsycopgSyncEventsBackend",
     "PsycopgSyncHybridEventsBackend",

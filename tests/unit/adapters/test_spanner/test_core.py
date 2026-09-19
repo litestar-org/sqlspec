@@ -12,6 +12,7 @@ from sqlspec.adapters.spanner.core import (
     resolve_column_names,
     resolve_row_plan,
 )
+from sqlspec.core import TypedParameter
 
 
 def _field(name: str, code: int) -> SimpleNamespace:
@@ -30,7 +31,15 @@ def test_build_param_type_signature_empty_parameters() -> None:
 def test_build_param_type_signature_tracks_key_type_pairs() -> None:
     signature = build_param_type_signature({"id": 1, "name": "alice"})
 
-    assert signature == (("id", int), ("name", str))
+    assert signature == (("id", int, None), ("name", str, None))
+
+
+def test_build_param_type_signature_separates_differently_typed_nulls() -> None:
+    """Every NULL has the same runtime type, so the declared type must be part of the key."""
+    as_text = build_param_type_signature({"value": TypedParameter(None, str)})
+    as_number = build_param_type_signature({"value": TypedParameter(None, int)})
+
+    assert as_text != as_number
 
 
 def test_resolve_row_plan_returns_empty_plan_without_metadata() -> None:

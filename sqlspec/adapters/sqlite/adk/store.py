@@ -1,13 +1,13 @@
 """SQLite sync ADK store for Google Agent Development Kit session/event storage."""
 
 import re
-import sqlite3
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.adapters.sqlite.config import _render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError

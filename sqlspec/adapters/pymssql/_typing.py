@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pymssql as _pymssql  # pyright: ignore[reportMissingTypeStubs]
 from pymssql import Connection as _PymssqlConnection  # pyright: ignore[reportMissingTypeStubs]
 from pymssql import Cursor as _PymssqlRawCursor  # pyright: ignore[reportMissingTypeStubs]
+from pymssql import Error as PymssqlError
 
 PYMSSQL_MODULE = _pymssql
 
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from types import TracebackType
     from typing import TypeAlias
 
+    from pymssql._pymssql import QueryParams as PymssqlQueryParams
+
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import StatementConfig
 
@@ -25,10 +28,19 @@ if TYPE_CHECKING:
     PymssqlRawCursor: TypeAlias = _PymssqlRawCursor
 
 if not TYPE_CHECKING:
+    PymssqlQueryParams = Any
     PymssqlConnection = _PymssqlConnection
     PymssqlRawCursor = _PymssqlRawCursor
 
-__all__ = ("PYMSSQL_MODULE", "PymssqlConnection", "PymssqlCursor", "PymssqlRawCursor", "PymssqlSessionContext")
+__all__ = (
+    "PYMSSQL_MODULE",
+    "PymssqlConnection",
+    "PymssqlCursor",
+    "PymssqlError",
+    "PymssqlQueryParams",
+    "PymssqlRawCursor",
+    "PymssqlSessionContext",
+)
 
 
 class PymssqlCursor:
@@ -66,7 +78,7 @@ class PymssqlSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[PymssqlDriver], PymssqlDriver]",
@@ -92,6 +104,6 @@ class PymssqlSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection)
+            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None

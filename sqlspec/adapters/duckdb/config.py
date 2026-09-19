@@ -173,8 +173,9 @@ class DuckDBDriverFeatures(TypedDict):
         enable_uuid_conversion: Enable automatic UUID string conversion.
             When True (default), UUID strings are automatically converted to UUID objects.
             When False, UUID strings are treated as regular strings.
-        extension_flags: Connection-level flags applied
-            via SET statements immediately after connection creation.
+        extension_flags: Connection-level flags folded into the database startup
+            configuration. DuckDB rejects these settings once the database is
+            running, so they cannot be applied afterwards.
         enable_events: Enable database event channel support.
             Defaults to True when extension_config["events"] is configured.
             Provides pub/sub capabilities via table-backed queue (DuckDB has no native pub/sub).
@@ -284,11 +285,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         if connection_config.get("database") in {":memory:", ""}:
             connection_config["database"] = ":memory:shared_db"
 
-        extension_flags: dict[str, Any] = {}
-        for key in tuple(connection_config.keys()):
-            if key in EXTENSION_FLAG_KEYS:
-                extension_flags[key] = connection_config.pop(key)
-
         features: dict[str, Any] = dict(driver_features) if driver_features else {}
         self._user_connection_hook = cast(
             "Callable[[DuckDBConnection], DuckDBConnection | None] | None", features.pop("on_connection_create", None)
@@ -296,10 +292,12 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         features.setdefault("enable_uuid_conversion", True)
         serializer = features.setdefault("json_serializer", to_json)
 
-        if extension_flags:
-            existing_flags = cast("dict[str, Any]", features.get("extension_flags", {}))
-            merged_flags = {**existing_flags, **extension_flags}
-            features["extension_flags"] = merged_flags
+        feature_flags = cast("dict[str, Any]", features.get("extension_flags", {}))
+        for key, value in feature_flags.items():
+            connection_config.setdefault(key, value)
+        declared_flags = {key: connection_config[key] for key in EXTENSION_FLAG_KEYS if key in connection_config}
+        if feature_flags or declared_flags:
+            features["extension_flags"] = {**feature_flags, **declared_flags}
 
         statement_config = statement_config or build_statement_config(
             json_serializer=cast("Callable[[Any], str]", serializer)
@@ -324,10 +322,8 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
 
         extensions = cast("list[dict[str, Any]] | None", self.driver_features.get("extensions", None))
         secrets = cast("list[dict[str, Any]] | None", self.driver_features.get("secrets", None))
-        extension_flags = cast("dict[str, Any] | None", self.driver_features.get("extension_flags", None))
         extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
         secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
-        extension_flags_dict = dict(extension_flags) if extension_flags else None
 
         pool_recycle_seconds = self.connection_config.get("pool_recycle_seconds")
         health_check_interval = self.connection_config.get("health_check_interval")
@@ -340,7 +336,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         return DuckDBConnectionPool(
             connection_config=connection_config,
             extensions=extensions_dicts,
-            extension_flags=extension_flags_dict,
             secrets=secrets_dicts,
             on_connection_create=self._user_connection_hook,
             **pool_kwargs,
@@ -358,18 +353,16 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         return driver
 
     def create_connection(self) -> DuckDBConnection:
-        """Get a DuckDB connection from the pool.
+        """Open a standalone connection owned by the caller.
 
-        This method ensures the pool is created and returns a connection
-        from the pool. The connection is checked out from the pool and must
-        be properly managed by the caller.
+        The connection carries the same settings, extensions, and secrets the
+        pool applies, but it is not the pool's thread-local connection, so
+        closing it leaves the pool usable.
 
         Returns:
-            DuckDBConnection: A connection from the pool
+            DuckDBConnection: A newly opened connection.
         """
-        pool = self.provide_pool()
-
-        return pool.acquire()
+        return self.provide_pool().new_connection()
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for DuckDB types.

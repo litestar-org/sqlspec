@@ -6,7 +6,17 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import duckdb as duckdb_module
+from duckdb import BinderException as DuckDBBinderException
+from duckdb import CatalogException as DuckDBCatalogException
+from duckdb import ConstraintException as DuckDBConstraintException
+from duckdb import ConversionException as DuckDBConversionException
 from duckdb import DuckDBPyConnection
+from duckdb import InterruptException as DuckDBInterruptException
+from duckdb import IOException as DuckDBIOException
+from duckdb import ParserException as DuckDBParserException
+from duckdb import PermissionException as DuckDBPermissionException
+from duckdb import TransactionException as DuckDBTransactionException
 
 _DuckDBConnection = DuckDBPyConnection
 
@@ -23,7 +33,21 @@ if TYPE_CHECKING:
 if not TYPE_CHECKING:
     DuckDBConnection = _DuckDBConnection
 
-__all__ = ("DuckDBConnection", "DuckDBCursor", "DuckDBSessionContext")
+__all__ = (
+    "DuckDBBinderException",
+    "DuckDBCatalogException",
+    "DuckDBConnection",
+    "DuckDBConstraintException",
+    "DuckDBConversionException",
+    "DuckDBCursor",
+    "DuckDBIOException",
+    "DuckDBInterruptException",
+    "DuckDBParserException",
+    "DuckDBPermissionException",
+    "DuckDBSessionContext",
+    "DuckDBTransactionException",
+    "duckdb_module",
+)
 
 
 class DuckDBCursor:
@@ -72,7 +96,7 @@ class DuckDBSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], DuckDBConnection]",
-        release_connection: "Callable[[DuckDBConnection], None]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[DuckDBDriver], DuckDBDriver]",
@@ -98,6 +122,6 @@ class DuckDBSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection)
+            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None

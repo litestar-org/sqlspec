@@ -3,9 +3,11 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from google.cloud.spanner_v1 import param_types
+from typing_extensions import NotRequired
 
+from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
+from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -13,8 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Protocol
 
-    from google.cloud.spanner_v1.transaction import Transaction
-
+    from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.adapters.spanner.config import SpannerSyncConfig
 
     class _DatabaseProtocol(Protocol):
@@ -25,7 +26,23 @@ if TYPE_CHECKING:
         def list_tables(self) -> Any: ...
 
 
-__all__ = ("SpannerSyncStore",)
+__all__ = ("SpannerLitestarConfig", "SpannerSyncStore")
+
+
+class SpannerLitestarConfig(LitestarConfig):
+    """Spanner-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    shard_count: NotRequired[int]
+    """Number of session key shards."""
+
+    table_options: NotRequired[str]
+    """Table DDL options."""
+
+    index_options: NotRequired[str]
+    """Index DDL options."""
 
 
 class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):

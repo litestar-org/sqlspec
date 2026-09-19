@@ -6,9 +6,17 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import psycopg as cockroach_psycopg_module
 from psycopg import AsyncCursor, Cursor
+from psycopg import crdb as cockroach_psycopg_crdb
 from psycopg import crdb as psycopg_crdb
+from psycopg import errors as cockroach_psycopg_errors
+from psycopg import sql as cockroach_psycopg_sql
 from psycopg.rows import DictRow as PsycopgDictRow
+from psycopg.rows import dict_row as cockroach_psycopg_dict_row
+from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
+from psycopg_pool import AsyncConnectionPool as CockroachPsycopgAsyncConnectionPool
+from psycopg_pool import ConnectionPool as CockroachPsycopgConnectionPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,11 +42,19 @@ if not TYPE_CHECKING:
 __all__ = (
     "CockroachAsyncConnection",
     "CockroachAsyncCursor",
+    "CockroachPsycopgAsyncConnectionPool",
     "CockroachPsycopgAsyncSessionContext",
+    "CockroachPsycopgConnectionPool",
+    "CockroachPsycopgJsonb",
     "CockroachPsycopgSyncSessionContext",
     "CockroachSyncConnection",
     "CockroachSyncCursor",
     "PsycopgDictRow",
+    "cockroach_psycopg_crdb",
+    "cockroach_psycopg_dict_row",
+    "cockroach_psycopg_errors",
+    "cockroach_psycopg_module",
+    "cockroach_psycopg_sql",
 )
 
 
@@ -58,7 +74,7 @@ class CockroachPsycopgSyncSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[CockroachPsycopgSyncDriver], CockroachPsycopgSyncDriver]",
@@ -85,7 +101,7 @@ class CockroachPsycopgSyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection)
+            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
 
@@ -106,7 +122,7 @@ class CockroachPsycopgAsyncSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig | Callable[[], StatementConfig]",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[CockroachPsycopgAsyncDriver], CockroachPsycopgAsyncDriver]",
@@ -133,6 +149,6 @@ class CockroachPsycopgAsyncSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            await self._release_connection(self._connection)
+            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None

@@ -9,8 +9,12 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 from adbc_driver_manager import Error as _AdbcNativeError
+from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
+from adbc_driver_manager import OperationalError as AdbcOperationalError
 from adbc_driver_manager.dbapi import Connection
 from adbc_driver_manager.dbapi import Cursor as _AdbcRawCursor
+
+from sqlspec.typing import import_optional_attr
 
 _AdbcConnection = Connection
 
@@ -18,6 +22,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
+
+    from adbc_driver_flightsql import DatabaseOptions as AdbcFlightSqlDatabaseOptions
 
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import StatementConfig
@@ -31,7 +37,16 @@ if not TYPE_CHECKING:
     AdbcRawCursor = _AdbcRawCursor
     AdbcNativeError = _AdbcNativeError
 
-__all__ = ("AdbcConnection", "AdbcCursor", "AdbcNativeError", "AdbcRawCursor", "AdbcSessionContext")
+__all__ = (
+    "AdbcConnection",
+    "AdbcCursor",
+    "AdbcFlightSqlDatabaseOptions",
+    "AdbcNativeError",
+    "AdbcNotSupportedError",
+    "AdbcOperationalError",
+    "AdbcRawCursor",
+    "AdbcSessionContext",
+)
 
 
 class AdbcCursor:
@@ -77,7 +92,7 @@ class AdbcSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[AdbcDriver], AdbcDriver]",
@@ -108,6 +123,18 @@ class AdbcSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection)
+            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def __getattr__(name: str) -> Any:
+    """Load Flight SQL options only when that optional driver is used."""
+    if name != "AdbcFlightSqlDatabaseOptions":
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+    value = import_optional_attr("adbc_driver_flightsql", "DatabaseOptions")
+    if value is None:
+        msg = "Cannot import DatabaseOptions from adbc_driver_flightsql"
+        raise ImportError(msg)
+    return value

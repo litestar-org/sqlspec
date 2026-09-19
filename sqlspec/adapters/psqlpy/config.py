@@ -24,8 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from psqlpy import ConnectionPool
-
+    from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
     from sqlspec.core import StatementConfig
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
@@ -152,7 +151,7 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 
@@ -294,7 +293,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        from psqlpy import ConnectionPool
+        from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
 
         return ConnectionPool(**build_connection_config(self.connection_config))
 

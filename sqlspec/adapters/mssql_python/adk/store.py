@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonCursor
+from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor, MssqlPythonError
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -27,7 +27,6 @@ MSSQL_DUPLICATE_OBJECT_ERROR: Final[int] = 2714
 MSSQL_DUPLICATE_INDEX_ERROR: Final[int] = 1913
 MSSQL_SCHEMA: Final[str] = "dbo"
 MSSQL_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
-MSSQL_ERROR: Final[type[BaseException]] = cast("type[BaseException]", getattr(MSSQL_PYTHON_MODULE, "Error", Exception))
 JSON_FALLBACK_COLUMN_TYPE: Final[str] = "NVARCHAR(MAX)"
 JSON_NATIVE_COLUMN_TYPE: Final[str] = "JSON"
 
@@ -118,7 +117,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 """,
                 (app_name, user_id, session_id),
             )
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise
@@ -156,7 +155,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         )
         try:
             rows = self._execute_fetchall(sql, params)
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return []
             raise
@@ -223,7 +222,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
             rows = self._execute_fetchall(sql, params)
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return []
             raise
@@ -238,7 +237,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return 0
             raise
@@ -252,7 +251,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return 0
             raise
@@ -266,7 +265,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return 0
             raise
@@ -277,7 +276,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             row = self._execute_fetchone(
                 f"SELECT TOP (1) state FROM {_table_ref(self._app_state_table)} WHERE app_name = ?", (app_name,)
             )
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise
@@ -294,7 +293,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 """,
                 (app_name, user_id),
             )
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise
@@ -314,7 +313,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             row = self._execute_fetchone(
                 f"SELECT TOP (1) value FROM {_table_ref(self._metadata_table)} WHERE [key] = ?", (key,)
             )
-        except MSSQL_ERROR as exc:
+        except MssqlPythonError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise

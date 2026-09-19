@@ -39,6 +39,7 @@ __all__ = ("AsyncmyConfig", "AsyncmyConnectionParams", "AsyncmyDriverFeatures", 
 
 _ASYNCMY_POOL_ONLY_KEYS = frozenset(("minsize", "maxsize", "pool_recycle"))
 _ASYNCMY_POOL_KEYS = _ASYNCMY_POOL_ONLY_KEYS | {"echo"}
+_ASYNCMY_SHARED_POOL_KEYS = frozenset(("echo",))
 asyncmy: "AsyncmyModule" = cast("AsyncmyModule", AsyncmyModule)
 
 
@@ -94,6 +95,7 @@ class AsyncmyConnectionParams(TypedDict):
     program_name: NotRequired[str]
     read_timeout: NotRequired[int | float]
     server_public_key: NotRequired[str | bytes]
+    stmt_cache_size: NotRequired[int]
     use_unicode: NotRequired[bool]
     write_timeout: NotRequired[int | float]
     extra: NotRequired["dict[str, Any]"]
@@ -205,7 +207,7 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            await self._ctx.__aexit__(None, None, None)
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 
@@ -287,11 +289,10 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
 
         connection_config.setdefault("host", "localhost")
         connection_config.setdefault("port", 3306)
+        connection_config.setdefault("charset", "utf8mb4")
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[AsyncmyConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -346,16 +347,17 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             self.connection_instance = None
 
     async def create_connection(self) -> AsyncmyConnection:
-        """Create a single async connection (not from pool).
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection settings and creation hook
+        the pool applies, consumes no pool slot, and must be closed by the caller.
 
         Returns:
             An Asyncmy connection instance.
         """
-        pool = self.connection_instance
-        if pool is None:
-            pool = await self.create_pool()
-            self.connection_instance = pool
-        connection = cast("AsyncmyConnection", await pool.acquire())
+        pool_kwargs, connection_kwargs = _split_pool_config(self.connection_config)
+        connection_kwargs.update({key: value for key, value in pool_kwargs.items() if key in _ASYNCMY_SHARED_POOL_KEYS})
+        connection = await asyncmy.connect(**connection_kwargs)
         await self._ensure_connection(connection)
         return connection
 

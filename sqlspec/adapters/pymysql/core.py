@@ -79,6 +79,7 @@ MYSQL_CR_CONN_HOST_ERROR = 2003
 MYSQL_CR_UNKNOWN_HOST = 2005
 MYSQL_CR_SERVER_GONE_ERROR = 2006
 MYSQL_CR_SERVER_LOST = 2013
+MYSQL_CR_SSL_CONNECTION_ERROR = 2026
 MYSQL_SYNTAX_ERROR_MIN = 1064
 MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE = 1100
 
@@ -122,6 +123,7 @@ _MYSQL_CONNECTION_ERROR_DISPATCH: dict[int, tuple[type[SQLSpecError], str]] = {
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_UNKNOWN_HOST: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_SERVER_GONE_ERROR: (DatabaseConnectionError, "connection error"),
+    MYSQL_CR_SSL_CONNECTION_ERROR: (DatabaseConnectionError, "ssl connection error"),
 }
 
 
@@ -158,10 +160,20 @@ def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def build_load_data_statement(table: str, columns: "list[str]", file_path: str) -> str:
-    column_list = ", ".join(format_identifier(column) for column in columns)
+def build_load_data_statement(table: str, columns: "list[str]") -> str:
+    """Build native LOAD DATA SQL with a bound filename.
+
+    Args:
+        table: Destination table identifier.
+        columns: Destination column names.
+
+    Returns:
+        SQL with one positional filename placeholder.
+    """
+    table_sql = format_identifier(table).replace("%", "%%")
+    column_list = ", ".join(format_identifier(column).replace("%", "%%") for column in columns)
     return (
-        f"LOAD DATA LOCAL INFILE '{file_path}' INTO TABLE {format_identifier(table)} "
+        f"LOAD DATA LOCAL INFILE %s INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         f"LINES TERMINATED BY '\\n' ({column_list})"
     )
@@ -187,7 +199,7 @@ class PymysqlStreamSource:
         self._row_plan: tuple[list[str], list[int] | None] | None = None
 
     def start(self) -> None:
-        from pymysql.cursors import SSCursor
+        from sqlspec.adapters.pymysql._typing import PyMysqlSSCursor as SSCursor
 
         handler = self._driver.handle_database_exceptions()
         with handler:

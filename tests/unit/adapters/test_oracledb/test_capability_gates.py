@@ -17,6 +17,15 @@ class _Connection:
             self.thin = thin
 
 
+def test_connection_is_thin_defaults_to_true_when_attribute_missing() -> None:
+    assert connection_is_thin(object()) is True
+
+
+def test_connection_is_thin_uses_connection_attribute() -> None:
+    assert connection_is_thin(_Connection(thin=True)) is True
+    assert connection_is_thin(_Connection(thin=False)) is False
+
+
 class _DirectPathConnection(_Connection):
     def direct_path_load(self, *_args: object, **_kwargs: object) -> None:
         return None
@@ -27,22 +36,14 @@ class _DataFrameBatchConnection:
         return None
 
 
-def test_connection_is_thin_defaults_to_true_when_attribute_missing() -> None:
-    assert connection_is_thin(object()) is True
-
-
-def test_connection_is_thin_uses_connection_attribute() -> None:
-    assert connection_is_thin(_Connection(thin=True)) is True
-    assert connection_is_thin(_Connection(thin=False)) is False
-
-
-def test_supports_direct_path_load_requires_thin_connection_and_method() -> None:
+def test_supports_direct_path_load_requires_thin_mode_and_the_api() -> None:
+    """A proxy without the API must fall back rather than raise AttributeError."""
     assert supports_direct_path_load(_DirectPathConnection(thin=True)) is True
     assert supports_direct_path_load(_DirectPathConnection(thin=False)) is False
     assert supports_direct_path_load(_Connection(thin=True)) is False
 
 
-def test_supports_df_batches_checks_fetch_df_batches_method() -> None:
+def test_supports_df_batches_checks_the_api() -> None:
     assert supports_df_batches(_DataFrameBatchConnection()) is True
     assert supports_df_batches(object()) is False
 

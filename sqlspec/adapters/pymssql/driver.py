@@ -5,9 +5,9 @@ from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.pymssql._typing import (
-    PYMSSQL_MODULE,
     PymssqlConnection,
     PymssqlCursor,
+    PymssqlError,
     PymssqlRawCursor,
     PymssqlSessionContext,
 )
@@ -38,12 +38,11 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from pymssql._pymssql import QueryParams
+    from sqlspec.adapters.pymssql._typing import PymssqlQueryParams as QueryParams
 
 __all__ = ("PymssqlCursor", "PymssqlDriver", "PymssqlExceptionHandler", "PymssqlSessionContext")
 
 logger = get_logger("sqlspec.adapters.pymssql")
-pymssql = PYMSSQL_MODULE
 
 
 class PymssqlExceptionHandler(BaseSyncExceptionHandler):
@@ -54,8 +53,7 @@ class PymssqlExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        error_type = _pymssql_error_type()
-        if isinstance(exc_val, error_type):
+        if isinstance(exc_val, PymssqlError):
             self.pending_exception = create_mapped_exception(cast("Exception", exc_val), logger=logger)
             return True
         return False
@@ -200,7 +198,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
                     cursor.execute("BEGIN TRANSACTION")
             self._explicit_transaction = explicit
             self._transaction_active = True
-        except _pymssql_error_type() as exc:
+        except PymssqlError as exc:
             msg = f"Failed to begin SQL Server transaction: {exc}"
             raise SQLSpecError(msg) from exc
 
@@ -213,7 +211,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
                 self.connection.commit()
             self._explicit_transaction = False
             self._transaction_active = False
-        except _pymssql_error_type() as exc:
+        except PymssqlError as exc:
             msg = f"Failed to commit SQL Server transaction: {exc}"
             raise SQLSpecError(msg) from exc
 
@@ -226,7 +224,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
                 self.connection.rollback()
             self._explicit_transaction = False
             self._transaction_active = False
-        except _pymssql_error_type() as exc:
+        except PymssqlError as exc:
             msg = f"Failed to rollback SQL Server transaction: {exc}"
             raise SQLSpecError(msg) from exc
 
@@ -298,14 +296,6 @@ class PymssqlDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Return whether a transaction opened by this driver remains active."""
         return self._transaction_active
-
-
-class _UnavailablePymssqlError(Exception):
-    """Fallback pymssql exception base when pymssql is unavailable."""
-
-
-def _pymssql_error_type() -> "type[BaseException]":
-    return cast("type[BaseException]", getattr(pymssql, "Error", _UnavailablePymssqlError))
 
 
 def _quote_tsql_identifier(identifier: str) -> str:

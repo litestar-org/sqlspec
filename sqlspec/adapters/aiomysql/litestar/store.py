@@ -3,9 +3,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import pymysql.err
+from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
+from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlProgrammingError, AiomysqlRawCursor
+from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.logging import get_logger
@@ -13,12 +14,25 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.aiomysql.config import AiomysqlConfig
 
-__all__ = ("AiomysqlStore",)
+__all__ = ("AiomysqlLitestarConfig", "AiomysqlStore")
 
 logger = get_logger("sqlspec.adapters.aiomysql.litestar.store")
 
 
 MYSQL_TABLE_NOT_FOUND_ERROR: Final = 1146
+
+
+class AiomysqlLitestarConfig(LitestarConfig):
+    """Aiomysql-specific Litestar settings.
+
+    Use inside ``extension_config["litestar"]`` with this adapter's session store.
+    """
+
+    table_options: NotRequired[str]
+    """Table DDL options."""
+
+    index_options: NotRequired[str]
+    """Index DDL options."""
 
 
 class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
@@ -103,7 +117,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                         await conn.commit()
 
                 return bytes(data_value)
-        except pymysql.err.ProgrammingError as e:
+        except AiomysqlProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
             raise
@@ -163,7 +177,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql)
                 await conn.commit()
             self._log_delete_all()
-        except pymysql.err.ProgrammingError as e:
+        except AiomysqlProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
@@ -192,7 +206,7 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
-        except pymysql.err.ProgrammingError as e:
+        except AiomysqlProgrammingError as e:
             if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return False
             raise

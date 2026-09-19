@@ -128,10 +128,6 @@ def test_input_handler_passes_array_array_through() -> None:
 def test_input_handler_rejects_sparse_vector() -> None:
     """``oracledb.SparseVector`` is bound natively by python-oracledb."""
     from sqlspec.adapters.oracledb._vector_handlers import _input_type_handler  # pyright: ignore[reportPrivateUsage]
-    from sqlspec.adapters.oracledb.core import ORACLEDB_SUPPORTS_SPARSE_VECTORS
-
-    if not ORACLEDB_SUPPORTS_SPARSE_VECTORS:
-        pytest.skip("python-oracledb does not provide SparseVector")
 
     cursor = _mock_cursor()
 
@@ -223,10 +219,6 @@ def test_output_handler_returns_none_for_sparse_vector_column() -> None:
     import oracledb
 
     from sqlspec.adapters.oracledb._vector_handlers import _output_type_handler  # pyright: ignore[reportPrivateUsage]
-    from sqlspec.adapters.oracledb.core import ORACLEDB_SUPPORTS_SPARSE_VECTORS
-
-    if not ORACLEDB_SUPPORTS_SPARSE_VECTORS:
-        pytest.skip("python-oracledb does not provide SparseVector")
 
     cursor = _mock_cursor_with_format("list")
     metadata = _mock_metadata(oracledb.DB_TYPE_VECTOR)

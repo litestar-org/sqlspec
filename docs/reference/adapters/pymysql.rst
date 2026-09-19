@@ -85,3 +85,17 @@ Data Dictionary
 .. autoclass:: sqlspec.adapters.pymysql.data_dictionary.PyMysqlDataDictionary
    :members:
    :show-inheritance:
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.pymysql.litestar.PyMysqlLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.pymysql.adk.PyMysqlADKConfig
+   :members:
+   :show-inheritance:

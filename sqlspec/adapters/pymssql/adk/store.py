@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlCursor
+from sqlspec.adapters.pymssql._typing import PymssqlCursor, PymssqlError
 from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -31,7 +31,6 @@ MSSQL_SCHEMA: Final[str] = "dbo"
 MSSQL_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
 JSON_FALLBACK_COLUMN_TYPE: Final[str] = "NVARCHAR(MAX)"
 JSON_NATIVE_COLUMN_TYPE: Final[str] = "JSON"
-MSSQL_ERROR: Final[type[BaseException]] = cast("type[BaseException]", getattr(PYMSSQL_MODULE, "Error", Exception))
 
 
 class PymssqlADKConfig(ADKConfig):
@@ -121,7 +120,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
                 """,
                 (app_name, user_id, session_id),
             )
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise
@@ -159,7 +158,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         )
         try:
             rows = self._execute_fetchall(sql, params)
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return []
             raise
@@ -226,7 +225,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         sql, params = self._events_query(app_name, user_id, session_id, after_timestamp, limit)
         try:
             rows = self._execute_fetchall(sql, params)
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return []
             raise
@@ -241,7 +240,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return 0
             raise
@@ -255,7 +254,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return 0
             raise
@@ -269,7 +268,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             params.append(app_name)
         try:
             return self._execute(sql, tuple(params), commit=True)
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return 0
             raise
@@ -280,7 +279,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             row = self._execute_fetchone(
                 f"SELECT TOP (1) state FROM {_table_ref(self._app_state_table)} WHERE app_name = %s", (app_name,)
             )
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise
@@ -297,7 +296,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
                 """,
                 (app_name, user_id),
             )
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise
@@ -317,7 +316,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             row = self._execute_fetchone(
                 f"SELECT TOP (1) value FROM {_table_ref(self._metadata_table)} WHERE [key] = %s", (key,)
             )
-        except MSSQL_ERROR as exc:
+        except PymssqlError as exc:
             if _is_mssql_table_missing(exc):
                 return None
             raise

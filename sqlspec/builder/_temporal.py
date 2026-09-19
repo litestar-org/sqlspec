@@ -28,54 +28,6 @@ if TYPE_CHECKING:
 __all__ = ("create_temporal_table", "register_version_generators")
 
 
-def _oracle_version_sql(self: "OracleGenerator", expression: exp.Version) -> str:
-    """Oracle: AS OF TIMESTAMP timestamp or AS OF SCN scn."""
-    expr = self.sql(expression, "expression")
-    this = expression.name or "TIMESTAMP"
-    return f"AS OF {this} {expr}"
-
-
-def _bigquery_version_sql(self: "BigQueryGenerator", expression: exp.Version) -> str:
-    """BigQuery: FOR SYSTEM_TIME AS OF timestamp."""
-    expr = self.sql(expression, "expression")
-    return f"FOR SYSTEM_TIME AS OF {expr}"
-
-
-def _snowflake_version_sql(self: "SnowflakeGenerator", expression: exp.Version) -> str:
-    """Snowflake: AT (TIMESTAMP => timestamp) or BEFORE (TIMESTAMP => ...).
-
-    AS OF is mapped to AT, and BEFORE is supported for point-before queries.
-    """
-    kind = expression.text("kind")
-    expr = self.sql(expression, "expression")
-    this = expression.name or "TIMESTAMP"
-    if kind and "BEFORE" in kind.upper():
-        return f"BEFORE ({this} => {expr})"
-    return f"AT ({this} => {expr})"
-
-
-def _duckdb_version_sql(self: "DuckDBGenerator", expression: exp.Version) -> str:
-    """DuckDB: AT (TIMESTAMP => timestamp)."""
-    expr = self.sql(expression, "expression")
-    return f"AT (TIMESTAMP => {expr})"
-
-
-def _cockroachdb_version_sql(self: "PostgresGenerator", expression: exp.Version) -> str:
-    """CockroachDB (via Postgres dialect): AS OF SYSTEM TIME timestamp."""
-    expr = self.sql(expression, "expression")
-    return f"AS OF SYSTEM TIME {expr}"
-
-
-def _default_version_sql(self: "Generator", expression: exp.Version) -> str:
-    """Default: AS OF SYSTEM TIME timestamp (CockroachDB style).
-
-    When no dialect is specified, we default to CockroachDB/Postgres style
-    which is commonly expected for time-travel queries.
-    """
-    expr = self.sql(expression, "expression")
-    return f"AS OF SYSTEM TIME {expr}"
-
-
 def create_temporal_table(
     table: "str | exp.Table | exp.Expr", as_of: "exp.Expr | str", kind: "str | None" = None
 ) -> exp.Table:
@@ -149,3 +101,51 @@ def register_version_generators() -> None:
     )
 
     _VERSION_GENERATORS_REGISTERED = True
+
+
+def _oracle_version_sql(self: "OracleGenerator", expression: exp.Version) -> str:
+    """Oracle: AS OF TIMESTAMP timestamp or AS OF SCN scn."""
+    expr = self.sql(expression, "expression")
+    this = expression.name or "TIMESTAMP"
+    return f"AS OF {this} {expr}"
+
+
+def _bigquery_version_sql(self: "BigQueryGenerator", expression: exp.Version) -> str:
+    """BigQuery: FOR SYSTEM_TIME AS OF timestamp."""
+    expr = self.sql(expression, "expression")
+    return f"FOR SYSTEM_TIME AS OF {expr}"
+
+
+def _snowflake_version_sql(self: "SnowflakeGenerator", expression: exp.Version) -> str:
+    """Snowflake: AT (TIMESTAMP => timestamp) or BEFORE (TIMESTAMP => ...).
+
+    AS OF is mapped to AT, and BEFORE is supported for point-before queries.
+    """
+    kind = expression.text("kind")
+    expr = self.sql(expression, "expression")
+    this = expression.name or "TIMESTAMP"
+    if kind and "BEFORE" in kind.upper():
+        return f"BEFORE ({this} => {expr})"
+    return f"AT ({this} => {expr})"
+
+
+def _duckdb_version_sql(self: "DuckDBGenerator", expression: exp.Version) -> str:
+    """DuckDB: AT (TIMESTAMP => timestamp)."""
+    expr = self.sql(expression, "expression")
+    return f"AT (TIMESTAMP => {expr})"
+
+
+def _cockroachdb_version_sql(self: "PostgresGenerator", expression: exp.Version) -> str:
+    """CockroachDB (via Postgres dialect): AS OF SYSTEM TIME timestamp."""
+    expr = self.sql(expression, "expression")
+    return f"AS OF SYSTEM TIME {expr}"
+
+
+def _default_version_sql(self: "Generator", expression: exp.Version) -> str:
+    """Default: AS OF SYSTEM TIME timestamp (CockroachDB style).
+
+    When no dialect is specified, we default to CockroachDB/Postgres style
+    which is commonly expected for time-travel queries.
+    """
+    expr = self.sql(expression, "expression")
+    return f"AS OF SYSTEM TIME {expr}"

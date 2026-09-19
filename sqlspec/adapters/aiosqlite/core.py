@@ -1,7 +1,6 @@
 """AIOSQLite adapter compiled helpers."""
 
 import contextlib
-import sqlite3
 import sys
 from datetime import date, datetime
 from decimal import Decimal
@@ -9,6 +8,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlglot import exp
 
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
@@ -355,7 +355,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
-    # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
     # SQLITE_BUSY means another process has the database locked
     # SQLITE_LOCKED means another connection has the table/rows locked
     if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":

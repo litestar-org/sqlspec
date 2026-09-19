@@ -1,11 +1,12 @@
 """Asyncmy configuration tests covering statement config builders."""
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyDictCursor
-from sqlspec.adapters.asyncmy.config import AsyncmyConfig
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig, _pool_config, _split_pool_config
 from sqlspec.adapters.asyncmy.core import build_statement_config
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -226,3 +227,51 @@ def test_driver_profile_name_matches_registry_key() -> None:
     from sqlspec.adapters.asyncmy.core import driver_profile
 
     assert driver_profile.name == "asyncmy"
+
+
+def test_stmt_cache_size_reaches_the_connection_kwargs() -> None:
+    """A declared cache size must survive the pool/connection split."""
+    config = AsyncmyConfig(connection_config={"host": "localhost", "stmt_cache_size": 64, "maxsize": 4})
+
+    pool_kwargs, connection_kwargs = _split_pool_config(config.connection_config)
+
+    assert connection_kwargs["stmt_cache_size"] == 64
+    assert "stmt_cache_size" not in pool_kwargs
+
+
+def test_stmt_cache_size_reaches_the_pool_configuration() -> None:
+    """The pool forwards unrecognized keys to connect, so it must carry the value too."""
+    config = AsyncmyConfig(connection_config={"host": "localhost", "stmt_cache_size": 64})
+
+    assert _pool_config(config.connection_config)["stmt_cache_size"] == 64
+
+
+async def test_create_connection_consumes_no_pool_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A standalone connection must not be taken out of the pool."""
+    sentinel = MagicMock()
+    connect = AsyncMock(return_value=sentinel)
+    monkeypatch.setattr("sqlspec.adapters.asyncmy.config.asyncmy.connect", connect)
+    config = AsyncmyConfig(connection_config={"host": "localhost", "minsize": 1, "maxsize": 1})
+
+    connection = await config.create_connection()
+
+    assert connection is sentinel
+    assert config.connection_instance is None
+    assert "minsize" not in connect.call_args.kwargs
+    assert "maxsize" not in connect.call_args.kwargs
+
+
+async def test_create_connection_runs_the_connection_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The creation hook the pool applies must also run on the standalone path."""
+    seen: list[object] = []
+    sentinel = MagicMock()
+
+    async def _hook(connection: object) -> None:
+        seen.append(connection)
+
+    monkeypatch.setattr("sqlspec.adapters.asyncmy.config.asyncmy.connect", AsyncMock(return_value=sentinel))
+    config = AsyncmyConfig(connection_config={"host": "localhost"}, driver_features={"on_connection_create": _hook})
+
+    await config.create_connection()
+
+    assert seen == [sentinel]

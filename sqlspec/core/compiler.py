@@ -350,7 +350,6 @@ class SQLProcessor:
         self._last_cache_key: Any | None = None
         self._last_result: CompiledSQL | None = None
 
-        # Pre-calculate static cache key components
         self._dialect_str = str(config.dialect) if config.dialect else None
         self._input_style = parameter_config.default_parameter_style.value
         default_execution_style = parameter_config.default_execution_parameter_style
@@ -397,7 +396,6 @@ class SQLProcessor:
             self._cache.move_to_end(cache_key)
             self._cache_hits += 1
 
-            # Update micro-cache
             self._last_cache_key = cache_key
             self._last_result = cached_result
             return self._apply_dynamic_sqlcommenter(self._materialize_cached_result(cached_result, parameters, is_many))
@@ -950,11 +948,9 @@ class SQLProcessor:
         placeholder_positions: dict[str, int] = {}
         placeholder_counter = [0]
 
-        # Walk all nodes in order to track parameter positions
         for node in expression.walk():
             if isinstance(node, exp.Placeholder):
                 _placeholder_position(node, placeholder_positions, placeholder_counter)
-            # Check for cast nodes with parameter children
             if isinstance(node, exp.Cast):
                 cast_target = node.this
                 position = None
@@ -973,7 +969,6 @@ class SQLProcessor:
                         position = int(column_name[1:])
 
                 if position is not None:
-                    # Extract cast type
                     if isinstance(node.to, exp.DataType):
                         cast_type = str(get_value_attribute(node.to.this))
                     else:
@@ -1167,7 +1162,7 @@ def _placeholder_position(
 def _parameters_empty(value: Any) -> bool:
     if value is None:
         return True
-    # Fast type dispatch: check concrete types first (2-4x faster than ABC isinstance)
+    # Fast type dispatch: check concrete types first
     value_type = type(value)
     if value_type is dict or value_type is list or value_type is tuple:
         return len(value) == 0

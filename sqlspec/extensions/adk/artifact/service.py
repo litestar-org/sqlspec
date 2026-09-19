@@ -172,7 +172,6 @@ class SQLSpecArtifactService(BaseArtifactService):
             )
             return None
 
-        # Derive content path from canonical URI
         content_path = record["canonical_uri"].removeprefix(self._artifact_storage_uri + "/")
 
         backend = self._registry.get(self._artifact_storage_uri)

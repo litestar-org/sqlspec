@@ -37,35 +37,6 @@ class StorageError:
         self.original = original
 
 
-def _is_missing_error(error: Exception) -> bool:
-    if isinstance(error, FileNotFoundError):
-        return True
-
-    if isinstance(error, OSError) and error.errno in {errno.ENOENT, errno.ENOTDIR}:
-        return True
-
-    name = error.__class__.__name__
-    return name in _NOT_FOUND_NAMES
-
-
-def _is_retryable(error: Exception) -> bool:
-    if isinstance(error, (ConnectionError, TimeoutError)):
-        return True
-
-    name = error.__class__.__name__
-    return bool("Timeout" in name or "Temporary" in name)
-
-
-def _storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> "StorageError":
-    message = f"{backend} {operation} failed"
-    if path:
-        message = f"{message} for {path}"
-
-    return StorageError(
-        message=message, backend=backend, operation=operation, path=path, retryable=_is_retryable(error), original=error
-    )
-
-
 def raise_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> NoReturn:
     is_missing = _is_missing_error(error)
     normalized = _storage_error(error, backend=backend, operation=operation, path=path)
@@ -100,3 +71,32 @@ async def execute_async_storage_operation(
         return await func()
     except Exception as error:
         raise_storage_error(error, backend=backend, operation=operation, path=path)
+
+
+def _is_missing_error(error: Exception) -> bool:
+    if isinstance(error, FileNotFoundError):
+        return True
+
+    if isinstance(error, OSError) and error.errno in {errno.ENOENT, errno.ENOTDIR}:
+        return True
+
+    name = error.__class__.__name__
+    return name in _NOT_FOUND_NAMES
+
+
+def _is_retryable(error: Exception) -> bool:
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+
+    name = error.__class__.__name__
+    return bool("Timeout" in name or "Temporary" in name)
+
+
+def _storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> "StorageError":
+    message = f"{backend} {operation} failed"
+    if path:
+        message = f"{message} for {path}"
+
+    return StorageError(
+        message=message, backend=backend, operation=operation, path=path, retryable=_is_retryable(error), original=error
+    )

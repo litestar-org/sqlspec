@@ -51,14 +51,14 @@ def _first_use_from_threads(
         except BaseException as exc:
             with guard:
                 errors.append(exc)
-        finally:
-            pool.close()
 
     workers = [threading.Thread(target=worker, args=(pool,)) for pool in pools for _ in range(threads_per_pool)]
     for thread in workers:
         thread.start()
     for thread in workers:
         thread.join()
+    for pool in pools:
+        pool.close()
     return errors, recorded
 
 

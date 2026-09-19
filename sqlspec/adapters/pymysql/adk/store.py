@@ -4,9 +4,9 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-import pymysql
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -540,7 +540,7 @@ def _select_session(
             finally:
                 cursor.close()
         return _session_record_from_row(row) if row is not None else None
-    except pymysql.MySQLError as exc:
+    except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return None
         raise
@@ -590,7 +590,7 @@ def _list_sessions(
             finally:
                 cursor.close()
         return [_session_record_from_row(row) for row in rows]
-    except pymysql.MySQLError as exc:
+    except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return []
         raise
@@ -722,7 +722,7 @@ def _select_events(
             finally:
                 cursor.close()
         return [_event_record_from_row(row) for row in rows]
-    except pymysql.MySQLError as exc:
+    except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return []
         raise
@@ -757,7 +757,7 @@ def _delete_before(
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
             finally:
                 cursor.close()
-    except pymysql.MySQLError as exc:
+    except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return 0
         raise
@@ -784,7 +784,7 @@ def _state(
             finally:
                 cursor.close()
         return _json_dict(row[0]) if row is not None else None
-    except pymysql.MySQLError as exc:
+    except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return None
         raise
@@ -809,7 +809,7 @@ def _metadata(store: PyMysqlADKStore, key: str) -> "str | None":
             finally:
                 cursor.close()
         return str(row[0]) if row is not None else None
-    except pymysql.MySQLError as exc:
+    except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return None
         raise

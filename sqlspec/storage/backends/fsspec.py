@@ -472,7 +472,6 @@ class FSSpecBackend:
         resolved_path = self._resolve_path(path)
         chunk_size = chunk_size or 65536
 
-        # Open the file in a thread pool
         file_obj = await asyncio.to_thread(self.fs.open, resolved_path, mode="rb", **kwargs)
 
         return AsyncThreadedBytesIterator(file_obj, chunk_size)

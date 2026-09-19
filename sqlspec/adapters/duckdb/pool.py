@@ -7,10 +7,10 @@ import time
 from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import duckdb
 from typing_extensions import final
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
+from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -73,8 +73,9 @@ class DuckDBConnectionPool:
 
     __slots__ = (
         "_connection_config",
-        "_extension_flags",
+        "_connection_registry",
         "_extensions",
+        "_generation",
         "_health_check_interval",
         "_installed_signatures",
         "_is_memory_db",
@@ -92,7 +93,6 @@ class DuckDBConnectionPool:
         pool_recycle_seconds: int = POOL_RECYCLE,
         health_check_interval: float = HEALTH_CHECK_INTERVAL,
         extensions: "list[dict[str, Any]] | None" = None,
-        extension_flags: "dict[str, Any] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
         on_connection_create: "Callable[[DuckDBConnection], DuckDBConnection | None] | None" = None,
     ) -> None:
@@ -103,7 +103,6 @@ class DuckDBConnectionPool:
             pool_recycle_seconds: Connection recycle time in seconds
             health_check_interval: Seconds of idle time before running health check
             extensions: List of extensions to install/load
-            extension_flags: Connection-level SET statements applied after creation
             secrets: List of secrets to create
             on_connection_create: Callback executed when connection is created
         """
@@ -111,11 +110,12 @@ class DuckDBConnectionPool:
         self._recycle = pool_recycle_seconds
         self._health_check_interval = health_check_interval
         self._extensions = extensions or []
-        self._extension_flags = extension_flags or {}
         self._secrets = secrets or []
         self._on_connection_create = on_connection_create
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
+        self._connection_registry: set[DuckDBConnection] = set()
+        self._generation = 0
         self._lock = threading.RLock()
         self._pool_id = str(uuid4())[:8]
         database = connection_config.get("database", "")
@@ -130,10 +130,25 @@ class DuckDBConnectionPool:
         return str(db)
 
     def _create_connection(self) -> DuckDBConnection:
-        """Create a new DuckDB connection with extensions and secrets."""
-        self._thread_local.storage_extensions = frozenset()
-        self._thread_local.storage_secrets = ()
-        self._thread_local.storage_protocols = frozenset()
+        """Create a pool-owned connection and record it for shutdown."""
+        connection = self.new_connection(record_thread_state=True)
+        with self._lock:
+            self._connection_registry.add(connection)
+        return connection
+
+    def new_connection(self, record_thread_state: bool = False) -> DuckDBConnection:
+        """Open a standalone connection with extensions and secrets applied.
+
+        Unless the pool asks it to, the result is owned by the caller: it is not
+        thread-local, is not tracked for pool shutdown, and leaves the storage
+        setup already published for this thread untouched.
+
+        Args:
+            record_thread_state: Whether to publish storage setup for this thread.
+
+        Returns:
+            DuckDBConnection: A newly opened, fully configured connection.
+        """
         loaded_extensions: set[str] = set()
         storage_protocols: set[str] = set()
         connect_parameters = {}
@@ -151,8 +166,6 @@ class DuckDBConnectionPool:
             connect_parameters["config"] = config_dict
 
         connection = duckdb.connect(**connect_parameters)
-
-        self._apply_extension_flags(connection)
 
         for ext_config in self._extensions:
             ext_name = ext_config.get("name")
@@ -223,11 +236,11 @@ class DuckDBConnectionPool:
 
         if self._on_connection_create:
             self._on_connection_create(connection)
-        else:
+        storage_protocols.update(connection.list_filesystems())
+        if record_thread_state:
             self._thread_local.storage_extensions = frozenset(loaded_extensions)
             self._thread_local.storage_secrets = tuple(created_secrets)
-        storage_protocols.update(connection.list_filesystems())
-        self._thread_local.storage_protocols = frozenset(storage_protocols)
+            self._thread_local.storage_protocols = frozenset(storage_protocols)
         return connection
 
     def _storage_settings(self, connection: DuckDBConnection) -> "dict[str, Any]":
@@ -278,42 +291,6 @@ class DuckDBConnectionPool:
             self._installed_signatures.add(signature)
             return None
 
-    def _apply_extension_flags(self, connection: DuckDBConnection) -> None:
-        """Apply connection-level extension flags via SET statements."""
-
-        if not self._extension_flags:
-            return
-
-        for key, value in self._extension_flags.items():
-            if not key or not key.replace("_", "").isalnum():
-                continue
-
-            normalized = self._normalize_flag_value(value)
-            try:
-                connection.execute(f"SET {key} = {normalized}")
-            except Exception as exc:  # pragma: no cover
-                log_with_context(
-                    logger,
-                    logging.DEBUG,
-                    "pool.flag.set.failed",
-                    adapter=_ADAPTER_NAME,
-                    pool_id=self._pool_id,
-                    database=self._database_name,
-                    flag=key,
-                    error=str(exc),
-                )
-
-    @staticmethod
-    def _normalize_flag_value(value: Any) -> str:
-        """Convert Python value to DuckDB SET literal."""
-
-        if isinstance(value, bool):
-            return "TRUE" if value else "FALSE"
-        if isinstance(value, (int, float)):
-            return str(value)
-        escaped = str(value).replace("'", "''")
-        return f"'{escaped}'"
-
     def _get_thread_connection(self) -> DuckDBConnection:
         """Get or create a connection for the current thread.
 
@@ -321,6 +298,13 @@ class DuckDBConnectionPool:
         thread-safety issues with concurrent cursor operations.
         """
         thread_state = self._thread_local.__dict__
+        if thread_state.get("generation") != self._generation:
+            stale = thread_state.pop("connection", None)
+            if stale is not None:
+                self._retire_connection(cast("DuckDBConnection", stale))
+            thread_state.pop("created_at", None)
+            thread_state.pop("last_used", None)
+            self._thread_local.generation = self._generation
         if "connection" not in thread_state:
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
@@ -328,8 +312,7 @@ class DuckDBConnectionPool:
             return cast("DuckDBConnection", self._thread_local.connection)
 
         if self._recycle > 0 and time.time() - self._thread_local.created_at > self._recycle:
-            with suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
             self._thread_local.last_used = time.time()
@@ -347,13 +330,19 @@ class DuckDBConnectionPool:
                 idle_seconds=round(idle_time, 1),
                 reason="failed_health_check",
             )
-            with suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
             self._thread_local.connection = self._create_connection()
             self._thread_local.created_at = time.time()
 
         self._thread_local.last_used = time.time()
         return cast("DuckDBConnection", self._thread_local.connection)
+
+    def _retire_connection(self, connection: DuckDBConnection) -> None:
+        """Close a pool-owned connection and drop it from the shutdown registry."""
+        with self._lock:
+            self._connection_registry.discard(connection)
+        with suppress(Exception):
+            connection.close()
 
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread."""
@@ -362,8 +351,7 @@ class DuckDBConnectionPool:
         thread_state.pop("storage_secrets", None)
         thread_state.pop("storage_protocols", None)
         if "connection" in thread_state:
-            with suppress(Exception):
-                self._thread_local.connection.close()
+            self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
             del self._thread_local.connection
             if "created_at" in thread_state:
                 del self._thread_local.created_at
@@ -407,15 +395,28 @@ class DuckDBConnectionPool:
         try:
             yield connection
         except Exception:
-            self._close_thread_connection()
-            raise
-        else:
+            with suppress(Exception):
+                connection.rollback()
             if not self._is_memory_db:
                 self._close_thread_connection()
+            raise
+        else:
+            try:
+                connection.commit()
+            finally:
+                if not self._is_memory_db:
+                    self._close_thread_connection()
 
     def close(self) -> None:
-        """Close the thread-local connection if it exists."""
+        """Close every connection this pool opened, on any thread."""
         self._close_thread_connection()
+        with self._lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+            self._generation += 1
+        for connection in orphaned:
+            with suppress(Exception):
+                connection.close()
 
     def size(self) -> int:
         """Get current pool size (always 1 for thread-local)."""

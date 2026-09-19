@@ -96,11 +96,6 @@ class ParameterDeclaration:
         )
 
 
-def _normalize_type_key(type_str: str) -> str:
-    """Normalize a declared type string to its registry lookup key."""
-    return "".join(type_str.split()).lower()
-
-
 def register_param_type(name: str, py_type: ParamTypeMatcher) -> None:
     """Register or override a declared-type-string matcher.
 
@@ -141,3 +136,8 @@ def matches_param_type(type_str: str, value: object) -> bool:
     if isinstance(resolved, type):
         return isinstance(value, resolved)
     return resolved(value)
+
+
+def _normalize_type_key(type_str: str) -> str:
+    """Normalize a declared type string to its registry lookup key."""
+    return "".join(type_str.split()).lower()

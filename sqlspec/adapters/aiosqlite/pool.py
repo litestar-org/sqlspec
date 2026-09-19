@@ -2,15 +2,14 @@
 
 import asyncio
 import logging
-import sqlite3
 import time
 from contextlib import suppress
 from inspect import isawaitable
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Final
 
-import aiosqlite
-
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
+from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import run_on_worker_thread
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
@@ -456,10 +455,32 @@ class AiosqliteConnectionPool:
         return len(self._connection_registry) - self._queue.qsize()
 
     async def _create_connection(self) -> AiosqlitePoolConnection:
-        """Create a new connection.
+        """Create a new pooled connection and register it.
 
         Returns:
             New pool connection instance
+        """
+        connection = await self.new_connection()
+        try:
+            pool_connection = AiosqlitePoolConnection(connection)
+            pool_connection.mark_as_idle()
+
+            async with self._lock:
+                self._connection_registry[pool_connection.id] = pool_connection
+        except BaseException:
+            with suppress(BaseException):
+                await connection.close()
+            raise
+
+        return pool_connection
+
+    async def new_connection(self) -> "AiosqliteConnection":
+        """Open a standalone connection configured exactly like a pooled one.
+
+        The result is owned by the caller: the pool neither tracks nor closes it.
+
+        Returns:
+            A newly opened, fully configured connection.
         """
         connect_proxy = aiosqlite.connect(**self._connection_parameters)
         self._set_connect_proxy_daemon(connect_proxy)
@@ -518,18 +539,12 @@ class AiosqliteConnectionPool:
 
             if self._on_connection_create is not None:
                 await self._on_connection_create(connection)
-
-            pool_connection = AiosqlitePoolConnection(connection)
-            pool_connection.mark_as_idle()
-
-            async with self._lock:
-                self._connection_registry[pool_connection.id] = pool_connection
         except BaseException:
             with suppress(BaseException):
                 await connection.close()
             raise
 
-        return pool_connection
+        return connection
 
     async def _claim_if_healthy(self, connection: AiosqlitePoolConnection) -> bool:
         """Check if connection is healthy and claim it.
@@ -726,7 +741,7 @@ class AiosqliteConnectionPool:
             if connection.idle_since is not None:
                 idle_time = time.time() - connection.idle_since
                 if idle_time <= self._health_check_interval and connection.is_healthy:
-                    connection.idle_since = None  # mark_as_in_use inline
+                    connection.idle_since = None
                     return connection
             # Fall back to full health check for older connections
             if await self._claim_if_healthy(connection):
@@ -788,7 +803,7 @@ class AiosqliteConnectionPool:
             if _has_active_transaction(connection.connection):
                 with suppress(Exception):
                     await connection.connection.rollback()
-            connection.idle_since = time.time()  # mark_as_idle inline
+            connection.idle_since = time.time()
             self._queue.put_nowait(connection)
         except Exception as e:
             log_with_context(

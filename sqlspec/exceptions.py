@@ -41,7 +41,6 @@ __all__ = (
     "StorageOperationFailedError",
     "StoragePathTraversalError",
     "TransactionError",
-    "TransactionRetryError",
     "UniqueViolationError",
     "map_sqlstate_to_exception",
 )
@@ -199,10 +198,6 @@ class TransactionError(SQLSpecError):
 
 class SerializationConflictError(TransactionError):
     """Serialization conflict (SQLSTATE 40001) requiring retry."""
-
-
-class TransactionRetryError(TransactionError):
-    """Transaction failed after retries were exhausted."""
 
 
 class DeadlockError(TransactionError):

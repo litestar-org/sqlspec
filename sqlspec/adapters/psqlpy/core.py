@@ -3,7 +3,6 @@
 import contextlib
 import datetime
 import decimal
-import io
 import re
 import uuid
 from functools import lru_cache
@@ -28,6 +27,7 @@ from sqlspec.core.config_runtime import (
     resolve_runtime_statement_config,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -56,21 +56,21 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
+    from sqlspec.core import SQL
+
 __all__ = (
     "PsqlpyStreamSource",
     "apply_driver_features",
     "build_connection_config",
-    "build_insert_statement",
     "build_postgres_extension_probe_names",
     "build_profile",
     "build_statement_config",
+    "coerce_json_columns",
     "coerce_numeric_for_write",
-    "coerce_records_for_execute_many",
     "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
-    "encode_records_for_binary_copy",
     "extract_rows_affected",
     "format_execute_many_parameters",
     "format_table_identifier",
@@ -94,7 +94,7 @@ _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: type[Any] | None = None
 try:
-    from psqlpy.extra_types import JSONB as _JSONB_IMPORTED
+    from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_IMPORTED
 except ImportError:
     pass
 else:
@@ -106,13 +106,6 @@ _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
-_STRING_WRITER_TYPE: type[Any] | None
-try:
-    from librt.strings import StringWriter
-except ImportError:
-    _STRING_WRITER_TYPE = None
-else:
-    _STRING_WRITER_TYPE = StringWriter
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -205,8 +198,10 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
 class PsqlpyStreamSource:
     """Compiled async chunk source streaming dict rows from a psqlpy server-side cursor.
 
-    The cursor is declared inside a stream-owned transaction and the transaction is
-    committed on close (rolled back on failure).
+    Outside a caller transaction the cursor is declared inside a stream-owned
+    transaction, which is committed on close and rolled back on failure. Inside
+    one the cursor is declared on the connection and the caller's transaction is
+    left untouched.
     """
 
     __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
@@ -225,6 +220,11 @@ class PsqlpyStreamSource:
         self._driver._check_pending_exception(handler)
 
     async def _start(self) -> None:
+        if self._driver._connection_in_transaction():
+            cursor = self._driver.connection.cursor(self._sql, self._parameters, array_size=self._chunk_size)
+            await cursor.start()
+            self._cursor = cursor
+            return
         transaction = self._driver.connection.transaction()
         await transaction.begin()
         self._transaction = transaction
@@ -303,29 +303,36 @@ def coerce_numeric_for_write(value: Any) -> Any:
     return value
 
 
-def encode_records_for_binary_copy(records: "list[tuple[Any, ...]]") -> bytes:
-    """Encode row tuples into a bytes payload compatible with binary_copy_to_table."""
+def coerce_json_columns(
+    records: "list[tuple[Any, ...]]", columns: "list[str]", json_columns: "set[str]"
+) -> "list[tuple[Any, ...]]":
+    """Parse JSON text into objects for destination columns typed json or jsonb.
 
-    string_writer_type = _STRING_WRITER_TYPE
-    if string_writer_type is not None:
-        writer = string_writer_type()
-        for record in records:
-            first = True
-            for value in record:
-                if first:
-                    first = False
-                else:
-                    writer.write("\t")
-                writer.write(_escape_copy_text(_format_copy_value(value)))
-            writer.write("\n")
-        return cast("str", writer.getvalue()).encode("utf-8")
+    psqlpy binds a value by the destination column type, so a JSON column needs
+    a dict or list rather than the text an Arrow string column carries. Only the
+    columns the database reports as JSON are converted, because converting a
+    JSON-looking string bound for a text column would break it.
 
-    buffer = io.StringIO()
+    Args:
+        records: Row tuples in column order.
+        columns: Destination column names, positionally aligned with the rows.
+        json_columns: Names of destination columns typed json or jsonb.
+
+    Returns:
+        The rows, with JSON column values decoded.
+    """
+    if not json_columns:
+        return records
+    indexes = [index for index, name in enumerate(columns) if name in json_columns]
+    if not indexes:
+        return records
+    coerced: list[tuple[Any, ...]] = []
     for record in records:
-        encoded_columns = [_escape_copy_text(_format_copy_value(value)) for value in record]
-        buffer.write("\t".join(encoded_columns))
-        buffer.write("\n")
-    return buffer.getvalue().encode("utf-8")
+        row = list(record)
+        for index in indexes:
+            row[index] = _coerce_json_text_for_execute_many(row[index])
+        coerced.append(tuple(row))
+    return coerced
 
 
 def split_schema_and_table(identifier: str) -> "tuple[str | None, str]":
@@ -362,20 +369,12 @@ def extract_rows_affected(result: Any) -> int:
     return 0
 
 
-def get_parameter_casts(statement: Any) -> "dict[int, str]":
-    """Get parameter cast metadata from compiled statements."""
-    processed_state = getattr(statement, "get_processed_state", None)
-    if callable(processed_state):
-        state = cast("Any", processed_state())
-        if state is not Empty:
-            return state.parameter_casts or {}
-    parameter_casts = getattr(statement, "parameter_casts", None)
-    if parameter_casts:
-        return cast("dict[int, str]", parameter_casts)
-    processed_state = getattr(statement, "processed_state", None)
-    if processed_state is not None and processed_state is not Empty:
-        return cast("dict[int, str]", getattr(processed_state, "parameter_casts", {}) or {})
-    return {}
+def get_parameter_casts(statement: "SQL | CachedQuery") -> "dict[int, str]":
+    """Get parameter cast metadata from a SQLSpec statement."""
+    if isinstance(statement, CachedQuery):
+        return statement.parameter_casts
+    state = statement.get_processed_state()
+    return {} if state is Empty else state.parameter_casts or {}
 
 
 def prepare_parameters_with_casts(
@@ -482,12 +481,6 @@ def format_table_identifier(identifier: str) -> str:
     return quote_identifier(table_name)
 
 
-def build_insert_statement(table: str, columns: "list[str]") -> str:
-    column_clause = ", ".join(quote_identifier(column) for column in columns)
-    placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
-    return f"INSERT INTO {format_table_identifier(table)} ({column_clause}) VALUES ({placeholders})"
-
-
 def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> "list[list[Any]]":
     """Normalize execute_many parameters for psqlpy.
 
@@ -516,13 +509,6 @@ def format_execute_many_parameters(parameters: Any, *, coerce_numeric: bool) -> 
         return formatted
 
     return [_format_execute_many_param_set(parameters, coerce_numeric=coerce_numeric)]
-
-
-def coerce_records_for_execute_many(
-    records: "list[tuple[Any, ...]]", *, parse_json_text: bool = False
-) -> "list[list[Any]]":
-    formatted = format_execute_many_parameters(records, coerce_numeric=True)
-    return _coerce_json_text_rows(formatted) if parse_json_text else formatted
 
 
 def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[Any], str]") -> Any:
@@ -624,24 +610,6 @@ def _parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleCon
     updated_type_map[tuple] = _prepare_tuple_parameter
 
     return base_config.replace(type_coercion_map=updated_type_map)
-
-
-def _escape_copy_text(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
-
-
-def _format_copy_value(value: Any) -> str:
-    if value is None:
-        return r"\N"
-    if isinstance(value, bool):
-        return "t" if value else "f"
-    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
-        return value.isoformat()
-    if isinstance(value, (list, tuple, dict)):
-        return to_json(value)
-    if isinstance(value, (bytes, bytearray)):
-        return value.decode("utf-8")
-    return str(coerce_numeric_for_write(value))
 
 
 def _parse_psqlpy_command_tag(tag: str) -> int:
@@ -758,27 +726,6 @@ def _coerce_json_text_for_execute_many(value: Any) -> Any:
     except Exception:
         return value
     return decoded if isinstance(decoded, (dict, list, tuple)) else value
-
-
-def _coerce_json_text_rows(rows: "list[list[Any]]") -> "list[list[Any]]":
-    coerced_rows: list[list[Any]] | None = None
-    for row_index, row in enumerate(rows):
-        coerced_row: list[Any] | None = None
-        for value_index, value in enumerate(row):
-            coerced_value = _coerce_json_text_for_execute_many(value)
-            if coerced_row is None:
-                if coerced_value is value:
-                    continue
-                coerced_row = list(row)
-            coerced_row[value_index] = coerced_value
-        if coerced_row is None:
-            if coerced_rows is not None:
-                coerced_rows.append(row)
-            continue
-        if coerced_rows is None:
-            coerced_rows = list(rows[:row_index])
-        coerced_rows.append(coerced_row)
-    return rows if coerced_rows is None else coerced_rows
 
 
 driver_profile = build_profile()

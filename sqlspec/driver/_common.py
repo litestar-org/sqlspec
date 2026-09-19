@@ -235,59 +235,6 @@ def hash_stack_operations(stack: "StatementStack") -> "tuple[str, ...]":
     return tuple(hashes)
 
 
-def _apply_declared_optional_defaults(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
-    """Bind missing optional named params as SQL NULL."""
-    for declaration in declared:
-        if not declaration.required and declaration.name not in supplied:
-            supplied[declaration.name] = None
-
-
-def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
-    """Validate a single named-parameter mapping against declared params.
-
-    Required params must be present. Missing optional params are bound as
-    ``None`` so SQL receives ``NULL``. A present non-``None`` value whose
-    declared type resolves via the registry must satisfy that matcher.
-    Unresolved types are documentation-only. Extra keys are ignored.
-    """
-    _apply_declared_optional_defaults(declared, supplied)
-    for declaration in declared:
-        name = declaration.name
-        if name not in supplied:
-            msg = f"Missing required parameter '{name}' for declared SQL statement."
-            raise SQLSpecError(msg)
-        value = supplied[name]
-        if value is None:
-            continue
-        if not matches_param_type(declaration.type_str, value):
-            msg = f"Parameter '{name}' expected type '{declaration.type_str}' but got {type(value).__name__}."
-            raise SQLSpecError(msg)
-
-
-def _check_declared_parameters(sql_statement: "SQL") -> None:
-    """Enforce declared-parameter contracts on the original user params.
-
-    No-op unless the statement carries declarations and is not a script. Runs before
-    driver style conversion, so declared names and raw values are intact. Named binding
-    is validated for presence and type; ``execute_many`` checks the first row only;
-    positional binding is skipped (arity is validated at load time).
-    """
-    declared = sql_statement.declared_parameters
-    if not declared or sql_statement.is_script:
-        return
-    if sql_statement.is_many:
-        rows = sql_statement.positional_parameters
-        if rows and isinstance(rows[0], dict):
-            for row in rows:
-                if isinstance(row, dict):
-                    _apply_declared_optional_defaults(declared, row)
-            _check_declared_named_row(declared, rows[0])
-        return
-    if sql_statement.positional_parameters:
-        return
-    _check_declared_named_row(declared, sql_statement.named_parameters)
-
-
 class StackExecutionObserver:
     """Context manager that aggregates telemetry for stack execution."""
 
@@ -1950,6 +1897,36 @@ class CommonDriverAttributesMixin:
         return create_storage_job(produced, provided, status=status)
 
 
+def parameter_values_need_processing(
+    values: "tuple[Any, ...] | list[Any]",
+    type_coercion_map: "dict[type, Any] | None",
+    fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
+) -> bool:
+    if fallback_items is None:
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
+    if len(values) == 1:
+        return parameter_value_needs_processing(values[0], type_coercion_map, fallback_items)
+    return any(parameter_value_needs_processing(value, type_coercion_map, fallback_items) for value in values)
+
+
+def parameter_value_needs_processing(
+    value: object,
+    type_coercion_map: "dict[type, Any] | None",
+    fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
+) -> bool:
+    if type(value) is TypedParameter:
+        return True
+    if not type_coercion_map:
+        return False
+
+    value_type = type(value)
+    if value_type in type_coercion_map:
+        return True
+    if fallback_items is None:
+        fallback_items = type_coercion_fallbacks(type_coercion_map)
+    return type_coercion_dispatcher(fallback_items).get(value) is not None
+
+
 def _raise_database_exception(
     exc_handler: "AsyncExceptionHandler | SyncExceptionHandler", exc: Exception | None
 ) -> None:
@@ -1997,36 +1974,6 @@ def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") 
     if isinstance(params, dict):
         return tuple(params.values())
     return params
-
-
-def parameter_values_need_processing(
-    values: "tuple[Any, ...] | list[Any]",
-    type_coercion_map: "dict[type, Any] | None",
-    fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
-) -> bool:
-    if fallback_items is None:
-        fallback_items = type_coercion_fallbacks(type_coercion_map)
-    if len(values) == 1:
-        return parameter_value_needs_processing(values[0], type_coercion_map, fallback_items)
-    return any(parameter_value_needs_processing(value, type_coercion_map, fallback_items) for value in values)
-
-
-def parameter_value_needs_processing(
-    value: object,
-    type_coercion_map: "dict[type, Any] | None",
-    fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
-) -> bool:
-    if type(value) is TypedParameter:
-        return True
-    if not type_coercion_map:
-        return False
-
-    value_type = type(value)
-    if value_type in type_coercion_map:
-        return True
-    if fallback_items is None:
-        fallback_items = type_coercion_fallbacks(type_coercion_map)
-    return type_coercion_dispatcher(fallback_items).get(value) is not None
 
 
 def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
@@ -2157,3 +2104,56 @@ def _callable_cache_key(func: Any) -> Any:
     module = getattr(func, "__module__", None)
     qualname = getattr(func, "__qualname__", type(func).__name__)
     return (module, qualname, id(func))
+
+
+def _apply_declared_optional_defaults(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
+    """Bind missing optional named params as SQL NULL."""
+    for declaration in declared:
+        if not declaration.required and declaration.name not in supplied:
+            supplied[declaration.name] = None
+
+
+def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> None:
+    """Validate a single named-parameter mapping against declared params.
+
+    Required params must be present. Missing optional params are bound as
+    ``None`` so SQL receives ``NULL``. A present non-``None`` value whose
+    declared type resolves via the registry must satisfy that matcher.
+    Unresolved types are documentation-only. Extra keys are ignored.
+    """
+    _apply_declared_optional_defaults(declared, supplied)
+    for declaration in declared:
+        name = declaration.name
+        if name not in supplied:
+            msg = f"Missing required parameter '{name}' for declared SQL statement."
+            raise SQLSpecError(msg)
+        value = supplied[name]
+        if value is None:
+            continue
+        if not matches_param_type(declaration.type_str, value):
+            msg = f"Parameter '{name}' expected type '{declaration.type_str}' but got {type(value).__name__}."
+            raise SQLSpecError(msg)
+
+
+def _check_declared_parameters(sql_statement: "SQL") -> None:
+    """Enforce declared-parameter contracts on the original user params.
+
+    No-op unless the statement carries declarations and is not a script. Runs before
+    driver style conversion, so declared names and raw values are intact. Named binding
+    is validated for presence and type; ``execute_many`` checks the first row only;
+    positional binding is skipped (arity is validated at load time).
+    """
+    declared = sql_statement.declared_parameters
+    if not declared or sql_statement.is_script:
+        return
+    if sql_statement.is_many:
+        rows = sql_statement.positional_parameters
+        if rows and isinstance(rows[0], dict):
+            for row in rows:
+                if isinstance(row, dict):
+                    _apply_declared_optional_defaults(declared, row)
+            _check_declared_named_row(declared, rows[0])
+        return
+    if sql_statement.positional_parameters:
+        return
+    _check_declared_named_row(declared, sql_statement.named_parameters)

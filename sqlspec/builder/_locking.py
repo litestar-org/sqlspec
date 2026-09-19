@@ -27,6 +27,18 @@ class _DialectClass(Protocol):
 _REGISTERED_LOCK_GENERATORS: set[type[_GeneratorClass]] = set()
 
 
+def register_lock_generator(dialect: "DialectType | str | None") -> None:
+    """Register lock-clause rendering for the dialect being rendered."""
+    generator_class = _generator_class_for_dialect(dialect)
+    if generator_class in _REGISTERED_LOCK_GENERATORS:
+        return
+
+    generator_class.TRANSFORMS[exp.Lock] = _lock_sql
+    invalidate_generator_dispatch(generator_class)
+
+    _REGISTERED_LOCK_GENERATORS.add(generator_class)
+
+
 def _render_lock_target(generator: "Generator", expression: exp.Expr) -> str:
     if isinstance(expression, exp.Identifier) and not expression.args.get("quoted"):
         return expression.name
@@ -77,15 +89,3 @@ def _generator_class_for_dialect(dialect: "DialectType | str | None") -> "type[_
         dialect_class = type(Dialect.get_or_raise(str(dialect)))
 
     return cast("_DialectClass", dialect_class).Generator
-
-
-def register_lock_generator(dialect: "DialectType | str | None") -> None:
-    """Register lock-clause rendering for the dialect being rendered."""
-    generator_class = _generator_class_for_dialect(dialect)
-    if generator_class in _REGISTERED_LOCK_GENERATORS:
-        return
-
-    generator_class.TRANSFORMS[exp.Lock] = _lock_sql
-    invalidate_generator_dispatch(generator_class)
-
-    _REGISTERED_LOCK_GENERATORS.add(generator_class)

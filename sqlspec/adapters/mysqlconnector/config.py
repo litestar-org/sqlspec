@@ -1,8 +1,7 @@
 """MysqlConnector database configuration."""
 
-import contextlib
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 from weakref import WeakSet
 
 from typing_extensions import NotRequired
@@ -276,6 +275,9 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
         self._connection = None
 
 
+_POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"pool_name", "pool_size", "pool_reset_session"})
+
+
 class MysqlConnectorSyncConfig(
     SyncDatabaseConfig[MysqlConnectorSyncConnection, "MysqlConnectorConnectionPool", MysqlConnectorSyncDriver]
 ):
@@ -320,8 +322,6 @@ class MysqlConnectorSyncConfig(
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[MysqlConnectorSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
@@ -376,11 +376,21 @@ class MysqlConnectorSyncConfig(
             self.connection_instance = None
 
     def create_connection(self) -> MysqlConnectorSyncConnection:
-        connection = mysql.connector.connect(**self.connection_config)
-        autocommit = self.connection_config.get("autocommit")
-        if autocommit is not None and hasattr(connection, "autocommit"):
-            with contextlib.suppress(Exception):
-                setattr(connection, "autocommit", bool(autocommit))
+        """Open a standalone connection owned by the caller.
+
+        Pool settings are dropped, because mysql-connector routes ``connect`` to
+        its own module-global pool as soon as it sees one, which would return a
+        wrapper that neither applies autocommit nor closes on request.
+
+        Returns:
+            A newly opened mysql-connector connection.
+        """
+        config = {key: value for key, value in self.connection_config.items() if key not in _POOL_ONLY_CONFIG_KEYS}
+        connection = mysql.connector.connect(**config)
+        autocommit = config.get("autocommit")
+        if autocommit is not None:
+            connection.autocommit = bool(autocommit)
+        self._ensure_connection(connection)
         return connection
 
     def get_signature_namespace(self) -> "dict[str, Any]":
@@ -442,8 +452,6 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]] | None = (
             features_dict.pop("on_connection_create", None)
@@ -469,9 +477,8 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
     async def create_connection(self) -> MysqlConnectorAsyncConnection:
         connection = await mysqlconnector_aio.connect(**self.connection_config)
         autocommit = self.connection_config.get("autocommit")
-        if autocommit is not None and hasattr(connection, "set_autocommit"):
-            with contextlib.suppress(Exception):
-                await connection.set_autocommit(bool(autocommit))
+        if autocommit is not None:
+            await connection.set_autocommit(bool(autocommit))
 
         # Call user-provided callback after connection setup
         if self._user_connection_hook is not None:

@@ -256,15 +256,14 @@ Use the same keys under ``litestar``; range partitioning defaults to
 ``expires_at``. Under ``adk``, per-table options use names such as
 ``session_table_options``, ``events_table_options``, and
 ``memory_table_options``. ADK partition settings can likewise override a
-specific table key with ``session_partition_key``, ``events_partition_key``,
-or the corresponding state or memory key.
+specific table key with ``session_partition_key`` for sessions,
+``events_partition_key`` for ADK events, or ``queue_partition_key`` for the
+Events queue. ADK state and memory tables use their corresponding table keys.
 
-SQLSpec resolves Oracle Partitioning, Advanced Compression, Basic Compression,
-and Database In-Memory availability once per connection pool through the data
-dictionary. If the option catalog is inaccessible or a requested feature is not
-available, SQLSpec logs a structured warning and creates the table without that
-optimization. User-provided table options are still emitted because they are
-application DDL rather than a capability-detected Oracle option.
+SQLSpec emits the requested compression, in-memory, partitioning, and table
+option clauses directly. It does not check the option catalog or omit requested
+clauses based on feature availability. Oracle reports an error if the database
+cannot apply a requested option.
 
 SQLSpec does not automatically add ``SECUREFILE`` LOB compression. Its safety
 also depends on tablespace segment-space management and database-level
@@ -333,5 +332,47 @@ Data Dictionary
    :show-inheritance:
 
 .. autoclass:: sqlspec.adapters.oracledb.data_dictionary.OracledbAsyncDataDictionary
+   :members:
+   :show-inheritance:
+
+Extension Settings
+==================
+
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
+
+.. autoclass:: sqlspec.adapters.oracledb.litestar.OracleLitestarCompressionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.litestar.OracleLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.litestar.OracleLitestarPartitionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.events.OracleEventsCompressionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.events.OracleEventsConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.events.OracleEventsPartitionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.adk.OracleADKCompressionConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.adk.OracleADKConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.adk.OracleADKPartitionConfig
    :members:
    :show-inheritance:

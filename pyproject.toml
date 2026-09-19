@@ -24,7 +24,7 @@ maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
 requires-python = ">=3.10, <4.0"
-version = "0.63.1"
+version = "0.63.2"
 
 [project.urls]
 Discord = "https://discord.gg/litestar"
@@ -44,13 +44,13 @@ attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-bigquery-storage", "google-cloud-storage"]
 cloud-sql = ["cloud-sql-python-connector"]
 cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
-duckdb = ["duckdb", "pytz"]
+duckdb = ["duckdb", "pytz", "pyarrow"]
 fastapi = ["fastapi"]
 flask = ["flask"]
 fsspec = ["fsspec"]
 litestar = ["litestar>=2.23.0"]
 msgspec = ["msgspec"]
-mssql-python = ["mssql-python>=1.7"]
+mssql-python = ["mssql-python>=1.13"]
 mypyc = ["sqlglot[c]>=30.13.0"]
 mysql-connector = [
   "mysql-connector-python; python_version < '3.12'",
@@ -59,13 +59,13 @@ mysql-connector = [
 nanoid = ["fastnanoid>=0.4.1"]
 obstore = ["obstore"]
 opentelemetry = ["opentelemetry-instrumentation"]
-oracledb = ["oracledb"]
+oracledb = ["oracledb>=3.4"]
 orjson = ["orjson"]
 pandas = ["pandas", "pyarrow"]
 performance = ["librt>=0.10.0", "msgspec"]
 polars = ["polars", "pyarrow"]
 prometheus = ["prometheus-client"]
-psqlpy = ["psqlpy"]
+psqlpy = ["psqlpy>=0.12.1"]
 psycopg = ["psycopg[binary,pool]"]
 pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
@@ -329,7 +329,7 @@ opt_level = "3"   # Maximum optimization (0-3)
 allow_dirty = true
 commit = false
 commit_args = "--no-verify"
-current_version = "0.63.1"
+current_version = "0.63.2"
 ignore_missing_files = false
 ignore_missing_version = false
 message = "chore(release): bump to v{new_version}"

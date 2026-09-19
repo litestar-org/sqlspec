@@ -4,10 +4,9 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-import pymysql.err
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlRawCursor
+from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlProgrammingError, AiomysqlRawCursor
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -144,7 +143,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                     return None
 
                 return _session_record_from_row(row)
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -191,7 +190,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
                 return [_session_record_from_row(row) for row in rows]
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -324,7 +323,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
                 return [_event_record_from_row(row) for row in rows]
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -345,7 +344,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -366,7 +365,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -387,7 +386,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -404,7 +403,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (app_name,))
                 row = await cursor.fetchone()
                 return _json_dict(row[0]) if row is not None else None
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -421,7 +420,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (app_name, user_id))
                 row = await cursor.fetchone()
                 return _json_dict(row[0]) if row is not None else None
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -458,7 +457,7 @@ class AiomysqlADKStore(BaseAsyncADKStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
                 return str(row[0]) if row is not None else None
-        except pymysql.err.ProgrammingError as exc:
+        except AiomysqlProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise

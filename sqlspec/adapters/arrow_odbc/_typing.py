@@ -4,6 +4,11 @@
 from typing import TYPE_CHECKING, Any
 
 import arrow_odbc as _arrow_odbc  # pyright: ignore[reportMissingImports]
+from arrow_odbc import Error as ArrowOdbcError
+from arrow_odbc import (
+    TextEncoding,  # pyright: ignore[reportMissingImports]
+    enable_odbc_connection_pooling,  # pyright: ignore[reportMissingImports]
+)
 from arrow_odbc import connect as arrow_odbc_connect  # pyright: ignore[reportMissingImports]
 
 if TYPE_CHECKING:
@@ -27,10 +32,10 @@ __all__ = (
     "ArrowOdbcError",
     "ArrowOdbcRawCursor",
     "ArrowOdbcSessionContext",
+    "TextEncoding",
     "arrow_odbc_connect",
+    "enable_odbc_connection_pooling",
 )
-
-ArrowOdbcError: "type[Exception]" = getattr(_arrow_odbc, "Error", Exception)
 
 
 class ArrowOdbcCursor:
@@ -64,7 +69,7 @@ class ArrowOdbcSessionContext:
     def __init__(
         self,
         acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[[Any], Any]",
+        release_connection: "Callable[..., Any]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[ArrowOdbcDriver], ArrowOdbcDriver]",
@@ -90,6 +95,6 @@ class ArrowOdbcSessionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._connection is not None:
-            self._release_connection(self._connection)
+            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
