@@ -6,12 +6,12 @@ compilation to avoid ABI boundary issues.
 
 from typing import TYPE_CHECKING, Any
 
+import google.cloud.bigquery as bigquery_module
 from google.api_core import exceptions as bigquery_exceptions
 from google.api_core.client_info import ClientInfo as BigQueryClientInfo
 from google.api_core.client_options import ClientOptions as BigQueryClientOptions
 from google.api_core.retry import Retry as BigQueryRetry
 from google.auth.credentials import Credentials as BigQueryCredentials
-from google.cloud import bigquery as bigquery_module
 from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter
 from google.cloud.bigquery import LoadJobConfig as BigQueryLoadJobConfig
 from google.cloud.bigquery import QueryJob as BigQueryQueryJob

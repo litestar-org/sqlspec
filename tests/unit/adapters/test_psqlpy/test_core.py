@@ -20,6 +20,7 @@ from sqlspec.adapters.psqlpy.core import (
     prepare_parameters_with_casts,
 )
 from sqlspec.core import SQL
+from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.exceptions import DataError, IntegrityError, OperationalError, PermissionDeniedError, SQLSpecError
 
 
@@ -152,8 +153,18 @@ def test_get_parameter_casts_reads_processed_state_from_cached_statement() -> No
     )
     statement.compile()
     assert get_parameter_casts(statement) == {1: "JSONB"}
-    cached = statement.copy()
-    cached.compile()
+    state = statement.get_processed_state()
+    cached = CachedQuery(
+        compiled_sql=state.compiled_sql,
+        parameter_profile=state.parameter_profile,
+        input_named_parameters=state.input_named_parameters,
+        applied_wrap_types=state.applied_wrap_types,
+        parameter_casts=state.parameter_casts,
+        operation_type=state.operation_type,
+        operation_profile=state.operation_profile,
+        param_count=1,
+        processed_state=state,
+    )
     assert get_parameter_casts(cached) == {1: "JSONB"}
 
 

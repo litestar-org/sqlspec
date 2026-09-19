@@ -27,6 +27,7 @@ from sqlspec.core.config_runtime import (
     resolve_runtime_statement_config,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher
+from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,
@@ -368,8 +369,10 @@ def extract_rows_affected(result: Any) -> int:
     return 0
 
 
-def get_parameter_casts(statement: "SQL") -> "dict[int, str]":
+def get_parameter_casts(statement: "SQL | CachedQuery") -> "dict[int, str]":
     """Get parameter cast metadata from a SQLSpec statement."""
+    if isinstance(statement, CachedQuery):
+        return statement.parameter_casts
     state = statement.get_processed_state()
     return {} if state is Empty else state.parameter_casts or {}
 

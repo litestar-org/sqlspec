@@ -4,6 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.typing import import_optional_attr
@@ -208,7 +209,7 @@ def __getattr__(name: str) -> Any:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
     module_name, attribute = target
-    value = import_optional_attr(module_name, attribute)
+    value = getattr(import_module(module_name), attribute, None)
     if value is None:
         msg = f"Cannot import {attribute!r} from {module_name!r}"
         raise ImportError(msg)
