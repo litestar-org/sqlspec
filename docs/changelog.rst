@@ -147,6 +147,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
+* Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
+  when parameters are bound, including repeated preparation, and retains returned
+  rows when legacy modulo syntax cannot be classified by the SQL parser.
 
 * Missing positional bindings no longer consume values reserved for named placeholders,
   including names that collide with generated parameter aliases.
@@ -172,6 +175,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
+* Psycopg preserves literal percent characters alongside bound parameters,
+  including cached statements, batch execution, streams, and pipelines.
+
 * Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
   A placeholder without a value now raises instead of rendering as ``NULL``.
 
