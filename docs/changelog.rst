@@ -14,6 +14,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Added:**
 
+* Added type-preserving pagination cursor tokens with optional HMAC signing and
+  a generic ``CursorPagination`` response container.
+
 * Defer public exports, query builders, and migration helpers in pure-Python installations
   on first access to accelerate cold import performance.
   (`#798 <https://github.com/litestar-org/sqlspec/pull/798>`_)

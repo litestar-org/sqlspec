@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from sqlspec.core._pagination import CursorPagination
 from sqlspec.core.filters import OffsetPagination
 from sqlspec.utils.serializers import (
     __all__,
@@ -987,3 +988,17 @@ def test_schema_dump_default_is_python_names_attrs_default_emits_python_names() 
 
     obj = _User(userId="abc")
     assert schema_dump(obj, exclude_unset=False) == {"user_id": "abc"}
+
+
+def test_to_json_cursor_pagination() -> None:
+    pagination = CursorPagination(
+        [{"id": 1}], limit=10, next_cursor="abc", previous_cursor=None, has_next=True, has_previous=False
+    )
+    assert json.loads(to_json(pagination)) == {
+        "items": [{"id": 1}],
+        "limit": 10,
+        "next_cursor": "abc",
+        "previous_cursor": None,
+        "has_next": True,
+        "has_previous": False,
+    }
