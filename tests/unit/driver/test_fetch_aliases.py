@@ -19,9 +19,18 @@ _ALIAS_PAIRS = (
     ("fetch_to_arrow", "select_to_arrow"),
     ("fetch_stream", "select_stream"),
     ("fetch_with_total", "select_with_total"),
+    ("fetch_with_cursor", "select_with_cursor"),
 )
 
 _DELEGATION_CASES = (
+    (
+        "fetch_with_cursor",
+        "select_with_cursor",
+        ("SELECT * FROM users",),
+        {"schema_type": None, "statement_config": None},
+        {"schema_type": None, "statement_config": None},
+        object(),
+    ),
     (
         "fetch",
         "select",
