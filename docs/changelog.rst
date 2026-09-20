@@ -114,6 +114,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Preserve parameter alignment when repeated BigQuery queries inline NULL values,
+  including copied statements and transitions between NULL and non-NULL values.
+
 * Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
   when parameters are bound, including repeated preparation, and retains returned
   rows when legacy modulo syntax cannot be classified by the SQL parser.

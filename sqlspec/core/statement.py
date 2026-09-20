@@ -885,6 +885,8 @@ class SQL:
         return compiled_sql, rebound_params
 
     def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
+        if self._statement_config.parameter_config.ast_transformer is not None:
+            return False
         cached_fingerprint = state.parameter_fingerprint
         if cached_fingerprint is None:
             return False
