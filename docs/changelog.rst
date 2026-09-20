@@ -118,9 +118,15 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   and result ordering. Pagination filters produce valid set-operation SQL.
 
 
-* Missing positional bindings no longer consume values reserved for named placeholders.
+* Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
+  when parameters are bound, including repeated preparation, and retains returned
+  rows when legacy modulo syntax cannot be classified by the SQL parser.
+
+* Missing positional bindings no longer consume values reserved for named placeholders,
+  including names that collide with generated parameter aliases and script literals.
 * Repeated and reordered numeric placeholders bind by their written indexes when
-  converted to another placeholder style.
+  converted to another placeholder style; native numeric mappings retain written
+  index order on the first call and cache hits.
 * Sequences for named placeholders and mappings for positional placeholders bind
   consistently on the first execution and cache hits, including repeated names.
 * Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
@@ -141,6 +147,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
+* Psycopg preserves literal percent characters alongside bound parameters,
+  including cached statements, batch execution, streams, and pipelines.
+
 * Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
   A placeholder without a value now raises instead of rendering as ``NULL``.
 

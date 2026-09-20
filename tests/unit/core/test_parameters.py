@@ -2604,6 +2604,7 @@ def test_injected_converter_overrides_are_invoked() -> None:
             target_style: ParameterStyle,
             is_many: bool = False,
             *,
+            dialect: str | None = None,
             strict_named_parameters: bool = True,
             param_info: list[ParameterInfo] | None = None,
             precomputed_plan: tuple[list[ParameterInfo], dict[str, int]] | None = None,
@@ -2614,6 +2615,7 @@ def test_injected_converter_overrides_are_invoked() -> None:
                 parameters,
                 target_style,
                 is_many,
+                dialect=dialect,
                 strict_named_parameters=strict_named_parameters,
                 param_info=param_info,
                 precomputed_plan=precomputed_plan,
@@ -2883,7 +2885,7 @@ def test_static_literal_rejects_non_finite_numbers(value: object) -> None:
 def test_static_embedding_raises_on_unresolved_placeholder() -> None:
     from sqlspec.adapters.asyncmy.core import default_statement_config
 
-    with pytest.raises(SQLSpecError, match="Missing value for placeholder"):
+    with pytest.raises(SQLSpecError, match="Missing value for positional placeholder"):
         SQL(
             "select * from t where a = ? and b = :x", {"x": 2}, statement_config=default_statement_config
         ).as_script().compile()
@@ -3021,3 +3023,44 @@ def test_consistent_mixed_placeholder_slots_expand(profile_name: str) -> None:
         assert tuple(results[0]) == ("User", 25)
     else:
         assert tuple(results[0]) == ("User", 25, 25)
+
+
+@pytest.mark.parametrize("target", [ParameterStyle.QMARK, ParameterStyle.NAMED_AT])
+def test_generated_alias_cannot_steal_named_placeholder_value(target: ParameterStyle) -> None:
+    converter = ParameterConverter()
+    with pytest.raises(SQLSpecError, match="Missing value for positional placeholder"):
+        converter.convert_placeholder_style("SELECT ?, :param_0", {"param_0": 42}, target)
+
+
+@pytest.mark.parametrize("target", [ParameterStyle.QMARK, ParameterStyle.NAMED_AT])
+def test_generated_alias_collision_preserves_both_values_on_cache_hits(target: ParameterStyle) -> None:
+    processor = ParameterProcessor()
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=target,
+        supported_execution_parameter_styles={target},
+    )
+    for _ in range(3):
+        result = processor.process("SELECT ?, :param_0", {"unclaimed": 1, "param_0": 42}, config)
+        if isinstance(result.parameters, dict):
+            assert result.parameters == {"param_0_p": 1, "param_0": 42}
+        else:
+            assert tuple(result.parameters) == (1, 42)
+
+
+@pytest.mark.parametrize("profile_name", ["asyncpg", "duckdb"])
+@pytest.mark.parametrize("many", [False, True])
+@pytest.mark.parametrize("row", [{"1": 7, "2": 8}, {"a": 7, "b": 8}])
+def test_native_index_mapping_is_ordered_by_written_slot(profile_name: str, many: bool, row: dict[str, int]) -> None:
+    config = build_statement_config_from_profile(get_driver_profile(profile_name)).parameter_config
+    processor = ParameterProcessor()
+    for _ in range(3):
+        result = processor.process("SELECT $2 AS a, $1 AS b, $2 AS c", [row] if many else row, config, is_many=many)
+        actual = result.parameters[0] if many else result.parameters
+        assert tuple(actual) == (7, 8)
+
+
+def test_static_missing_positional_does_not_consume_reserved_alias() -> None:
+    with pytest.raises(SQLSpecError, match="Missing value for positional placeholder"):
+        SQL("SELECT ?, :param_0", {"param_0": 42}).as_script().compile()
+    assert SQL("SELECT ?, :param_0", {"spare": 1, "param_0": 42}).as_script().compile() == ("SELECT 1, 42", None)
