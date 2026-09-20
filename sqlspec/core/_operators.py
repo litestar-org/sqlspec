@@ -41,6 +41,45 @@ def _trailing_branch_order(expression: exp.SetOperation) -> exp.Expr | None:
     return None
 
 
+def _outer_order(expression: exp.Expr, order: exp.Expr) -> exp.Expr:
+    """Resolve hoisted ordering against a derived table's output columns."""
+    outputs: dict[tuple[str, str], exp.Expr] = {}
+    if isinstance(expression, exp.Query):
+        projections = expression.selects
+        pending = [expression]
+        while pending:
+            branch = pending.pop()
+            if isinstance(branch, exp.SetOperation):
+                pending.extend((branch.this, branch.expression))
+            elif isinstance(branch, exp.Subquery):
+                pending.append(branch.this)
+            elif isinstance(branch, exp.Select):
+                for index, selection in enumerate(branch.selects):
+                    if index >= len(projections):
+                        break
+                    source = selection.this if isinstance(selection, exp.Alias) else selection
+                    projected = projections[index]
+                    output = (
+                        projected.args.get("alias")
+                        if isinstance(projected, exp.Alias)
+                        else (projected.this if isinstance(projected, exp.Column) else None)
+                    )
+                    if isinstance(source, exp.Column) and output is not None:
+                        outputs[(source.table, source.name)] = output
+                        outputs.setdefault(("", source.name), output)
+    result = order.copy()
+    for column in result.find_all(exp.Column):
+        if column.find_ancestor(exp.Subquery) is not None:
+            continue
+        output = outputs.get((column.table, column.name))
+        if output is not None:
+            column.set("this", output.copy())
+        column.set("table", None)
+        column.set("db", None)
+        column.set("catalog", None)
+    return result
+
+
 def _set_operation_sql(generator: Generator, expression: exp.SetOperation) -> str:
     """Render T-SQL pagination outside a set operation.
 
@@ -62,7 +101,12 @@ def _set_operation_sql(generator: Generator, expression: exp.SetOperation) -> st
     outer = (
         exp.Select().select("*").from_(exp.Subquery(this=working, alias=exp.TableAlias(this=exp.to_identifier("_l_0"))))
     )
-    for key, value in (("with_", with_), ("order", order), ("offset", offset), ("limit", limit)):
+    for key, value in (
+        ("with_", with_),
+        ("order", _outer_order(working, order) if order is not None else None),
+        ("offset", offset),
+        ("limit", limit),
+    ):
         if value is not None:
             outer.set(key, value)
     return generator.sql(outer)
