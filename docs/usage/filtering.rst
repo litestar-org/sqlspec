@@ -283,42 +283,6 @@ For FastAPI, use the same configuration with ``Depends()``:
 SQLSpec does not ship generated filter providers for Flask, Starlette, or Sanic;
 their integrations do not have a runtime ``orderBy`` alias surface.
 
-Service Layer
--------------
-
-For common database operations and pagination in application services, SQLSpec provides
-base classes ``SQLSpecAsyncService`` and ``SQLSpecSyncService`` in ``sqlspec.service``.
-
-.. code-block:: python
-
-    from dataclasses import dataclass
-    from sqlspec import sql
-    from sqlspec.adapters.asyncpg import AsyncpgDriver
-    from sqlspec.core import OffsetPagination, StatementFilter
-    from sqlspec.service import SQLSpecAsyncService
-
-    @dataclass
-    class User:
-        id: int
-        name: str
-
-    class UserService(SQLSpecAsyncService[AsyncpgDriver]):
-        async def list_users(self, filters: list[StatementFilter]) -> OffsetPagination[User]:
-            query = sql.select("*").from_("users")
-            return await self.paginate(query, *filters, schema_type=User)
-
-    async def some_handler(db_session: AsyncpgDriver, filters: list[StatementFilter]) -> OffsetPagination[User]:
-        service = UserService(db_session)
-        return await service.list_users(filters)
-
-Related Guides
---------------
-
-- :doc:`drivers_and_querying` for ``select_with_total`` and query methods.
-- :doc:`query_builder` for building queries with ``.where()`` clauses.
-- :doc:`/recipes/service_layer` for building robust application service layers.
-- :doc:`/reference/core/filters` for the core filter classes and parameters API.
-
 Cursor filter dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -370,3 +334,39 @@ When ``sort_field`` is configured, clients may also use ``orderBy`` and
 Changing the requested ordering starts a new traversal; an old token for a
 different ordering fails validation. The returned filter list contains a
 ``CursorFilter`` instead of separate offset and ordering filters.
+
+Service Layer
+-------------
+
+For common database operations and pagination in application services, SQLSpec provides
+base classes ``SQLSpecAsyncService`` and ``SQLSpecSyncService`` in ``sqlspec.service``.
+
+.. code-block:: python
+
+    from dataclasses import dataclass
+    from sqlspec import sql
+    from sqlspec.adapters.asyncpg import AsyncpgDriver
+    from sqlspec.core import OffsetPagination, StatementFilter
+    from sqlspec.service import SQLSpecAsyncService
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+
+    class UserService(SQLSpecAsyncService[AsyncpgDriver]):
+        async def list_users(self, filters: list[StatementFilter]) -> OffsetPagination[User]:
+            query = sql.select("*").from_("users")
+            return await self.paginate(query, *filters, schema_type=User)
+
+    async def some_handler(db_session: AsyncpgDriver, filters: list[StatementFilter]) -> OffsetPagination[User]:
+        service = UserService(db_session)
+        return await service.list_users(filters)
+
+Related Guides
+--------------
+
+- :doc:`drivers_and_querying` for ``select_with_total`` and query methods.
+- :doc:`query_builder` for building queries with ``.where()`` clauses.
+- :doc:`/recipes/service_layer` for building robust application service layers.
+- :doc:`/reference/core/filters` for the core filter classes and parameters API.
