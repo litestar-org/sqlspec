@@ -1012,10 +1012,11 @@ class SQL:
             The SQLGlot expression for this statement
         """
         # Preserve authoring-time parameter names when applying dynamic query modifiers.
+        raw_sql = self._raw_sql
         state = self._processed_state
-        if state is not Empty and state.input_named_parameters and self._raw_expression is None and self._raw_sql:
+        if state is not Empty and state.input_named_parameters and self._raw_expression is None and raw_sql:
             try:
-                parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+                parsed = sqlglot.parse_one(raw_sql, dialect=self._dialect)
                 if isinstance(parsed, exp.Expr):
                     return parsed
             except ParseError:
@@ -1030,14 +1031,24 @@ class SQL:
             return self._raw_expression.copy()
         # Fall back to parsing if enabled
         if not self._statement_config.enable_parsing:
-            return exp.Select().from_(f"({self._raw_sql})")
+            return self._wrapped_raw_sql_expression(raw_sql)
         try:
-            parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            parsed = sqlglot.parse_one(raw_sql, dialect=self._dialect)
             if isinstance(parsed, exp.Expr):
                 return parsed
-            return exp.Select().from_(f"({self._raw_sql})")
+            return self._wrapped_raw_sql_expression(raw_sql)
         except ParseError:
-            return exp.Select().from_(f"({self._raw_sql})")
+            return self._wrapped_raw_sql_expression(raw_sql)
+
+    def _wrapped_raw_sql_expression(self, raw_sql: str) -> exp.Expr:
+        if not raw_sql.strip():
+            msg = "Cannot build an expression from an empty SQL statement."
+            raise sqlspec.exceptions.SQLParsingError(msg)
+        try:
+            return exp.Select().select("*").from_("(" + raw_sql + ") AS filtered")
+        except ParseError as exc:
+            msg = f"Failed to parse SQL statement: {exc}"
+            raise sqlspec.exceptions.SQLParsingError(msg) from exc
 
     def _filter_expression(self) -> exp.Expr:
         """Return a mutable expression copy for statement filters.
