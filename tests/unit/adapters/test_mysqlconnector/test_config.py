@@ -392,4 +392,3 @@ def test_build_connection_config_normalizes_aliases() -> None:
     assert "db" not in cfg
     assert cfg["user"] == "alias_user"
     assert cfg["database"] == "alias_db"
-
