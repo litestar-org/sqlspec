@@ -249,7 +249,7 @@ def test_grouped_query_traversal() -> None:
         conn.execute("CREATE TABLE t(v INTEGER)")
         conn.executemany("INSERT INTO t VALUES (?)", [(1,), (1,), (2,), (3,)])
         first = CursorFilter([CursorKey("v")], 1)
-        seen = []
+        seen: list[dict[str, Any]] = []
         flt = first
         while True:
             text, parameters = flt.append_to_statement(
