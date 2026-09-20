@@ -4,7 +4,7 @@ import sqlite3
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -48,8 +48,11 @@ def cursor_client(tmp_path: Path) -> Generator[TestClient, None, None]:
         filters: Annotated[list[FilterTypes], Depends(filters_dependency)],
         db_session: Annotated[AiosqliteDriver, Depends(plugin.provide_session(config))],
     ) -> CursorPagination[Item]:
-        return await SQLSpecAsyncService(session=db_session).paginate_cursor(
-            "SELECT id, name FROM items", *filters, schema_type=Item
+        return cast(
+            "CursorPagination[Item]",
+            await SQLSpecAsyncService(session=db_session).paginate(
+                "SELECT id, name FROM items", *filters, schema_type=Item
+            ),
         )
 
     with TestClient(app) as client:

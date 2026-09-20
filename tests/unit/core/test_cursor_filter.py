@@ -57,6 +57,47 @@ def test_filter_validation(keys: list[CursorKey], limit: int, secret: bytes | No
         CursorFilter(keys, limit, secret=secret)
 
 
+@pytest.mark.parametrize("keys", ["id", ["id"], [("id", "asc")], [CursorKey("id")]])
+def test_cursor_key_shorthand_continuation(keys: Any) -> None:
+    first = CursorFilter([CursorKey("id")], 2, secret="secret")
+    token = first.encode({"id": 3}, backward=False)
+    shorthand = CursorFilter(keys, 2, token, secret="secret")
+    explicit = CursorFilter(first.keys, 2, token, secret="secret")
+    assert shorthand.keys == first.keys
+    assert shorthand.fingerprint == first.fingerprint
+    actual = shorthand.append_to_statement(_statement())
+    expected = explicit.append_to_statement(_statement())
+    assert actual.sql == expected.sql
+    assert actual.named_parameters == expected.named_parameters
+    assert (
+        shorthand.build_page([{"id": 4}, {"id": 5}, {"id": 6}]).next_cursor
+        == explicit.build_page([{"id": 4}, {"id": 5}, {"id": 6}]).next_cursor
+    )
+
+
+@pytest.mark.parametrize(
+    "keys,expected",
+    [
+        (["v", "id"], [CursorKey("v"), CursorKey("id")]),
+        ([("v", "desc"), ("id", "asc")], [CursorKey("v", "desc"), CursorKey("id")]),
+        ([CursorKey("v", "desc", nulls="last"), "id"], [CursorKey("v", "desc", nulls="last"), CursorKey("id")]),
+    ],
+)
+def test_composite_cursor_key_shorthand(keys: Any, expected: list[CursorKey]) -> None:
+    shorthand = CursorFilter(keys, 2)
+    explicit = CursorFilter(expected, 2)
+    assert shorthand.keys == explicit.keys
+    assert shorthand.encode({"v": 10, "id": 3}, backward=True) == explicit.encode({"v": 10, "id": 3}, backward=True)
+
+
+@pytest.mark.parametrize(
+    "keys", ["", [""], [("id", "bad")], [("id",)], [("id", "asc", "last")], [3], ["id", CursorKey("id")]]
+)
+def test_invalid_cursor_key_shorthand(keys: Any) -> None:
+    with pytest.raises(ValueError):
+        CursorFilter(keys, 2)
+
+
 def test_eager_cursor_validation() -> None:
     with pytest.raises(InvalidCursorError):
         CursorFilter([CursorKey("id")], 10, "invalid")

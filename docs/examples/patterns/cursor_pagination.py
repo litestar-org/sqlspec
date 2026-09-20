@@ -7,12 +7,12 @@ def test_cursor_pagination(tmp_path: Path) -> None:
     # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.core import CursorFilter, CursorKey
+    from sqlspec.core import CursorFilter, CursorKeys, CursorPagination, LimitOffsetFilter, OffsetPagination
     from sqlspec.service import SQLSpecSyncService
 
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "cursor.db")}))
-    keys = [CursorKey("created_at", "desc"), CursorKey("id", "desc")]
+    keys: CursorKeys = [("created_at", "desc"), ("id", "desc")]
     query = "select id, name, created_at from items"
 
     try:
@@ -23,13 +23,19 @@ def test_cursor_pagination(tmp_path: Path) -> None:
                 [(i, f"Item {i}", f"2026-01-{1 + i // 5:02d}") for i in range(1, 26)],
             )
             service = SQLSpecSyncService(session)
-            page = service.paginate_cursor(query, CursorFilter(keys, limit=10))
-            second = service.paginate_cursor(query, CursorFilter(keys, limit=10, cursor=page.next_cursor))
-            previous = service.paginate_cursor(query, CursorFilter(keys, limit=10, cursor=second.previous_cursor))
+            offset_page = service.paginate(query, LimitOffsetFilter(limit=10, offset=0))
+            page = service.paginate(query, CursorFilter(keys, limit=10))
+            assert isinstance(page, CursorPagination)
+            second = service.paginate(query, CursorFilter(keys, limit=10, cursor=page.next_cursor))
+            assert isinstance(second, CursorPagination)
+            previous = service.paginate(query, CursorFilter(keys, limit=10, cursor=second.previous_cursor))
     finally:
         config.close_pool()
     # end-example
 
+    assert isinstance(offset_page, OffsetPagination)
+    assert offset_page.total == 25
+    assert len(offset_page.items) == 10
     assert len(page.items) == 10
     assert len(second.items) == 10
     assert {row["id"] for row in page.items}.isdisjoint(row["id"] for row in second.items)

@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 
 from sqlspec.core import (
     BeforeAfterFilter,
+    CursorKey,
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
@@ -619,6 +620,30 @@ def test_page_size_invalid_configuration(size: int, maximum: int, message: str) 
     config = FilterConfig(pagination_type="limit_offset", pagination_size=size, pagination_max_size=maximum)
     with pytest.raises(ImproperConfigurationError, match=message):
         _get_dependency(provide_filters(config), "limit_offset_filter")
+
+
+@pytest.mark.parametrize("keys", ["id", ["name", "id"], [("name", "desc"), "id"], [CursorKey("name"), ("id", "asc")]])
+def test_cursor_key_shorthand_supports_sorting_and_signed_continuation(keys: Any) -> None:
+    import copy
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret="secret", sort_field="name")
+    provider = _get_dependency(provide_filters(config), "cursor_filter")
+    expected = (CursorKey("name", "desc"), CursorKey("id"))
+    page_filter = provider(field_name="name", sort_order="desc")
+    assert page_filter.keys == expected
+    token = page_filter.encode({"name": "sample", "id": 7}, backward=False)
+    canonical = _get_dependency(
+        provide_filters(
+            FilterConfig(
+                pagination_type="cursor", cursor_keys=list(expected), cursor_secret="secret", sort_field="name"
+            )
+        ),
+        "cursor_filter",
+    )
+    assert canonical(field_name="name", sort_order="desc").encode({"name": "sample", "id": 7}, backward=False) == token
+    resumed = copy.deepcopy(provider)(cursor=token, field_name="name", sort_order="desc")
+    assert resumed.keys == expected
+    assert resumed.encode({"name": "sample", "id": 7}, backward=False) == token
 
 
 def test_cursor_mode_requires_cursor_keys() -> None:

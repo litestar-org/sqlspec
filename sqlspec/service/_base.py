@@ -5,19 +5,17 @@ from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
 from typing_extensions import TypeVar
 
-from sqlspec.core import CursorPagination, OffsetPagination
+from sqlspec.core import CursorFilter, CursorPagination, LimitOffsetFilter, OffsetPagination
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.service._core import (
     _async_exists,
     _async_get_one,
     _async_paginate,
-    _async_paginate_cursor,
     _AsyncBeginTransactionContext,
     _sync_exists,
     _sync_get_one,
     _sync_paginate,
-    _sync_paginate_cursor,
     _SyncBeginTransactionContext,
     _transaction_session,
     _TransactionState,
@@ -126,6 +124,33 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
     async def paginate(
         self,
         statement: "Statement | QueryBuilder",
+        cursor_filter: CursorFilter,
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        count_with_window: bool = False,
+        session: AsyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> CursorPagination[SchemaT]: ...
+
+    @overload
+    async def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        cursor_filter: CursorFilter,
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        count_with_window: bool = False,
+        session: AsyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> CursorPagination[dict[str, Any]]: ...
+
+    @overload
+    async def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        limit_offset_filter: LimitOffsetFilter,
         /,
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT]",
@@ -138,6 +163,7 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
     async def paginate(
         self,
         statement: "Statement | QueryBuilder",
+        limit_offset_filter: LimitOffsetFilter,
         /,
         *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
@@ -145,6 +171,30 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         session: AsyncDriverT | None = None,
         **kwargs: Any,
     ) -> OffsetPagination[dict[str, Any]]: ...
+
+    @overload
+    async def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        count_with_window: bool = False,
+        session: AsyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> OffsetPagination[SchemaT] | CursorPagination[SchemaT]: ...
+
+    @overload
+    async def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        count_with_window: bool = False,
+        session: AsyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> OffsetPagination[dict[str, Any]] | CursorPagination[dict[str, Any]]: ...
 
     async def paginate(
         self,
@@ -155,68 +205,23 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         count_with_window: bool = False,
         session: AsyncDriverT | None = None,
         **kwargs: Any,
-    ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]":
-        """Execute a paginated query and return an OffsetPagination container.
+    ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]] | CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
+        """Execute offset or cursor pagination according to the supplied filter.
 
         Args:
             statement: The SQL statement or QueryBuilder instance.
             *parameters: Statement parameters or filters.
             schema_type: The schema type to map results to.
-            count_with_window: Whether to use COUNT(*) OVER() for total count.
+            count_with_window: Whether to use COUNT(*) OVER() for offset totals; incompatible with cursor pagination.
             session: Caller-owned driver override; no new session is acquired.
             **kwargs: Additional keyword arguments for the driver.
 
         Returns:
-            An OffsetPagination instance containing items and total count.
+            An OffsetPagination with a total, or CursorPagination with page tokens.
         """
         return await _async_paginate(
             self.provide_session(session), statement, parameters, schema_type, count_with_window, kwargs
         )
-
-    @overload
-    async def paginate_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT]",
-        session: AsyncDriverT | None = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT]": ...
-
-    @overload
-    async def paginate_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: None = None,
-        session: AsyncDriverT | None = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[dict[str, Any]]": ...
-
-    async def paginate_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT] | None" = None,
-        session: AsyncDriverT | None = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
-        """Execute a cursor-paginated query.
-
-        Args:
-            statement: SQL statement or query builder instance.
-            *parameters: Statement parameters or filters; must include one CursorFilter.
-            schema_type: Schema type to map results to.
-            session: Caller-owned driver override; no new session is acquired.
-            **kwargs: Additional keyword arguments for the driver.
-
-        Returns:
-            A CursorPagination instance containing items and page cursors.
-        """
-        return await _async_paginate_cursor(self.provide_session(session), statement, parameters, schema_type, kwargs)
 
     @overload
     async def get_one(
@@ -432,6 +437,33 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
     def paginate(
         self,
         statement: "Statement | QueryBuilder",
+        cursor_filter: CursorFilter,
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        count_with_window: bool = False,
+        session: SyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> CursorPagination[SchemaT]: ...
+
+    @overload
+    def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        cursor_filter: CursorFilter,
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        count_with_window: bool = False,
+        session: SyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> CursorPagination[dict[str, Any]]: ...
+
+    @overload
+    def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        limit_offset_filter: LimitOffsetFilter,
         /,
         *parameters: "StatementParameters | StatementFilter",
         schema_type: "type[SchemaT]",
@@ -444,6 +476,7 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
     def paginate(
         self,
         statement: "Statement | QueryBuilder",
+        limit_offset_filter: LimitOffsetFilter,
         /,
         *parameters: "StatementParameters | StatementFilter",
         schema_type: None = None,
@@ -451,6 +484,30 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         session: SyncDriverT | None = None,
         **kwargs: Any,
     ) -> OffsetPagination[dict[str, Any]]: ...
+
+    @overload
+    def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: "type[SchemaT]",
+        count_with_window: bool = False,
+        session: SyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> OffsetPagination[SchemaT] | CursorPagination[SchemaT]: ...
+
+    @overload
+    def paginate(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        schema_type: None = None,
+        count_with_window: bool = False,
+        session: SyncDriverT | None = None,
+        **kwargs: Any,
+    ) -> OffsetPagination[dict[str, Any]] | CursorPagination[dict[str, Any]]: ...
 
     def paginate(
         self,
@@ -461,68 +518,23 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         count_with_window: bool = False,
         session: SyncDriverT | None = None,
         **kwargs: Any,
-    ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]":
-        """Execute a paginated query and return an OffsetPagination container.
+    ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]] | CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
+        """Execute offset or cursor pagination according to the supplied filter.
 
         Args:
             statement: The SQL statement or QueryBuilder instance.
             *parameters: Statement parameters or filters.
             schema_type: The schema type to map results to.
-            count_with_window: Whether to use COUNT(*) OVER() for total count.
+            count_with_window: Whether to use COUNT(*) OVER() for offset totals; incompatible with cursor pagination.
             session: Caller-owned driver override; no new session is acquired.
             **kwargs: Additional keyword arguments for the driver.
 
         Returns:
-            An OffsetPagination instance containing items and total count.
+            An OffsetPagination with a total, or CursorPagination with page tokens.
         """
         return _sync_paginate(
             self.provide_session(session), statement, parameters, schema_type, count_with_window, kwargs
         )
-
-    @overload
-    def paginate_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT]",
-        session: SyncDriverT | None = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT]": ...
-
-    @overload
-    def paginate_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: None = None,
-        session: SyncDriverT | None = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[dict[str, Any]]": ...
-
-    def paginate_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT] | None" = None,
-        session: SyncDriverT | None = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
-        """Execute a cursor-paginated query.
-
-        Args:
-            statement: SQL statement or query builder instance.
-            *parameters: Statement parameters or filters; must include one CursorFilter.
-            schema_type: Schema type to map results to.
-            session: Caller-owned driver override; no new session is acquired.
-            **kwargs: Additional keyword arguments for the driver.
-
-        Returns:
-            A CursorPagination instance containing items and page cursors.
-        """
-        return _sync_paginate_cursor(self.provide_session(session), statement, parameters, schema_type, kwargs)
 
     @overload
     def get_one(

@@ -21,6 +21,7 @@ def sync_rows(config: SqliteConfig) -> tuple[OffsetPagination[ServiceRow], Servi
         driver: SqliteDriver = session
         page = service.paginate(sql.select("value").from_("service_values"), schema_type=ServiceRow, session=driver)
         row = service.get_one(sql.select("value").from_("service_values"), schema_type=ServiceRow, session=driver)
+        assert isinstance(page, OffsetPagination)
         return page, row
 
 
@@ -32,6 +33,7 @@ async def async_rows(config: AiosqliteConfig) -> tuple[OffsetPagination[ServiceR
             sql.select("value").from_("service_values"), schema_type=ServiceRow, session=driver
         )
         row = await service.get_one(sql.select("value").from_("service_values"), schema_type=ServiceRow, session=driver)
+        assert isinstance(page, OffsetPagination)
         return page, row
 
 
@@ -40,8 +42,8 @@ def sync_cursor_rows(config: SqliteConfig) -> tuple[CursorPagination[ServiceRow]
     with service.provide_session() as driver:
         statement = sql.select("value").from_("service_values")
         flt = CursorFilter([CursorKey("value")], 10)
-        typed = service.paginate_cursor(statement, flt, schema_type=ServiceRow, session=driver)
-        untyped = service.paginate_cursor(statement, flt, session=driver)
+        typed = service.paginate(statement, flt, schema_type=ServiceRow, session=driver)
+        untyped = service.paginate(statement, flt, session=driver)
         return typed, untyped
 
 
@@ -52,6 +54,6 @@ async def async_cursor_rows(
     async with service.provide_session() as driver:
         statement = sql.select("value").from_("service_values")
         flt = CursorFilter([CursorKey("value")], 10)
-        typed = await service.paginate_cursor(statement, flt, schema_type=ServiceRow, session=driver)
-        untyped = await service.paginate_cursor(statement, flt, session=driver)
+        typed = await service.paginate(statement, flt, schema_type=ServiceRow, session=driver)
+        untyped = await service.paginate(statement, flt, session=driver)
         return typed, untyped

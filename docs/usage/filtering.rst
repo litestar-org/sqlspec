@@ -41,7 +41,7 @@ count query or return a total.
 Pass a returned token unchanged to the next request. A ``next_cursor`` moves
 forward; a ``previous_cursor`` moves back while keeping the same row order.
 A missing token means there is no page in that direction. Use
-``SQLSpecAsyncService.paginate_cursor()`` with an async session.
+``SQLSpecAsyncService.paginate()`` with an async session.
 
 For direct driver access, pass the cursor filter after other filters to
 ``select()``, then build the page from the returned rows:
@@ -58,11 +58,19 @@ With an async driver, await the query before building the page:
     rows = await session.select(query, *filters, cursor_filter)
     page = cursor_filter.build_page(rows)
 
-Use ``paginate_cursor(..., schema_type=Item)`` on a service when you need
+Use ``paginate(..., schema_type=Item)`` on a service when you need
 response conversion after cursor keys have been read.
 
 Choosing keys
 ~~~~~~~~~~~~~
+
+Use ``CursorFilter("id", limit=20)`` for one ascending key, or
+``CursorFilter(["created_at", "id"], limit=20)`` for several ascending keys.
+For explicit directions, pass pairs such as
+``CursorFilter([("created_at", "desc"), ("id", "desc")], limit=20)``.
+You can mix these forms with ``CursorKey`` objects when a key needs NULL
+placement or a result alias. Framework ``cursor_keys`` settings accept the same
+forms.
 
 Choose stable sort columns and make the final key unique for each result row.
 For example, a timestamp may be shared by many rows, so follow it with the
@@ -139,7 +147,7 @@ It fetches one extra row to detect another page, then removes that row from
 subquery before cursor predicates are applied. In that case, these changes apply
 to the outer query; inner ``LIMIT`` and ``OFFSET`` bounds stay in place and cap
 the rows eligible for paging. Pass exactly one ``CursorFilter``
-to ``paginate_cursor()``; it applies other filters first, then the cursor filter.
+to ``paginate()``; it applies other filters first, then the cursor filter.
 When using ``select()`` directly, place the cursor filter last and pass its
 returned rows to ``build_page()``.
 Do not combine cursor pagination with offset pagination or a separate
@@ -319,12 +327,13 @@ secret in server configuration and pass it as ``cursor_secret``:
     import os
     from dataclasses import dataclass
     from datetime import datetime
+    from typing import cast
 
     from litestar import get
     from litestar.di import NamedDependency
     from litestar.params import SkipValidation
     from sqlspec.adapters.asyncpg import AsyncpgDriver
-    from sqlspec.core import CursorKey, CursorPagination, FilterTypes
+    from sqlspec.core import CursorPagination, FilterTypes
     from sqlspec.extensions.litestar.providers import create_filter_dependencies
     from sqlspec.service import SQLSpecAsyncService
 
@@ -336,7 +345,7 @@ secret in server configuration and pass it as ``cursor_secret``:
 
     cursor_deps = create_filter_dependencies({
         "pagination_type": "cursor",
-        "cursor_keys": [CursorKey("created_at", "desc"), CursorKey("id", "desc")],
+        "cursor_keys": [("created_at", "desc"), ("id", "desc")],
         "cursor_secret": os.environ["CURSOR_SECRET"],
         "pagination_size": 20,
     })
@@ -347,9 +356,10 @@ secret in server configuration and pass it as ``cursor_secret``:
         filters: NamedDependency[SkipValidation[list[FilterTypes]]],
     ) -> CursorPagination[Item]:
         service = SQLSpecAsyncService(db_session)
-        return await service.paginate_cursor(
+        page = await service.paginate(
             "SELECT id, name, created_at FROM items", *filters, schema_type=Item
         )
+        return cast("CursorPagination[Item]", page)
 
 Clients send ``cursor`` and ``pageSize``. The first request omits ``cursor``;
 subsequent requests pass ``next_cursor`` or ``previous_cursor`` from the response.

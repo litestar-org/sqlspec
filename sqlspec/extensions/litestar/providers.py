@@ -27,6 +27,7 @@ from sqlspec.core import (
     ChoicesFilter,
     CursorFilter,
     CursorKey,
+    CursorKeys,
     FilterTypes,
     InCollectionFilter,
     LimitOffsetFilter,
@@ -35,6 +36,7 @@ from sqlspec.core import (
     NullFilter,
     OrderByFilter,
     SearchFilter,
+    normalize_cursor_keys,
 )
 from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
 from sqlspec.utils.text import camelize
@@ -136,8 +138,8 @@ class FilterConfig(TypedDict):
     """Default sort order. Defaults to ``"desc"``."""
     pagination_type: NotRequired[Literal["limit_offset", "cursor"]]
     """Pagination strategy to enable: ``"limit_offset"`` or ``"cursor"``."""
-    cursor_keys: NotRequired[list[CursorKey]]
-    """Ordered keyset columns for cursor pagination. The last key must be unique per row."""
+    cursor_keys: NotRequired[CursorKeys]
+    """Field names, (field, direction) pairs, or CursorKey values. The last key must be unique per row."""
     cursor_secret: NotRequired[str | bytes]
     """Secret enabling HMAC-SHA256 signed cursors."""
     pagination_size: NotRequired[int]
@@ -318,12 +320,12 @@ def _create_statement_filters(
     if config.get("pagination_type") == "cursor":
         cursor_keys = config.get("cursor_keys")
         if not cursor_keys:
-            msg = "pagination_type='cursor' requires a non-empty 'cursor_keys' list"
+            msg = "pagination_type='cursor' requires a non-empty 'cursor_keys' value"
             raise ImproperConfigurationError(msg)
         filters[dep_defaults.CURSOR_FILTER_DEPENDENCY_KEY] = _create_provide(
             _bind_provider(
                 _CursorFilterProvider(
-                    list(cursor_keys),
+                    cursor_keys,
                     config.get("pagination_size", dep_defaults.DEFAULT_PAGINATION_SIZE),
                     config.get("pagination_max_size", dep_defaults.DEFAULT_PAGINATION_MAX_SIZE),
                     config.get("cursor_secret"),
@@ -726,14 +728,14 @@ class _LimitOffsetFilterProvider:
 class _CursorFilterProvider:
     def __init__(
         self,
-        cursor_keys: list[CursorKey],
+        cursor_keys: CursorKeys,
         default_page_size: int,
         max_page_size: int,
         secret: str | bytes | None,
         sort_field: SortField | None,
         config: FilterConfig,
     ) -> None:
-        self.cursor_keys = tuple(cursor_keys)
+        self.cursor_keys = normalize_cursor_keys(cursor_keys)
         self.default_page_size = default_page_size
         self.max_page_size = max_page_size
         self.secret = secret
@@ -778,7 +780,7 @@ class _CursorFilterProvider:
         return _memoize_deepcopy(
             self,
             _CursorFilterProvider(
-                list(self.cursor_keys),
+                self.cursor_keys,
                 self.default_page_size,
                 self.max_page_size,
                 self.secret,

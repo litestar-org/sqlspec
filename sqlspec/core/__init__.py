@@ -67,6 +67,7 @@ from sqlspec.core.filters import (
     ChoicesFilter,
     CursorFilter,
     CursorKey,
+    CursorKeys,
     FilterTypes,
     FilterTypeT,
     InCollectionFilter,
@@ -79,6 +80,7 @@ from sqlspec.core.filters import (
     StatementFilter,
     apply_filter,
     canonicalize_filters,
+    normalize_cursor_keys,
 )
 from sqlspec.core.hashing import (
     hash_expression,
@@ -204,6 +206,7 @@ __all__ = (
     "CorrelationExtractor",
     "CursorFilter",
     "CursorKey",
+    "CursorKeys",
     "CursorPagination",
     "DMLResult",
     "DriverParameterProfile",
@@ -315,6 +318,7 @@ __all__ = (
     "log_cache_stats",
     "looks_like_execute_many",
     "matches_param_type",
+    "normalize_cursor_keys",
     "normalize_parameter_key",
     "ordered",
     "parse_column_for_condition",

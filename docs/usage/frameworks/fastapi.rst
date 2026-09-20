@@ -143,17 +143,16 @@ To page with cursors, pass keys and a signing secret to the provider:
 .. code-block:: python
 
    import os
-   from sqlspec.core import CursorKey
 
    cursor_filter_dep = provide_filters({
        "pagination_type": "cursor",
-       "cursor_keys": [CursorKey("created_at", "desc"), CursorKey("id", "desc")],
+       "cursor_keys": [("created_at", "desc"), ("id", "desc")],
        "cursor_secret": os.environ["CURSOR_SECRET"],
        "pagination_size": 20,
    })
 
 Inject ``cursor_filter_dep`` through ``Depends`` in place of ``filter_dep`` and
-pass ``*filters`` to ``SQLSpecAsyncService(db_session).paginate_cursor()``
+pass ``*filters`` to ``SQLSpecAsyncService(db_session).paginate()``
 (from ``sqlspec.service``). Clients use ``cursor``
 and ``pageSize`` to move through pages. Invalid cursor tokens yield an HTTP 422
 validation response at the ``cursor`` query parameter. See

@@ -49,6 +49,7 @@ __all__ = (
     "ChoicesFilter",
     "CursorFilter",
     "CursorKey",
+    "CursorKeys",
     "CursorPagination",
     "FilterTypeT",
     "FilterTypes",
@@ -69,6 +70,7 @@ __all__ = (
     "apply_filter",
     "canonicalize_filters",
     "find_filter",
+    "normalize_cursor_keys",
 )
 
 T = TypeVar("T")
@@ -639,6 +641,41 @@ def _fold_or(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
     return exp.Paren(this=exp.Or(this=a, expression=b))
 
 
+_CURSOR_KEY_PAIR_LENGTH = 2
+
+CursorKeys: TypeAlias = str | abc.Sequence[CursorKey | str | tuple[str, Literal["asc", "desc"]]]
+
+
+def normalize_cursor_keys(keys: CursorKeys) -> tuple[CursorKey, ...]:
+    """Normalize column names and direction pairs into cursor keys.
+
+    Args:
+        keys: A column name or ordered sequence of names, ``(name, direction)``
+            tuples, and explicit cursor keys. Bare names sort ascending.
+
+    Returns:
+        Cursor keys in the supplied order.
+
+    Raises:
+        ValueError: A key specification is invalid or the sequence is empty.
+    """
+    normalized: list[CursorKey] = []
+    for key in (keys,) if isinstance(keys, str) else keys:
+        if isinstance(key, CursorKey):
+            normalized.append(key)
+        elif isinstance(key, str):
+            normalized.append(CursorKey(key))
+        elif isinstance(key, tuple) and len(key) == _CURSOR_KEY_PAIR_LENGTH and isinstance(key[0], str):
+            normalized.append(CursorKey(key[0], key[1]))
+        else:
+            msg = "Cursor keys must be column names, (name, direction) tuples, or CursorKey objects"
+            raise ValueError(msg)
+    if not normalized:
+        msg = "CursorFilter requires at least one cursor key"
+        raise ValueError(msg)
+    return tuple(normalized)
+
+
 def _fold_and(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
     if a is False or b is False:
         return False
@@ -653,13 +690,15 @@ class CursorFilter(PaginationFilter):
     """Paginate by ordered keys whose last key uniquely identifies each row.
 
     Replaces ORDER BY, LIMIT, and OFFSET and fetches ``limit + 1`` rows.
-    Assemble results with ``build_page()`` or the service's ``paginate_cursor()``.
+    Assemble results with ``build_page()`` or the service's ``paginate()``.
     Apply this filter last so other filters constrain the inner query when
-    grouping or set operations require wrapping. ``paginate_cursor()``
+    grouping or set operations require wrapping. ``paginate()``
     enforces that order automatically.
 
     Args:
-        keys: Sort keys including a unique final tiebreaker.
+        keys: A column name or sequence of names, ``(name, direction)`` tuples,
+            or ``CursorKey`` objects, including a unique final tiebreaker.
+            Bare names sort ascending.
         limit: Maximum page size.
         cursor: Optional token identifying the next or previous page.
         secret: Optional nonempty signing key.
@@ -675,12 +714,9 @@ class CursorFilter(PaginationFilter):
     _values: tuple[Any, ...] | None
 
     def __init__(
-        self, keys: abc.Sequence[CursorKey], limit: int, cursor: str | None = None, secret: str | bytes | None = None
+        self, keys: CursorKeys, limit: int, cursor: str | None = None, secret: str | bytes | None = None
     ) -> None:
-        self._keys = tuple(keys)
-        if not self._keys:
-            msg = "CursorFilter requires at least one CursorKey"
-            raise ValueError(msg)
+        self._keys = normalize_cursor_keys(keys)
         if len({key.field_name for key in self._keys}) != len(self._keys) or len({
             key.result_name for key in self._keys
         }) != len(self._keys):

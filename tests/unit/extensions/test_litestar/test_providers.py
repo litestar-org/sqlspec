@@ -14,6 +14,7 @@ from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
 from sqlspec.base import SQLSpec
 from sqlspec.core import (
     BeforeAfterFilter,
+    CursorKey,
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
@@ -474,6 +475,25 @@ def test_litestar_page_size_validation(page_size: int, status: int) -> None:
         assert client.get("/", params={"pageSize": page_size}).status_code == status
         parameters = client.app.openapi_schema.to_schema()["paths"]["/"]["get"]["parameters"]
         assert next(param["schema"]["maximum"] for param in parameters if param["name"] == "pageSize") == 1000
+
+
+@pytest.mark.parametrize("keys", ["id", ["name", "id"], [("name", "desc"), "id"], [CursorKey("name"), ("id", "asc")]])
+def test_cursor_key_shorthand_supports_sorting_and_signed_continuation(keys: Any) -> None:
+    import copy
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret="secret", sort_field="name")
+    provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    expected = (CursorKey("name", "desc"), CursorKey("id"))
+    page_filter = provider(field_name="name", sort_order="desc")
+    assert page_filter.keys == expected
+    token = page_filter.encode({"name": "sample", "id": 7}, backward=False)
+    canonical = create_filter_dependencies(
+        FilterConfig(pagination_type="cursor", cursor_keys=list(expected), cursor_secret="secret", sort_field="name")
+    )["cursor_filter"].dependency
+    assert canonical(field_name="name", sort_order="desc").encode({"name": "sample", "id": 7}, backward=False) == token
+    resumed = copy.deepcopy(provider)(cursor=token, field_name="name", sort_order="desc")
+    assert resumed.keys == expected
+    assert resumed.encode({"name": "sample", "id": 7}, backward=False) == token
 
 
 def test_cursor_mode_requires_cursor_keys() -> None:

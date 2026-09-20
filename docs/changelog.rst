@@ -16,7 +16,7 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * Added a :ref:`cursor pagination guide <cursor-pagination>` with a tested example.
   It shows how to move through pages in both directions and sign page tokens.
-  Examples cover service ``paginate_cursor()`` and direct driver ``select()``
+  Examples cover service ``paginate()`` and direct driver ``select()``
   with ``CursorFilter.build_page()``, plus Litestar and FastAPI filter setup.
 
 * FastAPI filter dependencies support cursor pagination, including signed
@@ -24,8 +24,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * Litestar filter dependencies support cursor pagination with signed tokens,
   bounded page sizes, dynamic sorting, and client validation errors.
-* Added ``paginate_cursor`` to sync and async services with short-session
-  acquisition, caller-owned session support, and typed pagination results.
+* Pass a cursor or offset filter to service ``paginate()`` to choose the page
+  type. Both sync and async calls return typed rows and can use your session.
+  Litestar routes can return either page type with typed items and an OpenAPI
+  union response.
 
 * Use cursor filters with sync and async driver ``select()`` calls.
   ``CursorFilter.build_page()`` builds a page from the rows.
@@ -36,6 +38,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   ``InvalidCursorError`` consistently in Python and compiled installations.
 * Added ``CursorKey`` and ``CursorFilter`` for bidirectional keyset pagination,
   including explicit NULL placement, composite sort keys, and page cursor creation.
+  Use a field name to sort from low to high. Use pairs to set each field's
+  sort order, or ``CursorKey`` for more control.
 
 * Defer public exports, query builders, and migration helpers in pure-Python installations
   on first access to accelerate cold import performance.
@@ -147,6 +151,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Fixed:**
+
+* Parameter-only statement copies preserve the shared parameter-validator cache
+  and its configured size when rebinding values.
 
 * Adapters, services, and builders import shared driver, ordering, and parameter
   helpers through their owning packages instead of private implementation modules.

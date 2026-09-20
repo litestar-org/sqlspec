@@ -853,7 +853,6 @@ class SQL:
                 converter=self._statement_config.parameter_converter,
                 validator=self._statement_config.parameter_validator,
                 cache_max_size=0,
-                validator_cache_max_size=0,
             )
         processor = self._rebind_processor
         rebound_params = processor.transform_cached_parameters(

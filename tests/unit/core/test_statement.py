@@ -842,6 +842,25 @@ def test_sql_copy_rebinds_parameters_on_compile() -> None:
     mock_compile.assert_not_called()
 
 
+def test_sql_copy_rebinding_preserves_shared_validator_cache() -> None:
+    config = StatementConfig()
+    validator = config.parameter_validator
+    original = SQL("SELECT :value", {"value": 1}, statement_config=config)
+    original.compile()
+    validator.set_cache_max_size(7)
+    metadata_sql = "SELECT :cached_value"
+    validator.extract_parameters(metadata_sql)
+    before = validator.cache_stats()
+
+    copied = original.copy(parameters={"value": 2})
+    assert copied.compile() == ("SELECT ?", (2,))
+    assert validator.cache_stats()["max_size"] == 7
+    validator.extract_parameters(metadata_sql)
+    after = validator.cache_stats()
+    assert after["hits"] == before["hits"] + 1
+    assert after["misses"] == before["misses"]
+
+
 @requires_interpreted
 def test_sql_copy_recompiles_on_structure_change() -> None:
     """Cached state should be discarded when parameter structure changes."""

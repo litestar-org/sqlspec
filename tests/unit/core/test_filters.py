@@ -25,6 +25,7 @@ from sqlspec.core import (
     BeforeAfterFilter,
     BooleanFilter,
     ChoicesFilter,
+    CursorPagination,
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
@@ -1271,13 +1272,13 @@ async def _assert_async_service_overloads(
     service: SQLSpecAsyncService[AsyncDriverAdapterBase], statement: "Statement | QueryBuilder"
 ) -> None:
     typed_page = await service.paginate(statement, schema_type=User)
-    assert_type(typed_page, OffsetPagination[User])
+    assert_type(typed_page, OffsetPagination[User] | CursorPagination[User])
 
     raw_page = await service.paginate(statement)
-    assert_type(raw_page, OffsetPagination[dict[str, Any]])
+    assert_type(raw_page, OffsetPagination[dict[str, Any]] | CursorPagination[dict[str, Any]])
 
     explicit_raw_page = await service.paginate(statement, schema_type=None)
-    assert_type(explicit_raw_page, OffsetPagination[dict[str, Any]])
+    assert_type(explicit_raw_page, OffsetPagination[dict[str, Any]] | CursorPagination[dict[str, Any]])
 
     typed_row = await service.get_one(statement, schema_type=User)
     assert_type(typed_row, User)
@@ -1293,13 +1294,13 @@ def _assert_sync_service_overloads(
     service: SQLSpecSyncService[SyncDriverAdapterBase], statement: "Statement | QueryBuilder"
 ) -> None:
     typed_page = service.paginate(statement, schema_type=User)
-    assert_type(typed_page, OffsetPagination[User])
+    assert_type(typed_page, OffsetPagination[User] | CursorPagination[User])
 
     raw_page = service.paginate(statement)
-    assert_type(raw_page, OffsetPagination[dict[str, Any]])
+    assert_type(raw_page, OffsetPagination[dict[str, Any]] | CursorPagination[dict[str, Any]])
 
     explicit_raw_page = service.paginate(statement, schema_type=None)
-    assert_type(explicit_raw_page, OffsetPagination[dict[str, Any]])
+    assert_type(explicit_raw_page, OffsetPagination[dict[str, Any]] | CursorPagination[dict[str, Any]])
 
     typed_row = service.get_one(statement, schema_type=User)
     assert_type(typed_row, User)
