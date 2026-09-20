@@ -130,6 +130,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
+* Psycopg preserves literal percent characters alongside bound parameters,
+  including cached statements, batch execution, streams, and pipelines.
+
 * Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
   A placeholder without a value now raises instead of rendering as ``NULL``.
 
