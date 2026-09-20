@@ -153,7 +153,6 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * Framework dependency caches preserve configured list order so the first
   sort field and cursor key sequence retain their declared meaning.
 
-* Close async example connection pools before their event loops shut down.
 * Explicit NULL placement remains explicit for PostgreSQL-compatible adapters,
   including CockroachDB, whose default NULL ordering differs from PostgreSQL.
 
