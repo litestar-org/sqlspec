@@ -13,3 +13,20 @@ def test_literal_percent_preserves_sql_text(parameters: object) -> None:
         assert escaped % {"value": "1"} == sql.replace("%(value)s", "1")
     else:
         assert escaped == sql
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("select '50%%', %s", "select '50%%', %s"),
+        ("select 5 %% 2, %s", "select 5 %% 2, %s"),
+        ("select '50%', %s", "select '50%%', %s"),
+        ("select '50%% and 20%', %s", "select '50%% and 20%%', %s"),
+        ("select '%%%s', %s", "select '%%%%s', %s"),
+    ],
+)
+def test_existing_percent_escapes_survive_repeated_preparation(sql: str, expected: str) -> None:
+    validator = default_statement_config.parameter_validator
+    for _ in range(3):
+        assert escape_literal_percent(sql, (1,), validator) == expected
+    assert escape_literal_percent(expected, (1,), validator) == expected

@@ -669,4 +669,14 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
     if not parameters or "%" not in sql:
         return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
-    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+    segments: list[str] = []
+    index = 0
+    while index < len(sql):
+        if sql[index : index + 2] == "%%":
+            segments.append("%%")
+            index += 2
+            continue
+        char = sql[index]
+        segments.append("%%" if char == "%" and index not in keep else char)
+        index += 1
+    return "".join(segments)
