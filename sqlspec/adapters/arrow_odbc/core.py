@@ -20,6 +20,7 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
@@ -146,19 +147,60 @@ def apply_driver_features(
     return statement_config, defaults
 
 
-def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Build arrow-odbc connection arguments using the 10.4 keyword names.
+_CANONICAL_KEY_LOOKUP: Final[dict[str, str]] = {
+    "dsn": "DSN",
+    "driver": "Driver",
+    "server": "Server",
+    "host": "Server",
+    "address": "Server",
+    "addr": "Server",
+    "database": "Database",
+    "db": "Database",
+    "uid": "UID",
+    "user": "UID",
+    "username": "UID",
+    "pwd": "PWD",
+    "password": "PWD",
+    "trusted_connection": "Trusted_Connection",
+    "trustservercertificate": "TrustServerCertificate",
+    "trust_server_certificate": "TrustServerCertificate",
+    "encrypt": "Encrypt",
+    "applicationintent": "ApplicationIntent",
+    "application_intent": "ApplicationIntent",
+    "app": "APP",
+    "wsid": "WSID",
+}
 
-    Individual ODBC fields and ``extra`` entries are emitted first and an
-    explicit ``connection_string`` follows them, so a field set on the config
-    wins over the same option written inside the string. ODBC resolves a
-    repeated keyword in favour of its first occurrence.
+
+def _append_port(server: str, port: Any) -> str:
+    """Append a port number to a server hostname for ODBC."""
+    if port is None:
+        return server
+    port_str = str(port).strip()
+    if not port_str:
+        return server
+    if "," in server:
+        host = server.split(",", 1)[0]
+        return f"{host},{port_str}"
+    return f"{server},{port_str}"
+
+
+def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Build arrow-odbc connection arguments with explicit-field precedence and key deduplication.
+
+    When both ``connection_string`` and discrete connection fields are provided,
+    discrete fields override matching options in ``connection_string``, new fields
+    are appended, and keys are deduplicated. When only ``connection_string`` is provided,
+    it passes through unchanged.
 
     Args:
         params: Raw connection configuration.
 
     Returns:
         The ODBC connection string and the ``connect`` keyword arguments.
+
+    Raises:
+        ImproperConfigurationError: If required connection parameters are missing.
     """
     config = dict(params)
     extra = config.pop("extra", None)
@@ -172,25 +214,64 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     connect_kwargs = {key: config.pop(key) for key in tuple(config) if key in _CONNECT_KWARG_KEYS}
     connection_string = config.pop("connection_string", None)
 
+    if connection_string is not None:
+        if not config:
+            return str(connection_string), connect_kwargs
+
+        options: dict[str, tuple[str, str]] = {}
+        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
+            canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
+            options[canonical_key.lower()] = (canonical_key, raw_value)
+
+        server = config.pop("server", None)
+        if server is None:
+            server = config.pop("host", None)
+        port = config.pop("port", None)
+        if server is not None:
+            options["server"] = ("Server", _format_connection_value("Server", _append_port(str(server), port)))
+        elif port is not None and "server" in options:
+            disp, val = options["server"]
+            options["server"] = (disp, _format_connection_value(disp, _append_port(val, port)))
+
+        consumed: set[str] = set()
+        for key, option_name in _CONNECTION_STRING_KEYS:
+            if key in ("server", "host"):
+                continue
+            value = config.get(key)
+            if value is not None:
+                canonical_name = _CANONICAL_KEY_LOOKUP.get(option_name.lower(), option_name)
+                options[canonical_name.lower()] = (canonical_name, _format_connection_value(canonical_name, value))
+            consumed.add(key)
+
+        for remaining_key, remaining_value in config.items():
+            if remaining_key in consumed or remaining_value is None:
+                continue
+            canonical_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
+            options[canonical_key.lower()] = (canonical_key, _format_connection_value(canonical_key, remaining_value))
+
+        merged_parts = [f"{name}={val}" for name, val in options.values()]
+        return ";".join(merged_parts) + ";", connect_kwargs
+
+    server = config.pop("server", None)
+    if server is None:
+        server = config.pop("host", None)
+    port = config.pop("port", None)
+    if server is not None:
+        config["server"] = _append_port(str(server), port)
+
     parts: list[str] = []
-    consumed: set[str] = set()
+    standalone_consumed: set[str] = set()
     for key, option_name in _CONNECTION_STRING_KEYS:
         value = config.get(key)
         if value is None:
             continue
         parts.append(f"{option_name}={_format_connection_value(option_name, value)}")
-        consumed.add(key)
+        standalone_consumed.add(key)
 
-    for key, value in config.items():
-        if key in consumed or value is None:
+    for remaining_key, remaining_value in config.items():
+        if remaining_key in standalone_consumed or remaining_value is None:
             continue
-        parts.append(f"{key}={_format_connection_value(key, value)}")
-
-    if connection_string is not None:
-        suffix = str(connection_string)
-        if not parts:
-            return suffix, connect_kwargs
-        return ";".join(parts) + ";" + suffix, connect_kwargs
+        parts.append(f"{remaining_key}={_format_connection_value(remaining_key, remaining_value)}")
 
     if not parts:
         msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
@@ -292,7 +373,10 @@ def _format_connection_value(option_name: str, value: Any) -> str:
             "which an ODBC connection string cannot represent."
         )
         raise ImproperConfigurationError(msg)
-    if text and text == text.strip() and not any(character in text for character in _ODBC_PUNCTUATION):
+    punctuation = _ODBC_PUNCTUATION
+    if option_name.lower() in ("server", "host"):
+        punctuation = punctuation.replace(",", "")
+    if text and text == text.strip() and not any(character in text for character in punctuation):
         return text
     return "{" + text + "}"
 
