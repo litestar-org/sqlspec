@@ -21,6 +21,7 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncConfig,
     CockroachPsycopgSyncDriver,
     CockroachPsycopgSyncSessionContext,
+    build_connection_config,
 )
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
 from sqlspec.exceptions import ImproperConfigurationError
@@ -628,3 +629,40 @@ def test_cockroach_psycopg_follower_reads_stay_off_by_default(monkeypatch: pytes
     driver.begin()
 
     assert connection.execute.call_count == 0
+
+
+def test_build_connection_config_resolves_aliases() -> None:
+    """build_connection_config should map dsn/url to conninfo, database/db to dbname, and username to user."""
+    cfg = build_connection_config({
+        "url": "postgresql://usr:pwd@host.internal:26257/main",
+        "database": "override_db",
+        "username": "override_usr",
+    })
+    assert cfg["conninfo"] == "postgresql://usr:pwd@host.internal:26257/main"
+    assert cfg["dbname"] == "override_db"
+    assert cfg["user"] == "override_usr"
+    assert "url" not in cfg
+    assert "database" not in cfg
+    assert "username" not in cfg
+
+
+def test_cockroach_sync_config_normalizes_aliases() -> None:
+    """CockroachPsycopgSyncConfig should normalize aliases in connection_config."""
+    config = CockroachPsycopgSyncConfig(
+        connection_config={"dsn": "postgresql://localhost:26257/initial", "database": "override"}
+    )
+    assert config.connection_config["conninfo"] == "postgresql://localhost:26257/initial"
+    assert config.connection_config["dbname"] == "override"
+    assert "dsn" not in config.connection_config
+    assert "database" not in config.connection_config
+
+
+def test_cockroach_async_config_normalizes_aliases() -> None:
+    """CockroachPsycopgAsyncConfig should normalize aliases in connection_config."""
+    config = CockroachPsycopgAsyncConfig(
+        connection_config={"connection_string": "postgresql://localhost:26257/initial", "db": "override"}
+    )
+    assert config.connection_config["conninfo"] == "postgresql://localhost:26257/initial"
+    assert config.connection_config["dbname"] == "override"
+    assert "connection_string" not in config.connection_config
+    assert "db" not in config.connection_config

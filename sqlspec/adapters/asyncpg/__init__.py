@@ -7,7 +7,7 @@ from sqlspec.adapters.asyncpg.config import (
     AsyncpgDriverFeatures,
     AsyncpgPoolConfig,
 )
-from sqlspec.adapters.asyncpg.core import default_statement_config
+from sqlspec.adapters.asyncpg.core import build_connection_config, default_statement_config
 from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 
 __all__ = (
@@ -21,5 +21,6 @@ __all__ = (
     "AsyncpgPool",
     "AsyncpgPoolConfig",
     "AsyncpgPreparedStatement",
+    "build_connection_config",
     "default_statement_config",
 )

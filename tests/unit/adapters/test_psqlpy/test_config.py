@@ -8,6 +8,7 @@ import pytest
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyDriverFeatures
 from sqlspec.adapters.psqlpy.core import (
+    build_connection_config,
     build_postgres_extension_probe_names,
     build_statement_config,
     resolve_postgres_extension_state,
@@ -204,3 +205,31 @@ def test_psqlpy_provide_session_tracks_promoted_statement_config() -> None:
 
     assert callable(session_config)
     assert session_config().dialect == "pgvector"
+
+
+def test_build_connection_config_resolves_aliases() -> None:
+    """build_connection_config should map conninfo/url to dsn, database/dbname/db to db_name, and user to username."""
+    cfg = build_connection_config({
+        "url": "postgresql://usr:pwd@host.internal:5432/main",
+        "database": "override_db",
+        "user": "override_usr",
+    })
+    assert cfg["dsn"] == "postgresql://usr:pwd@host.internal:5432/main"
+    assert cfg["db_name"] == "override_db"
+    assert cfg["username"] == "override_usr"
+    assert "url" not in cfg
+    assert "database" not in cfg
+    assert "user" not in cfg
+
+
+def test_psqlpy_config_normalizes_aliases() -> None:
+    """PsqlpyConfig should normalize aliases in connection_config."""
+    config = PsqlpyConfig(
+        connection_config={"conninfo": "postgresql://localhost:5432/test", "dbname": "target_db", "user": "target_user"}
+    )
+    assert config.connection_config["dsn"] == "postgresql://localhost:5432/test"
+    assert config.connection_config["db_name"] == "target_db"
+    assert config.connection_config["username"] == "target_user"
+    assert "conninfo" not in config.connection_config
+    assert "dbname" not in config.connection_config
+    assert "user" not in config.connection_config

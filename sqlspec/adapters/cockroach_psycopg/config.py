@@ -36,7 +36,7 @@ from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -48,6 +48,7 @@ __all__ = (
     "CockroachPsycopgDriverFeatures",
     "CockroachPsycopgPoolConfig",
     "CockroachPsycopgSyncConfig",
+    "build_connection_config",
 )
 
 default_statement_config = build_statement_config()
@@ -137,6 +138,33 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     events_backend: NotRequired[Literal["poll_queue"]]
 
 
+def build_connection_config(
+    connection_config: "CockroachPsycopgPoolConfig | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Build normalized CockroachDB psycopg connection configuration, resolving aliases for libpq compatibility.
+
+    Maps connection string aliases (dsn, url, connection_string) to conninfo, database aliases
+    (database, db) to dbname, and user aliases (username) to user, while discarding redundant keys
+    that libpq rejects.
+    """
+    config = normalize_connection_config(connection_config)
+    conninfo = (
+        config.pop("conninfo", None)
+        or config.pop("dsn", None)
+        or config.pop("url", None)
+        or config.pop("connection_string", None)
+    )
+    if conninfo is not None:
+        config["conninfo"] = conninfo
+    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
+    if dbname is not None:
+        config["dbname"] = dbname
+    user = config.pop("user", None) or config.pop("username", None)
+    if user is not None:
+        config["user"] = user
+    return config
+
+
 class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for CockroachDB psycopg connections."""
 
@@ -209,7 +237,7 @@ class CockroachPsycopgSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -436,7 +464,7 @@ class CockroachPsycopgAsyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         _validate_driver_features(driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

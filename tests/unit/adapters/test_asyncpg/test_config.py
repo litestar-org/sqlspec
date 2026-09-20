@@ -10,6 +10,7 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgConnectionConfig, AsyncpgPoolConfig
 from sqlspec.adapters.asyncpg.core import (
+    build_connection_config,
     build_postgres_extension_probe_names,
     build_statement_config,
     resolve_postgres_extension_state,
@@ -278,3 +279,35 @@ def test_asyncpg_provide_session_tracks_promoted_statement_config() -> None:
 
     assert callable(session_config)
     assert session_config().dialect == "pgvector"
+
+
+def test_build_connection_config_resolves_aliases() -> None:
+    """build_connection_config should map conninfo/url to dsn, dbname/db to database, and username to user."""
+    cfg = build_connection_config({
+        "url": "postgresql://usr:pwd@host.internal:5432/main",
+        "dbname": "override_db",
+        "username": "override_usr",
+    })
+    assert cfg["dsn"] == "postgresql://usr:pwd@host.internal:5432/main"
+    assert cfg["database"] == "override_db"
+    assert cfg["user"] == "override_usr"
+    assert "url" not in cfg
+    assert "dbname" not in cfg
+    assert "username" not in cfg
+
+
+def test_asyncpg_config_normalizes_aliases() -> None:
+    """AsyncpgConfig should normalize aliases in connection_config."""
+    config = AsyncpgConfig(
+        connection_config={
+            "conninfo": "postgresql://localhost:5432/test",
+            "dbname": "target_db",
+            "username": "target_user",
+        }
+    )
+    assert config.connection_config["dsn"] == "postgresql://localhost:5432/test"
+    assert config.connection_config["database"] == "target_db"
+    assert config.connection_config["user"] == "target_user"
+    assert "conninfo" not in config.connection_config
+    assert "dbname" not in config.connection_config
+    assert "username" not in config.connection_config

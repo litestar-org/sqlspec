@@ -41,7 +41,7 @@ from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
     from types import TracebackType
 
     from sqlspec.adapters.psycopg._typing import PsycopgAdaptContext as AdaptContext
@@ -65,6 +65,7 @@ __all__ = (
     "PsycopgPoolParams",
     "PsycopgSyncConfig",
     "PsycopgSyncCursor",
+    "build_connection_config",
 )
 
 
@@ -194,6 +195,31 @@ class PsycopgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
 
 
+def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str, Any] | None") -> dict[str, Any]:
+    """Build normalized psycopg connection configuration, resolving aliases for libpq compatibility.
+
+    Maps connection string aliases (dsn, url, connection_string) to conninfo, database aliases
+    (database, db) to dbname, and user aliases (username) to user, while discarding redundant keys
+    that libpq rejects.
+    """
+    config = normalize_connection_config(connection_config)
+    conninfo = (
+        config.pop("conninfo", None)
+        or config.pop("dsn", None)
+        or config.pop("url", None)
+        or config.pop("connection_string", None)
+    )
+    if conninfo is not None:
+        config["conninfo"] = conninfo
+    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
+    if dbname is not None:
+        config["dbname"] = dbname
+    user = config.pop("user", None) or config.pop("username", None)
+    if user is not None:
+        config["user"] = user
+    return config
+
+
 class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for Psycopg connections."""
 
@@ -274,7 +300,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             extension_config: Extension-specific configuration
             **kwargs: Additional keyword arguments
         """
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -651,7 +677,7 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extension_config: Extension-specific configuration
             **kwargs: Additional keyword arguments
         """
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

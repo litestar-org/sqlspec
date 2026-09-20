@@ -232,7 +232,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(normalize_connection_config(connection_config))
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

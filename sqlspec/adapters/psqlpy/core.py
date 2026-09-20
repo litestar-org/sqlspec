@@ -143,7 +143,7 @@ def build_statement_config(
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build connection configuration with non-null values only.
+    """Build normalized connection configuration resolving parameter aliases for psqlpy.
 
     Args:
         connection_config: Raw connection configuration mapping.
@@ -151,7 +151,27 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    return {key: value for key, value in connection_config.items() if value is not None}
+    config = {key: value for key, value in connection_config.items() if value is not None}
+    dsn = (
+        config.pop("dsn", None)
+        or config.pop("conninfo", None)
+        or config.pop("url", None)
+        or config.pop("connection_string", None)
+    )
+    if dsn is not None:
+        config["dsn"] = dsn
+    db_name = (
+        config.pop("db_name", None)
+        or config.pop("database", None)
+        or config.pop("dbname", None)
+        or config.pop("db", None)
+    )
+    if db_name is not None:
+        config["db_name"] = db_name
+    username = config.pop("username", None) or config.pop("user", None)
+    if username is not None:
+        config["username"] = username
+    return config
 
 
 def apply_driver_features(

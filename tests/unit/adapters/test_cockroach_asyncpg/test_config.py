@@ -18,6 +18,7 @@ from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgDriverFeatures,
     CockroachAsyncpgPoolConfig,
     CockroachAsyncpgRetryConfig,
+    build_connection_config,
 )
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
@@ -358,3 +359,35 @@ async def test_create_connection_consumes_no_pool_slot(monkeypatch: pytest.Monke
     assert config.connection_instance is None
     assert "min_size" not in connect.call_args.kwargs
     assert "max_size" not in connect.call_args.kwargs
+
+
+def test_build_connection_config_resolves_aliases() -> None:
+    """build_connection_config should map conninfo/url to dsn, dbname/db to database, and username to user."""
+    cfg = build_connection_config({
+        "url": "postgresql://usr:pwd@host.internal:26257/main",
+        "dbname": "override_db",
+        "username": "override_usr",
+    })
+    assert cfg["dsn"] == "postgresql://usr:pwd@host.internal:26257/main"
+    assert cfg["database"] == "override_db"
+    assert cfg["user"] == "override_usr"
+    assert "url" not in cfg
+    assert "dbname" not in cfg
+    assert "username" not in cfg
+
+
+def test_cockroach_asyncpg_config_normalizes_aliases() -> None:
+    """CockroachAsyncpgConfig should normalize aliases in connection_config."""
+    config = CockroachAsyncpgConfig(
+        connection_config={
+            "conninfo": "postgresql://localhost:26257/test",
+            "dbname": "target_db",
+            "username": "target_user",
+        }
+    )
+    assert config.connection_config["dsn"] == "postgresql://localhost:26257/test"
+    assert config.connection_config["database"] == "target_db"
+    assert config.connection_config["user"] == "target_user"
+    assert "conninfo" not in config.connection_config
+    assert "dbname" not in config.connection_config
+    assert "username" not in config.connection_config

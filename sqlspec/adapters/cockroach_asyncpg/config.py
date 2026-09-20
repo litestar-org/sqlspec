@@ -45,6 +45,7 @@ __all__ = (
     "CockroachAsyncpgGSSLib",
     "CockroachAsyncpgPoolConfig",
     "CockroachAsyncpgTargetSessionAttrs",
+    "build_connection_config",
 )
 
 _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
@@ -238,7 +239,7 @@ class CockroachAsyncpgConfig(
         **kwargs: Any,
     ) -> None:
         raw_enable_pgvector = bool(driver_features and driver_features.get("enable_pgvector") is True)
-        connection_config = normalize_connection_config(connection_config)
+        connection_config = build_connection_config(normalize_connection_config(connection_config))
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         driver_features["enable_pgvector"] = raw_enable_pgvector

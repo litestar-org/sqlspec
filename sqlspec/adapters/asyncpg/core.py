@@ -89,7 +89,7 @@ _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], s
 
 
 def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build connection configuration with non-null values only.
+    """Build normalized connection configuration resolving parameter aliases for asyncpg.
 
     Args:
         connection_config: Raw connection configuration mapping.
@@ -97,7 +97,41 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     Returns:
         Dictionary with connection parameters.
     """
-    return {key: value for key, value in connection_config.items() if value is not None}
+    config = dict(connection_config)
+    found_dsn = False
+    dsn_val = None
+    for key in ("dsn", "conninfo", "url", "connection_string"):
+        if key in config:
+            val = config.pop(key)
+            if not found_dsn:
+                dsn_val = val
+                found_dsn = True
+    if found_dsn:
+        config["dsn"] = dsn_val
+
+    found_database = False
+    database_val = None
+    for key in ("database", "dbname", "db"):
+        if key in config:
+            val = config.pop(key)
+            if not found_database:
+                database_val = val
+                found_database = True
+    if found_database:
+        config["database"] = database_val
+
+    found_user = False
+    user_val = None
+    for key in ("user", "username"):
+        if key in config:
+            val = config.pop(key)
+            if not found_user:
+                user_val = val
+                found_user = True
+    if found_user:
+        config["user"] = user_val
+
+    return config
 
 
 def build_profile() -> "DriverParameterProfile":
