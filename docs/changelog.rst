@@ -33,6 +33,18 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Changed:**
 
+* SQLSpec-built ordering (``OrderByFilter``, ``SQL.order_by``, builder
+  ``order_by``, ``Column.asc()``/``desc()``, and window ordering) leaves NULL
+  placement to the database unless requested. It no longer adds implicit
+  ``NULLS FIRST``/``NULLS LAST`` clauses or a ``CASE`` sort key.
+  On PostgreSQL, Oracle, Snowflake, and Redshift, affected ascending items
+  move NULL rows from first to last; descending items move them from last
+  to first. On DuckDB, ClickHouse, and Trino, affected ascending items move
+  NULL rows to last. On MySQL, SQL Server, SQLite, BigQuery, and Spanner,
+  ``Column.asc()`` and expression-based window ordering move NULL rows to first.
+  Request placement with ``OrderByFilter(nulls=...)``, ``Column.asc(nulls=...)`` /
+  ``Column.desc(nulls=...)``, or a string such as ``"id DESC NULLS LAST"``.
+
 * Pure-Python installations defer unused query builders and migration commands.
   Compiled wheels retain eager exports to preserve concurrent access after
   package initialization.
@@ -106,6 +118,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Fixed:**
+
+* ``SQL.order_by("id", desc=True)`` now sorts descending, and
+  ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when

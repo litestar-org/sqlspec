@@ -11,6 +11,7 @@ from sqlglot.errors import ParseError
 
 import sqlspec.exceptions
 from sqlspec.core import _pipeline as pipeline
+from sqlspec.core._ordering import apply_direction, default_nulls, ordered
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
 from sqlspec.core.cache import FiltersView
 from sqlspec.core.compiler import OperationProfile, OperationType
@@ -1348,11 +1349,9 @@ class SQL:
         enable_parsing = self._statement_config.enable_parsing
         for item in items:
             if isinstance(item, str):
-                order_expr = _parse_order_item(item, dialect, enable_parsing)
-                if desc and not isinstance(order_expr, exp.Ordered):
-                    order_expr = order_expr.desc()
+                order_expr = apply_direction(_parse_order_item(item, dialect, enable_parsing), desc)
             else:
-                order_expr = item.desc() if desc and not isinstance(item, exp.Ordered) else item
+                order_expr = apply_direction(item, desc)
             if isinstance(new_expr, exp.Select):
                 new_expr = new_expr.order_by(order_expr, copy=False)
             else:
@@ -1897,11 +1896,11 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
         except ParseError:
             parsed = None
         if parsed is not None:
-            return parsed
+            return default_nulls(parsed, normalized)
 
     parts = normalized.rsplit(None, 1)
     if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
         base_expr = exp.column(parts[0]) if parts[0] else exp.column(normalized)
-        return base_expr.desc() if parts[1].lower() == "desc" else base_expr.asc()
+        return ordered(base_expr, desc=True if parts[1].lower() == "desc" else None)
 
     return exp.column(normalized)

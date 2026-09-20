@@ -14,6 +14,7 @@ from sqlglot import exp, maybe_parse
 from sqlspec.builder._column import Column
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
 from sqlspec.core import ParameterStyle, ParameterValidator
+from sqlspec.core._ordering import default_nulls, ordered
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,
@@ -198,13 +199,11 @@ def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:
         base, direction = parts
         if _is_simple_identifier(base):
             column_expr = _simple_column_expression(base)
-            if direction.lower() == "desc":
-                return exp.Ordered(this=column_expr, desc=True, nulls_first=False)
-            return exp.Ordered(this=column_expr, desc=False, nulls_first=True)
+            return ordered(column_expr, desc=direction.lower() == "desc")
 
     parsed = maybe_parse(order_value, into=exp.Ordered)
     if parsed:
-        return parsed
+        return default_nulls(parsed, order_value)
 
     return parse_column_expression(order_input)
 
@@ -372,9 +371,9 @@ def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> 
 
 def _normalize_order_by(order_by: str | list[str] | exp.Expr | None) -> exp.Order | None:
     if isinstance(order_by, str):
-        return exp.Order(expressions=[exp.column(order_by).asc()])
+        return exp.Order(expressions=[ordered(exp.column(order_by))])
     if isinstance(order_by, list):
-        return exp.Order(expressions=[exp.column(column).asc() for column in order_by])
+        return exp.Order(expressions=[ordered(exp.column(column)) for column in order_by])
     if isinstance(order_by, exp.Expr):
         return exp.Order(expressions=[order_by])
     return None

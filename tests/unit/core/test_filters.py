@@ -106,8 +106,8 @@ def test_canonicalize_filters_deduplicates_and_sorts_by_class_and_field() -> Non
     assert [filter_.get_cache_key() for filter_ in result] == [
         ("InCollectionFilter", "status", ("active",)),
         ("InCollectionFilter", "status", ("pending",)),
-        ("OrderByFilter", "alpha", "asc"),
-        ("OrderByFilter", "zeta", "desc"),
+        ("OrderByFilter", "alpha", "asc", None),
+        ("OrderByFilter", "zeta", "desc", None),
         ("SearchFilter", "name", "needle", False),
     ]
 
