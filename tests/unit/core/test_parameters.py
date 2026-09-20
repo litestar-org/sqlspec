@@ -2884,3 +2884,11 @@ def test_static_cache_is_dialect_specific() -> None:
         )
         assert sql == "select " + sqlglot.exp.Literal.string(value).sql(dialect=dialect)
         assert parameters is None
+
+
+@pytest.mark.parametrize("parameters", [{}, (), []])
+def test_static_embedding_rejects_empty_payload(parameters: object) -> None:
+    from sqlspec.adapters.pymysql.core import default_statement_config
+
+    with pytest.raises(SQLSpecError, match="Missing value for placeholder"):
+        SQL("select :x", parameters, statement_config=default_statement_config).as_script().compile()

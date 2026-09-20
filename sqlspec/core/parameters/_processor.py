@@ -334,7 +334,7 @@ class ParameterProcessor:
 
         input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
 
-        if config.needs_static_script_compilation and param_info and parameters and not is_many:
+        if config.needs_static_script_compilation and param_info and not is_many:
             return self._compile_static_script(
                 sql, parameters, config, is_many, cache_key, dialect, input_named_parameters=input_named_parameters
             )
