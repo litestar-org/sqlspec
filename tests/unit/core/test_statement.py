@@ -1657,3 +1657,25 @@ def test_qmark_escape_survives_filter_round_trip() -> None:
     assert "COALESCE" not in sql
     assert tuple(params) == (5,)
     assert "LIMIT 2" in sql
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "-- c", "SELEC foo bar (", "select 1 from", ")"])
+def test_modifier_on_unparseable_sql_raises_sql_parsing_error(raw: str) -> None:
+    from sqlspec.exceptions import SQLParsingError
+
+    with pytest.raises(SQLParsingError):
+        SQL(raw).limit(1)
+
+
+def test_modifier_after_reset_raises_sql_parsing_error() -> None:
+    from sqlspec.exceptions import SQLParsingError
+
+    statement = SQL("SELECT 1")
+    statement.reset()
+    with pytest.raises(SQLParsingError):
+        statement.limit(1)
+
+
+def test_filter_on_unparsed_statement_wraps_with_projection() -> None:
+    statement = SQL("SELECT 1 AS v", statement_config=StatementConfig(enable_parsing=False)).limit(1)
+    assert statement.raw_sql.startswith("SELECT * FROM (SELECT 1 AS v) AS filtered")

@@ -1322,42 +1322,45 @@ async def test_service_paginate_works() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
         config = AiosqliteConfig(connection_config={"database": tmp.name})
-        sqlspec.add_config(config)
+        try:
+            sqlspec.add_config(config)
 
-        async with sqlspec.provide_session(config) as session:
-            await session.execute_script("""
-                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO users (id, name) VALUES (1, 'alice');
-                INSERT INTO users (id, name) VALUES (2, 'bob');
-                INSERT INTO users (id, name) VALUES (3, 'charlie');
-            """)
-            await session.commit()
+            async with sqlspec.provide_session(config) as session:
+                await session.execute_script("""
+                    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                    INSERT INTO users (id, name) VALUES (1, 'alice');
+                    INSERT INTO users (id, name) VALUES (2, 'bob');
+                    INSERT INTO users (id, name) VALUES (3, 'charlie');
+                """)
+                await session.commit()
 
-            service = UserService(session)
+                service = UserService(session)
 
-            # Query all
-            query = sql_builder.select("*").from_("users")
+                # Query all
+                query = sql_builder.select("*").from_("users")
 
-            # Paginate first 2
-            pagination_filter = LimitOffsetFilter(limit=2, offset=0)
-            result = await service.paginate(query, pagination_filter, schema_type=User)
+                # Paginate first 2
+                pagination_filter = LimitOffsetFilter(limit=2, offset=0)
+                result = await service.paginate(query, pagination_filter, schema_type=User)
 
-            assert len(result.items) == 2
-            assert result.total == 3
-            assert result.limit == 2
-            assert result.offset == 0
-            assert result.items[0].name == "alice"
-            assert result.items[1].name == "bob"
+                assert len(result.items) == 2
+                assert result.total == 3
+                assert result.limit == 2
+                assert result.offset == 0
+                assert result.items[0].name == "alice"
+                assert result.items[1].name == "bob"
 
-            # Paginate next
-            pagination_filter2 = LimitOffsetFilter(limit=2, offset=2)
-            result2 = await service.paginate(query, pagination_filter2, schema_type=User)
+                # Paginate next
+                pagination_filter2 = LimitOffsetFilter(limit=2, offset=2)
+                result2 = await service.paginate(query, pagination_filter2, schema_type=User)
 
-            assert len(result2.items) == 1
-            assert result2.total == 3
-            assert result2.limit == 2
-            assert result2.offset == 2
-            assert result2.items[0].name == "charlie"
+                assert len(result2.items) == 1
+                assert result2.total == 3
+                assert result2.limit == 2
+                assert result2.offset == 2
+                assert result2.items[0].name == "charlie"
+        finally:
+            await config.close_pool()
 
 
 @pytest.mark.anyio
@@ -1366,41 +1369,44 @@ async def test_service_paginate_handles_repeated_named_parameters() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
         config = AiosqliteConfig(connection_config={"database": tmp.name})
-        sqlspec.add_config(config)
+        try:
+            sqlspec.add_config(config)
 
-        async with sqlspec.provide_session(config) as session:
-            await session.execute_script("""
-                CREATE TABLE users (
-                    id INTEGER PRIMARY KEY,
-                    name TEXT,
-                    workspace TEXT,
-                    fallback_workspace TEXT
-                );
-                INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (1, 'alice', 'W', NULL);
-                INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (2, 'bob', 'other', 'W');
-                INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (3, 'charlie', 'other', 'other');
-            """)
-            await session.commit()
+            async with sqlspec.provide_session(config) as session:
+                await session.execute_script("""
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT,
+                        workspace TEXT,
+                        fallback_workspace TEXT
+                    );
+                    INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (1, 'alice', 'W', NULL);
+                    INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (2, 'bob', 'other', 'W');
+                    INSERT INTO users (id, name, workspace, fallback_workspace) VALUES (3, 'charlie', 'other', 'other');
+                """)
+                await session.commit()
 
-            service = UserService(session)
+                service = UserService(session)
 
-            result = await service.paginate(
-                """
-                SELECT id, name
-                FROM users
-                WHERE workspace = :wid OR fallback_workspace = :wid
-                ORDER BY id
-                """,
-                LimitOffsetFilter(limit=1, offset=0),
-                schema_type=User,
-                wid="W",
-            )
+                result = await service.paginate(
+                    """
+                    SELECT id, name
+                    FROM users
+                    WHERE workspace = :wid OR fallback_workspace = :wid
+                    ORDER BY id
+                    """,
+                    LimitOffsetFilter(limit=1, offset=0),
+                    schema_type=User,
+                    wid="W",
+                )
 
-            assert len(result.items) == 1
-            assert result.total == 2
-            assert result.limit == 1
-            assert result.offset == 0
-            assert result.items[0].name == "alice"
+                assert len(result.items) == 1
+                assert result.total == 2
+                assert result.limit == 1
+                assert result.offset == 0
+                assert result.items[0].name == "alice"
+        finally:
+            await config.close_pool()
 
 
 @pytest.mark.anyio
@@ -1432,24 +1438,27 @@ async def test_service_exists_works() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
         config = AiosqliteConfig(connection_config={"database": tmp.name})
-        sqlspec.add_config(config)
+        try:
+            sqlspec.add_config(config)
 
-        async with sqlspec.provide_session(config) as session:
-            await session.execute_script("""
-                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO users (id, name) VALUES (1, 'alice');
-            """)
-            await session.commit()
+            async with sqlspec.provide_session(config) as session:
+                await session.execute_script("""
+                    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                    INSERT INTO users (id, name) VALUES (1, 'alice');
+                """)
+                await session.commit()
 
-            service = UserService(session)
+                service = UserService(session)
 
-            # Exists
-            query = sql_builder.select("*").from_("users").where_eq("name", "alice")
-            assert await service.exists(query) is True
+                # Exists
+                query = sql_builder.select("*").from_("users").where_eq("name", "alice")
+                assert await service.exists(query) is True
 
-            # Does not exist
-            query2 = sql_builder.select("*").from_("users").where_eq("name", "bob")
-            assert await service.exists(query2) is False
+                # Does not exist
+                query2 = sql_builder.select("*").from_("users").where_eq("name", "bob")
+                assert await service.exists(query2) is False
+        finally:
+            await config.close_pool()
 
 
 @pytest.mark.anyio
@@ -1458,31 +1467,34 @@ async def test_service_get_one_returns_row_or_raises() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
         config = AiosqliteConfig(connection_config={"database": tmp.name})
-        sqlspec.add_config(config)
+        try:
+            sqlspec.add_config(config)
 
-        async with sqlspec.provide_session(config) as session:
-            await session.execute_script(
-                """
-                CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
-                INSERT INTO users (id, name) VALUES (1, 'alice');
-                """
-            )
-            await session.commit()
-
-            service = UserService(session)
-
-            row = await service.get_one(
-                sql_builder.select("id", "name").from_("users").where_eq("name", "alice"), schema_type=User
-            )
-            assert isinstance(row, User)
-            assert row.name == "alice"
-
-            with pytest.raises(NotFoundError, match="missing user"):
-                await service.get_one(
-                    sql_builder.select("id", "name").from_("users").where_eq("name", "ghost"),
-                    schema_type=User,
-                    error_message="missing user",
+            async with sqlspec.provide_session(config) as session:
+                await session.execute_script(
+                    """
+                    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+                    INSERT INTO users (id, name) VALUES (1, 'alice');
+                    """
                 )
+                await session.commit()
+
+                service = UserService(session)
+
+                row = await service.get_one(
+                    sql_builder.select("id", "name").from_("users").where_eq("name", "alice"), schema_type=User
+                )
+                assert isinstance(row, User)
+                assert row.name == "alice"
+
+                with pytest.raises(NotFoundError, match="missing user"):
+                    await service.get_one(
+                        sql_builder.select("id", "name").from_("users").where_eq("name", "ghost"),
+                        schema_type=User,
+                        error_message="missing user",
+                    )
+        finally:
+            await config.close_pool()
 
 
 @pytest.mark.anyio
@@ -1492,27 +1504,30 @@ async def test_service_begin_transaction_commits_and_rolls_back() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db", delete=True) as tmp:
         sqlspec = SQLSpec()
         config = AiosqliteConfig(connection_config={"database": tmp.name})
-        sqlspec.add_config(config)
+        try:
+            sqlspec.add_config(config)
 
-        async with sqlspec.provide_session(config) as session:
-            await session.execute_script("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-            await session.commit()
+            async with sqlspec.provide_session(config) as session:
+                await session.execute_script("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+                await session.commit()
 
-            service = UserService(session)
+                service = UserService(session)
 
-            async with service.begin_transaction():
-                await session.execute(sql_builder.insert("users").columns("id", "name").values(1, "alice"))
-
-            count_after_commit = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
-            assert count_after_commit.one()["n"] == 1
-
-            with pytest.raises(RuntimeError, match="boom"):
                 async with service.begin_transaction():
-                    await session.execute(sql_builder.insert("users").columns("id", "name").values(2, "bob"))
-                    raise RuntimeError("boom")
+                    await session.execute(sql_builder.insert("users").columns("id", "name").values(1, "alice"))
 
-            count_after_rollback = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
-            assert count_after_rollback.one()["n"] == 1
+                count_after_commit = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
+                assert count_after_commit.one()["n"] == 1
+
+                with pytest.raises(RuntimeError, match="boom"):
+                    async with service.begin_transaction():
+                        await session.execute(sql_builder.insert("users").columns("id", "name").values(2, "bob"))
+                        raise RuntimeError("boom")
+
+                count_after_rollback = await session.execute(sql_builder.select("COUNT(*) AS n").from_("users"))
+                assert count_after_rollback.one()["n"] == 1
+        finally:
+            await config.close_pool()
 
 
 def test_search_filter_raises_typeerror_on_invalid_field_name() -> None:

@@ -157,6 +157,17 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   Cross-adapter safety checks cover quotes, backslashes, and placeholder-like
   text supplied as bound values.
 
+
+* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
+  instead of leaking a sqlglot ``ParseError``, including during concurrent resets.
+
+* Tests, including Litestar connection-provider tests, close aiosqlite pools before
+  their event loops shut down, and unhandled worker-thread exceptions now fail the test suite.
+
+* The SQLite and aiosqlite pools retry enabling WAL mode when several connections
+  first open a new database at the same time; previously this could fail with
+  ``database is locked``.
+
 * Close async example connection pools before their event loops shut down.
 
 * Correct Litestar filter query parameter titles and pagination schema documentation.
