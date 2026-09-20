@@ -406,3 +406,21 @@ def test_raise_missing_connection_provide_request_session_raises_when_connection
 
 def test_raise_missing_connection_raise_missing_connection_annotation_is_noreturn() -> None:
     assert SQLSpecPlugin._raise_missing_connection.__annotations__["return"] is NoReturn
+
+
+def test_filter_query_parameter_titles() -> None:
+    from litestar import Litestar, get
+    from litestar.di import NamedDependency
+
+    from sqlspec.extensions.litestar.providers import create_filter_dependencies
+
+    @get("/")
+    def handler(filters: NamedDependency[list[Any]]) -> list[Any]:
+        return []
+
+    app = Litestar([handler], dependencies=create_filter_dependencies({"search": "name", "sort_field": "name"}))
+    parameters = app.openapi_schema.to_schema()["paths"]["/"]["get"]["parameters"]
+    titles = {parameter["name"]: parameter["schema"]["title"] for parameter in parameters}
+    assert titles["searchString"] == "Search term"
+    assert titles["searchIgnoreCase"] == "Search should be case insensitive"
+    assert titles["sortOrder"] == "Sort order"

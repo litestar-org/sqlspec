@@ -678,11 +678,11 @@ class _SearchFilterProvider:
         self.ignore_case_default = ignore_case_default
         self.return_annotation = SearchFilter
         search_annotation = _query_parameter_annotation(
-            StringOrNone, QueryParameter(name="searchString", required=False, title="Field to search")
+            StringOrNone, QueryParameter(name="searchString", required=False, title="Search term")
         )
         ignore_annotation = _query_parameter_annotation(
             BooleanOrNone,
-            QueryParameter(name="searchIgnoreCase", required=False, title="Search should be case sensitive"),
+            QueryParameter(name="searchIgnoreCase", required=False, title="Search should be case insensitive"),
         )
         self.signature = inspect.Signature(
             parameters=[
@@ -735,7 +735,7 @@ class _OrderByProvider:
             StringOrNone, QueryParameter(name="orderBy", required=False, title="Order by field")
         )
         order_annotation = _query_parameter_annotation(
-            SortOrderOrNone, QueryParameter(name="sortOrder", required=False, title="Field to search")
+            SortOrderOrNone, QueryParameter(name="sortOrder", required=False, title="Sort order")
         )
         self.signature = inspect.Signature(
             parameters=[

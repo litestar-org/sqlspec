@@ -107,6 +107,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Correct Litestar filter query parameter titles and pagination schema documentation.
+
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
   a driver error export is missing.
