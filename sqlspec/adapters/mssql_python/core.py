@@ -21,6 +21,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
@@ -67,6 +68,12 @@ _CONNECTION_STRING_KEYS: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = 
     (("ip_address_preference", "ipaddresspreference"), "IpAddressPreference", False),
     (("packet_size", "packetsize", "packet size"), "PacketSize", False),
 )
+_CANONICAL_KEY_LOOKUP: Final[dict[str, str]] = {
+    "address": "Server",
+    "addr": "Server",
+    **{alias.lower(): opt for aliases, opt, _ in _CONNECTION_STRING_KEYS for alias in aliases},
+    **{opt.lower(): opt for _, opt, _ in _CONNECTION_STRING_KEYS},
+}
 _CONNECT_KWARG_KEYS: Final[set[str]] = {"autocommit", "attrs_before", "native_uuid", "token_provider"}
 _CONNECT_TIMEOUT_KEYS: Final[tuple[str, ...]] = ("timeout", "connection_timeout", "login_timeout", "command_timeout")
 _POOL_CONFIG_KEYS: Final[set[str]] = {"pool_size", "pool_idle_timeout", "pool_enabled"}
@@ -146,7 +153,19 @@ def apply_driver_features(
 
 
 def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Build an ODBC connection string and mssql-python connect kwargs."""
+    """Build an ODBC connection string and mssql-python connect kwargs.
+
+    When both ``connection_string`` and discrete connection fields are provided,
+    discrete fields take precedence and override matching keys in the connection
+    string. Key names are normalized case-insensitively to prevent duplicate
+    keywords, satisfying mssql-python driver requirements.
+
+    Args:
+        params: Raw connection configuration dictionary.
+
+    Returns:
+        ODBC connection string and connect kwargs.
+    """
     config = dict(params)
     connect_kwargs = {key: config.pop(key) for key in tuple(config) if key in _CONNECT_KWARG_KEYS}
     timeout = _pop_alias(config, _CONNECT_TIMEOUT_KEYS, "timeout", strict=False)
@@ -159,7 +178,48 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
 
     connection_string = config.pop("connection_string", None)
     if connection_string is not None:
-        return str(connection_string), connect_kwargs
+        if not config:
+            return str(connection_string), connect_kwargs
+
+        options: dict[str, tuple[str, str]] = {}
+        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
+            canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
+            options[canonical_key.lower()] = (canonical_key, raw_value)
+
+        server = _pop_alias(config, ("server", "address", "addr"), "server")
+        port = config.pop("port", None)
+        if server is not None:
+            options["server"] = ("Server", _append_port(str(server), port))
+        elif port is not None and "server" in options:
+            disp, val = options["server"]
+            options["server"] = (disp, _append_port(val, port))
+
+        for keys, option_name, strict in _CONNECTION_STRING_KEYS:
+            if option_name == "Server":
+                continue
+            value = _pop_alias(config, keys, option_name, strict=strict)
+            if value is not None:
+                options[option_name.lower()] = (option_name, _format_connection_value(value))
+
+        extra = config.pop("extra", None)
+        if isinstance(extra, dict):
+            for extra_key, extra_value in extra.items():
+                if extra_value is not None:
+                    extra_key_str = str(extra_key)
+                    canonical_extra_key = _CANONICAL_KEY_LOOKUP.get(extra_key_str.lower(), extra_key_str)
+                    options[canonical_extra_key.lower()] = (canonical_extra_key, _format_connection_value(extra_value))
+
+        for remaining_key, remaining_value in list(config.items()):
+            if remaining_value is not None:
+                canonical_remaining_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
+                options[canonical_remaining_key.lower()] = (
+                    canonical_remaining_key,
+                    _format_connection_value(remaining_value),
+                )
+            config.pop(remaining_key, None)
+
+        merged_parts = [f"{name}={val}" for name, val in options.values()]
+        return ";".join(merged_parts) + ";", connect_kwargs
 
     server = _pop_alias(config, ("server", "address", "addr"), "server")
     if not server:

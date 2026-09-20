@@ -37,6 +37,7 @@ __all__ = (
     "discover_config_from_pyproject",
     "find_pyproject_toml",
     "normalize_connection_config",
+    "parse_odbc_connection_string",
     "parse_pyproject_config",
     "resolve_config_async",
     "resolve_config_sync",
@@ -228,6 +229,67 @@ def normalize_connection_config(
         raise ImproperConfigurationError(msg)
     normalized.update(extras)
     return normalized
+
+
+def parse_odbc_connection_string(conn_str: str) -> list[tuple[str, str]]:
+    """Tokenize a semicolon-delimited ODBC connection string into key-value pairs.
+
+    Handles quoted values enclosed in braces and doubled closing braces per the
+    MS-ODBCSTR specification.
+
+    Args:
+        conn_str: Semicolon-delimited ODBC connection string.
+
+    Returns:
+        List of key-value tuples preserving occurrence order and brace enclosures.
+    """
+    pairs: list[tuple[str, str]] = []
+    i = 0
+    n = len(conn_str)
+    while i < n:
+        while i < n and conn_str[i] in " ;":
+            i += 1
+        if i >= n:
+            break
+        eq = conn_str.find("=", i)
+        if eq == -1:
+            break
+        key = conn_str[i:eq].strip()
+        i = eq + 1
+        while i < n and conn_str[i] in " \t":
+            i += 1
+        if i >= n:
+            pairs.append((key, ""))
+            break
+        if conn_str[i] == "{":
+            val_chars = ["{"]
+            i += 1
+            while i < n:
+                ch = conn_str[i]
+                if ch == "}":
+                    if i + 1 < n and conn_str[i + 1] == "}":
+                        val_chars.append("}}")
+                        i += 2
+                    else:
+                        val_chars.append("}")
+                        i += 1
+                        break
+                else:
+                    val_chars.append(ch)
+                    i += 1
+            pairs.append((key, "".join(val_chars)))
+            while i < n and conn_str[i] != ";":
+                i += 1
+            if i < n and conn_str[i] == ";":
+                i += 1
+        else:
+            semi = conn_str.find(";", i)
+            if semi == -1:
+                pairs.append((key, conn_str[i:].strip()))
+                break
+            pairs.append((key, conn_str[i:semi].strip()))
+            i = semi + 1
+    return pairs
 
 
 def _normalize_config_path(config_path: str) -> str:

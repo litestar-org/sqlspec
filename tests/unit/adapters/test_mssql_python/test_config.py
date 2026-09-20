@@ -98,6 +98,23 @@ def test_config_create_pool_splits_connection_and_pool_options(monkeypatch: pyte
     assert pooling_calls == [{"max_size": 3, "idle_timeout": 10, "enabled": True}]
 
 
+def test_config_connection_string_with_discrete_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MssqlPythonConfig should merge discrete database overrides over connection_string."""
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: None)
+
+    config = MssqlPythonConfig(
+        connection_config={
+            "connection_string": "Server=localhost,1433;UID=app;PWD=secret;Encrypt=yes;",
+            "database": "sales",
+        }
+    )
+
+    pool = config.create_pool()
+    assert "Database=sales" in pool.connection_string
+    assert "Server=localhost,1433" in pool.connection_string
+
+
 def test_connection_params_include_current_mssql_python_odbc_keywords() -> None:
     """Typed connection params should cover the mssql-python ODBC keyword allowlist."""
     annotations = get_type_hints(MssqlPythonConnectionParams, include_extras=True)

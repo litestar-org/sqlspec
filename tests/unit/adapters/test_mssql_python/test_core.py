@@ -11,6 +11,7 @@ from sqlspec.exceptions import (
     NotNullViolationError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_odbc_connection_string
 
 
 def test_build_connection_config_uses_supplied_connection_string() -> None:
@@ -148,3 +149,109 @@ def test_build_connection_config_requires_server_when_missing_connection_string(
     """Part-based configuration should fail fast without a server."""
     with pytest.raises(ValueError, match="server"):
         build_connection_config({"database": "app"})
+
+
+def test_build_connection_config_merges_discrete_database_into_connection_string() -> None:
+    """Discrete database field must be appended when not present in connection_string."""
+    connection_string, _ = build_connection_config({
+        "connection_string": "Server=host;UID=u;PWD=p;",
+        "database": "sales",
+    })
+
+    assert "Database=sales" in connection_string
+    assert "Server=host" in connection_string
+    assert "UID=u" in connection_string
+    assert "PWD=p" in connection_string
+
+
+def test_build_connection_config_discrete_field_overrides_existing_in_connection_string() -> None:
+    """Discrete fields must override existing keys in connection_string without duplicates."""
+    connection_string, _ = build_connection_config({
+        "connection_string": "Server=host;Database=master;UID=u;PWD=p;",
+        "database": "sales",
+    })
+
+    assert "Database=sales" in connection_string
+    assert "Database=master" not in connection_string
+    assert connection_string.lower().count("database=") == 1
+
+
+def test_build_connection_config_merges_port_with_connection_string_server() -> None:
+    """Discrete port must be attached to the server defined in connection_string."""
+    connection_string, _ = build_connection_config({"connection_string": "Server=host;UID=u;PWD=p;", "port": 1433})
+
+    assert "Server=host,1433" in connection_string
+
+
+def test_build_connection_config_merges_extra_options_into_connection_string() -> None:
+    """Discrete extra dictionary options must be merged into connection_string."""
+    connection_string, _ = build_connection_config({
+        "connection_string": "Server=host;UID=u;PWD=p;",
+        "extra": {"ApplicationIntent": "ReadOnly"},
+    })
+
+    assert "ApplicationIntent=ReadOnly" in connection_string
+
+
+def test_build_connection_config_merges_boolean_options() -> None:
+    """Discrete boolean flags must override connection_string options with ODBC yes/no."""
+    connection_string, _ = build_connection_config({"connection_string": "Server=host;Encrypt=yes;", "encrypt": False})
+
+    assert "Encrypt=no" in connection_string
+    assert "Encrypt=yes" not in connection_string
+    assert connection_string.lower().count("encrypt=") == 1
+
+
+def test_build_connection_config_discrete_server_overrides_connection_string() -> None:
+    """Discrete server must override server from connection_string."""
+    connection_string, _ = build_connection_config({
+        "connection_string": "Server=oldhost;UID=u;PWD=p;",
+        "server": "newhost",
+        "port": 14333,
+    })
+
+    assert "Server=newhost,14333" in connection_string
+    assert "oldhost" not in connection_string
+
+
+def test_build_connection_config_braced_values_and_trailing_options() -> None:
+    """Braced values with escaped closing braces and unquoted trailing options must be preserved."""
+    connection_string, _ = build_connection_config({
+        "connection_string": "Driver={ODBC Driver 18 for SQL Server};PWD={p}}wd};Server=myhost",
+        "database": "sales",
+    })
+
+    assert "Driver={ODBC Driver 18 for SQL Server}" in connection_string
+    assert "PWD={p}}wd}" in connection_string
+    assert "Server=myhost" in connection_string
+    assert "Database=sales" in connection_string
+
+
+def test_build_connection_config_extra_dict_and_arbitrary_options() -> None:
+    """Extra dict None values must be ignored, and arbitrary unmapped config keys must be merged."""
+    connection_string, _ = build_connection_config({
+        "connection_string": "Server=myhost;",
+        "extra": {"ApplicationIntent": "ReadOnly", "IgnoredOption": None},
+        "CustomParam": "custom_val",
+        "IgnoredParam": None,
+    })
+
+    assert "ApplicationIntent=ReadOnly" in connection_string
+    assert "CustomParam=custom_val" in connection_string
+    assert "IgnoredOption" not in connection_string
+    assert "IgnoredParam" not in connection_string
+
+
+def test_parse_odbc_connection_string_edge_cases() -> None:
+    """Parser handles leading/duplicate semicolons, empty values, trailing tokens, and unclosed braces."""
+    parsed = parse_odbc_connection_string("; ;Server=host; ;Key= ;Driver={ODBC Driver} ;EmptyKey=  ")
+    parsed_dict = dict(parsed)
+
+    assert parsed_dict["Server"] == "host"
+    assert parsed_dict["Key"] == ""
+    assert parsed_dict["Driver"] == "{ODBC Driver}"
+    assert parsed_dict["EmptyKey"] == ""
+
+    assert parse_odbc_connection_string("Incomplete={no_close") == [("Incomplete", "{no_close")]
+    assert parse_odbc_connection_string("Server=host;  ") == [("Server", "host")]
+    assert parse_odbc_connection_string("DanglingToken") == []
