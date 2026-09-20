@@ -25,7 +25,6 @@ SQLSpec defines filter types in ``sqlspec.core`` that can be used independently
 or with framework integrations:
 
 - ``LimitOffsetFilter(limit, offset)`` -- limit and offset based pagination
-- ``PaginationFilter(page, page_size)`` -- page-number based pagination
 - ``OrderByFilter(field_name, sort_order, nulls=None)`` -- sorting (supports expression mode)
 - ``SearchFilter(field_name, value, ignore_case)`` -- text search (LIKE / ILIKE)
 - ``NotInSearchFilter(field_name, value, ignore_case)`` -- negative text search (NOT LIKE / NOT ILIKE)
@@ -111,6 +110,7 @@ Using filters in a Litestar handler:
     user_filter_deps = create_filter_dependencies({
         "pagination_type": "limit_offset",
         "pagination_size": 20,
+        "pagination_max_size": 1000,
         "sort_field": ["created_at", "uploaded_collections", "name"],
         "sort_order": "desc",
         "search": "name,email",
@@ -132,6 +132,10 @@ Camelized ``orderBy`` values are accepted by default for every configured
 SQL-facing field ``uploaded_collections`` before the ``OrderByFilter`` is
 created. Raw configured values such as ``orderBy=uploaded_collections`` also
 remain accepted for compatibility.
+
+Generated framework filters reject ``pageSize`` above ``pagination_max_size``
+(default ``1000``). Set this key in ``FilterConfig`` to change the limit;
+``pagination_size`` must not exceed it.
 
 Sort aliases are closed over the configured ``sort_field`` allowlist. Use
 ``sort_field_aliases`` when the public API name is not a mechanical camel-case

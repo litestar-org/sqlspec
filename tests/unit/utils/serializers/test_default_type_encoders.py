@@ -5,8 +5,6 @@ Mirrors ``advanced-alchemy`` test coverage adapted to sqlspec semantics:
 - Unsupported objects raise ``TypeError`` instead of falling back to ``str``.
 """
 
-from __future__ import annotations
-
 import datetime
 import enum
 import ipaddress

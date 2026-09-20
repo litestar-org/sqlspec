@@ -45,6 +45,13 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   Request placement with ``OrderByFilter(nulls=...)``, ``Column.asc(nulls=...)`` /
   ``Column.desc(nulls=...)``, or a string such as ``"id DESC NULLS LAST"``.
 
+* Examples, tests, and documentation tooling use explicit forward references;
+  lint now enforces the future-annotations import ban throughout the repository.
+
+* Generated filter dependencies reject ``pageSize`` values above
+  ``pagination_max_size`` (default ``1000``); set ``pagination_max_size`` in
+  ``FilterConfig`` to change the limit.
+
 * Pure-Python installations defer unused query builders and migration commands.
   Compiled wheels retain eager exports to preserve concurrent access after
   package initialization.
@@ -121,6 +128,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * ``SQL.order_by("id", desc=True)`` now sorts descending, and
   ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+
+* Close async example connection pools before their event loops shut down.
+
+* Correct Litestar filter query parameter titles and pagination schema documentation.
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when

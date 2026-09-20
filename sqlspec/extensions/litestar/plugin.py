@@ -1061,10 +1061,8 @@ class SQLCommenterMiddleware:
 class _OffsetPaginationSchemaPlugin(OpenAPISchemaPlugin):
     """OpenAPI schema plugin expanding OffsetPagination[T] into a concrete schema.
 
-    Defense-in-depth for sqlspec.core.filters.OffsetPagination. The msgspec.Struct
-    conversion already lets Litestar's default generator produce a correct schema;
-    this plugin guarantees the shape even if future Litestar or msgspec changes
-    break auto-detection.
+    Expands the dataclass container into an object schema with items, limit,
+    offset, and total, independently of Litestar's dataclass introspection.
     """
 
     @staticmethod
