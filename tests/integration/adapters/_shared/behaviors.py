@@ -1140,7 +1140,7 @@ def assert_sync_cursor_pagination_contract(driver: object, case: DriverCase) -> 
     cursor_driver = cast("SyncContractDriver", driver)
     table = case.table
     _seed_sync(cursor_driver, _CURSOR_SEED_ROWS, table, case)
-    base = sql.select("name", "value", "note", dialect=case.dialect).from_(table.name)
+    base = sql.select("name", "value", "note", dialect=_sqlglot_dialect(case)).from_(table.name)
     for keys in _CURSOR_SCENARIOS:
         forward_pages = []
         cursor = None
@@ -1162,7 +1162,9 @@ def assert_sync_cursor_pagination_contract(driver: object, case: DriverCase) -> 
             cursor = page.previous_cursor
         _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
     if case.supports_grouped_subquery:
-        grouped = sql.select("value", "COUNT(*) AS c", dialect=case.dialect).from_(table.name).group_by("value")
+        grouped = (
+            sql.select("value", "COUNT(*) AS c", dialect=_sqlglot_dialect(case)).from_(table.name).group_by("value")
+        )
         groups: list[dict[str, Any]] = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):
@@ -1180,7 +1182,7 @@ async def assert_async_cursor_pagination_contract(driver: object, case: DriverCa
     cursor_driver = cast("AsyncContractDriver", driver)
     table = case.table
     await _seed_async(cursor_driver, _CURSOR_SEED_ROWS, table, case)
-    base = sql.select("name", "value", "note", dialect=case.dialect).from_(table.name)
+    base = sql.select("name", "value", "note", dialect=_sqlglot_dialect(case)).from_(table.name)
     for keys in _CURSOR_SCENARIOS:
         forward_pages = []
         cursor = None
@@ -1202,7 +1204,9 @@ async def assert_async_cursor_pagination_contract(driver: object, case: DriverCa
             cursor = page.previous_cursor
         _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
     if case.supports_grouped_subquery:
-        grouped = sql.select("value", "COUNT(*) AS c", dialect=case.dialect).from_(table.name).group_by("value")
+        grouped = (
+            sql.select("value", "COUNT(*) AS c", dialect=_sqlglot_dialect(case)).from_(table.name).group_by("value")
+        )
         groups: list[dict[str, Any]] = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):

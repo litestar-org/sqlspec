@@ -29,7 +29,7 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * Use cursor filters with sync and async driver ``select()`` calls.
   ``CursorFilter.build_page()`` builds a page from the rows.
-  Tests cover quoted BigQuery table names.
+  Tests cover quoted BigQuery table names and the SQL Server dialect alias.
 
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
   a generic ``CursorPagination`` response container. Malformed cursor inputs raise
