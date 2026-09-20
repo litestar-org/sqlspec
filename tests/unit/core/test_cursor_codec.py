@@ -101,6 +101,10 @@ def test_invalid_entries(entry: Any) -> None:
     "token",
     [
         None,
+        1,
+        b"cursor",
+        [],
+        object(),
         "",
         "!!!",
         "a" * 4097,
@@ -111,7 +115,7 @@ def test_invalid_entries(entry: Any) -> None:
         base64.urlsafe_b64encode(b"[" * 1500 + b"]" * 1500).decode().rstrip("="),
     ],
 )
-def test_invalid_tokens(token: Any) -> None:
+def test_invalid_tokens(token: object) -> None:
     with pytest.raises(InvalidCursorError, match="malformed token"):
         decode_cursor(token, "order", 1)
 
