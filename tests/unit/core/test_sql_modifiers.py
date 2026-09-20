@@ -605,3 +605,17 @@ def test_wrapped_order_resolves_computed_projection_alias(ordering: str) -> None
         connection.execute("CREATE TABLE t(v INTEGER)")
         connection.executemany("INSERT INTO t VALUES (?)", [(2,), (1,)])
         assert connection.execute(rendered, parameters or ()).fetchall() == [(2,), (2,), (3,), (3,)]
+
+
+def test_wrapped_order_resolves_ambiguous_source_from_first_branch() -> None:
+    import sqlite3
+
+    base = "SELECT a.v AS x, a.w AS y FROM t a UNION ALL SELECT b.w AS x, b.v AS y FROM t b ORDER BY v"
+    statement = SQL(base, statement_config=StatementConfig(dialect="sqlite")).where("x > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER, w INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?, ?)", [(1, 9), (2, 8)])
+        expected = connection.execute(base).fetchall()
+        assert expected == [(1, 9), (2, 8), (8, 2), (9, 1)]
+        assert connection.execute(rendered, parameters or ()).fetchall() == expected

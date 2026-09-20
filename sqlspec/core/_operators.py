@@ -53,7 +53,7 @@ def _outer_order(expression: exp.Expr, order: exp.Expr) -> exp.Expr:
         while pending:
             branch = pending.pop()
             if isinstance(branch, exp.SetOperation):
-                pending.extend((branch.this, branch.expression))
+                pending.extend((branch.expression, branch.this))
             elif isinstance(branch, exp.Subquery):
                 pending.append(branch.this)
             elif isinstance(branch, exp.Select):
@@ -68,11 +68,11 @@ def _outer_order(expression: exp.Expr, order: exp.Expr) -> exp.Expr:
                         else (projected.this if isinstance(projected, exp.Column) else None)
                     )
                     if isinstance(source, exp.Column) and output is not None:
-                        outputs[(source.table, source.name)] = output
+                        outputs.setdefault((source.table, source.name), output)
                         outputs.setdefault(("", source.name), output)
                     elif not isinstance(source, (exp.Column, exp.Star)):
                         target = exp.Column(this=output.copy()) if output is not None else exp.Literal.number(index + 1)
-                        expressions[source.unnest()] = target
+                        expressions.setdefault(source.unnest(), target)
                         unqualified = source.unnest().copy()
                         for column in unqualified.find_all(exp.Column):
                             column.set("table", None)
