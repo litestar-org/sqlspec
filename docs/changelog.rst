@@ -29,7 +29,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   Use ``paginate_limit_offset()`` or ``paginate_cursor()`` to select a mode
   explicitly and retain a precise return type with dynamic filter lists.
   Litestar routes can return either page type with typed items and an OpenAPI
-  union response.
+  union response. ``Pagination[T]`` aliases both page types for concise return
+  annotations.
 
 * Use cursor filters with sync and async driver ``select()`` calls.
   ``CursorFilter.build_page()`` builds a page from the rows.

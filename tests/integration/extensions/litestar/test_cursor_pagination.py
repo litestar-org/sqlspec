@@ -21,8 +21,8 @@ from sqlspec.core import (
     CursorPagination,
     FilterTypes,
     LimitOffsetFilter,
-    OffsetPagination,
     OrderByFilter,
+    Pagination,
 )
 from sqlspec.extensions.litestar import SQLSpecPlugin
 from sqlspec.extensions.litestar.providers import create_filter_dependencies, dep_cache
@@ -74,7 +74,7 @@ def cursor_client(tmp_path: Path) -> Generator[TestClient, None, None]:
         mode: Annotated[Literal["cursor", "offset"], QueryParameter()] = "cursor",
         cursor: Annotated[str | None, QueryParameter()] = None,
         offset: Annotated[int, QueryParameter()] = 0,
-    ) -> CursorPagination[MsgspecItem] | OffsetPagination[MsgspecItem]:
+    ) -> Pagination[MsgspecItem]:
         filters: list[FilterTypes] = (
             [CursorFilter("id", 2, cursor)] if mode == "cursor" else [LimitOffsetFilter(2, offset), OrderByFilter("id")]
         )
@@ -119,7 +119,8 @@ def test_cursor_openapi(cursor_client: TestClient) -> None:
     assert {parameter["name"] for parameter in parameters} == {"cursor", "pageSize"}
     assert next(parameter["schema"]["maximum"] for parameter in parameters if parameter["name"] == "pageSize") == 1000
     components = schema["components"]["schemas"]
-    pagination = next(body for name, body in components.items() if name.startswith("CursorPagination"))
+    response = schema["paths"]["/items"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    pagination = components[response["$ref"].rsplit("/", 1)[-1]]
     assert set(pagination["properties"]) == {
         "items",
         "limit",

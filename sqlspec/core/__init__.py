@@ -27,7 +27,7 @@ Example Usage:
 from sqlspec.core import filters
 from sqlspec.core._cursor import register_cursor_type
 from sqlspec.core._ordering import NullsPlacement, apply_direction, default_nulls, ordered
-from sqlspec.core._pagination import CursorPagination, OffsetPagination
+from sqlspec.core._pagination import CursorPagination, OffsetPagination, Pagination
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -227,6 +227,7 @@ __all__ = (
     "OperationProfile",
     "OperationType",
     "OrderByFilter",
+    "Pagination",
     "ParamTypeMatcher",
     "ParameterConverter",
     "ParameterDeclaration",

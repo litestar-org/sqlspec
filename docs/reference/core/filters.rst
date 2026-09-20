@@ -137,6 +137,10 @@ Search
 Type Aliases
 ============
 
+.. data:: sqlspec.core.Pagination
+
+   Generic alias for ``CursorPagination[T] | OffsetPagination[T]``.
+
 .. data:: FilterTypes
 
    Union type of all filter classes.

@@ -184,7 +184,7 @@ A Litestar handler can return either page type. ``User`` can be a
    from msgspec import Struct
 
    from sqlspec.adapters.asyncpg import AsyncpgDriver
-   from sqlspec.core import CursorPagination, FilterTypes, OffsetPagination
+   from sqlspec.core import FilterTypes, Pagination
    from sqlspec.service import SQLSpecAsyncService
 
 
@@ -196,14 +196,19 @@ A Litestar handler can return either page type. ``User`` can be a
    async def list_users(
        service: NamedDependency[SQLSpecAsyncService[AsyncpgDriver]],
        filters: NamedDependency[SkipValidation[list[FilterTypes]]],
-   ) -> CursorPagination[User] | OffsetPagination[User]:
+   ) -> Pagination[User]:
        return await service.paginate(
            "SELECT id, name FROM users ORDER BY id", *filters, schema_type=User
        )
 
 Register dependencies for ``service`` and ``filters`` on the route or app.
 The filter dependency must choose one pagination mode per request. Litestar
-encodes either returned page and describes both response shapes in OpenAPI.
+encodes either returned page and describes both response shapes using OpenAPI
+``oneOf``. ``Pagination[User]`` is an alias for
+``CursorPagination[User] | OffsetPagination[User]``; it adds no response wrapper.
+To document only one mode, annotate the handler with ``CursorPagination[User]``
+or ``OffsetPagination[User]``. OpenAPI uses the handler return annotation, not
+the service overload selected within its body.
 
 This response encoding does not imply typed union decoding support.
 ``msgspec.json.Decoder(CursorPagination[User] | OffsetPagination[User])`` cannot

@@ -16,11 +16,11 @@ JSON shape.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Generic
+from typing import Generic, TypeAlias
 
 from typing_extensions import TypeVar
 
-__all__ = ("CursorPagination", "OffsetPagination")
+__all__ = ("CursorPagination", "OffsetPagination", "Pagination")
 
 T = TypeVar("T")
 
@@ -61,3 +61,6 @@ class CursorPagination(Generic[T]):
     previous_cursor: "str | None"
     has_next: bool
     has_previous: bool
+
+
+Pagination: TypeAlias = CursorPagination[T] | OffsetPagination[T]
