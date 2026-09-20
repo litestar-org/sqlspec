@@ -284,6 +284,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         prepared_statement.compile()
         sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
+        if self._dialect == "mssql":
+            sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
         resolved_batch_size = batch_size or self._chunk_size()
         table: Any | None = None
 

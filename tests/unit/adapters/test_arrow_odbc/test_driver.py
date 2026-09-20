@@ -620,14 +620,17 @@ def test_arrow_odbc_mssql_driver_uses_tsql_statement_dialect() -> None:
     assert parameters == (1,)
 
 
-def test_arrow_odbc_mssql_pagination_inlines_offset_fetch_integers() -> None:
+@pytest.mark.parametrize("method", ["execute", "select_to_arrow"])
+def test_arrow_odbc_mssql_pagination_inlines_offset_fetch_integers(method: str) -> None:
     """SQL Server ODBC requires literal integer OFFSET/FETCH control values."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
     )
 
-    driver.execute("SELECT name, value FROM dbo.items", OrderByFilter("value", "desc"), LimitOffsetFilter(2, 1))
+    getattr(driver, method)(
+        "SELECT name, value FROM dbo.items", OrderByFilter("value", "desc"), LimitOffsetFilter(2, 1)
+    )
 
     call = connection.read_calls[-1]
     assert "OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY" in call["query"]

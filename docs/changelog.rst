@@ -134,7 +134,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   including CockroachDB, whose default NULL ordering differs from PostgreSQL.
 
 * Arrow ODBC renders SQL Server ``TOP`` page-size controls as validated integers
-  while retaining bound data parameters, including queries with CTEs.
+  while retaining bound data parameters, including queries with CTEs. Native
+  ``select_to_arrow`` applies the same SQL Server pagination controls.
 
 * ``SQL.order_by("id", desc=True)`` now sorts descending, and
   ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
