@@ -1,10 +1,13 @@
+=========
 Changelog
+=========
 
 All notable SQLSpec changes are summarized here. Entries are grouped by release
 and focus on user-visible behavior, public API changes, compatibility notes, and
 important operational fixes.
 
 Recent Updates
+==============
 
 v0.64.0 - Startup performance, connection normalization, and adapter lifecycle hardening
 -----------------------------------------------------------------------------------------
@@ -2154,6 +2157,7 @@ v0.24.0 - Builder consolidation
 * Refactored builder code to reduce duplication.
 
 Previous Versions
+=================
 
 For releases before ``v0.24.0``, see the repository tag history and GitHub
 release records.
