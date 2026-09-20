@@ -31,7 +31,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   for one-query cursor pages with optional schema conversion.
 
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
-  a generic ``CursorPagination`` response container.
+  a generic ``CursorPagination`` response container. Malformed cursor inputs raise
+  ``InvalidCursorError`` consistently in Python and compiled installations.
 * Added ``CursorKey`` and ``CursorFilter`` for bidirectional keyset pagination,
   including explicit NULL placement, composite sort keys, and page cursor creation.
 
