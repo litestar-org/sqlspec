@@ -9,6 +9,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
 from sqlglot.errors import ParseError
 
+import sqlspec.core._operators  # noqa: F401 - register SQLGlot operator rendering before any SQL is generated
 import sqlspec.exceptions
 from sqlspec.core import _pipeline as pipeline
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
@@ -26,6 +27,7 @@ from sqlspec.core.parameters import (
     ParameterValidator,
     structural_fingerprint,
 )
+from sqlspec.core.parameters._validator import unescape_qmark_operator
 from sqlspec.core.query_modifiers import (
     apply_column_pruning,
     apply_limit,
@@ -48,6 +50,7 @@ from sqlspec.core.query_modifiers import (
     expr_neq,
     extract_column_name,
     safe_modify_with_cte,
+    wrap_as_subquery,
 )
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer
 from sqlspec.observability import resolve_db_system
@@ -555,7 +558,10 @@ class SQL:
 
     @property
     def parameters(self) -> Any:
-        """Get the original parameters."""
+        """Get the values that will be bound to the statement."""
+        mixed = self._mixed_parameter_inputs()
+        if mixed is not None:
+            return mixed[1]
         if self._named_parameters:
             return self._named_parameters
         return self._positional_parameters or []
@@ -746,8 +752,9 @@ class SQL:
 
         try:
             config = self._statement_config
-            raw_sql = self._materialized_raw_sql()
-            params = self._named_parameters or self._positional_parameters
+            mixed = self._mixed_parameter_inputs()
+            raw_sql = mixed[0] if mixed is not None else self._materialized_raw_sql()
+            params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
             is_many = self._is_many
             param_fingerprint = structural_fingerprint(params, is_many=is_many)
             pipeline_fingerprint: Any | None = (
@@ -758,7 +765,7 @@ class SQL:
                 raw_sql,
                 params,
                 is_many=is_many,
-                expression=self._raw_expression,
+                expression=None if mixed is not None else self._raw_expression,
                 param_fingerprint=pipeline_fingerprint,
             )
 
@@ -786,8 +793,60 @@ class SQL:
         self._compiled_from_cache = False
         return new_state.compiled_sql, new_state.execution_parameters
 
+    def _mixed_parameter_inputs(self) -> "tuple[str, dict[str, Any]] | None":
+        """Normalize coexisting positional and named values without losing either."""
+        positional, named = self._positional_parameters, self._named_parameters
+        if not positional or not named or self._is_many:
+            return None
+        raw = self._materialized_raw_sql()
+        infos = self._statement_config.parameter_validator.extract_parameters(raw)
+        ordinal_styles = {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
+        index_styles = {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}
+        positional_styles = ordinal_styles | index_styles
+        styles = {info.style for info in infos if info.style in positional_styles}
+        unbound = [info for info in infos if info.style not in positional_styles and info.name not in named]
+        if len(styles) > 1 or (styles & index_styles and unbound):
+            return None
+        selected = [info for info in infos if info.style in positional_styles or info.name not in named]
+        if not selected:
+            return None
+        slots: dict[str, int] = {}
+        indexes: list[int] = []
+        counter = 0
+        for info in selected:
+            if info.style in index_styles:
+                index = int(info.name or "0") - 1
+            elif info.style in ordinal_styles:
+                index = counter
+                counter += 1
+            elif info.name in slots:
+                index = slots[info.name]
+            else:
+                index = counter
+                slots[info.name or ""] = index
+                counter += 1
+            if index < 0 or index >= len(positional):
+                return None
+            indexes.append(index)
+        if not styles & index_styles and counter != len(positional):
+            return None
+        names = {index: name for name, index in slots.items()}
+        used = set(named) | set(slots)
+        for index in indexes:
+            if index not in names:
+                name = f"param_{index}"
+                while name in used:
+                    name += "_p"
+                names[index] = name
+                used.add(name)
+        for info, index in reversed(list(zip(selected, indexes, strict=True))):
+            if info.style in positional_styles:
+                raw = raw[: info.position] + ":" + names[index] + raw[info.position + len(info.placeholder_text) :]
+        return raw, {**{name: positional[index] for index, name in names.items()}, **named}
+
     def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
-        params = self._named_parameters or self._positional_parameters
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         if self._rebind_processor is None:
             self._rebind_processor = ParameterProcessor(
                 converter=self._statement_config.parameter_converter,
@@ -827,6 +886,8 @@ class SQL:
         return compiled_sql, rebound_params
 
     def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
+        if self._statement_config.parameter_config.ast_transformer is not None:
+            return False
         cached_fingerprint = state.parameter_fingerprint
         if cached_fingerprint is None:
             return False
@@ -834,7 +895,8 @@ class SQL:
             return False
         if state.filter_hash != hash_filters(self._filters):
             return False
-        params = self._named_parameters or self._positional_parameters
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         return bool(structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint)
 
     def as_script(self) -> "SQL":
@@ -954,10 +1016,11 @@ class SQL:
 
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
         logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
-        params = self._named_parameters or self._positional_parameters
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         return self._build_processed_state(
-            compiled_sql=self._materialized_raw_sql(),
-            execution_parameters=self._named_parameters or self._positional_parameters,
+            compiled_sql=mixed[0] if mixed is not None else self._materialized_raw_sql(),
+            execution_parameters=params,
             parsed_expression=None,
             operation_type="COMMAND",
             input_named_parameters=(),
@@ -1012,10 +1075,11 @@ class SQL:
             The SQLGlot expression for this statement
         """
         # Preserve authoring-time parameter names when applying dynamic query modifiers.
+        raw_sql = self._raw_sql
         state = self._processed_state
-        if state is not Empty and state.input_named_parameters and self._raw_expression is None and self._raw_sql:
+        if state is not Empty and state.input_named_parameters and self._raw_expression is None and raw_sql:
             try:
-                parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+                parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
                 if isinstance(parsed, exp.Expr):
                     return parsed
             except ParseError:
@@ -1030,14 +1094,24 @@ class SQL:
             return self._raw_expression.copy()
         # Fall back to parsing if enabled
         if not self._statement_config.enable_parsing:
-            return exp.Select().from_(f"({self._raw_sql})")
+            return self._wrapped_raw_sql_expression(raw_sql)
         try:
-            parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
             if isinstance(parsed, exp.Expr):
                 return parsed
-            return exp.Select().from_(f"({self._raw_sql})")
+            return self._wrapped_raw_sql_expression(raw_sql)
         except ParseError:
-            return exp.Select().from_(f"({self._raw_sql})")
+            return self._wrapped_raw_sql_expression(raw_sql)
+
+    def _wrapped_raw_sql_expression(self, raw_sql: str) -> exp.Expr:
+        if not raw_sql.strip():
+            msg = "Cannot build an expression from an empty SQL statement."
+            raise sqlspec.exceptions.SQLParsingError(msg)
+        try:
+            return exp.Select().select("*").from_("(" + unescape_qmark_operator(raw_sql)[0] + ") AS filtered")
+        except ParseError as exc:
+            msg = f"Failed to parse SQL statement: {exc}"
+            raise sqlspec.exceptions.SQLParsingError(msg) from exc
 
     def _filter_expression(self) -> exp.Expr:
         """Return a mutable expression copy for statement filters.
@@ -1059,6 +1133,13 @@ class SQL:
         new_sql = self._copy_base(new_expr)
         new_sql._sql_param_counters = self._sql_param_counters.copy()
         return new_sql
+
+    def _take_pending_filters(self) -> "tuple[SQL, list[StatementFilter]]":
+        if not self._filters:
+            return self, []
+        copied = self._copy_base(self._raw_expression or self._raw_sql)
+        copied._filters = []
+        return copied, self._filters.copy()
 
     def _copy_base(self, statement_seed: "str | exp.Expr") -> "SQL":
         new_sql = SQL(
@@ -1111,10 +1192,12 @@ class SQL:
         else:
             condition_expr = condition
 
-        if isinstance(current_expr, exp.Select) or supports_where(current_expr):
+        if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)) or (
+            not isinstance(current_expr, (exp.Query, exp.Values)) and supports_where(current_expr)
+        ):
             new_expr = current_expr.where(condition_expr, copy=False)
         else:
-            new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
+            new_expr = wrap_as_subquery(current_expr).where(condition_expr, copy=False)
 
         return self._copy_with_expression(new_expr)
 
@@ -1353,10 +1436,10 @@ class SQL:
                     order_expr = order_expr.desc()
             else:
                 order_expr = item.desc() if desc and not isinstance(item, exp.Ordered) else item
-            if isinstance(new_expr, exp.Select):
+            if isinstance(new_expr, (exp.Select, exp.SetOperation)):
                 new_expr = new_expr.order_by(order_expr, copy=False)
             else:
-                new_expr = exp.Select().from_(new_expr).order_by(order_expr)
+                new_expr = wrap_as_subquery(new_expr).order_by(order_expr, copy=False)
 
         return self._copy_with_expression(new_expr)
 

@@ -24,6 +24,21 @@ SQLITE_BUSY_TIMEOUT: Final = 5000
 SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS: Final = False
 SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
 SQLITE_MEMORY_CACHE_SIZE: Final = -16000
+SQLITE_WAL_SWITCH_ATTEMPTS: Final = 50
+SQLITE_WAL_SWITCH_DELAY: Final = 0.01
+
+
+def _enable_wal(connection: "SqliteConnection") -> None:
+    """Retry database and table locks briefly while switching to WAL mode."""
+    for attempt in range(SQLITE_WAL_SWITCH_ATTEMPTS):
+        try:
+            connection.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.OperationalError as exc:  # noqa: PERF203 - bounded lock retry
+            if "locked" not in str(exc) or attempt == SQLITE_WAL_SWITCH_ATTEMPTS - 1:
+                raise
+            time.sleep(SQLITE_WAL_SWITCH_DELAY)
+        else:
+            return
 
 
 def _end_transaction(
@@ -150,7 +165,7 @@ class SqliteConnectionPool:
                     connection.execute("PRAGMA temp_store = MEMORY")
                     connection.execute(f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
                 else:
-                    connection.execute("PRAGMA journal_mode = WAL")
+                    _enable_wal(connection)
                     connection.execute("PRAGMA synchronous = NORMAL")
 
                 connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")

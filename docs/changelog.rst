@@ -114,6 +114,49 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* ``limit``, ``offset``, and ``paginate`` on set operations render valid
+  SQL Server pagination while retaining the requested result ordering.
+
+* Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
+  result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
+  and result ordering. Pagination filters produce valid set-operation SQL.
+
+
+* Preserve parameter alignment when repeated BigQuery queries inline NULL values,
+  including copied statements and transitions between NULL and non-NULL values.
+
+* Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
+  when parameters are bound, including repeated preparation, and retains returned
+  rows when legacy modulo syntax cannot be classified by the SQL parser.
+
+* Missing positional bindings no longer consume values reserved for named placeholders,
+  including names that collide with generated parameter aliases and script literals.
+* Repeated and reordered numeric placeholders bind by their written indexes when
+  converted to another placeholder style; native numeric mappings retain written
+  index order on the first call and cache hits.
+* Sequences for named placeholders and mappings for positional placeholders bind
+  consistently on the first execution and cache hits, including repeated names.
+* Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
+  instead of silently binding values to the wrong slots.
+* PostgreSQL ``??`` escapes become ``?`` operators, including after filters modify
+  the statement; output transformers receive the driver's execution placeholder style.
+* Spanner ``execute_many`` converts tuple rows and mixed placeholder mappings before
+  calling the driver, preserving bindings on cache hits.
+
+* Filters supplied to the ``SQL`` constructor are applied once before call-site
+  filters, including when statements are reused.
+
+* Statements combining positional and named values now bind each value to its
+  own placeholder, including filters and ``where_*`` helpers.
+
+* PostgreSQL JSONB existence operators followed by literals or bound parameters
+  are recognized without consuming a parameter slot.
+
+* DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
+  order and defaults by restricting bulk loading to plain VALUES inserts.
+* Psycopg preserves literal percent characters alongside bound parameters,
+  including cached statements, batch execution, streams, and pipelines.
+
 * Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
   A placeholder without a value now raises instead of rendering as ``NULL``.
 
@@ -121,6 +164,17 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   now pass statement parameters to the driver for binding.
   Cross-adapter safety checks cover quotes, backslashes, and placeholder-like
   text supplied as bound values.
+
+
+* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
+  instead of leaking a sqlglot ``ParseError``, including during concurrent resets.
+
+* Tests, including Litestar connection-provider tests, close aiosqlite pools before
+  their event loops shut down, and unhandled worker-thread exceptions now fail the test suite.
+
+* The SQLite and aiosqlite pools retry enabling WAL mode when several connections
+  first open a new database at the same time; previously this could fail with
+  ``database is locked``.
 
 * Close async example connection pools before their event loops shut down.
 

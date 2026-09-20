@@ -13,6 +13,7 @@ from sqlspec.core import (
     SQL,
     DriverParameterProfile,
     ParameterStyle,
+    ParameterValidator,
     StatementConfig,
     build_statement_config_from_profile,
 )
@@ -661,3 +662,21 @@ def _resolve_exception_mapping(error_type: type[Any]) -> "tuple[str, type[SQLSpe
             _EXCEPTION_MAPPING_CACHE[error_type] = mapped_error
             return mapped_error
     return None
+
+
+def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
+    """Escape literal percent characters before driver-side interpolation."""
+    if not parameters or "%" not in sql:
+        return sql
+    keep = {info.position for info in validator.extract_parameters(sql)}
+    segments: list[str] = []
+    index = 0
+    while index < len(sql):
+        if sql[index : index + 2] == "%%":
+            segments.append("%%")
+            index += 2
+            continue
+        char = sql[index]
+        segments.append("%%" if char == "%" and index not in keep else char)
+        index += 1
+    return "".join(segments)

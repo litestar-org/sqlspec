@@ -6,7 +6,13 @@ from typing import Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.parameters._converter import ParameterConverter
+from sqlspec.core.parameters._converter import (
+    ParameterConverter,
+    _named_parameter_names,
+    _parameter_lookup_key,
+    ambiguous_index_message,
+    ambiguous_index_placeholder,
+)
 from sqlspec.core.parameters._types import (
     _EXPANDING_POSITIONAL_STYLES,
     _NAMED_STYLE_VALUES,
@@ -22,9 +28,14 @@ from sqlspec.core.parameters._types import (
     TypedParameter,
     wrap_with_type,
 )
-from sqlspec.core.parameters._validator import ParameterValidator
+from sqlspec.core.parameters._validator import ParameterValidator, unescape_qmark_operator
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.dispatch import TypeDispatcher
+
+_OCCURRENCE_KEYED_STYLE_VALUES: "frozenset[str]" = frozenset({
+    ParameterStyle.QMARK.value,
+    ParameterStyle.POSITIONAL_PYFORMAT.value,
+})
 
 __all__ = (
     "ParameterProcessor",
@@ -334,12 +345,28 @@ class ParameterProcessor:
 
         input_named_parameters = _named_parameters_for_style(param_info, config.default_execution_parameter_style)
 
+        if len(original_styles) > 1 and _is_sequence_payload(parameters, is_many):
+            ambiguous = ambiguous_index_placeholder(param_info)
+            if ambiguous is not None:
+                raise SQLSpecError(ambiguous_index_message(ambiguous))
+        has_qmark_escape = "??" in sql
+        unescape_output = has_qmark_escape and not executes_qmark(config)
+
         if config.needs_static_script_compilation and param_info and not is_many:
             return self._compile_static_script(
-                sql, parameters, config, is_many, cache_key, dialect, input_named_parameters=input_named_parameters
+                sql,
+                parameters,
+                config,
+                is_many,
+                cache_key,
+                dialect,
+                input_named_parameters=input_named_parameters,
+                unescape_output=unescape_output,
             )
 
         requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
+        if not requires_mapping and not needs_execution_conversion:
+            requires_mapping = _needs_named_binding(parameters, param_info, is_many)
         if (
             not needs_execution_conversion
             and not config.type_coercion_map
@@ -347,10 +374,15 @@ class ParameterProcessor:
             and not requires_mapping
         ):
             normalized_sql = self._normalize_sql_for_parsing(sql, param_info, config) if normalize_for_parsing else sql
+            fast_sql, fast_info = sql, param_info
+            if has_qmark_escape:
+                normalized_sql = unescape_qmark_operator(normalized_sql)[0]
+                if unescape_output:
+                    fast_sql, fast_info = unescape_qmark_operator(sql, param_info)
             result = ParameterProcessingResult(
-                sql,
+                fast_sql,
                 parameters,
-                ParameterProfile(param_info),
+                ParameterProfile(fast_info),
                 sqlglot_sql=normalized_sql,
                 parsed_expression=parsed_expression,
                 input_named_parameters=input_named_parameters,
@@ -406,12 +438,16 @@ class ParameterProcessor:
             processed_sql, processed_parameters = config.output_transformer(processed_sql, processed_parameters)
 
         final_param_info = converted_param_info if converted_param_info is not None else param_info
-        final_profile = ParameterProfile(final_param_info)
         sqlglot_sql = (
             self._normalize_sql_for_parsing(processed_sql, final_param_info, config)
             if normalize_for_parsing
             else processed_sql
         )
+        if has_qmark_escape:
+            sqlglot_sql = unescape_qmark_operator(sqlglot_sql)[0]
+            if unescape_output:
+                processed_sql, final_param_info = unescape_qmark_operator(processed_sql, final_param_info)
+        final_profile = ParameterProfile(final_param_info)
         result = ParameterProcessingResult(
             processed_sql,
             processed_parameters,
@@ -433,6 +469,7 @@ class ParameterProcessor:
         cache_key: Any | None,
         dialect: "str | None",
         input_named_parameters: "tuple[str, ...]",
+        unescape_output: bool = False,
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
         if config.type_coercion_map and parameters:
@@ -446,11 +483,14 @@ class ParameterProcessor:
             dialect=dialect,
             strict_named_parameters=config.strict_named_parameters,
         )
+        parse_sql = unescape_qmark_operator(static_sql)[0]
+        if unescape_output:
+            static_sql = parse_sql
         result = ParameterProcessingResult(
             static_sql,
             static_params,
             ParameterProfile.empty(),
-            sqlglot_sql=static_sql,
+            sqlglot_sql=parse_sql,
             input_named_parameters=input_named_parameters,
             applied_wrap_types=False,
         )
@@ -580,74 +620,87 @@ class ParameterProcessor:
 
         if processed:
             cached_styles = cached_profile.styles
+            index_order = _explicit_index_order(input_named_parameters)
+            if (
+                not index_order
+                and input_named_parameters
+                and all(style in _OCCURRENCE_KEYED_STYLE_VALUES for style in cached_styles)
+            ):
+                slots = dict.fromkeys(input_named_parameters)
+                if len(slots) < len(input_named_parameters):
+                    slot_indexes = {name: index for index, name in enumerate(slots)}
+                    index_order = tuple(slot_indexes[name] for name in input_named_parameters)
             if input_named_parameters and any(style in _POSITIONAL_STYLE_VALUES for style in cached_styles):
-                processed = self._map_named_to_positional(
-                    processed, input_named_parameters, is_many, strict=config.strict_named_parameters
+                expands_indexes = (
+                    bool(index_order)
+                    and len(index_order) == cached_profile.total_count
+                    and all(style in _OCCURRENCE_KEYED_STYLE_VALUES for style in cached_styles)
                 )
+                processed = self._map_named_to_positional(
+                    processed,
+                    input_named_parameters,
+                    is_many,
+                    strict=config.strict_named_parameters,
+                    index_order=index_order if expands_indexes else (),
+                )
+            elif not input_named_parameters and any(style in _POSITIONAL_STYLE_VALUES for style in cached_styles):
+                processed = _mapping_rows_to_positional(processed, is_many)
             elif any(style in _NAMED_STYLE_VALUES for style in cached_styles):
-                processed = self._map_positional_to_named(processed, cached_profile, is_many)
-
-        if processed and config.ast_transformer is not None and not is_many:
-            processed = self._drop_pruned_null_parameters(processed)
+                processed = self._map_positional_to_named(processed, cached_profile, is_many, index_order)
 
         return processed
 
-    @staticmethod
-    def _drop_pruned_null_parameters(parameters: "ConvertedParameters") -> "ConvertedParameters":
-        """Replicate AST null-pruning on a cache hit.
-
-        Adapters with a null-pruning ast_transformer replace ``None`` placeholders with
-        literal ``NULL`` and drop the matching values on the first (uncached) compile. The
-        transform does not re-run on cache hits, so the cached SQL keeps fewer placeholders
-        than the freshly supplied values; this removes the ``None`` values to realign them.
-        """
-        if isinstance(parameters, Mapping):
-            return {key: value for key, value in parameters.items() if value is not None}
-        if isinstance(parameters, (list, tuple)) and not isinstance(parameters, (str, bytes, bytearray)):
-            cleaned = [value for value in parameters if value is not None]
-            return tuple(cleaned) if isinstance(parameters, tuple) else cleaned
-        return parameters
-
     def _map_positional_to_named(
-        self, parameters: "ConvertedParameters", cached_profile: "ParameterProfile", is_many: bool
+        self,
+        parameters: "ConvertedParameters",
+        cached_profile: "ParameterProfile",
+        is_many: bool,
+        index_order: "tuple[int, ...]" = (),
     ) -> "ConvertedParameters":
         """Map a positional sequence to a dict keyed by cached placeholder names."""
         cached_param_info = cached_profile.parameters
         if not cached_param_info:
             return parameters
 
+        if index_order:
+            cached_names = tuple(dict.fromkeys(param.name or f"param_{param.ordinal}" for param in cached_param_info))
+            if len(cached_names) == len(index_order):
+                if is_many and isinstance(parameters, (list, tuple)):
+                    return [
+                        _index_row_to_named(row, cached_names, index_order) if isinstance(row, (list, tuple)) else row
+                        for row in cast("Sequence[Any]", parameters)
+                    ]
+                if isinstance(parameters, (list, tuple)):
+                    return _index_row_to_named(parameters, cached_names, index_order)
+
         if is_many and isinstance(parameters, (list, tuple)):
             rows = cast("Sequence[Any]", parameters)
             mapped_rows: list[Any] = []
             for row in rows:
                 if isinstance(row, Mapping):
-                    mapped_rows.append(row)
+                    mapped_rows.append(_align_cached_mapping(row, cached_param_info))
                     continue
                 if isinstance(row, (list, tuple)) and not isinstance(row, (str, bytes, bytearray)):
-                    mapped_rows.append({
-                        (param.name or f"param_{param.ordinal}"): row[idx]
-                        for idx, param in enumerate(cached_param_info)
-                        if idx < len(row)
-                    })
+                    mapped_rows.append(_sequence_row_to_named(row, cached_param_info))
                     continue
                 mapped_rows.append(row)
             return mapped_rows
 
         if isinstance(parameters, Mapping):
-            return parameters
+            return _align_cached_mapping(parameters, cached_param_info)
 
         if isinstance(parameters, (list, tuple)) and not isinstance(parameters, (str, bytes, bytearray)):
-            seq = cast("Sequence[Any]", parameters)
-            return {
-                (param.name or f"param_{param.ordinal}"): seq[idx]
-                for idx, param in enumerate(cached_param_info)
-                if idx < len(seq)
-            }
+            return _sequence_row_to_named(cast("Sequence[Any]", parameters), cached_param_info)
 
         return parameters
 
     def _map_named_to_positional(
-        self, parameters: "ConvertedParameters", named_order: "tuple[str, ...]", is_many: bool, strict: bool = False
+        self,
+        parameters: "ConvertedParameters",
+        named_order: "tuple[str, ...]",
+        is_many: bool,
+        strict: bool = False,
+        index_order: "tuple[int, ...]" = (),
     ) -> "ConvertedParameters":
         """Map named parameters (dict) to positional (tuple) using cached order.
 
@@ -656,6 +709,7 @@ class ParameterProcessor:
             named_order: Tuple of parameter names in placeholder order.
             is_many: Whether this is execute_many.
             strict: Whether to raise an error if required parameters are missing.
+            index_order: Source sequence slots in output occurrence order.
 
         Returns:
             Parameters converted to positional tuple if input was dict, else unchanged.
@@ -673,9 +727,9 @@ class ParameterProcessor:
             updated_rows: list[Any] | None = None
             for idx, row in enumerate(parameter_rows):
                 if type(row) is dict or isinstance(row, Mapping):
-                    if strict:
-                        _validate_missing_parameters(named_order, row)
-                    mapped_row: Any = tuple(row.get(name) for name in named_order)
+                    mapped_row: Any = _named_row_to_positional(row, named_order, strict)
+                elif index_order and isinstance(row, (list, tuple)):
+                    mapped_row = _expand_index_row(row, index_order)
                 else:
                     mapped_row = row
 
@@ -692,9 +746,10 @@ class ParameterProcessor:
             return updated_rows
 
         if isinstance(parameters, Mapping):
-            if strict:
-                _validate_missing_parameters(named_order, parameters)
-            return tuple(parameters.get(name) for name in named_order)
+            return _named_row_to_positional(parameters, named_order, strict)
+
+        if index_order and isinstance(parameters, (list, tuple)):
+            return _expand_index_row(parameters, index_order)
 
         return parameters
 
@@ -866,7 +921,12 @@ class ParameterProcessor:
         execution_plan = self._converter._build_conversion_plan(  # pyright: ignore[reportPrivateUsage]
             param_info, target_style
         )
-        preserve_batch = is_many and config.preserve_original_params_for_many and isinstance(parameters, (list, tuple))
+        preserve_batch = (
+            is_many
+            and config.preserve_original_params_for_many
+            and isinstance(parameters, (list, tuple))
+            and original_styles == {target_style}
+        )
         processed_sql, processed_parameters, converted_param_info = self._converter._convert_with_metadata(
             sql,
             parameters,
@@ -1089,13 +1149,109 @@ def _make_cache_key_tuple(
     return (sql, param_fingerprint, input_style, exec_style, dialect, is_many, wrap_types, normalize_for_parsing)
 
 
+def _explicit_index_order(input_named_parameters: "tuple[str, ...]") -> "tuple[int, ...]":
+    """Return zero-based indexes when every cached input name is a written ``$n`` / ``:n`` index."""
+    if not input_named_parameters:
+        return ()
+    indexes: list[int] = []
+    for name in input_named_parameters:
+        if not name.isdigit() or name == "0":
+            return ()
+        indexes.append(int(name) - 1)
+    return tuple(indexes)
+
+
+def _validate_index_row(row: "Sequence[Any]", index_order: "tuple[int, ...]") -> None:
+    distinct = len(set(index_order))
+    if len(row) != distinct or max(index_order) >= len(row):
+        msg = (
+            f"Parameter count mismatch: {len(row)} parameters provided but "
+            f"{distinct} distinct positional indexes referenced."
+        )
+        raise SQLSpecError(msg)
+
+
+def _expand_index_row(row: "Sequence[Any]", index_order: "tuple[int, ...]") -> "list[Any] | tuple[Any, ...]":
+    _validate_index_row(row, index_order)
+    expanded = [row[index] for index in index_order]
+    return expanded if isinstance(row, list) else tuple(expanded)
+
+
+def _index_row_to_named(
+    row: "Sequence[Any]", cached_names: "tuple[str, ...]", index_order: "tuple[int, ...]"
+) -> "dict[str, Any]":
+    _validate_index_row(row, index_order)
+    return {name: row[index] for name, index in zip(cached_names, index_order, strict=True)}
+
+
+def _is_generated_name(name: str) -> bool:
+    return name.isdigit() or (name.startswith("param_") and name[6:].rstrip("_p").isdigit())
+
+
+def _named_row_to_positional(
+    row: "Mapping[str, Any]", named_order: "tuple[str, ...]", strict: bool
+) -> "tuple[Any, ...]":
+    """Resolve cached placeholder names from a mapping without binding named values positionally."""
+    generated = [name for name in dict.fromkeys(named_order) if name not in row and _is_generated_name(name)]
+    if not generated:
+        if strict:
+            _validate_missing_parameters(named_order, row)
+        return tuple(row.get(name) for name in named_order)
+
+    reserved = set(named_order)
+    spare_keys = [key for key in row if key not in reserved]
+    all_indexes = all(name.isdigit() for name in named_order)
+    resolved: dict[str, Any] = {}
+    for rank, name in enumerate(generated):
+        position = int(name) - 1 if all_indexes else rank
+        if 0 <= position < len(spare_keys):
+            resolved[name] = row[spare_keys[position]]
+    missing = [name for name in named_order if name not in row and name not in resolved]
+    if missing and strict:
+        msg = f"Missing required parameters: {sorted(set(missing))}"
+        raise SQLSpecError(msg)
+    return tuple(row[name] if name in row else resolved.get(name) for name in named_order)
+
+
+def _generated_name_order(name: str) -> int:
+    return int(name[6:].rstrip("_p")) if name.startswith("param_") else int(name)
+
+
+def _align_cached_mapping(
+    parameters: "Mapping[str, Any]", cached_param_info: "Sequence[ParameterInfo]"
+) -> "Mapping[str, Any]":
+    names = tuple(dict.fromkeys(param.name for param in cached_param_info if param.name is not None))
+    generated = [name for name in names if name not in parameters and _is_generated_name(name)]
+    if not generated:
+        return parameters
+    reserved = set(names)
+    spare_keys = [key for key in parameters if key not in reserved]
+    generated.sort(key=_generated_name_order)
+    if len(spare_keys) < len(generated):
+        return parameters
+    aligned = {name: parameters[name] for name in names if name in parameters}
+    for name, key in zip(generated, spare_keys, strict=False):
+        aligned[name] = parameters[key]
+    return aligned
+
+
 def _named_parameters_for_style(
     param_info: "list[ParameterInfo]", target_style: "ParameterStyle | None"
 ) -> "tuple[str, ...]":
-    names = tuple(p.name for p in param_info if p.name is not None)
+    has_named = any(p.style in _NAMED_STYLES for p in param_info)
+    if has_named and any(p.name is None for p in param_info):
+        generated_names = _named_parameter_names(param_info)
+        names = tuple(p.name if p.name is not None else generated_names[_parameter_lookup_key(p)] for p in param_info)
+    else:
+        names = tuple(p.name for p in param_info if p.name is not None)
     if target_style in _EXPANDING_POSITIONAL_STYLES:
         return names
-    return tuple(dict.fromkeys(names))
+    unique_names = tuple(dict.fromkeys(names))
+    if target_style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON} and all(
+        param.style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON} for param in param_info
+    ):
+        return tuple(sorted(unique_names, key=int))
+    return unique_names
 
 
 def _validate_missing_parameters(named_order: Sequence[str], parameters: Mapping[str, Any]) -> None:
@@ -1142,3 +1298,57 @@ def _fingerprint_execute_many(parameters: "Sequence[Any]") -> Any:
 
     # Scalar values in sequence for execute_many
     return ("many_scalar", first_type)
+
+
+def executes_qmark(config: "ParameterStyleConfig") -> bool:
+    """Return True when the driver itself reads ``?`` as a placeholder."""
+    if config.default_execution_parameter_style == ParameterStyle.QMARK:
+        return True
+    supported = config.supported_execution_parameter_styles
+    return supported is not None and ParameterStyle.QMARK in supported
+
+
+def _is_sequence_payload(parameters: "ParameterPayload", is_many: bool) -> bool:
+    if not parameters or isinstance(parameters, (str, bytes, bytearray, Mapping)):
+        return False
+    if not isinstance(parameters, Sequence):
+        return False
+    if is_many:
+        first = parameters[0]
+        return isinstance(first, Sequence) and not isinstance(first, (str, bytes, bytearray))
+    return True
+
+
+def _needs_named_binding(parameters: "ParameterPayload", param_info: "list[ParameterInfo]", is_many: bool) -> bool:
+    """Return True when a sequence payload must be keyed by natively supported named placeholders."""
+    if not param_info or not parameters:
+        return False
+    if _is_sequence_payload(parameters, is_many):
+        return all(param.style in _NAMED_STYLES for param in param_info)
+    if not is_many and isinstance(parameters, Mapping):
+        return all(param.style not in _NAMED_STYLES for param in param_info)
+    return False
+
+
+def _sequence_row_to_named(row: "Sequence[Any]", cached_param_info: "Sequence[ParameterInfo]") -> "dict[str, Any]":
+    expected = len({param.name or f"param_{param.ordinal}" for param in cached_param_info})
+    if len(row) != expected:
+        msg = f"Parameter count mismatch: {len(row)} parameters provided but {expected} placeholders referenced."
+        raise SQLSpecError(msg)
+    named: dict[str, Any] = {}
+    for param in cached_param_info:
+        name = param.name or f"param_{param.ordinal}"
+        if name in named:
+            continue
+        slot = len(named)
+        if slot < len(row):
+            named[name] = row[slot]
+    return named
+
+
+def _mapping_rows_to_positional(parameters: "ConvertedParameters", is_many: bool) -> "ConvertedParameters":
+    if is_many and isinstance(parameters, (list, tuple)):
+        return [tuple(row.values()) if isinstance(row, Mapping) else row for row in parameters]
+    if isinstance(parameters, Mapping):
+        return tuple(parameters.values())
+    return parameters

@@ -859,7 +859,10 @@ class CommonDriverAttributesMixin:
         if isinstance(statement, QueryBuilder):
             sql_statement = self._prepare_from_builder(statement, data_parameters, statement_config, kwargs)
         elif isinstance(statement, SQL):
+            pending_filters = statement.filters
             sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
+            sql_statement, _ = sql_statement._take_pending_filters()
+            filters = [*pending_filters, *filters]
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
             # Cache the newly created SQL object for future use
@@ -1285,13 +1288,17 @@ class CommonDriverAttributesMixin:
                 else sql_statement.positional_parameters
             )
             statement_seed = sql_statement.raw_expression or sql_statement.raw_sql
-            return SQL(
+            merged = SQL(
                 statement_seed,
                 *merged_parameters,
                 statement_config=statement_config,
                 declared_parameters=declared,
                 **kwargs,
             )
+            merged._named_parameters.update({
+                key: value for key, value in bound_named.items() if key not in merged._named_parameters
+            })
+            return merged
 
         needs_rebuild = False
         if statement_config.dialect and (
@@ -1316,19 +1323,14 @@ class CommonDriverAttributesMixin:
                     is_many=True,
                     declared_parameters=declared,
                 )
-            if sql_statement.named_parameters:
-                return SQL(
-                    statement_seed,
-                    statement_config=statement_config,
-                    declared_parameters=declared,
-                    **sql_statement.named_parameters,
-                )
-            return SQL(
+            rebuilt = SQL(
                 statement_seed,
                 *sql_statement.positional_parameters,
                 statement_config=statement_config,
                 declared_parameters=declared,
             )
+            rebuilt._named_parameters.update(sql_statement.named_parameters)
+            return rebuilt
         return sql_statement
 
     def _prepare_from_string(

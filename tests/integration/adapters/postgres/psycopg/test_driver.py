@@ -263,3 +263,25 @@ def test_extensions_not_enabled_on_standard_postgres(psycopg_sync_config: "Psyco
     assert psycopg_sync_config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
     assert psycopg_sync_config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
     assert psycopg_sync_config.statement_config.dialect == "postgres"
+
+
+def test_percent_escapes_and_modulo_with_bound_values(psycopg_session: PsycopgSyncDriver) -> None:
+    for value in range(3):
+        assert psycopg_session.select_one("SELECT '50%%' AS label, 5 %% 2 AS remainder, %s AS value", value) == {
+            "label": "50%",
+            "remainder": 1,
+            "value": value,
+        }
+        assert psycopg_session.select_one(
+            "SELECT '50%' AS label, 5 % 2 AS remainder, :value AS value", value=value
+        ) == {"label": "50%", "remainder": 1, "value": value}
+
+
+async def test_async_percent_escapes_with_bound_values(psycopg_async_config: PsycopgAsyncConfig) -> None:
+    async with psycopg_async_config.provide_session() as session:
+        for value in range(3):
+            assert await session.select_one("SELECT '50%%' AS label, 5 %% 2 AS remainder, %s AS value", value) == {
+                "label": "50%",
+                "remainder": 1,
+                "value": value,
+            }
