@@ -107,6 +107,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* The SQLite and aiosqlite pools retry enabling WAL mode when several connections
+  first open a new database at the same time; previously this could fail with
+  ``database is locked``.
+
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
   a driver error export is missing.
