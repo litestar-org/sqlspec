@@ -227,6 +227,14 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
         config_dict: dict[str, Any] = dict(connection_config) if connection_config else {}
+        database = (
+            config_dict.pop("database", None)
+            or config_dict.pop("db", None)
+            or config_dict.pop("path", None)
+            or config_dict.pop("file", None)
+        )
+        if database is not None:
+            config_dict["database"] = database
         if "database" not in config_dict or config_dict["database"] == ":memory:":
             config_dict["database"] = f"file:memory_{uuid4().hex}?mode=memory&cache=private"
             config_dict["uri"] = True

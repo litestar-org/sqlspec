@@ -320,10 +320,23 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         "pool_max_size",
         "pool_timeout",
         "pool_recycle_seconds",
+        "db",
+        "path",
+        "file",
     }
     if sys.version_info < (3, 12):
         excluded_keys.add("autocommit")
-    return {key: value for key, value in connection_config.items() if key not in excluded_keys}
+    connection_parameters = {key: value for key, value in connection_config.items() if key not in excluded_keys}
+    if "database" not in connection_parameters:
+        database = (
+            connection_config.get("database")
+            or connection_config.get("db")
+            or connection_config.get("path")
+            or connection_config.get("file")
+        )
+        if database is not None:
+            connection_parameters["database"] = database
+    return connection_parameters
 
 
 def create_mapped_exception(error: BaseException, *, logger: Any | None = None) -> SQLSpecError:

@@ -91,6 +91,24 @@ def test_build_connection_config_filters_pool_keys_and_gates_autocommit(tmp_path
         assert "autocommit" not in connection_config
 
 
+def test_build_connection_config_resolves_database_aliases() -> None:
+    """build_connection_config should resolve db, path, and file aliases to database without leaking them."""
+    assert build_connection_config({"path": "app.db"}) == {"database": "app.db"}
+    assert build_connection_config({"db": "app.db"}) == {"database": "app.db"}
+    assert build_connection_config({"file": "app.db"}) == {"database": "app.db"}
+
+
+def test_aiosqlite_config_resolves_database_aliases() -> None:
+    """AiosqliteConfig should resolve path/db/file aliases and avoid generating memory UUID."""
+    config = AiosqliteConfig(connection_config={"path": "app.db"})
+    assert config.connection_config["database"] == "app.db"
+    assert "path" not in config.connection_config
+
+    config_db = AiosqliteConfig(connection_config={"db": "app2.db"})
+    assert config_db.connection_config["database"] == "app2.db"
+    assert "db" not in config_db.connection_config
+
+
 async def test_create_pool_routes_pool_settings_without_leaking_to_connect_kwargs(tmp_path: Path) -> None:
     config = AiosqliteConfig(
         connection_config={

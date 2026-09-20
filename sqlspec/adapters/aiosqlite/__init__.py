@@ -8,7 +8,7 @@ from sqlspec.adapters.aiosqlite.config import (
     AiosqliteFunctionConfig,
     AiosqlitePoolParams,
 )
-from sqlspec.adapters.aiosqlite.core import default_statement_config
+from sqlspec.adapters.aiosqlite.core import build_connection_config, default_statement_config
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
@@ -34,5 +34,6 @@ __all__ = (
     "AiosqlitePoolConnection",
     "AiosqlitePoolParams",
     "AiosqliteRawCursor",
+    "build_connection_config",
     "default_statement_config",
 )
