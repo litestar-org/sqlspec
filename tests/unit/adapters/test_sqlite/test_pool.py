@@ -175,19 +175,26 @@ def test_close_closes_connections_opened_on_other_threads(tmp_path: Path) -> Non
     """Connections opened by worker threads must not survive pool shutdown."""
     pool = SqliteConnectionPool({"database": str(tmp_path / "threads.sqlite")})
     opened: list[SqliteConnection] = []
-    barrier = threading.Barrier(3)
+    barrier = threading.Barrier(3, timeout=10)
+    errors: list[Exception] = []
 
     def _open() -> None:
-        opened.append(pool.acquire())
-        barrier.wait()
+        try:
+            opened.append(pool.acquire())
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            barrier.wait()
 
     workers = [threading.Thread(target=_open) for _ in range(2)]
     for worker in workers:
         worker.start()
     barrier.wait()
     for worker in workers:
-        worker.join()
+        worker.join(timeout=15)
 
+    assert errors == []
+    assert all(not worker.is_alive() for worker in workers)
     assert len({id(connection) for connection in opened}) == 2
 
     pool.close()
@@ -313,3 +320,60 @@ def test_a_connection_from_a_retired_generation_is_closed_and_deregistered() -> 
             connection.execute("SELECT 1")
     finally:
         pool.close()
+
+
+def test_concurrent_first_acquire_on_new_file_database_succeeds(tmp_path: Path) -> None:
+    for iteration in range(20):
+        pool = SqliteConnectionPool({"database": str(tmp_path / f"concurrent-{iteration}.sqlite")})
+        barrier = threading.Barrier(4, timeout=10)
+        errors: list[Exception] = []
+        modes: list[int | str] = []
+
+        def acquire() -> None:
+            try:
+                barrier.wait()
+                modes.append(_read_pragma(pool.acquire(), "PRAGMA journal_mode"))
+            except Exception as exc:
+                errors.append(exc)
+
+        workers = [threading.Thread(target=acquire) for _ in range(4)]
+        try:
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=15)
+            assert all(not worker.is_alive() for worker in workers)
+            assert errors == []
+            assert modes == ["wal"] * 4
+        finally:
+            pool.close()
+
+
+@pytest.mark.parametrize("failures", [2, 50])
+def test_enable_wal_retries_locked_errors(monkeypatch: pytest.MonkeyPatch, failures: int) -> None:
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.sqlite import pool as pool_module
+
+    connection = Mock()
+    connection.execute.side_effect = [sqlite3.OperationalError("database is locked")] * failures + [None]
+    monkeypatch.setattr(pool_module.time, "sleep", lambda _: None)
+    if failures == 50:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            pool_module._enable_wal(connection)
+        assert connection.execute.call_count == 50
+    else:
+        pool_module._enable_wal(connection)
+        assert connection.execute.call_count == 3
+
+
+def test_enable_wal_reraises_other_operational_errors() -> None:
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.sqlite import pool as pool_module
+
+    connection = Mock()
+    connection.execute.side_effect = sqlite3.OperationalError("disk I/O error")
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
+        pool_module._enable_wal(connection)
+    assert connection.execute.call_count == 1

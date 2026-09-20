@@ -1915,6 +1915,27 @@ def test_converted_parameters_transformers_null_pruning(processor: ParameterProc
     assert transformed_params[0] == 1
 
 
+@pytest.mark.parametrize("null_slot", [0, 1, 2])
+@pytest.mark.parametrize("copy_statement", [False, True])
+def test_bigquery_null_pruning_preserves_repeated_bindings(null_slot: int, copy_statement: bool) -> None:
+    from sqlspec.adapters.bigquery.core import default_statement_config
+
+    statement = SQL("SELECT ?, ?, ?", statement_config=default_statement_config)
+    for iteration, nullable in enumerate((None, None, "present", None, "again")):
+        values = [f"first-{iteration}", f"second-{iteration}", f"third-{iteration}"]
+        parameters: list[str | None] = list(values)
+        parameters[null_slot] = nullable
+        statement = (
+            statement.copy(parameters=parameters)
+            if copy_statement
+            else SQL("SELECT ?, ?, ?", parameters, statement_config=default_statement_config)
+        )
+        sql, bound = statement.compile()
+        assert bound == {f"param_{index}": value for index, value in enumerate(parameters) if value is not None}
+        assert sql.count("NULL") == (nullable is None)
+        assert statement.compile() == (sql, bound)
+
+
 def test_converted_parameters_transformers_none_input(processor: ParameterProcessor) -> None:
     """Test replace_null_parameters_with_literals handles None input."""
     expression = sqlglot.parse_one("SELECT * FROM table", dialect="postgres")
