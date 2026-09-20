@@ -129,6 +129,14 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   and result ordering. Pagination filters produce valid set-operation SQL.
 * ``SQL.order_by("id", desc=True)`` now sorts descending, and
   ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+* Statements combining positional and named values now bind each value to its
+  own placeholder, including filters and ``where_*`` helpers.
+
+* PostgreSQL JSONB existence operators followed by literals or bound parameters
+  are recognized without consuming a parameter slot.
+
+* DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
+  order and defaults by restricting bulk loading to plain VALUES inserts.
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
