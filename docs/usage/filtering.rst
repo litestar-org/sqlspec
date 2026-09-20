@@ -119,7 +119,9 @@ Query shape
 The cursor filter replaces the query's ``ORDER BY``, ``LIMIT``, and ``OFFSET``.
 It fetches one extra row to detect another page, then removes that row from
 ``items``. Grouped, ``DISTINCT``, and set-operation queries are wrapped in a
-subquery before cursor predicates are applied. Pass exactly one ``CursorFilter``
+subquery before cursor predicates are applied. In that case, these changes apply
+to the outer query; inner ``LIMIT`` and ``OFFSET`` bounds stay in place and cap
+the rows eligible for paging. Pass exactly one ``CursorFilter``
 to the driver helper; it applies other filters first, then the cursor filter.
 Do not combine cursor pagination with offset pagination or a separate
 ``OrderByFilter``.
