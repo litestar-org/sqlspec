@@ -130,11 +130,33 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* ``SQL.order_by("id", desc=True)`` now sorts descending, and
+  ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+* ``limit``, ``offset``, and ``paginate`` on set operations render valid
+  SQL Server pagination while retaining the requested result ordering.
+
+* Statement modifiers on empty or unparseable SQL raise ``SQLParsingError``
+  instead of leaking a sqlglot ``ParseError``.
+
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
 * ``SQL.order_by("id", desc=True)`` now sorts descending, and
   ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+
+
+* Missing positional bindings no longer consume values reserved for named placeholders.
+* Repeated and reordered numeric placeholders bind by their written indexes when
+  converted to another placeholder style.
+* Sequences for named placeholders and mappings for positional placeholders bind
+  consistently on the first execution and cache hits, including repeated names.
+* Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
+  instead of silently binding values to the wrong slots.
+* PostgreSQL ``??`` escapes become ``?`` operators, including after filters modify
+  the statement; output transformers receive the driver's execution placeholder style.
+* Spanner ``execute_many`` converts tuple rows and mixed placeholder mappings before
+  calling the driver, preserving bindings on cache hits.
+
 * Filters supplied to the ``SQL`` constructor are applied once before call-site
   filters, including when statements are reused.
 
@@ -146,6 +168,11 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
+* Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
+  A placeholder without a value now raises instead of rendering as ``NULL``.
+
+* The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
+  now pass statement parameters to the driver for binding.
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when

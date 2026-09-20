@@ -145,3 +145,20 @@ async def test_async_constructor_filter_is_applied(aiosqlite_session: AiosqliteD
     await aiosqlite_session.execute_many("INSERT INTO ctor_rows VALUES (?)", [(1,), (2,)])
     statement = SQL("SELECT n FROM ctor_rows ORDER BY n", LimitOffsetFilter(1, 0))
     assert await aiosqlite_session.select(statement) == [{"n": 1}]
+
+
+def test_mapping_rows_for_nameless_placeholders_rebind_every_call(sqlite_session: SqliteDriver) -> None:
+    sqlite_session.execute("CREATE TABLE rebound_rows (a INTEGER, b INTEGER)")
+    for index in range(3):
+        sqlite_session.execute_many("INSERT INTO rebound_rows VALUES (?, ?)", [{"x": index, "y": index + 10}])
+    assert sqlite_session.select("SELECT * FROM rebound_rows ORDER BY a") == [
+        {"a": 0, "b": 10},
+        {"a": 1, "b": 11},
+        {"a": 2, "b": 12},
+    ]
+
+
+@pytest.mark.parametrize("sql", ["SELECT $2 AS a, $1 AS b, $2 AS c", "SELECT :2 AS a, :1 AS b, :2 AS c"])
+def test_written_indexes_bind_identically_every_call(sqlite_session: SqliteDriver, sql: str) -> None:
+    for _ in range(3):
+        assert sqlite_session.select_one(sql, 7, 8) == {"a": 8, "b": 7, "c": 8}

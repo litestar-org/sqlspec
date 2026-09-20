@@ -2495,7 +2495,7 @@ def test_build_conversion_plan_called_once_execute_many_preserve_original_params
     result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
     assert converter.build_conversion_plan_calls == 1
     assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
-    assert result.parameters is rows
+    assert result.parameters == [(1, 2), (3, 4)]
 
 
 def test_type_coercion_dispatcher_is_shared_for_equal_fallbacks() -> None:
@@ -2553,11 +2553,10 @@ def test_same_style_numeric_gaps_are_preserved(converter: ParameterConverter) ->
     assert same_sql == sql_numeric_gaps
     assert same_params == [10, 20, 30, 40, 50]
 
-    (conv_sql, conv_params) = converter.convert_placeholder_style(
-        sql_numeric_gaps, [10, 20, 30, 40, 50], ParameterStyle.QMARK, param_info=info
-    )
-    assert conv_sql == "SELECT * FROM t WHERE a = ? AND b = ?"
-    assert conv_params == [10, 20, 30, 40, 50]
+    with pytest.raises(SQLSpecError, match="distinct positional indexes"):
+        converter.convert_placeholder_style(
+            sql_numeric_gaps, [10, 20, 30, 40, 50], ParameterStyle.QMARK, param_info=info
+        )
 
     (map_sql, map_params) = converter.convert_placeholder_style(
         sql_numeric_gaps, {"2": 20, "5": 50}, ParameterStyle.QMARK, param_info=info
@@ -2653,10 +2652,10 @@ def test_fallback_mapping_alias_precedence(converter: ParameterConverter) -> Non
     val5, ok5, _ = converter._lookup_parameter_value(param, {"fallback": "ordered"}, [])
     assert ok5 is True and val5 == "ordered"
 
-    num_info = converter.validator.extract_parameters("SELECT * FROM t WHERE a = $1")
-    num_param = num_info[0]
-    val6, ok6, _ = converter._lookup_parameter_value(num_param, {"col_a": "aliased", "param_0": "param_ord"}, ["col_a"])
-    assert ok6 is True and val6 == "aliased"
+    _, values = converter.convert_placeholder_style(
+        "SELECT * FROM t WHERE a = $1", {"col_a": "aliased", "param_0": "param_ord"}, ParameterStyle.QMARK
+    )
+    assert values == ("param_ord",)
 
 
 def test_preserved_many_batches_keep_identity_and_validate_positional_targets() -> None:
@@ -2671,11 +2670,11 @@ def test_preserved_many_batches_keep_identity_and_validate_positional_targets() 
     )
     rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
     result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
-    assert result.parameters is rows
+    assert result.parameters == [(1, 2), (3, 4)]
 
     tuple_rows = ({"a": 1, "b": 2}, {"a": 3, "b": 4})
     result_tuple = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", tuple_rows, config, is_many=True)
-    assert result_tuple.parameters is tuple_rows
+    assert result_tuple.parameters == ((1, 2), (3, 4))
 
     missing_rows = [{"a": 1, "b": 2}, {"a": 3}]
     with pytest.raises(SQLSpecError, match="Missing named parameter\\(s\\): b"):
@@ -2688,9 +2687,9 @@ def test_preserved_many_batches_keep_identity_and_validate_positional_targets() 
         supported_execution_parameter_styles={ParameterStyle.NAMED_AT},
         preserve_original_params_for_many=True,
     )
-    named_result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", missing_rows, named_config, is_many=True)
+    named_result = processor.process("INSERT INTO t (a, b) VALUES (@a, @b)", rows, named_config, is_many=True)
     assert named_result.sql == "INSERT INTO t (a, b) VALUES (@a, @b)"
-    assert named_result.parameters is missing_rows
+    assert named_result.parameters is rows
 
 
 @pytest.mark.skipif(
@@ -2714,7 +2713,7 @@ def test_preserved_many_batches_keep_identity_with_overridden_converter() -> Non
     rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
     result = processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", rows, config, is_many=True)
     assert result.sql == "INSERT INTO t (a, b) VALUES ($1, $2)"
-    assert result.parameters is rows
+    assert result.parameters == [(1, 2), (3, 4)]
 
     with pytest.raises(SQLSpecError, match="Missing named parameter\\(s\\): b"):
         processor.process("INSERT INTO t (a, b) VALUES (:a, :b)", [{"a": 1, "b": 2}, {"a": 3}], config, is_many=True)
@@ -2802,3 +2801,223 @@ def test_process_positional_json_values_preserves_objects(processor: ParameterPr
     parameters = ({"key": "value"}, {"count": 42})
     result = processor.process("SELECT $1, $2", parameters, config, is_many=False)
     assert result.parameters == parameters
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("select data ? 'key' from t where a = $1", ["$1"]),
+        ("select data ?'key' from t", []),
+        ("select t.data ? :key from t where a = :a", [":key", ":a"]),
+        ("select (data->'x') ? $1 from t", ["$1"]),
+        ("select data ? ? from t where a = ?", ["?", "?"]),
+        ("select ? 'alias'", ["?"]),
+        ("select ?, ? 'alias'", ["?", "?"]),
+        ("select interval ? 'day'", ["?"]),
+        ("select case when ? 'a' then 1 end", ["?"]),
+        ("select a = ? :x", ["?", ":x"]),
+        ("select a = ?\n'str'", ["?"]),
+        ("select coalesce(?, 'd')", ["?"]),
+        ("select ?::int", ["?"]),
+        ("select a from t where a like ? escape '\\'", ["?"]),
+    ],
+)
+def test_jsonb_exists_operator_distinguishes_operands(sql: str, expected: list[str]) -> None:
+    validator = ParameterValidator()
+    assert [info.placeholder_text for info in validator.extract_parameters(sql)] == expected
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "postgres", "sqlite", "oracle", "tsql", "duckdb", "bigquery", "spanner"])
+def test_static_literal_escapes_per_dialect(dialect: str) -> None:
+    value = "x\\' OR 1=1 -- "
+    literal = ParameterConverter._format_literal(value, dialect)
+    assert literal == sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+    statement = sqlglot.parse_one(f"SELECT * FROM t WHERE name = {literal}", dialect=dialect)
+    equality = statement.args["where"].this
+    assert isinstance(equality, sqlglot.exp.EQ)
+    assert isinstance(equality.expression, sqlglot.exp.Literal)
+    assert equality.expression.this == value
+
+
+def test_static_literal_escapes_non_string_objects() -> None:
+    class Value:
+        def __str__(self) -> str:
+            return "a' OR '1'='1"
+
+    assert ParameterConverter._format_literal(Value(), "mysql") == "'a'' OR ''1''=''1'"
+
+
+@pytest.mark.parametrize(
+    "dialect,template",
+    [
+        (None, "X'{}'"),
+        ("mysql", "X'{}'"),
+        ("sqlite", "X'{}'"),
+        ("postgres", "decode('{}', 'hex')"),
+        ("pgvector", "decode('{}', 'hex')"),
+        ("paradedb", "decode('{}', 'hex')"),
+        ("pg_textsearch", "decode('{}', 'hex')"),
+        ("oracle", "HEXTORAW('{}')"),
+        ("tsql", "0x{}"),
+        ("bigquery", "FROM_HEX('{}')"),
+        ("spanner", "FROM_HEX('{}')"),
+        ("duckdb", "UNHEX('{}')"),
+    ],
+)
+@pytest.mark.parametrize("value", [b"\x00\xffab", b"", bytearray(b"ab"), memoryview(b"ab")])
+def test_static_literal_renders_bytes_per_dialect(dialect: str | None, template: str, value: object) -> None:
+    assert ParameterConverter._format_literal(value, dialect) == template.format(bytes(value).hex())
+
+
+def test_static_literal_rejects_unknown_binary_dialect() -> None:
+    with pytest.raises(SQLSpecError, match="Cannot embed a bytes value"):
+        ParameterConverter._format_literal(b"a", "spangres")
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), Decimal("NaN"), Decimal("Infinity")])
+def test_static_literal_rejects_non_finite_numbers(value: object) -> None:
+    with pytest.raises(SQLSpecError, match="non-finite"):
+        ParameterConverter._format_literal(value, "mysql")
+
+
+def test_static_embedding_raises_on_unresolved_placeholder() -> None:
+    from sqlspec.adapters.asyncmy.core import default_statement_config
+
+    with pytest.raises(SQLSpecError, match="Missing value for placeholder"):
+        SQL(
+            "select * from t where a = ? and b = :x", {"x": 2}, statement_config=default_statement_config
+        ).as_script().compile()
+
+
+def test_static_embedding_explicit_none_renders_null() -> None:
+    from sqlspec.adapters.asyncmy.core import default_statement_config
+
+    sql, parameters = SQL("select :x", {"x": None}, statement_config=default_statement_config).as_script().compile()
+    assert sql == "select NULL"
+    assert parameters is None
+
+
+def test_static_cache_is_dialect_specific() -> None:
+    from sqlspec import StatementConfig
+
+    value = "back\\slash"
+    for dialect in ("mysql", "postgres", "mysql"):
+        sql, parameters = (
+            SQL("select :x", {"x": value}, statement_config=StatementConfig(dialect=dialect)).as_script().compile()
+        )
+        assert sql == "select " + sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+        assert parameters is None
+
+
+@pytest.mark.parametrize("parameters", [{}, (), []])
+def test_static_embedding_rejects_empty_payload(parameters: object) -> None:
+    from sqlspec.adapters.pymysql.core import default_statement_config
+
+    with pytest.raises(SQLSpecError, match="Missing value for placeholder"):
+        SQL("select :x", parameters, statement_config=default_statement_config).as_script().compile()
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        ParameterStyle.QMARK,
+        ParameterStyle.NUMERIC,
+        ParameterStyle.NAMED_COLON,
+        ParameterStyle.NAMED_AT,
+        ParameterStyle.POSITIONAL_PYFORMAT,
+    ],
+)
+def test_mapping_cannot_consume_named_value_for_positional_slot(target: ParameterStyle) -> None:
+    converter = ParameterConverter()
+    with pytest.raises(SQLSpecError, match="Missing value for positional placeholder"):
+        converter.convert_placeholder_style("SELECT ? AS a, :x AS b", {"x": 2}, target)
+
+
+@pytest.mark.parametrize("profile_name", ["sqlite", "psycopg", "oracledb", "asyncpg", "spanner"])
+@pytest.mark.parametrize(
+    "sql, values", [("SELECT $2 AS a, $1 AS b, $2 AS c", (7, 8)), ("SELECT :x AS a, :x AS b, :y AS c", (7, 8))]
+)
+def test_binding_shapes_match_on_every_call(profile_name: str, sql: str, values: tuple[int, ...]) -> None:
+    profile = get_driver_profile(profile_name)
+    config = build_statement_config_from_profile(profile).parameter_config
+    processor = ParameterProcessor()
+    results = [processor.process(sql, values, config, dialect=profile.default_dialect) for _ in range(3)]
+    assert all(result.parameters == results[0].parameters for result in results)
+    params = results[0].parameters
+    if isinstance(params, dict):
+        assert sorted(params.values()) == [7, 8]
+    elif profile_name == "asyncpg":
+        assert tuple(params) == values
+    else:
+        assert tuple(params) == ((8, 7, 8) if "$2" in sql else (7, 7, 8))
+
+
+@pytest.mark.parametrize("profile_name", ["sqlite", "psycopg", "oracledb", "asyncpg"])
+def test_ambiguous_mixed_indexes_raise_every_call(profile_name: str) -> None:
+    profile = get_driver_profile(profile_name)
+    config = build_statement_config_from_profile(profile).parameter_config
+    processor = ParameterProcessor()
+    for _ in range(3):
+        with pytest.raises(SQLSpecError, match="Ambiguous positional binding"):
+            processor.process("SELECT $2 AS a, ? AS b, $1 AS c", (1, 2, 3), config)
+
+
+@pytest.mark.parametrize("profile_name", ["asyncpg", "psycopg", "psqlpy", "sqlite", "duckdb"])
+def test_qmark_escape_is_only_unescaped_for_non_qmark_drivers(profile_name: str) -> None:
+    profile = get_driver_profile(profile_name)
+    config = build_statement_config_from_profile(profile)
+    statement = SQL("SELECT data ?? other_col FROM t WHERE id = :id", id=5, statement_config=config)
+    expected_operator = "??" if profile_name in {"sqlite", "duckdb"} else "?"
+    for _ in range(3):
+        sql, _ = statement.compile()
+        assert f"data {expected_operator} other_col" in sql
+
+
+def test_output_transformer_receives_execution_style_sql() -> None:
+    from sqlspec.adapters.psycopg.core import default_statement_config
+
+    def identity(sql: str, parameters: Any) -> tuple[str, Any]:
+        return sql, parameters
+
+    config = default_statement_config.replace(output_transformer=identity)
+    sql, params = SQL("SELECT :id, :n", id=5, n=1, statement_config=config).compile()
+    assert sql == "SELECT %s, %s"
+    assert params == (5, 1)
+
+
+@pytest.mark.parametrize("profile_name", ["sqlite", "oracledb", "bigquery", "spanner"])
+def test_surplus_named_sequence_values_raise_every_call(profile_name: str) -> None:
+    profile = get_driver_profile(profile_name)
+    processor = ParameterProcessor()
+    config = build_statement_config_from_profile(profile).parameter_config
+    for _ in range(3):
+        with pytest.raises(SQLSpecError, match="Parameter count mismatch"):
+            processor.process("SELECT :x, :y", (1, 2, 3), config)
+
+
+def test_spanner_execute_many_converts_index_rows_every_call() -> None:
+    profile = get_driver_profile("spanner")
+    processor = ParameterProcessor()
+    config = build_statement_config_from_profile(profile).parameter_config
+    for _ in range(3):
+        result = processor.process("INSERT INTO t (a, b) VALUES ($2, $1)", [(1, 2), (3, 4)], config, is_many=True)
+        assert result.parameters == [{"param_1": 2, "param_0": 1}, {"param_1": 4, "param_0": 3}]
+
+
+def test_static_embedding_uses_written_index() -> None:
+    statement = SQL("SELECT $2, $1, $2", 7, 8).as_script()
+    assert statement.compile() == ("SELECT 8, 7, 8", None)
+
+
+@pytest.mark.parametrize("profile_name", ["sqlite", "psycopg", "oracledb", "asyncpg", "spanner"])
+def test_consistent_mixed_placeholder_slots_expand(profile_name: str) -> None:
+    config = build_statement_config_from_profile(get_driver_profile(profile_name)).parameter_config
+    processor = ParameterProcessor()
+    results = [processor.process("SELECT :name, $2, $2", ("User", 25), config).parameters for _ in range(3)]
+    assert results[1:] == results[:1] * 2
+    if isinstance(results[0], dict):
+        assert list(results[0].values()) == ["User", 25]
+    elif profile_name == "asyncpg":
+        assert tuple(results[0]) == ("User", 25)
+    else:
+        assert tuple(results[0]) == ("User", 25, 25)

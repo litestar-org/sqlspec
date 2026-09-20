@@ -1630,6 +1630,28 @@ def test_value_objects_version_info_comparison_hash_and_pickle() -> None:
     assert hash(restored) == hash(version)
 
 
+@pytest.mark.parametrize("raw", ["", "   ", "-- c", "SELEC foo bar (", "select 1 from", ")"])
+def test_modifier_on_unparseable_sql_raises_sql_parsing_error(raw: str) -> None:
+    from sqlspec.exceptions import SQLParsingError
+
+    with pytest.raises(SQLParsingError):
+        SQL(raw).limit(1)
+
+
+def test_modifier_after_reset_raises_sql_parsing_error() -> None:
+    from sqlspec.exceptions import SQLParsingError
+
+    statement = SQL("SELECT 1")
+    statement.reset()
+    with pytest.raises(SQLParsingError):
+        statement.limit(1)
+
+
+def test_filter_on_unparsed_statement_wraps_with_projection() -> None:
+    statement = SQL("SELECT 1 AS v", statement_config=StatementConfig(enable_parsing=False)).limit(1)
+    assert statement.raw_sql.startswith("SELECT * FROM (SELECT 1 AS v) AS filtered")
+
+
 @pytest.mark.parametrize(
     ("text", "values", "named", "expected"),
     [
@@ -1646,3 +1668,26 @@ def test_compile_mixed_parameter_inputs(
     statement = SQL(text, *values, **named, statement_config=StatementConfig(dialect="postgres"))
     for _ in range(3):
         assert tuple(statement.compile()[1]) == expected
+
+
+def test_qmark_escape_survives_filter_round_trip() -> None:
+    from sqlspec.adapters.asyncpg.core import default_statement_config
+
+    statement = SQL("SELECT data ?? other_col FROM t WHERE id = $1", 5, statement_config=default_statement_config)
+    sql, params = statement.limit(2).compile()
+    assert "data ? other_col" in sql
+    assert "COALESCE" not in sql
+    assert tuple(params) == (5,)
+    assert "LIMIT 2" in sql
+
+
+def test_qmark_escape_survives_unparsed_fallback() -> None:
+    from sqlspec.adapters.asyncpg.core import default_statement_config
+
+    statement = SQL(
+        "SELECT data FROM t WHERE data ?? other_col",
+        statement_config=default_statement_config.replace(enable_parsing=False),
+    ).limit(2)
+    rendered, _ = statement.compile()
+    assert "data ? other_col" in rendered
+    assert "COALESCE" not in rendered

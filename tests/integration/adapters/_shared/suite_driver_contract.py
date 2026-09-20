@@ -11,6 +11,7 @@ from tests.integration.adapters._shared.behaviors import (
     assert_async_driver_basics_contract,
     assert_async_execute_many_contract,
     assert_async_for_update_contract,
+    assert_async_parameter_values_are_data_contract,
     assert_async_savepoint_round_trip_contract,
     assert_async_savepoint_unsafe_name_contract,
     assert_async_statement_stack_contract,
@@ -18,6 +19,7 @@ from tests.integration.adapters._shared.behaviors import (
     assert_sync_driver_basics_contract,
     assert_sync_execute_many_contract,
     assert_sync_for_update_contract,
+    assert_sync_parameter_values_are_data_contract,
     assert_sync_savepoint_round_trip_contract,
     assert_sync_savepoint_unsafe_name_contract,
     assert_sync_statement_stack_contract,
@@ -122,3 +124,11 @@ def test_driver_case_metadata_resolves_fixture(driver_case: DriverCaseContext) -
     assert driver_case.case.dialect
     assert driver_case.case.fixture_name
     assert driver_case.case.supports_execute_many or driver_case.case.supports_native_bulk_ingest
+
+
+def test_sync_parameter_values_are_data_contract(sync_driver_case: DriverCaseContext) -> None:
+    assert_sync_parameter_values_are_data_contract(sync_driver_case.driver, sync_driver_case.case)
+
+
+async def test_async_parameter_values_are_data_contract(async_driver_case: DriverCaseContext) -> None:
+    await assert_async_parameter_values_are_data_contract(async_driver_case.driver, async_driver_case.case)

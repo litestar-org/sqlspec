@@ -5,7 +5,7 @@ from typing import Final, Literal
 
 from sqlglot import Dialect, exp
 from sqlglot.generator import Generator
-from sqlglot.tokens import TokenType
+from sqlglot.tokenizer_core import TokenType
 
 __all__ = ("NullsPlacement", "apply_direction", "default_nulls", "has_default_nulls", "ordered")
 
@@ -56,13 +56,22 @@ def default_nulls(item: exp.Ordered, source: str, dialect: str | None = None) ->
         The same ordering expression.
     """
     tokens = Dialect.get_or_raise(dialect).tokenize(source) if "NULLS" in source.upper() else []
-    explicit_nulls = any(
-        token.token_type == TokenType.VAR
-        and token.text.upper() == "NULLS"
-        and following.token_type in (TokenType.VAR, TokenType.FIRST)
-        and following.text.upper() in ("FIRST", "LAST")
-        for token, following in itertools.pairwise(tokens)
-    )
+    explicit_nulls = False
+    depth = 0
+    for token, following in itertools.pairwise(tokens):
+        if token.token_type in (TokenType.L_PAREN, TokenType.L_BRACKET):
+            depth += 1
+        elif token.token_type in (TokenType.R_PAREN, TokenType.R_BRACKET):
+            depth -= 1
+        elif (
+            depth == 0
+            and token.token_type == TokenType.VAR
+            and token.text.upper() == "NULLS"
+            and following.token_type in (TokenType.VAR, TokenType.FIRST)
+            and following.text.upper() in ("FIRST", "LAST")
+        ):
+            explicit_nulls = True
+            break
     if not explicit_nulls:
         item.set("nulls_first", not item.args.get("desc"))
         item.meta[_DEFAULT_NULLS_ARG] = True

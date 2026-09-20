@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pymysql
 from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
 from pymysql.constants import SERVER_STATUS as _PYMYSQL_SERVER_STATUS
+from pymysql.cursors import RE_INSERT_VALUES as PYMYSQL_INSERT_VALUES_PATTERN
 from pymysql.cursors import DictCursor as PyMysqlDictCursor
 from pymysql.cursors import SSCursor as PyMysqlSSCursor
 
@@ -48,6 +49,7 @@ if not TYPE_CHECKING:
 
 
 __all__ = (
+    "PYMYSQL_INSERT_VALUES_PATTERN",
     "PyMysqlCloudSqlConnector",
     "PyMysqlConnect",
     "PyMysqlConnection",
