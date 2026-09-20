@@ -154,6 +154,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
   now pass statement parameters to the driver for binding.
+  Cross-adapter safety checks cover quotes, backslashes, and placeholder-like
+  text supplied as bound values.
 
 * Close async example connection pools before their event loops shut down.
 
