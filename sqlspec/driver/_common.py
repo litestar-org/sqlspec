@@ -859,7 +859,10 @@ class CommonDriverAttributesMixin:
         if isinstance(statement, QueryBuilder):
             sql_statement = self._prepare_from_builder(statement, data_parameters, statement_config, kwargs)
         elif isinstance(statement, SQL):
+            pending_filters = statement.filters
             sql_statement = self._prepare_from_sql(statement, data_parameters, statement_config, kwargs)
+            sql_statement, _ = sql_statement._take_pending_filters()
+            filters = [*pending_filters, *filters]
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
             # Cache the newly created SQL object for future use

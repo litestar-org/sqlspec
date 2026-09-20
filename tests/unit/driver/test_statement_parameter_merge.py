@@ -122,3 +122,26 @@ def test_mixed_values_preserve_tenant_on_every_call(sqlite_session: SqliteDriver
             args = (1,)
             expected = [4]
         assert [row["id"] for row in sqlite_session.select(statement, *args)] == expected
+
+
+def test_constructor_filters_are_applied_once(sqlite_session: SqliteDriver) -> None:
+    from sqlspec.core import LimitOffsetFilter
+
+    sqlite_session.execute("CREATE TABLE ctor_rows (n INTEGER)")
+    sqlite_session.execute_many("INSERT INTO ctor_rows VALUES (?)", [(1,), (2,)])
+    statement = SQL("SELECT n FROM ctor_rows ORDER BY n", LimitOffsetFilter(1, 0))
+    for _ in range(3):
+        assert sqlite_session.select(statement) == [{"n": 1}]
+    prepared = sqlite_session.prepare_statement(statement)
+    assert sqlite_session.select(prepared) == [{"n": 1}]
+    assert statement.filters
+    assert prepared.filters == []
+
+
+async def test_async_constructor_filter_is_applied(aiosqlite_session: AiosqliteDriver) -> None:
+    from sqlspec.core import LimitOffsetFilter
+
+    await aiosqlite_session.execute("CREATE TABLE ctor_rows (n INTEGER)")
+    await aiosqlite_session.execute_many("INSERT INTO ctor_rows VALUES (?)", [(1,), (2,)])
+    statement = SQL("SELECT n FROM ctor_rows ORDER BY n", LimitOffsetFilter(1, 0))
+    assert await aiosqlite_session.select(statement) == [{"n": 1}]
