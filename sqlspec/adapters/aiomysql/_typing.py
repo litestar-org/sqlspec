@@ -14,6 +14,7 @@ from aiomysql import MySQLError as _AiomysqlMySQLError  # pyright: ignore
 from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
 from aiomysql import ProgrammingError as AiomysqlProgrammingError  # pyright: ignore
 from aiomysql import SSCursor as AiomysqlSSCursor
+from aiomysql.cursors import RE_INSERT_VALUES as AIOMYSQL_INSERT_VALUES_PATTERN
 from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
 from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
 from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE  # pyright: ignore
@@ -66,6 +67,7 @@ if not TYPE_CHECKING:
     AiomysqlPymysqlMySQLError = _AiomysqlMySQLError
 
 __all__ = (
+    "AIOMYSQL_INSERT_VALUES_PATTERN",
     "AiomysqlConnection",
     "AiomysqlCursor",
     "AiomysqlDictCursor",

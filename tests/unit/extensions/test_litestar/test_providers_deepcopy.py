@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from sqlspec.core import CursorKey
 from sqlspec.extensions.litestar import providers as litestar_providers
 from sqlspec.extensions.litestar.providers import FieldNameType
 from sqlspec.typing import LITESTAR_INSTALLED
@@ -15,7 +16,8 @@ if not LITESTAR_INSTALLED:
 
 
 _FACTORIES: "dict[str, Any]" = {
-    "_LimitOffsetFilterProvider": lambda cls: cls(20),
+    "_CursorFilterProvider": lambda cls: cls([CursorKey("id")], 20, 1000, "secret", "id", {"sort_field": "id"}),
+    "_LimitOffsetFilterProvider": lambda cls: cls(20, 1000),
     "_IdFilterProvider": lambda cls: cls("id", int),
     "_BeforeAfterFilterProvider": lambda cls: cls("created_at", "createdBefore", "createdAfter"),
     "_SearchFilterProvider": lambda cls: cls({"name", "email"}, False),

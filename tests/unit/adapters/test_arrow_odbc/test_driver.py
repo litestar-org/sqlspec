@@ -620,14 +620,17 @@ def test_arrow_odbc_mssql_driver_uses_tsql_statement_dialect() -> None:
     assert parameters == (1,)
 
 
-def test_arrow_odbc_mssql_pagination_inlines_offset_fetch_integers() -> None:
+@pytest.mark.parametrize("method", ["execute", "select_to_arrow"])
+def test_arrow_odbc_mssql_pagination_inlines_offset_fetch_integers(method: str) -> None:
     """SQL Server ODBC requires literal integer OFFSET/FETCH control values."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
     )
 
-    driver.execute("SELECT name, value FROM dbo.items", OrderByFilter("value", "desc"), LimitOffsetFilter(2, 1))
+    getattr(driver, method)(
+        "SELECT name, value FROM dbo.items", OrderByFilter("value", "desc"), LimitOffsetFilter(2, 1)
+    )
 
     call = connection.read_calls[-1]
     assert "OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY" in call["query"]
@@ -871,3 +874,45 @@ def test_arrow_odbc_driver_slots_in_class_definition() -> None:
     }
     assert expected_new.issubset(set(slots))
     assert list(slots) == sorted(slots)
+
+
+@pytest.mark.parametrize(
+    "sql,parameters,expected_sql,expected_parameters",
+    [
+        (
+            "SELECT TOP (?) id FROM t WHERE name = ?",
+            [3, "hostile'; --"],
+            "SELECT TOP (3) id FROM t WHERE name = ?",
+            ["hostile'; --"],
+        ),
+        (
+            "WITH c AS (SELECT ? AS id) SELECT TOP (?) id FROM c WHERE id > ?",
+            [7, 3, 0],
+            "WITH c AS (SELECT ? AS id) SELECT TOP (3) id FROM c WHERE id > ?",
+            [7, 0],
+        ),
+        ("SELECT TOP /* limit */ (?) '?' AS marker FROM t", [3], "SELECT TOP /* limit */ (3) '?' AS marker FROM t", []),
+        ("SELECT 'TOP (?)' AS label FROM t WHERE id = ?", [7], "SELECT 'TOP (?)' AS label FROM t WHERE id = ?", [7]),
+    ],
+)
+def test_mssql_top_preserves_data_bindings(
+    sql: str, parameters: list[Any], expected_sql: str, expected_parameters: list[Any]
+) -> None:
+    from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
+
+    assert _inline_mssql_pagination_parameters(sql, parameters) == (expected_sql, expected_parameters)
+
+
+def test_mssql_top_rejects_noninteger_limit() -> None:
+    from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
+
+    with pytest.raises(ValueError):
+        _inline_mssql_pagination_parameters("SELECT TOP (?) id FROM t", ["3); DROP TABLE t; --"])
+
+
+@pytest.mark.parametrize("suffix", ["", " PERCENT"])
+def test_mssql_top_rejects_fractional_limits(suffix: str) -> None:
+    from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
+
+    with pytest.raises(ValueError, match="whole integers"):
+        _inline_mssql_pagination_parameters("SELECT TOP (?)" + suffix + " id FROM t", [12.5])

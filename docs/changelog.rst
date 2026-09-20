@@ -1,13 +1,10 @@
-=========
 Changelog
-=========
 
 All notable SQLSpec changes are summarized here. Entries are grouped by release
 and focus on user-visible behavior, public API changes, compatibility notes, and
 important operational fixes.
 
 Recent Updates
-==============
 
 v0.64.0 - Startup performance, connection normalization, and adapter lifecycle hardening
 -----------------------------------------------------------------------------------------
@@ -19,6 +16,11 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   Examples cover ``select_with_cursor()``, ``fetch_with_cursor()``, and
   ``paginate_cursor()``, plus Litestar and FastAPI filter setup.
 
+* FastAPI filter dependencies support cursor pagination, including signed
+  tokens, dynamic sorting, page-size bounds, and HTTP 422 cursor errors.
+
+* Litestar filter dependencies support cursor pagination with signed tokens,
+  bounded page sizes, dynamic sorting, and client validation errors.
 * Added ``paginate_cursor`` to sync and async services with short-session
   acquisition, caller-owned session support, and typed pagination results.
 
@@ -49,6 +51,12 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Changed:**
 
+* Examples, tests, and documentation tooling use explicit forward references;
+  lint now enforces the future-annotations import ban throughout the repository.
+
+* Generated filter dependencies reject ``pageSize`` values above
+  ``pagination_max_size`` (default ``1000``); set ``pagination_max_size`` in
+  ``FilterConfig`` to change the limit.
 * SQLSpec-built ordering (``OrderByFilter``, ``SQL.order_by``, builder
   ``order_by``, ``Column.asc()``/``desc()``, and window ordering) leaves NULL
   placement to the database unless requested. It no longer adds implicit
@@ -135,11 +143,49 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Cursor provider dependency caches distinguish byte secrets from their text
+  representation, preserving each endpoint's configured signing key.
+
+* Framework dependency caches preserve configured list order so the first
+  sort field and cursor key sequence retain their declared meaning.
+
+* Close async example connection pools before their event loops shut down.
+* Explicit NULL placement remains explicit for PostgreSQL-compatible adapters,
+  including CockroachDB, whose default NULL ordering differs from PostgreSQL.
+
+* Arrow ODBC renders SQL Server ``TOP`` page-size controls as validated integers
+  while retaining bound data parameters, including queries with CTEs. Native
+  ``select_to_arrow`` applies the same SQL Server pagination controls.
+
+* ``SQL.order_by("id", desc=True)`` now sorts descending, and
+  ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+* ``limit``, ``offset``, and ``paginate`` on set operations render valid
+  SQL Server pagination while retaining the requested result ordering.
+
+* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
+  instead of leaking a sqlglot ``ParseError``.
+
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
-* ``SQL.order_by("id", desc=True)`` now sorts descending, and
-  ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+* Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
+  when parameters are bound, including repeated preparation, and retains returned
+  rows when legacy modulo syntax cannot be classified by the SQL parser.
+
+* Missing positional bindings no longer consume values reserved for named placeholders,
+  including names that collide with generated parameter aliases and script literals.
+* Repeated and reordered numeric placeholders bind by their written indexes when
+  converted to another placeholder style; native numeric mappings retain written
+  index order on the first call and cache hits.
+* Sequences for named placeholders and mappings for positional placeholders bind
+  consistently on the first execution and cache hits, including repeated names.
+* Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
+  instead of silently binding values to the wrong slots.
+* PostgreSQL ``??`` escapes become ``?`` operators, including after filters modify
+  the statement; output transformers receive the driver's execution placeholder style.
+* Spanner ``execute_many`` converts tuple rows and mixed placeholder mappings before
+  calling the driver, preserving bindings on cache hits.
+
 * Filters supplied to the ``SQL`` constructor are applied once before call-site
   filters, including when statements are reused.
 
@@ -149,8 +195,17 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * PostgreSQL JSONB existence operators followed by literals or bound parameters
   are recognized without consuming a parameter slot.
 
+* Correct Litestar filter query parameter titles and pagination schema documentation.
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
+* Psycopg preserves literal percent characters alongside bound parameters,
+  including cached statements, batch execution, streams, and pipelines.
+
+* Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
+  A placeholder without a value now raises instead of rendering as ``NULL``.
+
+* The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
+  now pass statement parameters to the driver for binding.
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
@@ -2099,7 +2154,6 @@ v0.24.0 - Builder consolidation
 * Refactored builder code to reduce duplication.
 
 Previous Versions
-=================
 
 For releases before ``v0.24.0``, see the repository tag history and GitHub
 release records.

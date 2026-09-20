@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
@@ -23,7 +21,7 @@ class ExampleDriver(SyncDriverAdapterBase):
     """Example synchronous database driver adapter."""
 
     @property
-    def data_dictionary(self) -> SyncDataDictionaryBase:
+    def data_dictionary(self) -> "SyncDataDictionaryBase":
         """Return the data dictionary instance for schema inspection.
 
         Returns:
@@ -31,7 +29,7 @@ class ExampleDriver(SyncDriverAdapterBase):
         """
         raise NotImplementedError
 
-    def dispatch_execute(self, cursor: Any, statement: SQL) -> ExecutionResult:
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute a single statement and return execution metadata.
 
         Args:
@@ -43,7 +41,7 @@ class ExampleDriver(SyncDriverAdapterBase):
         """
         raise NotImplementedError
 
-    def dispatch_execute_many(self, cursor: Any, statement: SQL) -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute a statement with multiple parameter sets.
 
         Args:

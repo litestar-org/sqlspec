@@ -6,6 +6,9 @@ from collections.abc import Iterable, Mapping
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from sqlglot import Dialect
+from sqlglot.tokenizer_core import TokenType
+
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
 from sqlspec.adapters.arrow_odbc.core import (
     build_statement_config,
@@ -281,6 +284,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         prepared_statement.compile()
         sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
+        if self._dialect == "mssql":
+            sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
         resolved_batch_size = batch_size or self._chunk_size()
         table: Any | None = None
 
@@ -425,6 +430,29 @@ _MSSQL_PAGINATION_PARAMETER_COUNT: Final = 2
 
 
 def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[str, object]:
+    if isinstance(parameters, (list, tuple)) and "TOP" in sql.upper():
+        tokens = Dialect.get_or_raise("tsql").tokenize(sql)
+        replacements: list[tuple[int, int, str]] = []
+        consumed: set[int] = set()
+        parameter_index = 0
+        for index, token in enumerate(tokens):
+            if token.token_type != TokenType.PLACEHOLDER:
+                continue
+            if (
+                index >= _MSSQL_PAGINATION_PARAMETER_COUNT
+                and tokens[index - 1].token_type == TokenType.L_PAREN
+                and tokens[index - 2].token_type == TokenType.TOP
+                and index + 1 < len(tokens)
+                and tokens[index + 1].token_type == TokenType.R_PAREN
+                and parameter_index < len(parameters)
+            ):
+                replacements.append((token.start, token.end + 1, str(_pagination_int(parameters[parameter_index]))))
+                consumed.add(parameter_index)
+            parameter_index += 1
+        for start, end, value in reversed(replacements):
+            sql = sql[:start] + value + sql[end:]
+        if consumed:
+            parameters = [value for index, value in enumerate(parameters) if index not in consumed]
     match = _MSSQL_OFFSET_FETCH_PATTERN.search(sql)
     if (
         match is None
@@ -442,7 +470,11 @@ def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[s
 
 def _pagination_int(value: object) -> int:
     unwrapped = getattr(value, "value", value)
-    return int(cast("Any", unwrapped))
+    integer = int(cast("Any", unwrapped))
+    if not isinstance(unwrapped, str) and unwrapped != integer:
+        msg = "SQL Server pagination controls must be whole integers"
+        raise ValueError(msg)
+    return integer
 
 
 def _unwrap_parameter(value: Any) -> Any:

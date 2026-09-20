@@ -30,6 +30,7 @@ from sqlspec.adapters.psycopg.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    escape_literal_percent,
     execute_with_optional_parameters,
     execute_with_optional_parameters_async,
     pipeline_supported,
@@ -70,6 +71,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._common import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 
@@ -159,6 +161,7 @@ class PsycopgPipelineMixin:
             sql_text, prepared_parameters = driver._compiled_sql(  # pyright: ignore[reportPrivateUsage]
                 sql_statement, config
             )
+            sql_text = escape_literal_percent(sql_text, prepared_parameters, config.parameter_validator)
             prepared.append(
                 PreparedStackOperation(
                     operation_index=index,
@@ -222,6 +225,16 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         self._restore_autocommit = False
         self._transaction_active = False
 
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if "%" in cached.compiled_sql:
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return self._execute_cached_statement(statement)
+        return super()._execute_cache_hit(sql, params, cached)
+
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
@@ -233,10 +246,11 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
 
         execute_with_optional_parameters(cursor, sql, prepared_parameters)
 
-        if statement.returns_rows():
+        if statement.returns_rows() or cursor.description is not None:
             fetched_data = cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
             column_names = self._resolve_column_names(cursor.description)
@@ -267,6 +281,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -434,6 +449,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         return SyncRowStream(PsycopgSyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "PsycopgSyncExceptionHandler":
@@ -726,6 +742,16 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         self._restore_autocommit = False
         self._transaction_active = False
 
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if "%" in cached.compiled_sql:
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return await self._execute_cached_statement(statement)
+        return await super()._execute_cache_hit(sql, params, cached)
+
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement (async).
 
@@ -737,10 +763,11 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             ExecutionResult with statement execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
 
         await execute_with_optional_parameters_async(cursor, sql, prepared_parameters)
 
-        if statement.returns_rows():
+        if statement.returns_rows() or cursor.description is not None:
             fetched_data = await cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
             column_names = self._resolve_column_names(cursor.description)
@@ -771,6 +798,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             ExecutionResult with batch execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
 
         if not prepared_parameters:
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
@@ -941,6 +969,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         return AsyncRowStream(PsycopgAsyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "PsycopgAsyncExceptionHandler":

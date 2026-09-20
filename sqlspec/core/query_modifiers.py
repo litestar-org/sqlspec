@@ -16,6 +16,7 @@ from typing import Any, Final
 
 from sqlglot import exp
 
+from sqlspec.core._operators import _outer_order
 from sqlspec.exceptions import SQLSpecError
 
 __all__ = (
@@ -443,7 +444,7 @@ def wrap_as_subquery(expression: exp.Expr, alias: str = "filtered") -> exp.Selec
     if with_ is not None:
         outer.set("with_", with_)
     if order is not None:
-        outer.set("order", order)
+        outer.set("order", _outer_order(working, order))
     return outer
 
 

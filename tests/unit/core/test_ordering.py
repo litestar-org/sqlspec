@@ -23,7 +23,7 @@ def test_ordered_emits_no_null_placement(dialect: str, desc: bool | None, suffix
 @pytest.mark.parametrize(
     ("dialect", "expected"),
     [
-        ("postgres", "id DESC"),
+        ("postgres", "id DESC NULLS FIRST"),
         ("oracle", "id DESC"),
         ("snowflake", "id DESC"),
         ("sqlite", "id DESC NULLS FIRST"),
@@ -200,3 +200,16 @@ def test_nested_null_placement_does_not_set_outer_ordering() -> None:
     explicit_source = source + " NULLS FIRST"
     explicit = default_nulls(parse_one(explicit_source, into=exp.Ordered), explicit_source)
     assert explicit.sql(dialect="postgres").endswith("LIMIT 1), id) NULLS FIRST")
+
+
+@pytest.mark.parametrize(
+    "desc,nulls,expected", [(False, "last", "id ASC NULLS LAST"), (True, "first", "id DESC NULLS FIRST")]
+)
+def test_explicit_postgres_placement_survives_compatible_servers(
+    desc: bool, nulls: NullsPlacement, expected: str
+) -> None:
+    item = ordered(exp.column("id"), desc=desc, nulls=nulls)
+    assert item.sql(dialect="postgres") == expected
+    untouched = exp.Ordered(this=exp.column("id"), desc=desc, nulls_first=nulls == "first")
+    assert hash_expression(item) != hash_expression(untouched)
+    assert untouched.sql(dialect="postgres") == ("id DESC" if desc else "id ASC")

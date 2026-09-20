@@ -3,7 +3,7 @@
 
 import datetime
 import inspect
-from typing import Any, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast
 
 import pytest
 from litestar.config.app import AppConfig
@@ -29,6 +29,7 @@ from sqlspec.extensions.litestar.providers import (
     FilterConfig,
     _configured_filter_aggregator,
     _create_statement_filters,
+    create_filter_dependencies,
     dep_cache,
 )
 from sqlspec.typing import LITESTAR_INSTALLED
@@ -406,3 +407,183 @@ def test_raise_missing_connection_provide_request_session_raises_when_connection
 
 def test_raise_missing_connection_raise_missing_connection_annotation_is_noreturn() -> None:
     assert SQLSpecPlugin._raise_missing_connection.__annotations__["return"] is NoReturn
+
+
+def test_filter_query_parameter_titles() -> None:
+    from litestar import Litestar, get
+    from litestar.di import NamedDependency
+
+    from sqlspec.extensions.litestar.providers import create_filter_dependencies
+
+    @get("/")
+    def handler(filters: NamedDependency[list[Any]]) -> list[Any]:
+        return []
+
+    app = Litestar([handler], dependencies=create_filter_dependencies({"search": "name", "sort_field": "name"}))
+    parameters = app.openapi_schema.to_schema()["paths"]["/"]["get"]["parameters"]
+    titles = {parameter["name"]: parameter["schema"]["title"] for parameter in parameters}
+    assert titles["searchString"] == "Search term"
+    assert titles["searchIgnoreCase"] == "Search should be case insensitive"
+    assert titles["sortOrder"] == "Sort order"
+
+
+@pytest.mark.parametrize("maximum", [None, 50, 2000])
+def test_page_size_limit_is_applied(maximum: int | None) -> None:
+    from typing import get_args
+
+    config = FilterConfig(pagination_type="limit_offset")
+    if maximum is not None:
+        config["pagination_max_size"] = maximum
+    provider = _create_statement_filters(config)["limit_offset_filter"].dependency
+    assert get_args(inspect.signature(provider).parameters["page_size"].annotation)[1].le == (
+        1000 if maximum is None else maximum
+    )
+
+
+@pytest.mark.parametrize(
+    "size, maximum, message",
+    [
+        (21, 20, "pagination_size must not exceed"),
+        (20, 0, "pagination_max_size must be at least 1"),
+        (20, -1, "pagination_max_size must be at least 1"),
+    ],
+)
+def test_page_size_invalid_configuration(size: int, maximum: int, message: str) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = FilterConfig(pagination_type="limit_offset", pagination_size=size, pagination_max_size=maximum)
+    with pytest.raises(ImproperConfigurationError, match=message):
+        _create_statement_filters(config)["limit_offset_filter"].dependency
+
+
+@pytest.mark.parametrize("page_size, status", [(1000, 200), (1001, 400)])
+def test_litestar_page_size_validation(page_size: int, status: int) -> None:
+    from litestar import get
+    from litestar.di import NamedDependency
+    from litestar.testing import create_test_client
+
+    from sqlspec.extensions.litestar.providers import create_filter_dependencies
+
+    @get("/")
+    def handler(filters: NamedDependency[list[Any]]) -> list[Any]:
+        return []
+
+    with create_test_client(
+        handler, dependencies=create_filter_dependencies({"pagination_type": "limit_offset"})
+    ) as client:
+        assert client.get("/", params={"pageSize": page_size}).status_code == status
+        parameters = client.app.openapi_schema.to_schema()["paths"]["/"]["get"]["parameters"]
+        assert next(param["schema"]["maximum"] for param in parameters if param["name"] == "pageSize") == 1000
+
+
+def test_cursor_mode_requires_cursor_keys() -> None:
+    with pytest.raises(ImproperConfigurationError, match="requires a non-empty 'cursor_keys'"):
+        _create_statement_filters(FilterConfig(pagination_type="cursor"))
+
+
+def test_cursor_provider_builds_filter_and_preserves_key_order() -> None:
+    from sqlspec.core import CursorFilter, CursorKey
+
+    config = FilterConfig(
+        pagination_type="cursor", cursor_keys=[CursorKey("name"), CursorKey("id")], pagination_size=2, search="name"
+    )
+    provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    result = provider()
+    assert isinstance(result, CursorFilter)
+    assert result.keys == tuple(config["cursor_keys"])
+    assert result.limit == 2
+    assert provider(page_size=5).limit == 5
+    config["cursor_keys"] = list(reversed(config["cursor_keys"]))
+    reverse_provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    assert reverse_provider().keys == tuple(config["cursor_keys"])
+    assert reverse_provider is not provider
+    dependencies = _create_statement_filters(config)
+    assert set(dependencies) == {"cursor_filter", "search_filter", "filters"}
+    assert list(inspect.signature(dependencies["filters"].dependency).parameters) == ["search_filter", "cursor_filter"]
+
+
+@pytest.mark.parametrize("field_name, order", [(None, None), ("name", "asc"), ("identifier", "desc")])
+def test_cursor_provider_composes_order_by(field_name: str | None, order: Literal["asc", "desc"] | None) -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(
+        pagination_type="cursor",
+        cursor_keys=[CursorKey("id", nulls="last", result_name="identifier")],
+        sort_field=["name", "id"],
+        sort_field_aliases={"identifier": "id"},
+    )
+    provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    keys = provider(field_name=field_name, sort_order=order).keys
+    if field_name == "identifier":
+        assert keys == (CursorKey("id", "desc", nulls="last", result_name="identifier"),)
+    else:
+        assert keys == (CursorKey("name", order or "desc"), config["cursor_keys"][0])
+
+
+def test_cursor_provider_rejects_unknown_order_by() -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], sort_field="name")
+    provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    with pytest.raises(ValidationException, match="Invalid orderBy"):
+        provider(field_name="unknown")
+
+
+@pytest.mark.parametrize("token", ["garbage", ""])
+def test_cursor_provider_invalid_cursor(token: str) -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")])
+    provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    with pytest.raises(ValidationException, match="Invalid pagination cursor"):
+        provider(cursor=token)
+
+
+def test_cursor_secret_signs_tokens_and_rejects_tampering() -> None:
+    import base64
+    import json
+
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret")
+    provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    token = provider().encode({"id": 1}, backward=False)
+    assert provider(cursor=token).limit == 20
+    unsigned_config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")])
+    config = unsigned_config
+    unsigned_provider = create_filter_dependencies(config)["cursor_filter"].dependency
+    with pytest.raises(ValidationException, match="Invalid pagination cursor"):
+        unsigned_provider(cursor=token)
+    payload, signature = token.split(".")
+    decoded = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    decoded["k"][0][0] = "s"
+    tampered = base64.urlsafe_b64encode(json.dumps(decoded).encode()).rstrip(b"=").decode() + "." + signature
+    with pytest.raises(ValidationException, match="Invalid pagination cursor"):
+        provider(cursor=tampered)
+
+
+def test_cursor_sort_field_order_changes_cached_default() -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], sort_field=["name", "id"])
+    first = create_filter_dependencies(config)["cursor_filter"].dependency
+    config["sort_field"] = ["id", "name"]
+    second = create_filter_dependencies(config)["cursor_filter"].dependency
+    assert first().keys[0].field_name == "name"
+    assert second().keys[0].field_name == "id"
+
+
+@pytest.mark.parametrize("secrets", [(b"secret", "b'secret'"), ("b'secret'", b"secret")])
+def test_cursor_secret_cache_preserves_type(secrets: tuple[str | bytes, str | bytes]) -> None:
+    from sqlspec.core import CursorFilter, CursorKey
+
+    keys = [CursorKey("id")]
+    providers = []
+    for secret in secrets:
+        config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret=secret)
+        providers.append(create_filter_dependencies(config)["cursor_filter"].dependency)
+    for index, secret in enumerate(secrets):
+        token = CursorFilter(keys, 20, secret=secret).encode({"id": 1}, backward=False)
+        assert providers[index](cursor=token).limit == 20
+        with pytest.raises(ValidationException, match="Invalid pagination cursor"):
+            providers[1 - index](cursor=token)
