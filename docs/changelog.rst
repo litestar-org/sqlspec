@@ -107,6 +107,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
+  result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
+  and result ordering. Pagination filters produce valid set-operation SQL.
+
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
   a driver error export is missing.
