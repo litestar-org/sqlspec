@@ -11,7 +11,7 @@ from sqlspec.adapters.spanner.core import apply_driver_features, default_stateme
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
 from sqlspec.config import SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config

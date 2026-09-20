@@ -16,7 +16,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 

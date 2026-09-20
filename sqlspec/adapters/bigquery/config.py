@@ -17,7 +17,7 @@ from sqlspec.adapters.bigquery.core import apply_driver_features, default_statem
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import TypeCoercionCapabilities
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import Empty

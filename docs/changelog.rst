@@ -148,6 +148,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Adapters, services, and builders import shared driver, ordering, and parameter
+  helpers through their owning packages instead of private implementation modules.
+
 * Cursor provider dependency caches distinguish byte secrets from their text
   representation, preserving each endpoint's configured signing key.
 

@@ -24,7 +24,7 @@ from sqlspec.adapters.aiosqlite.pool import (
 from sqlspec.adapters.aiosqlite.type_converter import register_type_handlers
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.logging import get_logger

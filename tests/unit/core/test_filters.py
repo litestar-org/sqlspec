@@ -40,9 +40,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import NotInSearchFilter, OnBeforeAfterFilter, PaginationFilter
 from sqlspec.core.parameters import TypedParameter
-from sqlspec.driver import CommonDriverAttributesMixin
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, CommonDriverAttributesMixin, SyncDriverAdapterBase
 from sqlspec.exceptions import NotFoundError
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 

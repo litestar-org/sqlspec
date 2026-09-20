@@ -31,8 +31,7 @@ from sqlspec.builder._parsing_utils import (
     parse_table_expression,
     to_expression,
 )
-from sqlspec.core import SQL, ParameterStyle
-from sqlspec.core._ordering import apply_direction, ordered
+from sqlspec.core import SQL, ParameterStyle, apply_direction, ordered
 from sqlspec.core.query_modifiers import expr_eq, expr_gt, expr_gte, expr_lt, expr_lte, expr_neq, expr_not_like
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (

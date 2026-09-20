@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 

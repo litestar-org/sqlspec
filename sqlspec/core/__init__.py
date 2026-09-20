@@ -26,6 +26,7 @@ Example Usage:
 
 from sqlspec.core import filters
 from sqlspec.core._cursor import register_cursor_type
+from sqlspec.core._ordering import NullsPlacement, apply_direction, default_nulls, ordered
 from sqlspec.core._pagination import CursorPagination, OffsetPagination
 from sqlspec.core.cache import (
     CacheConfig,
@@ -218,6 +219,7 @@ __all__ = (
     "NotInCollectionFilter",
     "NotNullFilter",
     "NullFilter",
+    "NullsPlacement",
     "OffsetPagination",
     "OperationProfile",
     "OperationType",
@@ -247,6 +249,7 @@ __all__ = (
     "StatementStack",
     "TypeCoercionCapabilities",
     "TypedParameter",
+    "apply_direction",
     "apply_filter",
     "apply_limit",
     "apply_offset",
@@ -276,6 +279,7 @@ __all__ = (
     "create_not_exists_condition",
     "create_not_in_condition",
     "create_sql_result",
+    "default_nulls",
     "expr_eq",
     "expr_gt",
     "expr_gte",
@@ -312,6 +316,7 @@ __all__ = (
     "looks_like_execute_many",
     "matches_param_type",
     "normalize_parameter_key",
+    "ordered",
     "parse_column_for_condition",
     "parse_datetime_rfc3339",
     "register_cursor_type",

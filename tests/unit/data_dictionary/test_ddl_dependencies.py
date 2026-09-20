@@ -23,7 +23,7 @@ from sqlspec.data_dictionary import (
     sort_ddl_results,
     sort_dependencies,
 )
-from sqlspec.driver._common import DataDictionaryMixin
+from sqlspec.driver import DataDictionaryMixin
 
 
 def test_dependency_graph_sorts_views_sequences_and_tables() -> None:

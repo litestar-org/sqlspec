@@ -51,8 +51,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.aiomysql._typing import AiomysqlConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._common import CachedQuery
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("AiomysqlCursor", "AiomysqlDriver", "AiomysqlExceptionHandler", "AiomysqlSessionContext")

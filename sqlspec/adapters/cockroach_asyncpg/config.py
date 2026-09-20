@@ -25,7 +25,7 @@ from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, Co
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config

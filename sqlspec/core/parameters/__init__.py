@@ -50,7 +50,7 @@ from sqlspec.core.parameters._types import (
     is_iterable_parameters,
     wrap_with_type,
 )
-from sqlspec.core.parameters._validator import PARAMETER_REGEX, ParameterValidator
+from sqlspec.core.parameters._validator import PARAMETER_REGEX, ParameterValidator, unescape_qmark_operator
 
 __all__ = (
     "DRIVER_PARAMETER_PROFILES",
@@ -90,6 +90,7 @@ __all__ = (
     "structural_fingerprint",
     "type_coercion_dispatcher",
     "type_coercion_fallbacks",
+    "unescape_qmark_operator",
     "validate_parameter_alignment",
     "value_fingerprint",
     "wrap_with_type",

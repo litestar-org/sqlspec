@@ -6,8 +6,7 @@ from typing import TYPE_CHECKING, Any, Generic, cast, overload
 from typing_extensions import TypeVar
 
 from sqlspec.core import CursorPagination, OffsetPagination
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.service._core import (
     _async_exists,

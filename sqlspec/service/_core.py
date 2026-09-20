@@ -11,8 +11,7 @@ from typing_extensions import TypeVar
 
 from sqlspec.core import CursorPagination, OffsetPagination
 from sqlspec.core.filters import LimitOffsetFilter
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
 

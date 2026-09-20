@@ -49,8 +49,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.asyncmy._typing import AsyncmyConnection
     from sqlspec.core import SQL, SQLResult, StatementConfig
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._common import CachedQuery
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "AsyncmySessionContext")

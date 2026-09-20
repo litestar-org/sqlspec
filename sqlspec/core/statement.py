@@ -27,8 +27,8 @@ from sqlspec.core.parameters import (
     ParameterStyleConfig,
     ParameterValidator,
     structural_fingerprint,
+    unescape_qmark_operator,
 )
-from sqlspec.core.parameters._validator import unescape_qmark_operator
 from sqlspec.core.query_modifiers import (
     apply_column_pruning,
     apply_limit,

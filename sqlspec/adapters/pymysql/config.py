@@ -12,7 +12,7 @@ from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandl
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import CLOUD_SQL_CONNECTOR_INSTALLED

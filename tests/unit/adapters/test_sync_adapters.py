@@ -8,8 +8,7 @@ import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
 from sqlspec.core import SQL, ParameterStyle, ParameterStyleConfig, SQLResult, StatementConfig, get_default_config
-from sqlspec.driver import ExecutionResult
-from sqlspec.driver._common import CommonDriverAttributesMixin
+from sqlspec.driver import CommonDriverAttributesMixin, ExecutionResult
 from sqlspec.exceptions import MultipleResultsFoundError, NotFoundError, SQLSpecError
 from sqlspec.observability import ObservabilityConfig, ObservabilityRuntime
 from sqlspec.typing import Empty

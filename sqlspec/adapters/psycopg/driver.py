@@ -70,8 +70,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
     from sqlspec.core import ArrowResult
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._common import CachedQuery
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 

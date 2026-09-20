@@ -29,8 +29,12 @@ from sqlspec.adapters.cockroach_psycopg.driver import (
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import resolve_runtime_statement_config
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import (
+    AsyncPoolConnectionContext,
+    AsyncPoolSessionFactory,
+    SyncPoolConnectionContext,
+    SyncPoolSessionFactory,
+)
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config

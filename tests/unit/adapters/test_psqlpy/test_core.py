@@ -20,7 +20,7 @@ from sqlspec.adapters.psqlpy.core import (
     prepare_parameters_with_casts,
 )
 from sqlspec.core import SQL
-from sqlspec.driver._query_cache import CachedQuery
+from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import DataError, IntegrityError, OperationalError, PermissionDeniedError, SQLSpecError
 
 

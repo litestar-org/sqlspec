@@ -11,7 +11,7 @@ from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTra
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 

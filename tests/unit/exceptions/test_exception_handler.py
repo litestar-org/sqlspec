@@ -450,7 +450,7 @@ def test_check_pending_exception_raises_when_set() -> None:
     handler = BaseSyncExceptionHandler()
     handler.pending_exception = UniqueViolationError("duplicate key")
 
-    from sqlspec.driver._sync import SyncDriverAdapterBase
+    from sqlspec.driver import SyncDriverAdapterBase
 
     with pytest.raises(UniqueViolationError, match="duplicate key"):
         SyncDriverAdapterBase._check_pending_exception(handler)
@@ -461,7 +461,7 @@ def test_check_pending_exception_noop_when_none() -> None:
     handler = BaseSyncExceptionHandler()
     assert handler.pending_exception is None
 
-    from sqlspec.driver._sync import SyncDriverAdapterBase
+    from sqlspec.driver import SyncDriverAdapterBase
 
     SyncDriverAdapterBase._check_pending_exception(handler)
 
@@ -474,7 +474,7 @@ async def test_async_check_pending_exception_raises_when_set() -> None:
     handler = BaseAsyncExceptionHandler()
     handler.pending_exception = ForeignKeyViolationError("fk violation")
 
-    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver import AsyncDriverAdapterBase
 
     with pytest.raises(ForeignKeyViolationError, match="fk violation"):
         AsyncDriverAdapterBase._check_pending_exception(handler)
@@ -486,6 +486,6 @@ async def test_async_check_pending_exception_noop_when_none() -> None:
     handler = BaseAsyncExceptionHandler()
     assert handler.pending_exception is None
 
-    from sqlspec.driver._async import AsyncDriverAdapterBase
+    from sqlspec.driver import AsyncDriverAdapterBase
 
     AsyncDriverAdapterBase._check_pending_exception(handler)

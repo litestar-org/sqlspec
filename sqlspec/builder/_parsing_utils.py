@@ -13,8 +13,7 @@ from sqlglot import exp, maybe_parse
 
 from sqlspec.builder._column import Column
 from sqlspec.builder._expression_wrappers import ExpressionWrapper
-from sqlspec.core import ParameterStyle, ParameterValidator
-from sqlspec.core._ordering import default_nulls, ordered
+from sqlspec.core import ParameterStyle, ParameterValidator, default_nulls, ordered
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
     has_expression_and_parameters,

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from sqlspec.core._pagination import CursorPagination
+from sqlspec.core import CursorPagination
 from sqlspec.core.filters import OffsetPagination
 from sqlspec.utils.serializers import (
     __all__,

@@ -35,8 +35,12 @@ from sqlspec.adapters.oracledb.driver import (
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import (
+    AsyncPoolConnectionContext,
+    AsyncPoolSessionFactory,
+    SyncPoolConnectionContext,
+    SyncPoolSessionFactory,
+)
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
