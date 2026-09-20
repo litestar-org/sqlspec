@@ -369,3 +369,72 @@ def test_method_chaining_immutability_in_chain() -> None:
     assert "LIMIT" in step2.raw_sql
     assert "id" in step3.raw_sql
     assert "LIMIT" in step3.raw_sql
+
+
+@pytest.mark.parametrize("operation", ["UNION ALL", "INTERSECT", "EXCEPT"])
+def test_where_on_set_operation_wraps_whole_result(operation: str) -> None:
+    import sqlite3
+
+    query = "SELECT 1 AS v UNION ALL SELECT 2 AS v"
+    base = SQL(query, statement_config=StatementConfig(dialect="sqlite"))
+    if operation != "UNION ALL":
+        base = SQL("SELECT 1 AS v " + operation + " SELECT 2 AS v", statement_config=StatementConfig(dialect="sqlite"))
+    modified = base.where("v = 2")
+    rendered, parameters = modified.compile()
+    assert rendered.startswith("SELECT * FROM (")
+    with sqlite3.connect(":memory:") as connection:
+        rows = connection.execute(rendered, parameters or ()).fetchall()
+    assert rows == ([(2,)] if operation == "UNION ALL" else [])
+
+
+def test_where_on_values_wraps() -> None:
+    import sqlite3
+
+    statement = SQL("VALUES (1), (2)", statement_config=StatementConfig(dialect="sqlite")).where("1 = 1")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(1,), (2,)]
+
+
+@pytest.mark.parametrize("prefix", ["", "WITH source AS (SELECT 1 AS v) "])
+def test_where_on_tsql_set_operation_hoists_trailing_order_by(prefix: str) -> None:
+    statement = SQL(
+        prefix + "SELECT 1 AS v UNION ALL SELECT 2 AS v UNION ALL SELECT 3 AS v ORDER BY v DESC",
+        statement_config=StatementConfig(dialect="tsql"),
+    ).where("v = 1")
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    assert rendered.endswith(") AS filtered WHERE v = 1 ORDER BY v DESC")
+    assert rendered.count("ORDER BY") == 1
+    if prefix:
+        assert rendered.startswith("WITH source AS")
+
+
+def test_where_on_update_stays_in_place() -> None:
+    statement = SQL("UPDATE t SET v = 1").where("id = 2")
+    assert statement.raw_sql == "UPDATE t SET v = 1 WHERE id = 2"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 1 AS v ORDER BY v LIMIT 1",
+        "(SELECT 1 AS v) ORDER BY v LIMIT 1",
+        "(SELECT 1 AS v) ORDER BY v",
+        "SELECT 1 AS v UNION ALL (SELECT 2 AS v ORDER BY v LIMIT 1)",
+    ],
+)
+def test_subquery_wrapper_preserves_bounded_order_and_input(query: str) -> None:
+    import sqlglot
+
+    from sqlspec.core.query_modifiers import wrap_as_subquery
+
+    expression = sqlglot.parse_one(query)
+    original = expression.sql()
+    wrapped = wrap_as_subquery(expression)
+    assert expression.sql() == original
+    assert wrapped.sql().startswith("SELECT * FROM (")
+    if expression.args.get("limit") is not None:
+        assert wrapped.args.get("limit") is None
+        assert "LIMIT 1" in wrapped.sql()
+    elif expression.args.get("order") is not None:
+        assert wrapped.sql().endswith("ORDER BY v")
