@@ -14,6 +14,7 @@ __all__ = (
     "ForeignKeyViolationError",
     "ImproperConfigurationError",
     "IntegrityError",
+    "InvalidCursorError",
     "MigrationError",
     "MissingDependencyError",
     "MultipleResultsFoundError",
@@ -211,6 +212,10 @@ class DeadlockError(TransactionError):
 
     Applications should typically retry the transaction when this error occurs.
     """
+
+
+class InvalidCursorError(SQLSpecError):
+    """Raised when a pagination cursor is malformed, tampered with, or mismatched."""
 
 
 class DataError(SQLSpecError):
