@@ -14,6 +14,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Added:**
 
+* Added ``select_with_cursor`` and ``fetch_with_cursor`` to sync and async drivers
+  for one-query cursor pages with optional schema conversion.
+
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
   a generic ``CursorPagination`` response container.
 * Added ``CursorKey`` and ``CursorFilter`` for bidirectional keyset pagination,
