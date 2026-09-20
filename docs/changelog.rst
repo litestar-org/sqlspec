@@ -201,7 +201,6 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * PostgreSQL JSONB existence operators followed by literals or bound parameters
   are recognized without consuming a parameter slot.
 
-* Correct Litestar filter query parameter titles and pagination schema documentation.
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
 * Psycopg preserves literal percent characters alongside bound parameters,
