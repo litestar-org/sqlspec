@@ -148,6 +148,24 @@ Do not mix ``CursorFilter`` and ``LimitOffsetFilter`` in one call. The
 ``count_with_window=True`` option applies only to offset pages and raises an
 error with a cursor filter.
 
+For an explicit mode, use ``paginate_limit_offset()`` or ``paginate_cursor()``.
+These methods keep a precise return type even when filters come from a dynamic
+list:
+
+.. code-block:: python
+
+   offset_page = await service.paginate_limit_offset(
+       query, *offset_filters, schema_type=User
+   )  # OffsetPagination[User]
+
+   cursor_page = await service.paginate_cursor(
+       query, *cursor_filters, schema_type=User
+   )  # CursorPagination[User]
+
+``paginate_cursor()`` requires one ``CursorFilter``. ``paginate_limit_offset()``
+rejects cursor filters and preserves default offset behavior when no pagination
+filter is supplied. Both methods validate the mode before executing the query.
+
 The runnable :ref:`cursor-pagination` example shows both modes and a return trip
 to the previous cursor page. That guide also covers key shorthand, NULL values,
 and token handling.

@@ -63,9 +63,16 @@ async def _async_paginate(
     schema_type: "type[SchemaT] | None",
     count_with_window: bool,
     kwargs: dict[str, Any],
+    mode: Literal["limit_offset", "cursor"] | None = None,
 ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]] | CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
     """Execute the async service paginate operation in the supplied session context."""
     cursor_parameters = _cursor_pagination_parameters(statement, parameters)
+    if mode == "cursor" and cursor_parameters is None:
+        msg = "paginate_cursor() requires a CursorFilter"
+        raise ImproperConfigurationError(msg)
+    if mode == "limit_offset" and cursor_parameters is not None:
+        msg = "paginate_limit_offset() does not accept CursorFilter"
+        raise ImproperConfigurationError(msg)
     if cursor_parameters is not None:
         if count_with_window:
             msg = "count_with_window is incompatible with cursor pagination"
@@ -172,9 +179,16 @@ def _sync_paginate(
     schema_type: "type[SchemaT] | None",
     count_with_window: bool,
     kwargs: dict[str, Any],
+    mode: Literal["limit_offset", "cursor"] | None = None,
 ) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]] | CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
     """Execute the sync service paginate operation in the supplied session context."""
     cursor_parameters = _cursor_pagination_parameters(statement, parameters)
+    if mode == "cursor" and cursor_parameters is None:
+        msg = "paginate_cursor() requires a CursorFilter"
+        raise ImproperConfigurationError(msg)
+    if mode == "limit_offset" and cursor_parameters is not None:
+        msg = "paginate_limit_offset() does not accept CursorFilter"
+        raise ImproperConfigurationError(msg)
     if cursor_parameters is not None:
         if count_with_window:
             msg = "count_with_window is incompatible with cursor pagination"

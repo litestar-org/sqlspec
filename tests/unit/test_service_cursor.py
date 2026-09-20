@@ -30,8 +30,9 @@ async def _call(target: Any, method: str, *args: Any, **kwargs: Any) -> Any:
 
 
 @pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("method", ["paginate", "paginate_cursor"])
 async def test_walk_schema_and_single_query(
-    async_mode: bool, sqlite_sync_driver: Any, aiosqlite_async_driver: Any
+    async_mode: bool, method: str, sqlite_sync_driver: Any, aiosqlite_async_driver: Any
 ) -> None:
     driver = aiosqlite_async_driver if async_mode else sqlite_sync_driver
     service = SQLSpecAsyncService(session=driver) if async_mode else SQLSpecSyncService(session=driver)
@@ -40,30 +41,28 @@ async def test_walk_schema_and_single_query(
     statements: list[str] = []
     await _call(driver.connection, "set_trace_callback", statements.append)
     expected = [row[0] for row in sorted(_ROWS, key=lambda row: (-row[1], row[0]))]
-    page = await _call(service, "paginate", "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10))
+    page = await _call(service, method, "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10))
     assert len([sql for sql in statements if sql.startswith("SELECT")]) == 1
     forward = list(page.items)
     while page.next_cursor:
-        page = await _call(service, "paginate", "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10, page.next_cursor))
+        page = await _call(service, method, "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10, page.next_cursor))
         forward.extend(page.items)
     assert [row["id"] for row in forward] == expected
     backward = list(page.items)
     while page.previous_cursor:
-        page = await _call(
-            service, "paginate", "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10, page.previous_cursor)
-        )
+        page = await _call(service, method, "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10, page.previous_cursor))
         backward = list(page.items) + backward
     assert [row["id"] for row in backward] == expected
 
     class Item(BaseModel):
         n: str | None
 
-    typed = await _call(service, "paginate", "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10), schema_type=Item)
+    typed = await _call(service, method, "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10), schema_type=Item)
     assert all(isinstance(row, Item) for row in typed.items)
     assert typed.next_cursor == page.next_cursor
     assert [item.n for item in typed.items] == [row["n"] for row in page.items]
     next_typed = await _call(
-        service, "paginate", "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10, typed.next_cursor), schema_type=Item
+        service, method, "SELECT id, v, n FROM items", CursorFilter(_KEYS, 10, typed.next_cursor), schema_type=Item
     )
     assert len(next_typed.items) == 10
     assert next_typed.previous_cursor
@@ -111,8 +110,9 @@ def test_positional_base_parameters(sqlite_sync_driver: Any) -> None:
 
 
 @pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.parametrize("method", ["paginate", "paginate_cursor"])
 async def test_cursor_forwards_parameters_and_statement_config(
-    async_mode: bool, sqlite_sync_driver: Any, aiosqlite_async_driver: Any
+    async_mode: bool, method: str, sqlite_sync_driver: Any, aiosqlite_async_driver: Any
 ) -> None:
     driver = aiosqlite_async_driver if async_mode else sqlite_sync_driver
     service = SQLSpecAsyncService(session=driver) if async_mode else SQLSpecSyncService(session=driver)
@@ -124,7 +124,7 @@ async def test_cursor_forwards_parameters_and_statement_config(
 
     page = await _call(
         service,
-        "paginate",
+        method,
         "SELECT id FROM users WHERE id > :minimum",
         CursorFilter([CursorKey("id")], 1),
         minimum=0,
@@ -158,3 +158,30 @@ async def test_paginate_dispatch_and_pending_filters(
         await _call(service, "paginate", statement, count_with_window=True)
     with pytest.raises(ImproperConfigurationError, match="exactly one"):
         await _call(service, "paginate", statement, CursorFilter("name", 1))
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+async def test_explicit_pagination_modes_reject_before_query(
+    async_mode: bool, sqlite_sync_driver: Any, aiosqlite_async_driver: Any
+) -> None:
+    driver = aiosqlite_async_driver if async_mode else sqlite_sync_driver
+    service = SQLSpecAsyncService(session=driver) if async_mode else SQLSpecSyncService(session=driver)
+    statements: list[str] = []
+    await _call(driver.connection, "set_trace_callback", statements.append)
+    for method, filters, kwargs in [
+        ("paginate_cursor", [], {}),
+        ("paginate_cursor", [LimitOffsetFilter(1, 0)], {}),
+        ("paginate_cursor", [CursorFilter("id", 1)], {"count_with_window": True}),
+        ("paginate_limit_offset", [CursorFilter("id", 1)], {}),
+    ]:
+        with pytest.raises(ImproperConfigurationError):
+            await _call(service, method, "SELECT id FROM users", *filters, **kwargs)
+    with pytest.raises(ImproperConfigurationError):
+        await _call(service, "paginate_limit_offset", SQL("SELECT id FROM users", CursorFilter("id", 1)))
+    assert statements == []
+    offset = await _call(service, "paginate_limit_offset", "SELECT id FROM users", count_with_window=True)
+    assert isinstance(offset, OffsetPagination)
+    assert offset.total == len(offset.items) == 2
+    cursor = await _call(service, "paginate_cursor", SQL("SELECT id FROM users", CursorFilter("id", 1)))
+    assert isinstance(cursor, CursorPagination)
+    assert cursor.items == [{"id": 1}]

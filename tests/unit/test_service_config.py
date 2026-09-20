@@ -1314,7 +1314,10 @@ def _check_cursor_pages(pages: list[Any]) -> None:
     assert pages[-1].next_cursor is None
 
 
-def test_sync_service_paginate_with_cursor(sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]]) -> None:
+@pytest.mark.parametrize("method", ["paginate", "paginate_cursor"])
+def test_sync_service_paginate_with_cursor(
+    sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]], method: str
+) -> None:
     from sqlspec.core import CursorFilter, CursorKey
 
     config, events = sync_config
@@ -1326,7 +1329,9 @@ def test_sync_service_paginate_with_cursor(sync_config: tuple[SqliteConfig, list
     pages = []
     cursor = None
     for _ in range(3):
-        page = service.paginate("SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1, cursor))
+        page = getattr(service, method)(
+            "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1, cursor)
+        )
         pages.append(page)
         cursor = page.next_cursor
     _check_cursor_pages(pages)
@@ -1335,15 +1340,16 @@ def test_sync_service_paginate_with_cursor(sync_config: tuple[SqliteConfig, list
         _ = service.session
     with service.provide_session() as driver:
         events.clear()
-        page = service.paginate(
+        page = getattr(service, method)(
             "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1), session=driver
         )
         assert page.items == [{"value": 1}]
         assert events == []
 
 
+@pytest.mark.parametrize("method", ["paginate", "paginate_cursor"])
 async def test_async_service_paginate_with_cursor(
-    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]],
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]], method: str
 ) -> None:
     from sqlspec.core import CursorFilter, CursorKey
 
@@ -1356,7 +1362,9 @@ async def test_async_service_paginate_with_cursor(
     pages = []
     cursor = None
     for _ in range(3):
-        page = await service.paginate("SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1, cursor))
+        page = await getattr(service, method)(
+            "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1, cursor)
+        )
         pages.append(page)
         cursor = page.next_cursor
     _check_cursor_pages(pages)
@@ -1365,7 +1373,7 @@ async def test_async_service_paginate_with_cursor(
         _ = service.session
     async with service.provide_session() as driver:
         events.clear()
-        page = await service.paginate(
+        page = await getattr(service, method)(
             "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1), session=driver
         )
         assert page.items == [{"value": 1}]

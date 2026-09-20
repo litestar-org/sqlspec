@@ -26,6 +26,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   bounded page sizes, dynamic sorting, and client validation errors.
 * Pass a cursor or offset filter to service ``paginate()`` to choose the page
   type. Both sync and async calls return typed rows and can use your session.
+  Use ``paginate_limit_offset()`` or ``paginate_cursor()`` to select a mode
+  explicitly and retain a precise return type with dynamic filter lists.
   Litestar routes can return either page type with typed items and an OpenAPI
   union response.
 

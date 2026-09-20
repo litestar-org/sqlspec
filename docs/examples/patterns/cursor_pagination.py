@@ -7,7 +7,7 @@ def test_cursor_pagination(tmp_path: Path) -> None:
     # start-example
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.core import CursorFilter, CursorKeys, CursorPagination, LimitOffsetFilter, OffsetPagination
+    from sqlspec.core import CursorFilter, CursorKeys, LimitOffsetFilter
     from sqlspec.service import SQLSpecSyncService
 
     spec = SQLSpec()
@@ -23,17 +23,14 @@ def test_cursor_pagination(tmp_path: Path) -> None:
                 [(i, f"Item {i}", f"2026-01-{1 + i // 5:02d}") for i in range(1, 26)],
             )
             service = SQLSpecSyncService(session)
-            offset_page = service.paginate(query, LimitOffsetFilter(limit=10, offset=0))
-            page = service.paginate(query, CursorFilter(keys, limit=10))
-            assert isinstance(page, CursorPagination)
-            second = service.paginate(query, CursorFilter(keys, limit=10, cursor=page.next_cursor))
-            assert isinstance(second, CursorPagination)
+            offset_page = service.paginate_limit_offset(query, LimitOffsetFilter(limit=10, offset=0))
+            page = service.paginate_cursor(query, CursorFilter(keys, limit=10))
+            second = service.paginate_cursor(query, CursorFilter(keys, limit=10, cursor=page.next_cursor))
             previous = service.paginate(query, CursorFilter(keys, limit=10, cursor=second.previous_cursor))
     finally:
         config.close_pool()
     # end-example
 
-    assert isinstance(offset_page, OffsetPagination)
     assert offset_page.total == 25
     assert len(offset_page.items) == 10
     assert len(page.items) == 10
