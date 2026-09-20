@@ -6,7 +6,7 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
-from sqlspec.adapters.oracledb.core import default_statement_config
+from sqlspec.adapters.oracledb.core import build_connection_config, default_statement_config
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbAsyncDataDictionary,
     OracledbSyncDataDictionary,
@@ -37,5 +37,6 @@ __all__ = (
     "OracleVersionInfo",
     "OracledbAsyncDataDictionary",
     "OracledbSyncDataDictionary",
+    "build_connection_config",
     "default_statement_config",
 )

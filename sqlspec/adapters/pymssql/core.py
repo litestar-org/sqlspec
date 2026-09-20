@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "apply_driver_features",
+    "build_connection_config",
     "build_insert_statement",
     "build_profile",
     "build_statement_config",
@@ -273,3 +274,24 @@ def _extract_error_number(exc: Exception) -> "int | None":
 
 driver_profile = build_profile()
 default_statement_config = build_statement_config()
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection parameters.
+    """
+    config = dict(connection_config)
+    config.setdefault("server", config.pop("host", "localhost"))
+    config.setdefault("port", 1433)
+    db_alias = config.pop("db", None)
+    if "database" not in config and db_alias is not None:
+        config["database"] = db_alias
+    user_alias = config.pop("username", None)
+    if "user" not in config and user_alias is not None:
+        config["user"] = user_alias
+    return config

@@ -8,6 +8,7 @@ import pytest
 from oracledb import AuthMode, PoolGetMode, Purity
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.oracledb import build_connection_config
 from sqlspec.adapters.oracledb import config as oracle_config_module
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
@@ -224,3 +225,27 @@ async def test_oracle_async_connection_config_session_callback_is_preserved(monk
     await config._init_connection(cast(Any, _StubConnection()), "analytics")  # pyright: ignore[reportPrivateUsage]
 
     assert calls == ["numpy", "json", "uuid", "session_callback", "on_connection_create"]
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """build_connection_config should normalize url, connection_string, and username."""
+    from_url = build_connection_config({"url": "localhost/orclpdb1", "username": "scott"})
+    assert from_url == {"dsn": "localhost/orclpdb1", "user": "scott"}
+
+    from_conn_str = build_connection_config({"connection_string": "localhost/orclpdb1"})
+    assert from_conn_str == {"dsn": "localhost/orclpdb1"}
+
+
+def test_oracle_config_normalizes_aliases() -> None:
+    """Oracle configs should normalize url, connection_string, and username to dsn and user."""
+    sync_config = OracleSyncConfig(connection_config={"url": "localhost/orclpdb1", "username": "scott"})
+    assert sync_config.connection_config["dsn"] == "localhost/orclpdb1"
+    assert sync_config.connection_config["user"] == "scott"
+    assert "url" not in sync_config.connection_config
+    assert "username" not in sync_config.connection_config
+
+    async_config = OracleAsyncConfig(connection_config={"connection_string": "localhost/orclpdb1", "username": "scott"})
+    assert async_config.connection_config["dsn"] == "localhost/orclpdb1"
+    assert async_config.connection_config["user"] == "scott"
+    assert "connection_string" not in async_config.connection_config
+    assert "username" not in async_config.connection_config

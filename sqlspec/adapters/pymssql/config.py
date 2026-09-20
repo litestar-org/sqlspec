@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlCursor, PymssqlRawCursor, PymssqlSessionContext
-from sqlspec.adapters.pymssql.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.pymssql.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandler
 from sqlspec.adapters.pymssql.migrations import PymssqlSyncMigrationTracker
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
@@ -120,9 +120,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = normalize_connection_config(connection_config)
-        connection_config.setdefault("server", connection_config.pop("host", "localhost"))
-        connection_config.setdefault("port", 1433)
+        connection_config = build_connection_config(normalize_connection_config(connection_config))
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
