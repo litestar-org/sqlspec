@@ -131,6 +131,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 **Fixed:**
 
 * Close async example connection pools before their event loops shut down.
+* Filters supplied to the ``SQL`` constructor are applied once before call-site
+  filters, including when statements are reused.
+
 * Statements combining positional and named values now bind each value to its
   own placeholder, including filters and ``where_*`` helpers.
 
