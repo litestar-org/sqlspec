@@ -1265,7 +1265,12 @@ def _named_parameters_for_style(
         names = tuple(p.name for p in param_info if p.name is not None)
     if target_style in _EXPANDING_POSITIONAL_STYLES:
         return names
-    return tuple(dict.fromkeys(names))
+    unique_names = tuple(dict.fromkeys(names))
+    if target_style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON} and all(
+        param.style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON} for param in param_info
+    ):
+        return tuple(sorted(unique_names, key=int))
+    return unique_names
 
 
 def _validate_missing_parameters(named_order: Sequence[str], parameters: Mapping[str, Any]) -> None:
