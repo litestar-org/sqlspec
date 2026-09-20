@@ -131,6 +131,11 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 **Fixed:**
 
 * Close async example connection pools before their event loops shut down.
+* Statements combining positional and named values now bind each value to its
+  own placeholder, including filters and ``where_*`` helpers.
+
+* PostgreSQL JSONB existence operators followed by literals or bound parameters
+  are recognized without consuming a parameter slot.
 
 * Correct Litestar filter query parameter titles and pagination schema documentation.
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole

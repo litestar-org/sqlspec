@@ -1628,3 +1628,21 @@ def test_value_objects_version_info_comparison_hash_and_pickle() -> None:
     assert version > VersionInfo(15)
     assert version >= VersionInfo(16, 1, 2)
     assert hash(restored) == hash(version)
+
+
+@pytest.mark.parametrize(
+    ("text", "values", "named", "expected"),
+    [
+        ("SELECT ? AS a, :x AS b", (7,), {"x": 8}, (7, 8)),
+        ("SELECT $1 AS a, $2 AS b, $1 AS c, :x AS d", (7, 8), {"x": 9}, (7, 8, 7, 9)),
+        ("SELECT %s AS a, %s AS b, :x AS c", (7, 8), {"x": 9}, (7, 8, 9)),
+        ("SELECT ? AS a, :param_0 AS b", (7,), {"param_0": 8}, (7, 8)),
+        ("SELECT :a AS a, :a AS b, :x AS c", (7,), {"x": 8}, (7, 7, 8)),
+    ],
+)
+def test_compile_mixed_parameter_inputs(
+    text: str, values: tuple[int, ...], named: dict[str, int], expected: tuple[int, ...]
+) -> None:
+    statement = SQL(text, *values, **named, statement_config=StatementConfig(dialect="postgres"))
+    for _ in range(3):
+        assert tuple(statement.compile()[1]) == expected
