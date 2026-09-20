@@ -6,7 +6,7 @@ import pytest
 from sqlglot import exp, parse_one
 
 from sqlspec import sql
-from sqlspec.builder import Column
+from sqlspec.builder import Column, FunctionExpression
 from sqlspec.core import SQL, OrderByFilter, StatementConfig
 from sqlspec.core._ordering import NullsPlacement, apply_direction, default_nulls, ordered
 from sqlspec.core.hashing import hash_expression
@@ -88,7 +88,7 @@ def test_core_sites_emit_no_null_placement(dialect: str, desc: bool) -> None:
     "kind", ["plain", "desc_flag", "desc_string", "function", "column_asc", "column_desc", "column_flag", "alias"]
 )
 def test_builder_sites_emit_no_null_placement(dialect: str, kind: str) -> None:
-    item = {
+    items: dict[str, str | exp.Expr | Column] = {
         "plain": "id",
         "desc_flag": "id",
         "desc_string": "id desc",
@@ -97,10 +97,11 @@ def test_builder_sites_emit_no_null_placement(dialect: str, kind: str) -> None:
         "column_desc": Column("id").desc(),
         "column_flag": Column("id"),
         "alias": Column("id").alias("desc"),
-    }[kind]
-    rendered = (
-        sql.select("id").from_("t").order_by(item, desc=kind in {"desc_flag", "column_flag"}).to_sql(dialect=dialect)
-    )
+    }
+    item = items[kind]
+    # The builder supports alias expressions at runtime beyond its declared input types.
+    builder = sql.select("id").from_("t").order_by(item, desc=kind in {"desc_flag", "column_flag"})  # type: ignore[arg-type]
+    rendered = builder.to_sql(dialect=dialect)
     assert "NULLS" not in rendered and "CASE" not in rendered
     assert rendered.count("DESC") == (0 if kind in {"plain", "column_asc"} else 1)
 
@@ -151,14 +152,15 @@ def test_explicit_nulls_preserved_across_sites(dialect: str) -> None:
 @pytest.mark.parametrize("dialect", DIALECTS)
 @pytest.mark.parametrize("kind", ["count_string", "count_list", "count_expression", "row_string", "row_expression"])
 def test_window_order_by_emits_no_null_placement(dialect: str, kind: str) -> None:
-    expressions = {
+    expressions: dict[str, exp.Expr | FunctionExpression] = {
         "count_string": sql.count_over(order_by="id"),
         "count_list": sql.count_over(order_by=["id"]),
         "count_expression": sql.count_over(order_by=exp.column("id")),
         "row_string": sql.row_number_.order_by("id").as_("position"),
         "row_expression": sql.row_number_.order_by(exp.column("id")).as_("position"),
     }
-    rendered = sql.select(expressions[kind]).from_("t").to_sql(dialect=dialect)
+    # Window wrappers are accepted at runtime beyond the declared select input types.
+    rendered = sql.select(expressions[kind]).from_("t").to_sql(dialect=dialect)  # type: ignore[arg-type]
     assert "ORDER BY" in rendered
     assert "NULLS" not in rendered and "CASE" not in rendered
 
