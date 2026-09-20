@@ -1663,7 +1663,7 @@ def test_filter_on_unparsed_statement_wraps_with_projection() -> None:
     ],
 )
 def test_compile_mixed_parameter_inputs(
-    text: str, values: tuple[int, ...], named: dict[str, int], expected: tuple[int, ...]
+    text: str, values: tuple[int, ...], named: dict[str, Any], expected: tuple[int, ...]
 ) -> None:
     statement = SQL(text, *values, **named, statement_config=StatementConfig(dialect="postgres"))
     for _ in range(3):

@@ -551,3 +551,57 @@ def test_tsql_pagination_preserves_parenthesized_branch_limit() -> None:
     rendered = statement._filter_expression().sql(dialect="tsql")
     assert "(SELECT TOP 2 id FROM b ORDER BY id DESC)" in rendered
     assert rendered.endswith("ORDER BY (SELECT NULL) OFFSET 1 ROWS FETCH FIRST 4 ROWS ONLY")
+
+
+@pytest.mark.parametrize("projection", ["a.v", "a.v AS renamed"])
+@pytest.mark.parametrize("order", ["a.v", "b.v", "v"])
+def test_wrapped_set_order_uses_projected_names(projection: str, order: str) -> None:
+    import sqlite3
+
+    result_name = "renamed" if " AS " in projection else "v"
+    statement = SQL(
+        "SELECT " + projection + " FROM t a UNION ALL SELECT b.v FROM t b ORDER BY " + order,
+        statement_config=StatementConfig(dialect="sqlite"),
+    ).where(result_name + " > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?)", [(2,), (1,)])
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(1,), (1,), (2,), (2,)]
+
+
+def test_tsql_paginated_union_resolves_qualified_output_alias() -> None:
+    statement = SQL(
+        "SELECT a.v AS renamed FROM t a UNION ALL SELECT b.v FROM t b ORDER BY a.v DESC",
+        statement_config=StatementConfig(dialect="tsql"),
+    ).limit(2)
+    assert statement._filter_expression().sql(dialect="tsql").endswith("AS _l_0 ORDER BY renamed DESC")
+
+
+def test_wrapped_order_preserves_output_alias_shadowing_source_column() -> None:
+    import sqlite3
+
+    statement = SQL(
+        "SELECT a.v AS x, a.x AS y FROM t a UNION ALL SELECT b.v AS x, b.x AS y FROM t b ORDER BY x",
+        statement_config=StatementConfig(dialect="sqlite"),
+    ).where("x > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER, x INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?, ?)", [(1, 9), (2, 8)])
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(1, 9), (1, 9), (2, 8), (2, 8)]
+
+
+@pytest.mark.parametrize("ordering", ["a.v + 1", "b.v + 1", "v + 1", "(a.v + 1)"])
+def test_wrapped_order_resolves_computed_projection_alias(ordering: str) -> None:
+    import sqlite3
+
+    statement = SQL(
+        "SELECT a.v + 1 AS x FROM t a UNION ALL SELECT b.v + 1 AS x FROM t b ORDER BY " + ordering,
+        statement_config=StatementConfig(dialect="sqlite"),
+    ).where("x > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?)", [(2,), (1,)])
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(2,), (2,), (3,), (3,)]
