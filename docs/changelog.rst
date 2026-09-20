@@ -107,6 +107,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
+  A placeholder without a value now raises instead of rendering as ``NULL``.
+
 * The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
   now pass statement parameters to the driver for binding.
 

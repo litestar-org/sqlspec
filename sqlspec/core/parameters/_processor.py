@@ -336,7 +336,7 @@ class ParameterProcessor:
 
         if config.needs_static_script_compilation and param_info and parameters and not is_many:
             return self._compile_static_script(
-                sql, parameters, config, is_many, cache_key, input_named_parameters=input_named_parameters
+                sql, parameters, config, is_many, cache_key, dialect, input_named_parameters=input_named_parameters
             )
 
         requires_mapping = self._needs_mapping_normalization(parameters, param_info, is_many)
@@ -431,6 +431,7 @@ class ParameterProcessor:
         config: "ParameterStyleConfig",
         is_many: bool,
         cache_key: Any | None,
+        dialect: "str | None",
         input_named_parameters: "tuple[str, ...]",
     ) -> "ParameterProcessingResult":
         coerced_params = parameters
@@ -438,7 +439,12 @@ class ParameterProcessor:
             coerced_params = self._coerce_parameter_types(parameters, config.type_coercion_map, is_many)
 
         static_sql, static_params = self._converter.convert_placeholder_style(
-            sql, coerced_params, ParameterStyle.STATIC, is_many, strict_named_parameters=config.strict_named_parameters
+            sql,
+            coerced_params,
+            ParameterStyle.STATIC,
+            is_many,
+            dialect=dialect,
+            strict_named_parameters=config.strict_named_parameters,
         )
         result = ParameterProcessingResult(
             static_sql,
