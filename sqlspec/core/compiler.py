@@ -993,9 +993,6 @@ class SQLProcessor:
         """
         output_transformer = self._config.output_transformer
         if output_transformer:
-            if expression is not None:
-                ast_sql = expression.sql(dialect=dialect_str)
-                return output_transformer(ast_sql, parameters)
             return output_transformer(sql, parameters)
 
         return sql, parameters

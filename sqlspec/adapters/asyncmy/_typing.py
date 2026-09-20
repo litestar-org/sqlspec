@@ -14,6 +14,7 @@ from asyncmy import errors as _asyncmy_errors  # pyright: ignore
 from asyncmy.connection import LoadLocalFile as _LoadLocalFile  # pyright: ignore
 from asyncmy.connection import MySQLResult as _AsyncmyResult  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
+from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
 from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
 from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
 from asyncmy.cursors import SSCursor as AsyncmySSCursor
@@ -68,6 +69,7 @@ if not TYPE_CHECKING:
     AsyncmyRawCursor = _AsyncmyCursor
 
 __all__ = (
+    "ASYNCMY_INSERT_VALUES_PATTERN",
     "AsyncmyConnection",
     "AsyncmyCursor",
     "AsyncmyDictCursor",

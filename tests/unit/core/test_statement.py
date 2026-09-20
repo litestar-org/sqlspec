@@ -1650,3 +1650,44 @@ def test_modifier_after_reset_raises_sql_parsing_error() -> None:
 def test_filter_on_unparsed_statement_wraps_with_projection() -> None:
     statement = SQL("SELECT 1 AS v", statement_config=StatementConfig(enable_parsing=False)).limit(1)
     assert statement.raw_sql.startswith("SELECT * FROM (SELECT 1 AS v) AS filtered")
+
+
+@pytest.mark.parametrize(
+    ("text", "values", "named", "expected"),
+    [
+        ("SELECT ? AS a, :x AS b", (7,), {"x": 8}, (7, 8)),
+        ("SELECT $1 AS a, $2 AS b, $1 AS c, :x AS d", (7, 8), {"x": 9}, (7, 8, 7, 9)),
+        ("SELECT %s AS a, %s AS b, :x AS c", (7, 8), {"x": 9}, (7, 8, 9)),
+        ("SELECT ? AS a, :param_0 AS b", (7,), {"param_0": 8}, (7, 8)),
+        ("SELECT :a AS a, :a AS b, :x AS c", (7,), {"x": 8}, (7, 7, 8)),
+    ],
+)
+def test_compile_mixed_parameter_inputs(
+    text: str, values: tuple[int, ...], named: dict[str, int], expected: tuple[int, ...]
+) -> None:
+    statement = SQL(text, *values, **named, statement_config=StatementConfig(dialect="postgres"))
+    for _ in range(3):
+        assert tuple(statement.compile()[1]) == expected
+
+
+def test_qmark_escape_survives_filter_round_trip() -> None:
+    from sqlspec.adapters.asyncpg.core import default_statement_config
+
+    statement = SQL("SELECT data ?? other_col FROM t WHERE id = $1", 5, statement_config=default_statement_config)
+    sql, params = statement.limit(2).compile()
+    assert "data ? other_col" in sql
+    assert "COALESCE" not in sql
+    assert tuple(params) == (5,)
+    assert "LIMIT 2" in sql
+
+
+def test_qmark_escape_survives_unparsed_fallback() -> None:
+    from sqlspec.adapters.asyncpg.core import default_statement_config
+
+    statement = SQL(
+        "SELECT data FROM t WHERE data ?? other_col",
+        statement_config=default_statement_config.replace(enable_parsing=False),
+    ).limit(2)
+    rendered, _ = statement.compile()
+    assert "data ? other_col" in rendered
+    assert "COALESCE" not in rendered

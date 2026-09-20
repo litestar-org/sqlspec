@@ -69,7 +69,7 @@ def build_profile() -> "DriverParameterProfile":
         preserve_parameter_format=True,
         needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
-        preserve_original_params_for_many=True,
+        preserve_original_params_for_many=False,
         custom_type_coercions=None,
         extras={},
     )

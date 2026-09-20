@@ -338,6 +338,51 @@ def _delete_by_name_sql(table: ContractTable) -> str:
     return f"DELETE FROM {table.name} WHERE name = ?"
 
 
+_PARAMETER_DATA_VALUES = ("x\\' OR 1=1 -- ", "it's", "back\\slash", "a'; DROP TABLE x; --", 'q"uote', "%s %(n)s ?")
+
+
+def _assert_parameter_data_rows(rows: list[dict[str, Any]], expected: list[str]) -> None:
+    assert sorted(row["name"] for row in rows) == sorted(expected)
+
+
+def assert_sync_parameter_values_are_data_contract(driver: object, case: DriverCase) -> None:
+    """Bound values round-trip as data, including literal percent query text."""
+    connection = cast("SyncContractDriver", driver)
+    table = case.table
+    rows = tuple(ContractRow(f"seed{index}", index) for index in range(3))
+    _seed_sync(connection, rows, table, case)
+    for _ in range(3):
+        selected = connection.select(f"SELECT name FROM {table.name} WHERE name LIKE 'seed%' AND value >= ?", (0,))
+        _assert_parameter_data_rows(selected, [row.name for row in rows])
+    for value in _PARAMETER_DATA_VALUES:
+        selected = connection.select(table.select_by_name_qmark_sql, (value,))
+        _assert_parameter_data_rows(selected, [])
+        connection.execute(table.insert_qmark_sql, (value, 0, None))
+        selected = connection.select(table.select_by_name_named_sql, {"name": value})
+        _assert_parameter_data_rows(selected, [value])
+        connection.execute(table.delete_sql)
+
+
+async def assert_async_parameter_values_are_data_contract(driver: object, case: DriverCase) -> None:
+    """Bound values round-trip as data, including literal percent query text."""
+    connection = cast("AsyncContractDriver", driver)
+    table = case.table
+    rows = tuple(ContractRow(f"seed{index}", index) for index in range(3))
+    await _seed_async(connection, rows, table, case)
+    for _ in range(3):
+        selected = await connection.select(
+            f"SELECT name FROM {table.name} WHERE name LIKE 'seed%' AND value >= ?", (0,)
+        )
+        _assert_parameter_data_rows(selected, [row.name for row in rows])
+    for value in _PARAMETER_DATA_VALUES:
+        selected = await connection.select(table.select_by_name_qmark_sql, (value,))
+        _assert_parameter_data_rows(selected, [])
+        await connection.execute(table.insert_qmark_sql, (value, 0, None))
+        selected = await connection.select(table.select_by_name_named_sql, {"name": value})
+        _assert_parameter_data_rows(selected, [value])
+        await connection.execute(table.delete_sql)
+
+
 def assert_sync_driver_basics_contract(driver: object, case: DriverCase) -> None:
     """Assert sync drivers run the CRUD lifecycle and expose result column metadata."""
     sync_driver = cast("SyncContractDriver", driver)

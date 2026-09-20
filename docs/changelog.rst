@@ -117,6 +117,36 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
 
+
+* Missing positional bindings no longer consume values reserved for named placeholders.
+* Repeated and reordered numeric placeholders bind by their written indexes when
+  converted to another placeholder style.
+* Sequences for named placeholders and mappings for positional placeholders bind
+  consistently on the first execution and cache hits, including repeated names.
+* Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
+  instead of silently binding values to the wrong slots.
+* PostgreSQL ``??`` escapes become ``?`` operators, including after filters modify
+  the statement; output transformers receive the driver's execution placeholder style.
+* Spanner ``execute_many`` converts tuple rows and mixed placeholder mappings before
+  calling the driver, preserving bindings on cache hits.
+
+* Filters supplied to the ``SQL`` constructor are applied once before call-site
+  filters, including when statements are reused.
+
+* Statements combining positional and named values now bind each value to its
+  own placeholder, including filters and ``where_*`` helpers.
+
+* PostgreSQL JSONB existence operators followed by literals or bound parameters
+  are recognized without consuming a parameter slot.
+
+* DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
+  order and defaults by restricting bulk loading to plain VALUES inserts.
+* Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
+  A placeholder without a value now raises instead of rendering as ``NULL``.
+
+* The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
+  now pass statement parameters to the driver for binding.
+
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
   a driver error export is missing.
