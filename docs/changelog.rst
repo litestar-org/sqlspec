@@ -1,29 +1,29 @@
-==
+=========
 Changelog
-==
+=========
 
 All notable SQLSpec changes are summarized here. Entries are grouped by release
 and focus on user-visible behavior, public API changes, compatibility notes, and
 important operational fixes.
 
 Recent Updates
-=======
+==============
 
 v0.64.0 - Startup performance, connection normalization, and adapter lifecycle hardening
 -----------------------------------------------------------------------------------------
 
 **Added:**
 
+* Added a :ref:`cursor pagination guide <cursor-pagination>` with a tested example.
+  It shows how to move through pages in both directions and sign page tokens.
+  Examples cover ``select_with_cursor()``, ``fetch_with_cursor()``, and
+  ``paginate_cursor()``, plus Litestar and FastAPI filter setup.
+
 * Added ``paginate_cursor`` to sync and async services with short-session
   acquisition, caller-owned session support, and typed pagination results.
 
 * Added ``select_with_cursor`` and ``fetch_with_cursor`` to sync and async drivers
   for one-query cursor pages with optional schema conversion.
-
-* Added a :ref:`cursor pagination guide <cursor-pagination>` with a tested example.
-  It shows how to move through pages in both directions and sign page tokens.
-  Examples cover ``select_with_cursor()``, ``fetch_with_cursor()``, and
-  ``paginate_cursor()``, plus Litestar and FastAPI filter setup.
 
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
   a generic ``CursorPagination`` response container.
@@ -2099,7 +2099,7 @@ v0.24.0 - Builder consolidation
 * Refactored builder code to reduce duplication.
 
 Previous Versions
-==========
+=================
 
 For releases before ``v0.24.0``, see the repository tag history and GitHub
 release records.

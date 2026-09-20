@@ -62,8 +62,8 @@ NULL values
 ~~~~~~~~~~~
 
 For a nullable key, set ``nulls="first"`` or ``nulls="last"`` on ``CursorKey``.
-For cursor keys, ``nulls=None`` declares that the key is non-nullable; a NULL
-key value raises ``ImproperConfigurationError`` when a page token is built.
+For cursor keys, ``nulls=None`` declares that the key is non-nullable. A NULL
+key value in a returned row raises ``ImproperConfigurationError``.
 This differs from ``OrderByFilter``, where ``nulls=None`` uses the database's
 NULL order.
 
@@ -354,7 +354,7 @@ secret in server configuration and pass it as ``cursor_secret``:
     @get("/items", dependencies=cursor_deps)
     async def list_cursor_items(
         db_session: AsyncpgDriver,
-        filters: SkipValidation[NamedDependency[list[FilterTypes]]],
+        filters: NamedDependency[SkipValidation[list[FilterTypes]]],
     ) -> CursorPagination[Item]:
         return await db_session.select_with_cursor(
             "SELECT id, name, created_at FROM items", *filters, schema_type=Item
