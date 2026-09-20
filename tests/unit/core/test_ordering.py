@@ -8,7 +8,7 @@ from sqlglot import exp, parse_one
 from sqlspec import sql
 from sqlspec.builder import Column
 from sqlspec.core import SQL, OrderByFilter, StatementConfig
-from sqlspec.core._ordering import apply_direction, default_nulls, ordered
+from sqlspec.core._ordering import NullsPlacement, apply_direction, default_nulls, ordered
 from sqlspec.core.hashing import hash_expression
 
 DIALECTS = ["postgres", "mysql", "oracle", "tsql", "sqlite", "duckdb"]
@@ -106,7 +106,7 @@ def test_builder_sites_emit_no_null_placement(dialect: str, kind: str) -> None:
 
 
 @pytest.mark.parametrize("nulls", ["first", "last", None])
-def test_filter_round_trip_preserves_nulls(nulls: str | None) -> None:
+def test_filter_round_trip_preserves_nulls(nulls: NullsPlacement | None) -> None:
     original = OrderByFilter("id", "desc", nulls=nulls)
     restored = pickle.loads(pickle.dumps(original))
     assert restored.nulls == nulls
@@ -115,7 +115,7 @@ def test_filter_round_trip_preserves_nulls(nulls: str | None) -> None:
 
 def test_filter_rejects_invalid_nulls() -> None:
     with pytest.raises(ValueError, match="nulls must"):
-        OrderByFilter("id", nulls="invalid")
+        OrderByFilter("id", nulls="invalid")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("dialect", DIALECTS)
