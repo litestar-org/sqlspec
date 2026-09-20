@@ -48,6 +48,7 @@ from sqlspec.core.query_modifiers import (
     expr_neq,
     extract_column_name,
     safe_modify_with_cte,
+    wrap_as_subquery,
 )
 from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer
 from sqlspec.observability import resolve_db_system
@@ -1111,10 +1112,12 @@ class SQL:
         else:
             condition_expr = condition
 
-        if isinstance(current_expr, exp.Select) or supports_where(current_expr):
+        if isinstance(current_expr, (exp.Select, exp.Update, exp.Delete)) or (
+            not isinstance(current_expr, (exp.Query, exp.Values)) and supports_where(current_expr)
+        ):
             new_expr = current_expr.where(condition_expr, copy=False)
         else:
-            new_expr = exp.Select().from_(current_expr).where(condition_expr, copy=False)
+            new_expr = wrap_as_subquery(current_expr).where(condition_expr, copy=False)
 
         return self._copy_with_expression(new_expr)
 
@@ -1353,10 +1356,10 @@ class SQL:
                     order_expr = order_expr.desc()
             else:
                 order_expr = item.desc() if desc and not isinstance(item, exp.Ordered) else item
-            if isinstance(new_expr, exp.Select):
+            if isinstance(new_expr, (exp.Select, exp.SetOperation)):
                 new_expr = new_expr.order_by(order_expr, copy=False)
             else:
-                new_expr = exp.Select().from_(new_expr).order_by(order_expr)
+                new_expr = wrap_as_subquery(new_expr).order_by(order_expr, copy=False)
 
         return self._copy_with_expression(new_expr)
 
