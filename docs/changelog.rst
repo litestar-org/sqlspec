@@ -107,6 +107,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Statement modifiers on empty or unparseable SQL raise ``SQLParsingError``
+  instead of leaking a sqlglot ``ParseError``.
+
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
