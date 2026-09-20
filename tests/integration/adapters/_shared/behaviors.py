@@ -7220,3 +7220,43 @@ async def assert_async_data_dictionary_topology_contract(driver: object, case: D
         with contextlib.suppress(Exception):
             await async_driver.execute_script(_data_dictionary_topology_drop_sql(users, orders, items))
             await async_driver.commit()
+
+
+def _set_operation_pagination_statements(case: DriverCase) -> tuple[tuple[SQL, list[int] | None], ...]:
+    base = f"SELECT value FROM {case.table.name} UNION ALL SELECT value FROM {case.table.name}"
+    config = StatementConfig(dialect=_sqlglot_dialect(case))
+    ordered = SQL(base + " ORDER BY value", statement_config=config)
+    unordered = SQL(base, statement_config=config)
+    return (
+        (ordered.limit(3).offset(2), [20, 20, 30]),
+        (ordered.paginate(2, 3), [20, 30, 30]),
+        (unordered.limit(3).offset(2), None),
+        (unordered.paginate(2, 3), None),
+    )
+
+
+def _assert_set_operation_page(result: SQLResult, expected: list[int] | None) -> None:
+    rows = result.get_data()
+    assert len(rows) == 3
+    if expected is not None:
+        assert [row["value"] for row in rows] == expected
+
+
+def assert_sync_set_operation_pagination_contract(driver: object, case: DriverCase) -> None:
+    """Assert ordered and unordered set-operation pagination executes correctly."""
+    sync_driver = cast("SyncContractDriver", driver)
+    _seed_sync(sync_driver, _FILTER_SEED_ROWS, case.table, case)
+    for statement, expected in _set_operation_pagination_statements(case):
+        _assert_set_operation_page(sync_driver.execute(statement), expected)
+    result = sync_driver.execute("SELECT value FROM " + case.table.name, LimitOffsetFilter(3, 1))
+    assert len(result.get_data()) == 3
+
+
+async def assert_async_set_operation_pagination_contract(driver: object, case: DriverCase) -> None:
+    """Assert async drivers share the set-operation pagination contract."""
+    async_driver = cast("AsyncContractDriver", driver)
+    await _seed_async(async_driver, _FILTER_SEED_ROWS, case.table, case)
+    for statement, expected in _set_operation_pagination_statements(case):
+        _assert_set_operation_page(await async_driver.execute(statement), expected)
+    result = await async_driver.execute("SELECT value FROM " + case.table.name, LimitOffsetFilter(3, 1))
+    assert len(result.get_data()) == 3

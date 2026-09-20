@@ -21,14 +21,14 @@ Features:
 from abc import abstractmethod
 from collections import abc
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
 from sqlspec.core._pagination import OffsetPagination
-from sqlspec.core.query_modifiers import parse_column_for_condition
+from sqlspec.core.query_modifiers import parse_column_for_condition, safe_modify_with_cte, wrap_as_subquery
 from sqlspec.utils.type_guards import has_field_name
 from sqlspec.utils.uuids import uuid4
 
@@ -521,10 +521,17 @@ class LimitOffsetFilter(PaginationFilter):
 
         current_statement = statement._filter_expression()
 
-        if isinstance(current_statement, exp.Select):
-            new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
-        else:
-            new_statement = exp.Select().from_(current_statement).limit(limit_placeholder).offset(offset_placeholder)
+        target = (
+            current_statement
+            if isinstance(current_statement, (exp.Select, exp.SetOperation))
+            else wrap_as_subquery(current_statement)
+        )
+        new_statement = safe_modify_with_cte(
+            target,
+            lambda expression: (
+                cast("exp.Select | exp.SetOperation", expression).limit(limit_placeholder).offset(offset_placeholder)
+            ),
+        )
 
         result = statement.copy(statement=new_statement)
         result = result.add_named_parameter(limit_param_name, self.limit)
@@ -573,10 +580,10 @@ class OrderByFilter(StatementFilter):
 
         current_statement = statement._filter_expression()
 
-        if isinstance(current_statement, exp.Select):
+        if isinstance(current_statement, (exp.Select, exp.SetOperation)):
             new_statement = current_statement.order_by(order_expr)
         else:
-            new_statement = exp.Select().from_(current_statement).order_by(order_expr)
+            new_statement = wrap_as_subquery(current_statement).order_by(order_expr)
 
         return statement.copy(statement=new_statement)
 

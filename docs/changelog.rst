@@ -114,6 +114,14 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* ``limit``, ``offset``, and ``paginate`` on set operations render valid
+  SQL Server pagination while retaining the requested result ordering.
+
+* Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
+  result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
+  and result ordering. Pagination filters produce valid set-operation SQL.
+
+
 * Preserve parameter alignment when repeated BigQuery queries inline NULL values,
   including copied statements and transitions between NULL and non-NULL values.
 

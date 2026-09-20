@@ -39,6 +39,7 @@ from sqlspec.core import (
     canonicalize_filters,
 )
 from sqlspec.core.filters import NotInSearchFilter, OnBeforeAfterFilter, PaginationFilter
+from sqlspec.core.parameters import TypedParameter
 from sqlspec.driver import CommonDriverAttributesMixin
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
@@ -1607,3 +1608,51 @@ def test_choices_filter_uses_column_based_parameters() -> None:
     assert result.parameters["status_choices_1"] == "pending"
     assert filter_obj.get_cache_key() == ("ChoicesFilter", "status", ("active", "pending"))
     assert filter_obj._reconstruction_args() == ("status", ["active", "pending"])
+
+
+@pytest.mark.parametrize(
+    ("statement_filter", "expected"),
+    [
+        (InCollectionFilter("v", [1]), [(1, "a"), (1, "a")]),
+        (NullFilter("v"), [(None, "a"), (None, "a")]),
+        (BooleanFilter("v", True), [(1, "a"), (1, "a")]),
+        (SearchFilter("name", "a"), [(1, "a"), (None, "a"), (1, "a"), (None, "a")]),
+        (LimitOffsetFilter(2, 1), [(2, "b"), (None, "a")]),
+        (OrderByFilter("v"), [(None, "a"), (None, "a"), (1, "a"), (1, "a"), (2, "b"), (2, "b")]),
+    ],
+)
+def test_filters_on_union_execute_whole_result(
+    statement_filter: StatementFilter, expected: list[tuple[Any, ...]]
+) -> None:
+    import sqlite3
+
+    statement = SQL(
+        "SELECT v, name FROM t UNION ALL SELECT v, name FROM t", statement_config=StatementConfig(dialect="sqlite")
+    )
+    filtered = statement_filter.append_to_statement(statement)
+    rendered, parameters = filtered.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t (v INTEGER, name TEXT)")
+        connection.executemany("INSERT INTO t VALUES (?, ?)", [(1, "a"), (2, "b"), (None, "a")])
+        assert (
+            connection.execute(
+                rendered, tuple(value.value if isinstance(value, TypedParameter) else value for value in parameters)
+            ).fetchall()
+            == expected
+        )
+
+
+def test_filters_on_cte_union_keep_cte_and_outer_order() -> None:
+    import sqlite3
+
+    statement = SQL(
+        "WITH x AS (SELECT 2 AS v UNION ALL SELECT 1 AS v) SELECT v FROM x UNION ALL SELECT v FROM x",
+        statement_config=StatementConfig(dialect="sqlite"),
+    )
+    statement = OrderByFilter("v").append_to_statement(statement)
+    statement = InCollectionFilter("v", [1, 2]).append_to_statement(statement)
+    rendered, parameters = statement.compile()
+    assert rendered.startswith("WITH x AS")
+    assert "ORDER BY" in rendered.rsplit(") AS filtered", 1)[-1]
+    with sqlite3.connect(":memory:") as connection:
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(1,), (1,), (2,), (2,)]

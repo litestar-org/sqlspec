@@ -10,8 +10,10 @@ from tests.integration.adapters._shared._cases import (
 from tests.integration.adapters._shared.behaviors import (
     assert_async_complex_query_contract,
     assert_async_filter_contract,
+    assert_async_set_operation_pagination_contract,
     assert_sync_complex_query_contract,
     assert_sync_filter_contract,
+    assert_sync_set_operation_pagination_contract,
 )
 
 
@@ -39,3 +41,13 @@ def test_sync_complex_query_contract(sync_capability_driver_case: DriverCaseCont
 async def test_async_complex_query_contract(async_capability_driver_case: DriverCaseContext) -> None:
     """Async drivers run grouped aggregation and correlated subquery selects."""
     await assert_async_complex_query_contract(async_capability_driver_case.driver, async_capability_driver_case.case)
+
+
+def test_sync_set_operation_pagination_contract(sync_driver_case: DriverCaseContext) -> None:
+    """Set-operation pagination uses executable SQL on each sync adapter."""
+    assert_sync_set_operation_pagination_contract(sync_driver_case.driver, sync_driver_case.case)
+
+
+async def test_async_set_operation_pagination_contract(async_driver_case: DriverCaseContext) -> None:
+    """Set-operation pagination uses executable SQL on each async adapter."""
+    await assert_async_set_operation_pagination_contract(async_driver_case.driver, async_driver_case.case)
