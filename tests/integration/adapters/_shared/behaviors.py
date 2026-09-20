@@ -15,7 +15,15 @@ import pytest
 
 from sqlspec import SQL, SQLResult, StackExecutionError, StatementConfig, StatementStack, sql
 from sqlspec.builder import Explain
-from sqlspec.core.filters import InCollectionFilter, LimitOffsetFilter, OrderByFilter, SearchFilter
+from sqlspec.core import CursorPagination
+from sqlspec.core.filters import (
+    CursorFilter,
+    CursorKey,
+    InCollectionFilter,
+    LimitOffsetFilter,
+    OrderByFilter,
+    SearchFilter,
+)
 from sqlspec.data_dictionary import TableStatisticsMetadata, VersionInfo
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import (
@@ -155,6 +163,10 @@ class SyncContractDriver(Protocol):
 
     def execute_stack(self, stack: object, /, *, continue_on_error: bool = False) -> "tuple[Any, ...]": ...
 
+    def select_with_cursor(
+        self, statement: object, /, *parameters: object, **kwargs: Any
+    ) -> CursorPagination[dict[str, Any]]: ...
+
     def select_one(self, statement: object, /, *parameters: object, **kwargs: Any) -> dict[str, Any]: ...
 
     def select_one_or_none(self, statement: object, /, *parameters: object, **kwargs: Any) -> dict[str, Any] | None: ...
@@ -203,6 +215,10 @@ class AsyncContractDriver(Protocol):
     async def execute_script(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
     async def execute_stack(self, stack: object, /, *, continue_on_error: bool = False) -> "tuple[Any, ...]": ...
+
+    async def select_with_cursor(
+        self, statement: object, /, *parameters: object, **kwargs: Any
+    ) -> CursorPagination[dict[str, Any]]: ...
 
     async def select_one(self, statement: object, /, *parameters: object, **kwargs: Any) -> dict[str, Any]: ...
 
@@ -1080,6 +1096,121 @@ async def assert_async_filter_contract(driver: object, case: DriverCase) -> None
     if case.supports_search_filter:
         searched = await async_driver.execute(base, SearchFilter("name", "lta"))
         assert [row["name"] for row in searched.get_data()] == ["delta"]
+
+
+_CURSOR_SEED_ROWS = (
+    ContractRow("alpha", 10, "x"),
+    ContractRow("beta", 20, None),
+    ContractRow("gamma", 20, "y"),
+    ContractRow("delta", 30, None),
+    ContractRow("epsilon", 30, "x"),
+    ContractRow("zeta", 30, None),
+    ContractRow("eta", 40, "z"),
+)
+_CURSOR_SCENARIOS = (
+    (CursorKey("value", "desc"), CursorKey("name")),
+    (CursorKey("note", nulls="last"), CursorKey("name")),
+    (CursorKey("note", "desc", "first"), CursorKey("name", "desc")),
+)
+
+
+def _expected_cursor_order(rows: tuple[ContractRow, ...], keys: tuple[CursorKey, ...]) -> list[str]:
+    ordered_rows = list(rows)
+    for key in reversed(keys):
+        non_null = [row for row in ordered_rows if getattr(row, key.field_name) is not None]
+        null_rows = [row for row in ordered_rows if getattr(row, key.field_name) is None]
+        non_null.sort(key=lambda row: getattr(row, key.field_name), reverse=key.sort_order == "desc")
+        ordered_rows = null_rows + non_null if key.nulls == "first" else non_null + null_rows
+    return [row.name for row in ordered_rows]
+
+
+def _check_cursor_walk(
+    forward_pages: list[CursorPagination[dict[str, Any]]],
+    backward_pages: list[CursorPagination[dict[str, Any]]],
+    expected: list[str],
+) -> None:
+    forward = [row["name"] for page in forward_pages for row in page.items]
+    backward = [row["name"] for page in reversed(backward_pages) for row in page.items]
+    assert forward == expected
+    assert len(set(forward)) == len(forward)
+    assert backward == expected[: -len(forward_pages[-1].items)]
+    assert not forward_pages[0].has_previous
+    assert forward_pages[-1].next_cursor is None
+    assert backward_pages[-1].previous_cursor is None
+
+
+def assert_sync_cursor_pagination_contract(driver: object, case: DriverCase) -> None:
+    """Assert cursor ordering, nullable keys, and bidirectional page traversal."""
+    cursor_driver = cast("SyncContractDriver", driver)
+    table = case.table
+    _seed_sync(cursor_driver, _CURSOR_SEED_ROWS, table, case)
+    base = sql.select("name", "value", "note").from_(table.name)
+    for keys in _CURSOR_SCENARIOS:
+        forward_pages = []
+        cursor = None
+        for _ in range(len(_CURSOR_SEED_ROWS)):
+            page = cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            forward_pages.append(page)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        backward_pages = []
+        cursor = forward_pages[-1].previous_cursor
+        for _ in range(len(_CURSOR_SEED_ROWS)):
+            if cursor is None:
+                break
+            page = cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            backward_pages.append(page)
+            cursor = page.previous_cursor
+        _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
+    if case.supports_grouped_subquery:
+        grouped = sql.select("value", "COUNT(*) AS c").from_(table.name).group_by("value")
+        groups = []
+        cursor = None
+        for _ in range(len(_CURSOR_SEED_ROWS)):
+            page = cursor_driver.select_with_cursor(grouped, CursorFilter([CursorKey("value")], 2, cursor))
+            groups.extend(page.items)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        assert [(row["value"], row["c"]) for row in groups] == [(10, 1), (20, 2), (30, 3), (40, 1)]
+
+
+async def assert_async_cursor_pagination_contract(driver: object, case: DriverCase) -> None:
+    """Assert cursor ordering, nullable keys, and bidirectional page traversal."""
+    cursor_driver = cast("AsyncContractDriver", driver)
+    table = case.table
+    await _seed_async(cursor_driver, _CURSOR_SEED_ROWS, table, case)
+    base = sql.select("name", "value", "note").from_(table.name)
+    for keys in _CURSOR_SCENARIOS:
+        forward_pages = []
+        cursor = None
+        for _ in range(len(_CURSOR_SEED_ROWS)):
+            page = await cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            forward_pages.append(page)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        backward_pages = []
+        cursor = forward_pages[-1].previous_cursor
+        for _ in range(len(_CURSOR_SEED_ROWS)):
+            if cursor is None:
+                break
+            page = await cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            backward_pages.append(page)
+            cursor = page.previous_cursor
+        _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
+    if case.supports_grouped_subquery:
+        grouped = sql.select("value", "COUNT(*) AS c").from_(table.name).group_by("value")
+        groups = []
+        cursor = None
+        for _ in range(len(_CURSOR_SEED_ROWS)):
+            page = await cursor_driver.select_with_cursor(grouped, CursorFilter([CursorKey("value")], 2, cursor))
+            groups.extend(page.items)
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        assert [(row["value"], row["c"]) for row in groups] == [(10, 1), (20, 2), (30, 3), (40, 1)]
 
 
 def assert_sync_complex_query_contract(driver: object, case: DriverCase) -> None:

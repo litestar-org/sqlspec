@@ -141,15 +141,12 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * ``limit``, ``offset``, and ``paginate`` on set operations render valid
   SQL Server pagination while retaining the requested result ordering.
 
-* Statement modifiers on empty or unparseable SQL raise ``SQLParsingError``
+* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
   instead of leaking a sqlglot ``ParseError``.
 
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
-* ``SQL.order_by("id", desc=True)`` now sorts descending, and
-  ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
-
 
 * Missing positional bindings no longer consume values reserved for named placeholders.
 * Repeated and reordered numeric placeholders bind by their written indexes when

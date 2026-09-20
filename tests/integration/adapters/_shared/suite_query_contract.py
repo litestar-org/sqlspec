@@ -9,9 +9,11 @@ from tests.integration.adapters._shared._cases import (
 )
 from tests.integration.adapters._shared.behaviors import (
     assert_async_complex_query_contract,
+    assert_async_cursor_pagination_contract,
     assert_async_filter_contract,
     assert_async_set_operation_pagination_contract,
     assert_sync_complex_query_contract,
+    assert_sync_cursor_pagination_contract,
     assert_sync_filter_contract,
     assert_sync_set_operation_pagination_contract,
 )
@@ -51,3 +53,19 @@ def test_sync_set_operation_pagination_contract(sync_driver_case: DriverCaseCont
 async def test_async_set_operation_pagination_contract(async_driver_case: DriverCaseContext) -> None:
     """Set-operation pagination uses executable SQL on each async adapter."""
     await assert_async_set_operation_pagination_contract(async_driver_case.driver, async_driver_case.case)
+
+
+@pytest.mark.parametrize(
+    "sync_capability_driver_case", sync_driver_params_with("supports_filtered_statement"), indirect=True
+)
+def test_sync_cursor_pagination_contract(sync_capability_driver_case: DriverCaseContext) -> None:
+    assert_sync_cursor_pagination_contract(sync_capability_driver_case.driver, sync_capability_driver_case.case)
+
+
+@pytest.mark.parametrize(
+    "async_capability_driver_case", async_driver_params_with("supports_filtered_statement"), indirect=True
+)
+async def test_async_cursor_pagination_contract(async_capability_driver_case: DriverCaseContext) -> None:
+    await assert_async_cursor_pagination_contract(
+        async_capability_driver_case.driver, async_capability_driver_case.case
+    )
