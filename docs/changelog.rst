@@ -107,6 +107,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* PostgreSQL JSONB existence operators followed by literals or bound parameters
+  are recognized without consuming a parameter slot.
+
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
 

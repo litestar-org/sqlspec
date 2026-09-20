@@ -2802,3 +2802,27 @@ def test_process_positional_json_values_preserves_objects(processor: ParameterPr
     parameters = ({"key": "value"}, {"count": 42})
     result = processor.process("SELECT $1, $2", parameters, config, is_many=False)
     assert result.parameters == parameters
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("select data ? 'key' from t where a = $1", ["$1"]),
+        ("select data ?'key' from t", []),
+        ("select t.data ? :key from t where a = :a", [":key", ":a"]),
+        ("select (data->'x') ? $1 from t", ["$1"]),
+        ("select data ? ? from t where a = ?", ["?", "?"]),
+        ("select ? 'alias'", ["?"]),
+        ("select ?, ? 'alias'", ["?", "?"]),
+        ("select interval ? 'day'", ["?"]),
+        ("select case when ? 'a' then 1 end", ["?"]),
+        ("select a = ? :x", ["?", ":x"]),
+        ("select a = ?\n'str'", ["?"]),
+        ("select coalesce(?, 'd')", ["?"]),
+        ("select ?::int", ["?"]),
+        ("select a from t where a like ? escape '\\'", ["?"]),
+    ],
+)
+def test_jsonb_exists_operator_distinguishes_operands(sql: str, expected: list[str]) -> None:
+    validator = ParameterValidator()
+    assert [info.placeholder_text for info in validator.extract_parameters(sql)] == expected

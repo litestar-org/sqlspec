@@ -46,6 +46,73 @@ _SKIP_GROUPS: Final[tuple[str, ...]] = (
 )
 
 
+_OPERAND_START: Final = re.compile(r"\s*(?:'|\$\d|:[A-Za-z_]|%s|%\(\w+\)s|@\w|\?)")
+_PRECEDING_WORD: Final = re.compile(r"([A-Za-z_][A-Za-z0-9_$]*)\s*$")
+_NON_OPERAND_KEYWORDS: Final[frozenset[str]] = frozenset([
+    "select",
+    "distinct",
+    "all",
+    "where",
+    "and",
+    "or",
+    "not",
+    "on",
+    "when",
+    "then",
+    "else",
+    "in",
+    "like",
+    "ilike",
+    "between",
+    "values",
+    "set",
+    "by",
+    "limit",
+    "offset",
+    "having",
+    "returning",
+    "case",
+    "is",
+    "from",
+    "using",
+    "interval",
+    "escape",
+    "top",
+    "fetch",
+    "first",
+    "next",
+    "as",
+    "any",
+    "some",
+    "exists",
+    "join",
+    "with",
+    "union",
+    "except",
+    "intersect",
+    "return",
+    "call",
+    "exec",
+    "execute",
+    "into",
+    "over",
+    "filter",
+    "within",
+    "end",
+    "if",
+])
+
+
+def _follows_operand(sql: str, start: int) -> bool:
+    head = sql[:start].rstrip()
+    if not head:
+        return False
+    if head[-1] in ")]\"'":
+        return True
+    match = _PRECEDING_WORD.search(head)
+    return bool(match and match.group(1).lower() not in _NON_OPERAND_KEYWORDS)
+
+
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterValidator:
     """Extracts placeholder metadata and dialect compatibility information."""
@@ -131,6 +198,8 @@ class ParameterValidator:
                 continue
             style, name = self._extract_parameter_style(match)
             if style is None:
+                continue
+            if match.group("qmark") and _OPERAND_START.match(sql, match.end()) and _follows_operand(sql, match.start()):
                 continue
             placeholder_text = match.group(0)
             parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
