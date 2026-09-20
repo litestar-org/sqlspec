@@ -139,6 +139,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Cursor provider dependency caches distinguish byte secrets from their text
+  representation, preserving each endpoint's configured signing key.
+
 * Framework dependency caches preserve configured list order so the first
   sort field and cursor key sequence retain their declared meaning.
 

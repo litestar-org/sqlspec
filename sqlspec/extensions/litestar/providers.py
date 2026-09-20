@@ -68,7 +68,7 @@ BooleanOrNone = bool | None
 SortOrder = Literal["asc", "desc"]
 SortOrderOrNone = SortOrder | None
 SortField = str | set[str] | list[str]
-HashableValue = str | int | float | bool | None
+HashableValue = str | bytes | int | float | bool | None
 HashableType = HashableValue | tuple[Any, ...] | tuple[tuple[str, Any], ...] | tuple[HashableValue, ...]
 _ProviderT = TypeVar("_ProviderT")
 
@@ -488,7 +488,7 @@ def _make_hashable(value: Any) -> HashableType:
         hashable_items = [_make_hashable(item) for item in value]
         filtered_items = [item for item in hashable_items if item is not None]
         return tuple(sorted(filtered_items, key=str))
-    if isinstance(value, (str, int, float, bool, type(None))):
+    if isinstance(value, (str, bytes, int, float, bool, type(None))):
         return value
     return str(value)
 

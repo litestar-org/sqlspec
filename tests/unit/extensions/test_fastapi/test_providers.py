@@ -716,3 +716,19 @@ def test_cursor_sort_field_order_changes_cached_default() -> None:
     second = _get_dependency(provide_filters(config), "cursor_filter")
     assert first().keys[0].field_name == "name"
     assert second().keys[0].field_name == "id"
+
+
+@pytest.mark.parametrize("secrets", [(b"secret", "b'secret'"), ("b'secret'", b"secret")])
+def test_cursor_secret_cache_preserves_type(secrets: tuple[str | bytes, str | bytes]) -> None:
+    from sqlspec.core import CursorFilter, CursorKey
+
+    keys = [CursorKey("id")]
+    providers = []
+    for secret in secrets:
+        config = FilterConfig(pagination_type="cursor", cursor_keys=keys, cursor_secret=secret)
+        providers.append(_get_dependency(provide_filters(config), "cursor_filter"))
+    for index, secret in enumerate(secrets):
+        token = CursorFilter(keys, 20, secret=secret).encode({"id": 1}, backward=False)
+        assert providers[index](cursor=token).limit == 20
+        with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
+            providers[1 - index](cursor=token)
