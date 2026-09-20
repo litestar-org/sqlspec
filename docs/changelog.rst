@@ -107,6 +107,18 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Missing positional bindings no longer consume values reserved for named placeholders.
+* Repeated and reordered numeric placeholders bind by their written indexes when
+  converted to another placeholder style.
+* Sequences for named placeholders and mappings for positional placeholders bind
+  consistently on the first execution and cache hits, including repeated names.
+* Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
+  instead of silently binding values to the wrong slots.
+* PostgreSQL ``??`` escapes become ``?`` operators, including after filters modify
+  the statement; output transformers receive the driver's execution placeholder style.
+* Spanner ``execute_many`` converts tuple rows and mixed placeholder mappings before
+  calling the driver, preserving bindings on cache hits.
+
 * Filters supplied to the ``SQL`` constructor are applied once before call-site
   filters, including when statements are reused.
 

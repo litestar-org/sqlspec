@@ -9,6 +9,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
 from sqlglot.errors import ParseError
 
+import sqlspec.core._operators  # noqa: F401 - register SQLGlot operator rendering before any SQL is generated
 import sqlspec.exceptions
 from sqlspec.core import _pipeline as pipeline
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
@@ -26,6 +27,7 @@ from sqlspec.core.parameters import (
     ParameterValidator,
     structural_fingerprint,
 )
+from sqlspec.core.parameters._validator import unescape_qmark_operator
 from sqlspec.core.query_modifiers import (
     apply_column_pruning,
     apply_limit,
@@ -1073,7 +1075,7 @@ class SQL:
         state = self._processed_state
         if state is not Empty and state.input_named_parameters and self._raw_expression is None and self._raw_sql:
             try:
-                parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+                parsed = sqlglot.parse_one(unescape_qmark_operator(self._raw_sql)[0], dialect=self._dialect)
                 if isinstance(parsed, exp.Expr):
                     return parsed
             except ParseError:
@@ -1088,14 +1090,14 @@ class SQL:
             return self._raw_expression.copy()
         # Fall back to parsing if enabled
         if not self._statement_config.enable_parsing:
-            return exp.Select().from_(f"({self._raw_sql})")
+            return exp.Select().from_(f"({unescape_qmark_operator(self._raw_sql)[0]})")
         try:
-            parsed = sqlglot.parse_one(self._raw_sql, dialect=self._dialect)
+            parsed = sqlglot.parse_one(unescape_qmark_operator(self._raw_sql)[0], dialect=self._dialect)
             if isinstance(parsed, exp.Expr):
                 return parsed
-            return exp.Select().from_(f"({self._raw_sql})")
+            return exp.Select().from_(f"({unescape_qmark_operator(self._raw_sql)[0]})")
         except ParseError:
-            return exp.Select().from_(f"({self._raw_sql})")
+            return exp.Select().from_(f"({unescape_qmark_operator(self._raw_sql)[0]})")
 
     def _filter_expression(self) -> exp.Expr:
         """Return a mutable expression copy for statement filters.

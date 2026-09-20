@@ -1646,3 +1646,14 @@ def test_compile_mixed_parameter_inputs(
     statement = SQL(text, *values, **named, statement_config=StatementConfig(dialect="postgres"))
     for _ in range(3):
         assert tuple(statement.compile()[1]) == expected
+
+
+def test_qmark_escape_survives_filter_round_trip() -> None:
+    from sqlspec.adapters.asyncpg.core import default_statement_config
+
+    statement = SQL("SELECT data ?? other_col FROM t WHERE id = $1", 5, statement_config=default_statement_config)
+    sql, params = statement.limit(2).compile()
+    assert "data ? other_col" in sql
+    assert "COALESCE" not in sql
+    assert tuple(params) == (5,)
+    assert "LIMIT 2" in sql

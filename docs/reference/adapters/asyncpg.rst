@@ -87,6 +87,5 @@ JSONB existence operator
 
 All PostgreSQL adapters support ``data ? 'key'``, ``data ? $1``,
 ``data ? :key``, ``?|``, and ``?&`` without treating the operator as a
-placeholder. Identifier or function right-hand operands require an explicit
-operator escape. Write parameterized intervals as ``? * interval '1 day'``
+placeholder. Write ``data ?? other_col`` for identifier or function right-hand operands. Write parameterized intervals as ``? * interval '1 day'``
 (or use ``$1``).

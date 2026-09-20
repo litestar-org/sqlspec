@@ -8,7 +8,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 
-__all__ = ("PARAMETER_REGEX", "ParameterValidator")
+__all__ = ("PARAMETER_REGEX", "ParameterValidator", "unescape_qmark_operator")
 
 _PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:@$")
 
@@ -205,3 +205,46 @@ class ParameterValidator:
             parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
             ordinal += 1
         return parameters
+
+
+_QMARK_ESCAPE: Final[str] = "??"
+
+
+def unescape_qmark_operator(
+    sql: str, param_info: "list[ParameterInfo] | None" = None
+) -> "tuple[str, list[ParameterInfo]]":
+    """Replace each ``??`` escape outside literals and comments with a single ``?``.
+
+    Returns the rewritten SQL and ``param_info`` with positions shifted to match it.
+    """
+    infos = param_info if param_info is not None else []
+    if _QMARK_ESCAPE not in sql:
+        return sql, infos
+    segments: list[str] = []
+    escape_positions: list[int] = []
+    last_end = 0
+    for match in PARAMETER_REGEX.finditer(sql):
+        if match.group("pg_q_operator") != _QMARK_ESCAPE:
+            continue
+        segments.extend((sql[last_end : match.start()], "?"))
+        escape_positions.append(match.start())
+        last_end = match.end()
+    if not escape_positions:
+        return sql, infos
+    segments.append(sql[last_end:])
+    shifted: list[ParameterInfo] = []
+    for info in infos:
+        removed = 0
+        for position in escape_positions:
+            if position < info.position:
+                removed += 1
+        shifted.append(
+            ParameterInfo(
+                name=info.name,
+                style=info.style,
+                position=info.position - removed,
+                ordinal=info.ordinal,
+                placeholder_text=info.placeholder_text,
+            )
+        )
+    return "".join(segments), shifted
