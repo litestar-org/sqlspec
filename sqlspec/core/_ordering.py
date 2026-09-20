@@ -1,10 +1,11 @@
 """ORDER BY item construction that defers NULL placement to the database."""
 
-import re
+import itertools
 from typing import Final, Literal
 
-from sqlglot import exp
+from sqlglot import Dialect, exp
 from sqlglot.generator import Generator
+from sqlglot.tokens import TokenType
 
 __all__ = ("NullsPlacement", "apply_direction", "default_nulls", "has_default_nulls", "ordered")
 
@@ -25,9 +26,6 @@ def has_default_nulls(expression: exp.Expr) -> bool:
     return isinstance(expression, exp.Ordered) and _DEFAULT_NULLS_ARG in expression.meta
 
 
-_EXPLICIT_NULLS_PATTERN: Final = re.compile(r"\bNULLS\s+(?:FIRST|LAST)\b", re.IGNORECASE)
-
-
 def ordered(expression: exp.Expr, *, desc: "bool | None" = None, nulls: "NullsPlacement | None" = None) -> exp.Ordered:
     """Build an ORDER BY item with optional NULL placement.
 
@@ -46,17 +44,26 @@ def ordered(expression: exp.Expr, *, desc: "bool | None" = None, nulls: "NullsPl
     return node
 
 
-def default_nulls(item: exp.Ordered, source: str) -> exp.Ordered:
+def default_nulls(item: exp.Ordered, source: str, dialect: str | None = None) -> exp.Ordered:
     """Mark parsed ordering as database-default unless its source requests placement.
 
     Args:
         item: Parsed ordering expression to mutate.
         source: Original ORDER BY item text.
+        dialect: Dialect used to parse the source text.
 
     Returns:
         The same ordering expression.
     """
-    if _EXPLICIT_NULLS_PATTERN.search(source) is None:
+    tokens = Dialect.get_or_raise(dialect).tokenize(source) if "NULLS" in source.upper() else []
+    explicit_nulls = any(
+        token.token_type == TokenType.VAR
+        and token.text.upper() == "NULLS"
+        and following.token_type in (TokenType.VAR, TokenType.FIRST)
+        and following.text.upper() in ("FIRST", "LAST")
+        for token, following in itertools.pairwise(tokens)
+    )
+    if not explicit_nulls:
         item.set("nulls_first", not item.args.get("desc"))
         item.meta[_DEFAULT_NULLS_ARG] = True
     return item
