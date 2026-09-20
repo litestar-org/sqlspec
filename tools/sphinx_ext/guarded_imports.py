@@ -1,7 +1,5 @@
 """Sphinx logging filters for optional dependency guarded imports."""
 
-from __future__ import annotations
-
 from logging import Filter, LogRecord, getLogger
 from typing import TYPE_CHECKING
 
@@ -31,6 +29,6 @@ class AutodocTypehintsGuardedImportFilter(Filter):
         return True
 
 
-def setup(app: Sphinx) -> dict[str, bool]:
+def setup(app: "Sphinx") -> dict[str, bool]:
     getLogger(_AUTODOC_TYPEHINTS_LOGGER).addFilter(AutodocTypehintsGuardedImportFilter())
     return {"parallel_read_safe": True, "parallel_write_safe": True}

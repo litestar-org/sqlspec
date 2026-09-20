@@ -1,7 +1,5 @@
 """Tests for SQLCommenter framework middleware."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

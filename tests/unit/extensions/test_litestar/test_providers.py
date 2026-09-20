@@ -406,3 +406,70 @@ def test_raise_missing_connection_provide_request_session_raises_when_connection
 
 def test_raise_missing_connection_raise_missing_connection_annotation_is_noreturn() -> None:
     assert SQLSpecPlugin._raise_missing_connection.__annotations__["return"] is NoReturn
+
+
+def test_filter_query_parameter_titles() -> None:
+    from litestar import Litestar, get
+    from litestar.di import NamedDependency
+
+    from sqlspec.extensions.litestar.providers import create_filter_dependencies
+
+    @get("/")
+    def handler(filters: NamedDependency[list[Any]]) -> list[Any]:
+        return []
+
+    app = Litestar([handler], dependencies=create_filter_dependencies({"search": "name", "sort_field": "name"}))
+    parameters = app.openapi_schema.to_schema()["paths"]["/"]["get"]["parameters"]
+    titles = {parameter["name"]: parameter["schema"]["title"] for parameter in parameters}
+    assert titles["searchString"] == "Search term"
+    assert titles["searchIgnoreCase"] == "Search should be case insensitive"
+    assert titles["sortOrder"] == "Sort order"
+
+
+@pytest.mark.parametrize("maximum", [None, 50, 2000])
+def test_page_size_limit_is_applied(maximum: int | None) -> None:
+    from typing import get_args
+
+    config = FilterConfig(pagination_type="limit_offset")
+    if maximum is not None:
+        config["pagination_max_size"] = maximum
+    provider = _create_statement_filters(config)["limit_offset_filter"].dependency
+    assert get_args(inspect.signature(provider).parameters["page_size"].annotation)[1].le == (
+        1000 if maximum is None else maximum
+    )
+
+
+@pytest.mark.parametrize(
+    "size, maximum, message",
+    [
+        (21, 20, "pagination_size must not exceed"),
+        (20, 0, "pagination_max_size must be at least 1"),
+        (20, -1, "pagination_max_size must be at least 1"),
+    ],
+)
+def test_page_size_invalid_configuration(size: int, maximum: int, message: str) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = FilterConfig(pagination_type="limit_offset", pagination_size=size, pagination_max_size=maximum)
+    with pytest.raises(ImproperConfigurationError, match=message):
+        _create_statement_filters(config)["limit_offset_filter"].dependency
+
+
+@pytest.mark.parametrize("page_size, status", [(1000, 200), (1001, 400)])
+def test_litestar_page_size_validation(page_size: int, status: int) -> None:
+    from litestar import get
+    from litestar.di import NamedDependency
+    from litestar.testing import create_test_client
+
+    from sqlspec.extensions.litestar.providers import create_filter_dependencies
+
+    @get("/")
+    def handler(filters: NamedDependency[list[Any]]) -> list[Any]:
+        return []
+
+    with create_test_client(
+        handler, dependencies=create_filter_dependencies({"pagination_type": "limit_offset"})
+    ) as client:
+        assert client.get("/", params={"pageSize": page_size}).status_code == status
+        parameters = client.app.openapi_schema.to_schema()["paths"]["/"]["get"]["parameters"]
+        assert next(param["schema"]["maximum"] for param in parameters if param["name"] == "pageSize") == 1000

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 
 __all__ = ("test_litestar_commit_modes",)

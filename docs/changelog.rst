@@ -33,6 +33,13 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Changed:**
 
+* Examples, tests, and documentation tooling use explicit forward references;
+  lint now enforces the future-annotations import ban throughout the repository.
+
+* Generated filter dependencies reject ``pageSize`` values above
+  ``pagination_max_size`` (default ``1000``); set ``pagination_max_size`` in
+  ``FilterConfig`` to change the limit.
+
 * Pure-Python installations defer unused query builders and migration commands.
   Compiled wheels retain eager exports to preserve concurrent access after
   package initialization.
@@ -106,6 +113,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Fixed:**
+
+* Close async example connection pools before their event loops shut down.
+
+* Correct Litestar filter query parameter titles and pagination schema documentation.
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
