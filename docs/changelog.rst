@@ -148,7 +148,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
 
-* Missing positional bindings no longer consume values reserved for named placeholders.
+* Missing positional bindings no longer consume values reserved for named placeholders,
+  including names that collide with generated parameter aliases.
 * Repeated and reordered numeric placeholders bind by their written indexes when
   converted to another placeholder style.
 * Sequences for named placeholders and mappings for positional placeholders bind

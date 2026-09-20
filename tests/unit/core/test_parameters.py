@@ -3021,3 +3021,26 @@ def test_consistent_mixed_placeholder_slots_expand(profile_name: str) -> None:
         assert tuple(results[0]) == ("User", 25)
     else:
         assert tuple(results[0]) == ("User", 25, 25)
+
+
+@pytest.mark.parametrize("target", [ParameterStyle.QMARK, ParameterStyle.NAMED_AT])
+def test_generated_alias_cannot_steal_named_placeholder_value(target: ParameterStyle) -> None:
+    converter = ParameterConverter()
+    with pytest.raises(SQLSpecError, match="Missing value for positional placeholder"):
+        converter.convert_placeholder_style("SELECT ?, :param_0", {"param_0": 42}, target)
+
+
+@pytest.mark.parametrize("target", [ParameterStyle.QMARK, ParameterStyle.NAMED_AT])
+def test_generated_alias_collision_preserves_both_values_on_cache_hits(target: ParameterStyle) -> None:
+    processor = ParameterProcessor()
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=target,
+        supported_execution_parameter_styles={target},
+    )
+    for _ in range(3):
+        result = processor.process("SELECT ?, :param_0", {"unclaimed": 1, "param_0": 42}, config)
+        if isinstance(result.parameters, dict):
+            assert result.parameters == {"param_0_p": 1, "param_0": 42}
+        else:
+            assert tuple(result.parameters) == (1, 42)
