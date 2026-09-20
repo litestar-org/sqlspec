@@ -1,11 +1,12 @@
 """Config constructors preserve the driver and schema result types."""
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlspec import sql
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-from sqlspec.core import OffsetPagination
+from sqlspec.core import CursorFilter, CursorKey, CursorPagination, OffsetPagination
 from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
 
 
@@ -32,3 +33,25 @@ async def async_rows(config: AiosqliteConfig) -> tuple[OffsetPagination[ServiceR
         )
         row = await service.get_one(sql.select("value").from_("service_values"), schema_type=ServiceRow, session=driver)
         return page, row
+
+
+def sync_cursor_rows(config: SqliteConfig) -> tuple[CursorPagination[ServiceRow], CursorPagination[dict[str, Any]]]:
+    service = SQLSpecSyncService(config=config)
+    with service.provide_session() as driver:
+        statement = sql.select("value").from_("service_values")
+        flt = CursorFilter([CursorKey("value")], 10)
+        typed = service.paginate_cursor(statement, flt, schema_type=ServiceRow, session=driver)
+        untyped = service.paginate_cursor(statement, flt, session=driver)
+        return typed, untyped
+
+
+async def async_cursor_rows(
+    config: AiosqliteConfig,
+) -> tuple[CursorPagination[ServiceRow], CursorPagination[dict[str, Any]]]:
+    service = SQLSpecAsyncService(config=config)
+    async with service.provide_session() as driver:
+        statement = sql.select("value").from_("service_values")
+        flt = CursorFilter([CursorKey("value")], 10)
+        typed = await service.paginate_cursor(statement, flt, schema_type=ServiceRow, session=driver)
+        untyped = await service.paginate_cursor(statement, flt, session=driver)
+        return typed, untyped

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, cast
 
 from typing_extensions import TypeVar
 
-from sqlspec.core import OffsetPagination
+from sqlspec.core import CursorPagination, OffsetPagination
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._sync import SyncDriverAdapterBase
@@ -89,6 +89,18 @@ async def _async_paginate(
         )
 
 
+async def _async_paginate_cursor(
+    context: AbstractAsyncContextManager[AsyncDriverAdapterBase],
+    statement: "Statement | QueryBuilder",
+    parameters: "tuple[StatementParameters | StatementFilter, ...]",
+    schema_type: "type[SchemaT] | None",
+    kwargs: dict[str, Any],
+) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
+    """Execute cursor pagination inside the supplied service session context."""
+    async with context as driver:
+        return await driver.select_with_cursor(statement, *parameters, schema_type=schema_type, **kwargs)
+
+
 async def _async_get_one(
     context: AbstractAsyncContextManager[AsyncDriverAdapterBase],
     statement: "Statement | QueryBuilder",
@@ -146,6 +158,18 @@ def _sync_paginate(
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
         )
+
+
+def _sync_paginate_cursor(
+    context: AbstractContextManager[SyncDriverAdapterBase],
+    statement: "Statement | QueryBuilder",
+    parameters: "tuple[StatementParameters | StatementFilter, ...]",
+    schema_type: "type[SchemaT] | None",
+    kwargs: dict[str, Any],
+) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
+    """Execute cursor pagination inside the supplied service session context."""
+    with context as driver:
+        return driver.select_with_cursor(statement, *parameters, schema_type=schema_type, **kwargs)
 
 
 def _sync_get_one(

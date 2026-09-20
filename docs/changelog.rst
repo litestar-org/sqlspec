@@ -14,6 +14,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Added:**
 
+* Added ``paginate_cursor`` to sync and async services with short-session
+  acquisition, caller-owned session support, and typed pagination results.
+
 * Added ``select_with_cursor`` and ``fetch_with_cursor`` to sync and async drivers
   for one-query cursor pages with optional schema conversion.
 
