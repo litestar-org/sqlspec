@@ -30,7 +30,7 @@ from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFa
 from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -49,6 +49,7 @@ __all__ = (
     "MysqlConnectorPoolParams",
     "MysqlConnectorSyncConfig",
     "MysqlConnectorSyncConnectionParams",
+    "build_connection_config",
 )
 mysql: "MysqlConnectorMysqlModule" = cast("MysqlConnectorMysqlModule", MysqlConnectorMysqlModule)
 mysqlconnector_aio: "MysqlConnectorAio" = cast("MysqlConnectorAio", MysqlConnectorAio)
@@ -195,12 +196,32 @@ class MysqlConnectorDriverFeatures(TypedDict):
     enable_local_infile_bulk_load: NotRequired[bool]
 
 
-def _normalize_local_infile(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
-    """Normalize mysql-connector local-infile consent."""
+def build_connection_config(
+    connection_config: "MysqlConnectorPoolParams | MysqlConnectorAsyncConnectionParams | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize mysqlconnector connection configuration mapping, parsing any DSN and applying overrides."""
     config = normalize_connection_config(connection_config)
+    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if user_alias is not None and "user" not in config:
+        config["user"] = user_alias
+    db_alias = config.pop("db", None)
+    if db_alias is not None and "database" not in config:
+        config["database"] = db_alias
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = parse_mysql_dsn(dsn)
+        for key, value in dsn_params.items():
+            config.setdefault(key, value)
+    config.setdefault("host", "localhost")
+    config.setdefault("port", 3306)
     local_infile = bool(config.pop("local_infile", False))
     config["allow_local_infile"] = bool(config.get("allow_local_infile", False) or local_infile)
     return config
+
+
+def _normalize_local_infile(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
+    """Normalize mysql-connector local-infile consent and connection config."""
+    return build_connection_config(connection_config)
 
 
 class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
@@ -316,9 +337,7 @@ class MysqlConnectorSyncConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = _normalize_local_infile(connection_config)
-        connection_config.setdefault("host", "localhost")
-        connection_config.setdefault("port", 3306)
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -446,9 +465,7 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        self.connection_config = _normalize_local_infile(connection_config)
-        self.connection_config.setdefault("host", "localhost")
-        self.connection_config.setdefault("port", 3306)
+        self.connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)

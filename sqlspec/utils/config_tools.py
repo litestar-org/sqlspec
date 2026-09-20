@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from sqlspec.exceptions import ConfigResolverError, ImproperConfigurationError
 from sqlspec.utils.module_loader import import_string
@@ -37,6 +38,7 @@ __all__ = (
     "discover_config_from_pyproject",
     "find_pyproject_toml",
     "normalize_connection_config",
+    "parse_mysql_dsn",
     "parse_odbc_connection_string",
     "parse_pyproject_config",
     "resolve_config_async",
@@ -290,6 +292,51 @@ def parse_odbc_connection_string(conn_str: str) -> list[tuple[str, str]]:
             pairs.append((key, conn_str[i:semi].strip()))
             i = semi + 1
     return pairs
+
+
+def parse_mysql_dsn(dsn: str) -> dict[str, Any]:
+    """Parse a MySQL connection DSN or URL into keyword arguments.
+
+    Args:
+        dsn: Connection string formatted as URL or key-value pairs.
+
+    Returns:
+        Dictionary of connection parameter keyword arguments.
+    """
+    if "://" in dsn:
+        parsed = urlsplit(dsn)
+        params: dict[str, Any] = {}
+        if parsed.username is not None:
+            params["user"] = unquote(parsed.username)
+        if parsed.password is not None:
+            params["password"] = unquote(parsed.password)
+        if parsed.hostname is not None:
+            params["host"] = parsed.hostname
+        if parsed.port is not None:
+            params["port"] = parsed.port
+        path = parsed.path.lstrip("/")
+        if path:
+            params["database"] = unquote(path)
+        if parsed.query:
+            query = parse_qs(parsed.query)
+            for k, v in query.items():
+                if v:
+                    val = v[-1]
+                    if val.lower() == "true":
+                        params[k] = True
+                    elif val.lower() == "false":
+                        params[k] = False
+                    elif val.isdigit():
+                        params[k] = int(val)
+                    else:
+                        params[k] = val
+        return params
+    key_value_params: dict[str, Any] = {}
+    for item in dsn.split(";"):
+        if "=" in item:
+            param_key, param_val = item.split("=", 1)
+            key_value_params[param_key.strip()] = param_val.strip()
+    return key_value_params
 
 
 def _normalize_config_path(config_path: str) -> str:
