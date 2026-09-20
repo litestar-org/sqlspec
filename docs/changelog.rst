@@ -110,7 +110,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
   when parameters are bound, including repeated preparation.
 
-* Missing positional bindings no longer consume values reserved for named placeholders.
+* Missing positional bindings no longer consume values reserved for named placeholders,
+  including names that collide with generated parameter aliases.
 * Repeated and reordered numeric placeholders bind by their written indexes when
   converted to another placeholder style.
 * Sequences for named placeholders and mappings for positional placeholders bind

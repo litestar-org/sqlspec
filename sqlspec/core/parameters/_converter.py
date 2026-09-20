@@ -146,7 +146,7 @@ class ParameterConverter:
         last_end = 0
         converted_param_info: list[ParameterInfo] = []
         delta = 0
-        names_by_key: dict[str, str] = {}
+        names_by_key = {} if is_positional_style else _named_parameter_names(param_info)
 
         for param in ordered_params:
             if is_positional_style:
@@ -155,9 +155,7 @@ class ParameterConverter:
                 new_placeholder = generator(converted_index)
                 name = str(converted_index + 1) if target_is_indexed else None
             else:
-                name = names_by_key.setdefault(
-                    _parameter_lookup_key(param), _named_parameter_name(param, explicit_indexes)
-                )
+                name = names_by_key[_parameter_lookup_key(param)]
                 new_placeholder = generator(name)
 
             segments.extend((sql[last_end : param.position], new_placeholder))
@@ -280,7 +278,7 @@ class ParameterConverter:
             msg = f"Parameter count mismatch: {len(parameters)} parameters provided but {expected} placeholders referenced."
             raise SQLSpecError(msg)
         slots: dict[str, int] = {}
-        names_by_key: dict[str, str] = {}
+        names_by_key = _named_parameter_names(param_info)
         for param in param_info:
             explicit_index = _explicit_index(param) if explicit_indexes else -1
             if explicit_index >= 0:
@@ -291,9 +289,7 @@ class ParameterConverter:
                     slots[lookup_key] = len(slots)
                 source_index = slots[lookup_key]
             if source_index < len(parameters):
-                name = names_by_key.setdefault(
-                    _parameter_lookup_key(param), _named_parameter_name(param, explicit_indexes)
-                )
+                name = names_by_key[_parameter_lookup_key(param)]
                 if name not in param_dict:
                     param_dict[name] = parameters[source_index]
         return param_dict
@@ -302,8 +298,8 @@ class ParameterConverter:
         self, parameters: "Mapping[str, Any]", param_info: "list[ParameterInfo]", strict_named_parameters: bool = True
     ) -> "NamedParameterOutput":
         """Align a mapping with the placeholder names of a named-style target."""
-        explicit_indexes = _uses_explicit_indexes(param_info)
-        expected_names = {_named_parameter_name(param, explicit_indexes) for param in param_info}
+        names_by_key = _named_parameter_names(param_info)
+        expected_names = set(names_by_key.values())
         if expected_names.issubset(parameters.keys()):
             return dict(parameters)
         reserved_keys = _named_placeholder_keys(param_info)
@@ -319,7 +315,7 @@ class ParameterConverter:
         positional_ranks: dict[str, int] = {}
         aligned: dict[str, Any] = {}
         for param in param_info:
-            target_name = _named_parameter_name(param, explicit_indexes)
+            target_name = names_by_key[_parameter_lookup_key(param)]
             if target_name in aligned:
                 continue
             if param.style in _NAMED_STYLES:
@@ -387,10 +383,10 @@ class ParameterConverter:
             return parameters[param.name], True
         if param.placeholder_text in parameters:
             return parameters[param.placeholder_text], True
-        if f"param_{param.ordinal}" in parameters:
+        if f"param_{param.ordinal}" in positional_keys:
             return parameters[f"param_{param.ordinal}"], True
         ordinal_key = str(param.ordinal + 1)
-        if ordinal_key in parameters:
+        if ordinal_key in positional_keys:
             return parameters[ordinal_key], True
         if 0 <= positional_index < len(positional_keys):
             return parameters[positional_keys[positional_index]], True
@@ -806,3 +802,20 @@ def _sequence_to_positional(
             raise SQLSpecError(msg)
     expanded = [parameters[index] for index in order]
     return expanded if isinstance(parameters, list) else tuple(expanded)
+
+
+def _named_parameter_names(param_info: "list[ParameterInfo]") -> dict[str, str]:
+    reserved = {param.name for param in param_info if param.style in _NAMED_STYLES and param.name}
+    explicit_indexes = _uses_explicit_indexes(param_info)
+    names: dict[str, str] = {}
+    for param in param_info:
+        key = _parameter_lookup_key(param)
+        if key in names:
+            continue
+        name = _named_parameter_name(param, explicit_indexes)
+        if param.style not in _NAMED_STYLES:
+            while name in reserved:
+                name += "_p"
+            reserved.add(name)
+        names[key] = name
+    return names

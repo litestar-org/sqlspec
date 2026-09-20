@@ -6,7 +6,13 @@ from typing import Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.parameters._converter import ParameterConverter, ambiguous_index_message, ambiguous_index_placeholder
+from sqlspec.core.parameters._converter import (
+    ParameterConverter,
+    _named_parameter_names,
+    _parameter_lookup_key,
+    ambiguous_index_message,
+    ambiguous_index_placeholder,
+)
 from sqlspec.core.parameters._types import (
     _EXPANDING_POSITIONAL_STYLES,
     _NAMED_STYLE_VALUES,
@@ -1184,7 +1190,7 @@ def _validate_index_row(row: "Sequence[Any]", index_order: "tuple[int, ...]") ->
         raise SQLSpecError(msg)
 
 
-def _expand_index_row(row: "Sequence[Any]", index_order: "tuple[int, ...]") -> Any:
+def _expand_index_row(row: "Sequence[Any]", index_order: "tuple[int, ...]") -> "list[Any] | tuple[Any, ...]":
     _validate_index_row(row, index_order)
     expanded = [row[index] for index in index_order]
     return expanded if isinstance(row, list) else tuple(expanded)
@@ -1198,7 +1204,7 @@ def _index_row_to_named(
 
 
 def _is_generated_name(name: str) -> bool:
-    return name.isdigit() or (name.startswith("param_") and name[6:].isdigit())
+    return name.isdigit() or (name.startswith("param_") and name[6:].rstrip("_p").isdigit())
 
 
 def _named_row_to_positional(
@@ -1227,7 +1233,7 @@ def _named_row_to_positional(
 
 
 def _generated_name_order(name: str) -> int:
-    return int(name[6:]) if name.startswith("param_") else int(name)
+    return int(name[6:].rstrip("_p")) if name.startswith("param_") else int(name)
 
 
 def _align_cached_mapping(
@@ -1253,7 +1259,8 @@ def _named_parameters_for_style(
 ) -> "tuple[str, ...]":
     has_named = any(p.style in _NAMED_STYLES for p in param_info)
     if has_named and any(p.name is None for p in param_info):
-        names = tuple(p.name if p.name is not None else f"param_{p.ordinal}" for p in param_info)
+        generated_names = _named_parameter_names(param_info)
+        names = tuple(p.name if p.name is not None else generated_names[_parameter_lookup_key(p)] for p in param_info)
     else:
         names = tuple(p.name for p in param_info if p.name is not None)
     if target_style in _EXPANDING_POSITIONAL_STYLES:
