@@ -235,7 +235,6 @@ Using filters in a Litestar handler:
     from sqlspec.adapters.asyncpg import AsyncpgDriver
     from sqlspec.core import FilterTypes
     from sqlspec.extensions.litestar.providers import create_filter_dependencies
-    from sqlspec.service import SQLSpecAsyncService
 
     user_filter_deps = create_filter_dependencies({
         "pagination_type": "limit_offset",
