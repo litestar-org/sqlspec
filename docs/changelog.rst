@@ -110,7 +110,7 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * ``limit``, ``offset``, and ``paginate`` on set operations render valid
   SQL Server pagination while retaining the requested result ordering.
 
-* Statement modifiers on empty or unparseable SQL raise ``SQLParsingError``
+* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
   instead of leaking a sqlglot ``ParseError``.
 
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
