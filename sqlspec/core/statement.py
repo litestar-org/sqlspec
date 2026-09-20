@@ -9,6 +9,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import Dialect, exp
 from sqlglot.errors import ParseError
 
+import sqlspec.core._operators  # noqa: F401 - register SQLGlot operator rendering before any SQL is generated
 import sqlspec.exceptions
 from sqlspec.core import _pipeline as pipeline
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
