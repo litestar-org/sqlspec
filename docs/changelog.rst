@@ -211,6 +211,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
   now pass statement parameters to the driver for binding.
 
+* Close async example connection pools before their event loops shut down.
+
+* Correct Litestar filter query parameter titles and pagination schema documentation.
+
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
   a driver error export is missing.
