@@ -1120,6 +1120,13 @@ class SQL:
         new_sql._sql_param_counters = self._sql_param_counters.copy()
         return new_sql
 
+    def _take_pending_filters(self) -> "tuple[SQL, list[StatementFilter]]":
+        if not self._filters:
+            return self, []
+        copied = self._copy_base(self._raw_expression or self._raw_sql)
+        copied._filters = []
+        return copied, self._filters.copy()
+
     def _copy_base(self, statement_seed: "str | exp.Expr") -> "SQL":
         new_sql = SQL(
             statement_seed,

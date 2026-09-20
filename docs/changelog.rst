@@ -129,6 +129,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   and result ordering. Pagination filters produce valid set-operation SQL.
 * ``SQL.order_by("id", desc=True)`` now sorts descending, and
   ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+* Filters supplied to the ``SQL`` constructor are applied once before call-site
+  filters, including when statements are reused.
+
 * Statements combining positional and named values now bind each value to its
   own placeholder, including filters and ``where_*`` helpers.
 
