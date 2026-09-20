@@ -261,3 +261,9 @@ def test_grouped_query_traversal() -> None:
                 break
             flt = CursorFilter(first.keys, 1, page.next_cursor)
         assert seen == [{"v": 1, "c": 2}, {"v": 2, "c": 1}, {"v": 3, "c": 1}]
+
+
+@pytest.mark.parametrize("rows", [[{"other": 1}], [{"id": None}], [{"id": None}, {"id": 2}, {"id": 3}]])
+def test_every_page_row_has_valid_cursor_keys(rows: list[dict[str, Any]]) -> None:
+    with pytest.raises(ImproperConfigurationError):
+        CursorFilter([CursorKey("id")], 2).build_page(rows)
