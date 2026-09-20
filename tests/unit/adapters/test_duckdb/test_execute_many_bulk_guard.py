@@ -1,5 +1,6 @@
 """Bulk INSERT preserves the semantics of its VALUES and column list."""
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -21,8 +22,10 @@ from sqlspec.core.result import DMLResult
         ("INSERT INTO t (a, b) VALUES (?, ?) ON CONFLICT DO NOTHING", [{"a": 1, "b": 2, "c": 9}]),
     ],
 )
-def test_execute_many_preserves_insert_semantics(statement: str, expected: list[dict[str, int]]) -> None:
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
+def test_execute_many_preserves_insert_semantics(
+    statement: str, expected: list[dict[str, int]], tmp_path: Path
+) -> None:
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "bulk_guard.duckdb")})
     try:
         with config.provide_session() as session:
             session.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b INTEGER, c INTEGER DEFAULT 9)")
@@ -36,8 +39,8 @@ def test_execute_many_preserves_insert_semantics(statement: str, expected: list[
         config.close_pool()
 
 
-def test_plain_values_retains_bulk_loading() -> None:
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
+def test_plain_values_retains_bulk_loading(tmp_path: Path) -> None:
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "bulk_guard.duckdb")})
     original = DuckDBDriver._execute_bulk_insert_many
     results: list[DMLResult | None] = []
 
