@@ -7,8 +7,6 @@ route/controller/router-level encoders on top — no bidirectional thread
 into sqlspec's serializer is needed.
 """
 
-from __future__ import annotations
-
 import datetime
 from typing import Any
 

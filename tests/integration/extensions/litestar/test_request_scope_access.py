@@ -5,8 +5,6 @@ provide_request_connection, and provide_request_connection_async work
 correctly when accessed from route handlers and guards.
 """
 
-from __future__ import annotations
-
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
@@ -33,9 +31,9 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 
 @contextmanager
 def create_test_app(
-    route_handlers: Sequence[HTTPRouteHandler],
+    route_handlers: "Sequence[HTTPRouteHandler]",
     config: SyncDatabaseConfig[Any, Any, Any] | AsyncDatabaseConfig[Any, Any, Any],
-    guards: Sequence[Guard] | None = None,
+    guards: "Sequence[Guard] | None" = None,
 ) -> Generator[TestClient[Litestar], None, None]:
     """Create a test application with SQLSpec plugin configured.
 

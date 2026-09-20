@@ -1,6 +1,4 @@
 # Configuration file for the Sphinx documentation builder.
-from __future__ import annotations
-
 import os
 import warnings
 from datetime import date
@@ -308,12 +306,12 @@ pygments_dark_style = "sqlspec-dark"
 
 
 def update_html_context(
-    _app: Sphinx, _pagename: str, _templatename: str, context: dict[str, Any], _doctree: document
+    _app: "Sphinx", _pagename: str, _templatename: str, context: "dict[str, Any]", _doctree: "document"
 ) -> None:
     context["generate_toctree_html"] = partial(context["generate_toctree_html"], startdepth=0)
 
 
-def setup(app: Sphinx) -> dict[str, bool]:
+def setup(app: "Sphinx") -> dict[str, bool]:
     """Configure Sphinx application plugins."""
     app.setup_extension("shibuya")
     return {"parallel_read_safe": True, "parallel_write_safe": True}
