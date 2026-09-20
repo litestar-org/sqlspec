@@ -130,6 +130,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Arrow ODBC renders SQL Server ``TOP`` page-size controls as validated integers
+  while retaining bound data parameters, including queries with CTEs.
+
 * ``SQL.order_by("id", desc=True)`` now sorts descending, and
   ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
 * ``limit``, ``offset``, and ``paginate`` on set operations render valid

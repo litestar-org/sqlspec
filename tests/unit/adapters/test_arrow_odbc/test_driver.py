@@ -871,3 +871,37 @@ def test_arrow_odbc_driver_slots_in_class_definition() -> None:
     }
     assert expected_new.issubset(set(slots))
     assert list(slots) == sorted(slots)
+
+
+@pytest.mark.parametrize(
+    "sql,parameters,expected_sql,expected_parameters",
+    [
+        (
+            "SELECT TOP (?) id FROM t WHERE name = ?",
+            [3, "hostile'; --"],
+            "SELECT TOP (3) id FROM t WHERE name = ?",
+            ["hostile'; --"],
+        ),
+        (
+            "WITH c AS (SELECT ? AS id) SELECT TOP (?) id FROM c WHERE id > ?",
+            [7, 3, 0],
+            "WITH c AS (SELECT ? AS id) SELECT TOP (3) id FROM c WHERE id > ?",
+            [7, 0],
+        ),
+        ("SELECT TOP /* limit */ (?) '?' AS marker FROM t", [3], "SELECT TOP /* limit */ (3) '?' AS marker FROM t", []),
+        ("SELECT 'TOP (?)' AS label FROM t WHERE id = ?", [7], "SELECT 'TOP (?)' AS label FROM t WHERE id = ?", [7]),
+    ],
+)
+def test_mssql_top_preserves_data_bindings(
+    sql: str, parameters: list[Any], expected_sql: str, expected_parameters: list[Any]
+) -> None:
+    from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
+
+    assert _inline_mssql_pagination_parameters(sql, parameters) == (expected_sql, expected_parameters)
+
+
+def test_mssql_top_rejects_noninteger_limit() -> None:
+    from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
+
+    with pytest.raises(ValueError):
+        _inline_mssql_pagination_parameters("SELECT TOP (?) id FROM t", ["3); DROP TABLE t; --"])
