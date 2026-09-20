@@ -168,12 +168,13 @@ async def test_explicit_pagination_modes_reject_before_query(
     service = SQLSpecAsyncService(session=driver) if async_mode else SQLSpecSyncService(session=driver)
     statements: list[str] = []
     await _call(driver.connection, "set_trace_callback", statements.append)
-    for method, filters, kwargs in [
+    invalid_cases: list[tuple[str, list[Any], dict[str, Any]]] = [
         ("paginate_cursor", [], {}),
         ("paginate_cursor", [LimitOffsetFilter(1, 0)], {}),
         ("paginate_cursor", [CursorFilter("id", 1)], {"count_with_window": True}),
         ("paginate_limit_offset", [CursorFilter("id", 1)], {}),
-    ]:
+    ]
+    for method, filters, kwargs in invalid_cases:
         with pytest.raises(ImproperConfigurationError):
             await _call(service, method, "SELECT id FROM users", *filters, **kwargs)
     with pytest.raises(ImproperConfigurationError):
