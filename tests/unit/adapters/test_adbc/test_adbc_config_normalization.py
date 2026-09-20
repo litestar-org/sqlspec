@@ -410,3 +410,45 @@ def test_shared_object_driver_keeps_its_parameter_style() -> None:
     config = AdbcConfig(connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"})
 
     assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.NUMERIC
+
+
+def test_resolve_driver_name_from_url_and_dsn() -> None:
+    """Detect driver from URL and DSN aliases when driver_name is absent."""
+    url_config = AdbcConfig(connection_config={"url": "postgresql://example.invalid/db"})
+    assert _resolve_driver_name(url_config) == "adbc_driver_postgresql.dbapi.connect"
+
+    dsn_config = AdbcConfig(connection_config={"dsn": "postgresql://example.invalid/db"})
+    assert _resolve_driver_name(dsn_config) == "adbc_driver_postgresql.dbapi.connect"
+
+    conn_str_config = AdbcConfig(connection_config={"connection_string": "postgresql://example.invalid/db"})
+    assert _resolve_driver_name(conn_str_config) == "adbc_driver_postgresql.dbapi.connect"
+
+
+def test_connection_config_dict_resolves_aliases() -> None:
+    """Normalize url, dsn, path, and database aliases into uri or path kwargs."""
+    url_result = build_connection_config({"url": "postgresql://example.invalid/db"})
+    assert url_result["uri"] == "postgresql://example.invalid/db"
+    assert "url" not in url_result
+
+    sqlite_db_result = build_connection_config({"driver_name": "sqlite", "database": "/tmp/app.db"})
+    assert sqlite_db_result["uri"] == "/tmp/app.db"
+    assert "database" not in sqlite_db_result
+
+    sqlite_path_result = build_connection_config({"driver_name": "sqlite", "path": "/tmp/app.db"})
+    assert sqlite_path_result["uri"] == "/tmp/app.db"
+    assert "path" not in sqlite_path_result
+
+    duckdb_db_result = build_connection_config({"driver_name": "duckdb", "database": "/tmp/app.duckdb"})
+    assert duckdb_db_result["path"] == "/tmp/app.duckdb"
+    assert "database" not in duckdb_db_result
+
+
+def test_adbc_config_resolves_database_aliases() -> None:
+    """AdbcConfig should normalize aliases in connection_config."""
+    sqlite_config = AdbcConfig(connection_config={"driver_name": "sqlite", "database": "/tmp/app.db"})
+    assert sqlite_config.connection_config["uri"] == "/tmp/app.db"
+    assert "database" not in sqlite_config.connection_config
+
+    pg_config = AdbcConfig(connection_config={"url": "postgresql://example.invalid/db"})
+    assert pg_config.connection_config["uri"] == "postgresql://example.invalid/db"
+    assert "url" not in pg_config.connection_config
