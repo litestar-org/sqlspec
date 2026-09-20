@@ -1169,7 +1169,7 @@ def assert_sync_cursor_pagination_contract(driver: object, case: DriverCase) -> 
         _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
     if case.supports_grouped_subquery:
         grouped = sql.select("value", "COUNT(*) AS c").from_(table.name).group_by("value")
-        groups = []
+        groups: list[dict[str, Any]] = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):
             page = cursor_driver.select_with_cursor(grouped, CursorFilter([CursorKey("value")], 2, cursor))
@@ -1206,7 +1206,7 @@ async def assert_async_cursor_pagination_contract(driver: object, case: DriverCa
         _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
     if case.supports_grouped_subquery:
         grouped = sql.select("value", "COUNT(*) AS c").from_(table.name).group_by("value")
-        groups = []
+        groups: list[dict[str, Any]] = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):
             page = await cursor_driver.select_with_cursor(grouped, CursorFilter([CursorKey("value")], 2, cursor))
