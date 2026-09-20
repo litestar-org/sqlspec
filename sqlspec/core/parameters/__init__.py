@@ -18,6 +18,7 @@ from sqlspec.core.parameters._declared import (
 from sqlspec.core.parameters._processor import (
     ParameterProcessor,
     apply_type_coercion,
+    executes_qmark,
     structural_fingerprint,
     type_coercion_dispatcher,
     type_coercion_fallbacks,
@@ -75,6 +76,7 @@ __all__ = (
     "build_null_pruning_transform",
     "build_statement_config_from_profile",
     "collect_null_parameter_ordinals",
+    "executes_qmark",
     "get_driver_profile",
     "is_iterable_parameters",
     "looks_like_execute_many",

@@ -8,7 +8,7 @@ from mypy_extensions import mypyc_attr
 
 from sqlspec.core.parameters._types import ParameterInfo, ParameterStyle
 
-__all__ = ("PARAMETER_REGEX", "ParameterValidator")
+__all__ = ("PARAMETER_REGEX", "ParameterValidator", "unescape_qmark_operator")
 
 _PARAM_CHARS: Final[frozenset[str]] = frozenset("?%:@$")
 
@@ -44,6 +44,73 @@ _SKIP_GROUPS: Final[tuple[str, ...]] = (
     "pg_cast",
     "sql_server_global",
 )
+
+
+_OPERAND_START: Final = re.compile(r"\s*(?:'|\$\d|:[A-Za-z_]|%s|%\(\w+\)s|@\w|\?)")
+_PRECEDING_WORD: Final = re.compile(r"([A-Za-z_][A-Za-z0-9_$]*)\s*$")
+_NON_OPERAND_KEYWORDS: Final[frozenset[str]] = frozenset([
+    "select",
+    "distinct",
+    "all",
+    "where",
+    "and",
+    "or",
+    "not",
+    "on",
+    "when",
+    "then",
+    "else",
+    "in",
+    "like",
+    "ilike",
+    "between",
+    "values",
+    "set",
+    "by",
+    "limit",
+    "offset",
+    "having",
+    "returning",
+    "case",
+    "is",
+    "from",
+    "using",
+    "interval",
+    "escape",
+    "top",
+    "fetch",
+    "first",
+    "next",
+    "as",
+    "any",
+    "some",
+    "exists",
+    "join",
+    "with",
+    "union",
+    "except",
+    "intersect",
+    "return",
+    "call",
+    "exec",
+    "execute",
+    "into",
+    "over",
+    "filter",
+    "within",
+    "end",
+    "if",
+])
+
+
+def _follows_operand(sql: str, start: int) -> bool:
+    head = sql[:start].rstrip()
+    if not head:
+        return False
+    if head[-1] in ")]\"'":
+        return True
+    match = _PRECEDING_WORD.search(head)
+    return bool(match and match.group(1).lower() not in _NON_OPERAND_KEYWORDS)
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -132,7 +199,52 @@ class ParameterValidator:
             style, name = self._extract_parameter_style(match)
             if style is None:
                 continue
+            if match.group("qmark") and _OPERAND_START.match(sql, match.end()) and _follows_operand(sql, match.start()):
+                continue
             placeholder_text = match.group(0)
             parameters.append(ParameterInfo(name, style, match.start(), ordinal, placeholder_text))
             ordinal += 1
         return parameters
+
+
+_QMARK_ESCAPE: Final[str] = "??"
+
+
+def unescape_qmark_operator(
+    sql: str, param_info: "list[ParameterInfo] | None" = None
+) -> "tuple[str, list[ParameterInfo]]":
+    """Replace each ``??`` escape outside literals and comments with a single ``?``.
+
+    Returns the rewritten SQL and ``param_info`` with positions shifted to match it.
+    """
+    infos = param_info if param_info is not None else []
+    if _QMARK_ESCAPE not in sql:
+        return sql, infos
+    segments: list[str] = []
+    escape_positions: list[int] = []
+    last_end = 0
+    for match in PARAMETER_REGEX.finditer(sql):
+        if match.group("pg_q_operator") != _QMARK_ESCAPE:
+            continue
+        segments.extend((sql[last_end : match.start()], "?"))
+        escape_positions.append(match.start())
+        last_end = match.end()
+    if not escape_positions:
+        return sql, infos
+    segments.append(sql[last_end:])
+    shifted: list[ParameterInfo] = []
+    for info in infos:
+        removed = 0
+        for position in escape_positions:
+            if position < info.position:
+                removed += 1
+        shifted.append(
+            ParameterInfo(
+                name=info.name,
+                style=info.style,
+                position=info.position - removed,
+                ordinal=info.ordinal,
+                placeholder_text=info.placeholder_text,
+            )
+        )
+    return "".join(segments), shifted

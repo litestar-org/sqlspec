@@ -438,3 +438,116 @@ def test_subquery_wrapper_preserves_bounded_order_and_input(query: str) -> None:
         assert "LIMIT 1" in wrapped.sql()
     elif expression.args.get("order") is not None:
         assert wrapped.sql().endswith("ORDER BY v")
+
+
+@pytest.mark.parametrize("operation", ["UNION ALL", "INTERSECT", "EXCEPT"])
+@pytest.mark.parametrize(("limit", "offset"), [(10, 20), (None, 20), (10, None)])
+def test_tsql_set_operation_pagination_uses_valid_outer_select(
+    operation: str, limit: int | None, offset: int | None
+) -> None:
+    statement = SQL(
+        "SELECT id FROM a " + operation + " SELECT id FROM b", statement_config=StatementConfig(dialect="tsql")
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+    if offset is not None:
+        statement = statement.offset(offset)
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    if offset is not None:
+        expected = (
+            "SELECT * FROM (SELECT id FROM a "
+            + operation
+            + " SELECT id FROM b) AS _l_0 ORDER BY (SELECT NULL) OFFSET 20 ROWS"
+        )
+        if limit is not None:
+            expected += " FETCH FIRST 10 ROWS ONLY"
+    else:
+        expected = "SELECT TOP 10 * FROM (SELECT id FROM a " + operation + " SELECT id FROM b) AS _l_0"
+    assert rendered == expected
+
+
+def test_tsql_paginate_on_cte_set_operation_keeps_cte_leading() -> None:
+    statement = SQL(
+        "WITH x AS (SELECT 1 AS id) SELECT id FROM x UNION ALL SELECT id FROM x ORDER BY id DESC",
+        statement_config=StatementConfig(dialect="tsql"),
+    ).paginate(2, 10)
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    assert rendered.startswith("WITH x AS")
+    assert rendered.endswith(") AS _l_0 ORDER BY id DESC OFFSET 10 ROWS FETCH FIRST 10 ROWS ONLY")
+
+
+def test_tsql_limit_only_on_set_operation_hoists_trailing_order_by() -> None:
+    statement = SQL(
+        "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id DESC", statement_config=StatementConfig(dialect="tsql")
+    ).limit(10)
+    assert statement._filter_expression().sql(dialect="tsql") == (
+        "SELECT TOP 10 * FROM (SELECT id FROM a UNION ALL SELECT id FROM b) AS _l_0 ORDER BY id DESC"
+    )
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("postgres", "SELECT id FROM a UNION ALL SELECT id FROM b LIMIT 10 OFFSET 20"),
+        ("mysql", "SELECT id FROM a UNION ALL SELECT id FROM b LIMIT 10 OFFSET 20"),
+        ("sqlite", "SELECT id FROM a UNION ALL SELECT id FROM b LIMIT 10 OFFSET 20"),
+        ("oracle", "SELECT id FROM a UNION ALL SELECT id FROM b OFFSET 20 ROWS FETCH FIRST 10 ROWS ONLY"),
+    ],
+)
+def test_non_tsql_set_operation_limit_offset_unchanged(dialect: str, expected: str) -> None:
+    statement = SQL("SELECT id FROM a UNION ALL SELECT id FROM b", statement_config=StatementConfig(dialect=dialect))
+    assert statement.limit(10).offset(20)._filter_expression().sql(dialect=dialect) == expected
+
+
+def test_tsql_set_operation_without_limit_or_offset_is_unchanged() -> None:
+    statement = SQL("SELECT id FROM a UNION ALL SELECT id FROM b", statement_config=StatementConfig(dialect="tsql"))
+    assert statement._filter_expression().sql(dialect="tsql") == "SELECT id FROM a UNION ALL SELECT id FROM b"
+
+
+def test_set_operation_transform_applies_after_generator_was_used() -> None:
+    import subprocess
+    import sys
+
+    probe = """
+import sys
+from sqlglot import exp
+from sqlglot.generator import Generator
+query = exp.select('id').from_('a').union(exp.select('id').from_('b'), distinct=False).limit(10).offset(20)
+generic_before = query.sql()
+assert 'sqlglot.dialects.tsql' not in sys.modules
+import sqlspec.core._operators
+assert 'sqlglot.dialects.tsql' not in sys.modules
+assert query.sql() == generic_before
+assert 'ORDER BY (SELECT NULL) OFFSET 20 ROWS FETCH FIRST 10 ROWS ONLY' in query.sql(dialect='tsql')
+"""
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_set_operation_transform_invalidates_loaded_tsql_dispatch() -> None:
+    import subprocess
+    import sys
+
+    probe = """
+from sqlglot import exp
+query = exp.select('id').from_('a').union(exp.select('id').from_('b'), distinct=False).limit(10).offset(20)
+query.sql(dialect='tsql')
+import sqlspec.core._operators
+assert 'ORDER BY (SELECT NULL) OFFSET 20 ROWS FETCH FIRST 10 ROWS ONLY' in query.sql(dialect='tsql')
+"""
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_tsql_pagination_preserves_parenthesized_branch_limit() -> None:
+    statement = (
+        SQL(
+            "SELECT id FROM a UNION ALL (SELECT TOP 2 id FROM b ORDER BY id DESC)",
+            statement_config=StatementConfig(dialect="tsql"),
+        )
+        .limit(4)
+        .offset(1)
+    )
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    assert "(SELECT TOP 2 id FROM b ORDER BY id DESC)" in rendered
+    assert rendered.endswith("ORDER BY (SELECT NULL) OFFSET 1 ROWS FETCH FIRST 4 ROWS ONLY")
