@@ -167,11 +167,7 @@ def build_connection_config(
 ) -> dict[str, Any]:
     """Normalize asyncmy connection configuration, parsing DSN and mapping aliases."""
     config = _normalize_connection_config(connection_config)
-    dsn = (
-        config.pop("dsn", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
+    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
     user_alias = config.pop("username", None)
     if user_alias is not None and "user" not in config:
         config["user"] = user_alias
@@ -431,4 +427,3 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Return queue polling defaults for Asyncmy adapters."""
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
-
