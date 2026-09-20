@@ -519,16 +519,9 @@ class ParameterConverter:
                         unique_params[param_key] = value
                         param_order.append(param_key)
 
-            needs_expansion = target_style in _EXPANDING_POSITIONAL_STYLES
-
-            if needs_expansion:
-                param_values = []
-                for param in param_info:
-                    param_key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
-                    if param_key in unique_params:
-                        param_values.append(unique_params[param_key])
-            else:
-                param_values = [unique_params[param_key] for param_key in param_order]
+            param_values = _mapping_values_for_style(
+                unique_params, param_order, param_info, target_style, explicit_indexes
+            )
 
             if preserve_parameter_format and original_parameters is not None:
                 return self._preserve_original_format(param_values, original_parameters)
@@ -569,6 +562,12 @@ class ParameterConverter:
     ) -> str:
         if not param_info:
             return sql
+        if (
+            isinstance(parameters, Mapping)
+            and any(param.style in _NAMED_STYLES for param in param_info)
+            and any(param.style not in _NAMED_STYLES for param in param_info)
+        ):
+            parameters = self._convert_parameter_format(parameters, param_info, ParameterStyle.NUMERIC)
 
         unique_params: dict[str, int] = {}
         for param in param_info:
@@ -819,3 +818,26 @@ def _named_parameter_names(param_info: "list[ParameterInfo]") -> dict[str, str]:
             reserved.add(name)
         names[key] = name
     return names
+
+
+def _written_index_key(placeholder: str) -> int:
+    return int(placeholder[1:])
+
+
+def _mapping_values_for_style(
+    values: dict[str, Any],
+    order: list[str],
+    param_info: "list[ParameterInfo]",
+    target: ParameterStyle,
+    explicit_indexes: bool,
+) -> list[Any]:
+    if target in _EXPANDING_POSITIONAL_STYLES:
+        expanded = []
+        for param in param_info:
+            key = param.placeholder_text if param.name else f"{param.placeholder_text}_{param.ordinal}"
+            if key in values:
+                expanded.append(values[key])
+        return expanded
+    if explicit_indexes and target in _INDEX_STYLES:
+        order.sort(key=_written_index_key)
+    return [values[key] for key in order]

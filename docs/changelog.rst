@@ -153,9 +153,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   rows when legacy modulo syntax cannot be classified by the SQL parser.
 
 * Missing positional bindings no longer consume values reserved for named placeholders,
-  including names that collide with generated parameter aliases.
+  including names that collide with generated parameter aliases and script literals.
 * Repeated and reordered numeric placeholders bind by their written indexes when
-  converted to another placeholder style.
+  converted to another placeholder style; native numeric mappings retain written
+  index order on the first call and cache hits.
 * Sequences for named placeholders and mappings for positional placeholders bind
   consistently on the first execution and cache hits, including repeated names.
 * Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
