@@ -130,6 +130,10 @@ SQL-facing field ``uploaded_collections`` before the ``OrderByFilter`` is
 created. Raw configured values such as ``orderBy=uploaded_collections`` also
 remain accepted for compatibility.
 
+Generated framework filters reject ``pageSize`` above ``pagination_max_size``
+(default ``1000``). Set this key in ``FilterConfig`` to change the limit;
+``pagination_size`` must not exceed it.
+
 Sort aliases are closed over the configured ``sort_field`` allowlist. Use
 ``sort_field_aliases`` when the public API name is not a mechanical camel-case
 conversion, or set ``sort_field_camelize=False`` to require raw configured
@@ -207,7 +211,3 @@ Related Guides
 - :doc:`query_builder` for building queries with ``.where()`` clauses.
 - :doc:`/recipes/service_layer` for building robust application service layers.
 - :doc:`/reference/core/filters` for the core filter classes and parameters API.
-
-Generated framework filters reject ``pageSize`` above ``pagination_max_size``
-(default ``1000``). Set this key in ``FilterConfig`` to change the limit;
-``pagination_size`` must not exceed it.
