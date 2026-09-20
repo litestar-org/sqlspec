@@ -135,6 +135,39 @@ For async configurations, ``migrate_up()`` and ``migrate_down()`` return awaitab
     await config.migrate_up()
     await config.migrate_down(revision="-1")
 
+.. _migration-startup-checks:
+
+Initialization and startup checks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Configs build migration helpers when you first use them. You can run queries
+before they build commands or a custom tracker. The SQL loader is separate:
+it is first built when you call ``get_migration_loader()`` or load migration
+SQL files.
+
+Creating a config still checks migration keys, path values, and explicit
+template settings. Custom tracker setup and the search for extension migrations
+run when you first request commands. Their errors surface at that point.
+To check these at startup, call ``get_migration_commands()`` after creating
+the config:
+
+.. literalinclude:: /examples/configuration/migration_warmup.py
+   :language: python
+   :caption: Check migration setup during startup
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+This call builds the helpers. It does not apply migrations. Use it without
+``await`` for both sync and async configs. Call ``migrate_up()`` when you want
+to apply migrations; await it for an async config. Access to the database and
+running files can still fail at that later step.
+
+Assigning ``migration_config`` or calling ``set_migration_config()`` clears both
+cached helpers. Their next use reads the new settings. Use these setters to
+replace settings. Editing a nested dictionary does not refresh the helpers.
+
 Common keys
 ~~~~~~~~~~~
 
@@ -340,10 +373,10 @@ To unregister an extension's migrations at runtime, call
     removed = config.remove_extension_migrations("litestar_queues")
 
 These methods update the extension entry under ``extension_config`` and
-``migration_config["include_extensions"]``. ``MigrationCommands`` and its
-``runner`` are rebuilt by these methods and are not a direct mutation surface;
-mutating ``extension_config`` or runner internals directly does not re-run
-discovery.
+``migration_config["include_extensions"]``. When an entry changes, cached
+migration commands are cleared and rebuilt on their next access. The existing
+SQL loader and its loaded queries are preserved. Mutating ``extension_config``
+or runner internals directly does not re-run discovery.
 
 SQL files inside a registered extension directory use their filename-local
 version in named-query directives. For example,

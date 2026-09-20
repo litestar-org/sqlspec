@@ -3,6 +3,7 @@
 import argparse
 import importlib
 import importlib.machinery
+import importlib.util
 import inspect
 import json
 import subprocess
@@ -771,9 +772,302 @@ print("service-subclasses:ok")
     return result
 
 
+def _run_startup_check(
+    name: str, script: str, *, require_compiled: bool, optional_dependency: str | None = None
+) -> dict[str, Any]:
+    """Run first-use checks in a fresh interpreter, retaining installed origins."""
+    result = _new_smoke_result(name=name, module="sqlspec.base", attribute=None, compiled_required=require_compiled)
+    if optional_dependency is not None and importlib.util.find_spec(optional_dependency) is None:
+        result["skipped"] = True
+        result["skip_reason"] = f"optional dependency missing: {optional_dependency}"
+        return result
+    footer = """
+import json
+import sys
+from importlib.machinery import EXTENSION_SUFFIXES
+
+modules = {name: sys.modules[name] for name in ("sqlspec.base", "sqlspec.builder._select")}
+print(json.dumps({
+    "imported": True,
+    "compiled": all(module.__file__.endswith(tuple(EXTENSION_SUFFIXES)) for module in modules.values()),
+    "origins": {name: module.__file__ for name, module in modules.items()},
+}))
+"""
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", script + footer], capture_output=True, check=False, text=True, timeout=30
+        )
+        if completed.returncode != 0:
+            result["error"] = (
+                f"subprocess failed with return code {completed.returncode}; "
+                f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
+            )
+            return result
+        result.update(json.loads(completed.stdout.splitlines()[-1]))
+        if require_compiled and not result["compiled"]:
+            result["error"] = "module was imported from Python source, not a compiled extension"
+    except (subprocess.TimeoutExpired, ValueError, IndexError) as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _check_public_import_order(order: str, *, require_compiled: bool) -> dict[str, Any]:
+    """Resolve package exports in either order without proxying the defining objects."""
+    imports = {
+        "facade_first": "from sqlspec import SQLSpec, SQL, QueryBuilder, Select, sql\n",
+        "definitions_first": (
+            "from sqlspec.base import SQLSpec\n"
+            "from sqlspec.core.statement import SQL\n"
+            "from sqlspec.builder._base import QueryBuilder\n"
+            "from sqlspec.builder._select import Select\n"
+            "from sqlspec.builder._factory import sql\n"
+        ),
+        "builder_first": "from sqlspec.builder import sql, QueryBuilder, Select\nfrom sqlspec import SQLSpec, SQL\n",
+        "migration_first": (
+            "from sqlspec.migrations import SyncMigrationTracker, SchemaTarget\n"
+            "from sqlspec import SQLSpec, SQL, QueryBuilder, Select, sql\n"
+        ),
+    }
+    script = (
+        imports[order]
+        + """
+import importlib
+import sqlspec
+import sqlspec.builder as builder
+
+for facade in (sqlspec, builder):
+    namespace = {}
+    exec("from " + facade.__name__ + " import *", namespace)
+    for name in facade.__all__:
+        assert namespace[name] is getattr(facade, name), name
+    assert set(facade.__all__).issubset(dir(facade))
+assert SQLSpec is sqlspec.SQLSpec is importlib.import_module("sqlspec.base").SQLSpec
+assert SQL is sqlspec.SQL is importlib.import_module("sqlspec.core.statement").SQL
+assert QueryBuilder is builder.QueryBuilder is importlib.import_module("sqlspec.builder._base").QueryBuilder
+assert Select is sqlspec.Select is builder.Select is importlib.import_module("sqlspec.builder._select").Select
+assert sql is sqlspec.sql is builder.sql is importlib.import_module("sqlspec.builder._factory").sql
+assert isinstance(sql.select("value"), QueryBuilder)
+assert isinstance(sql.select("value"), Select)
+
+from typing import get_type_hints
+from sqlspec.extensions.events import BaseEventQueueStore
+from sqlspec.migrations import SchemaEnsureResult
+
+for method in (BaseEventQueueStore.reconcile_schema_sync, BaseEventQueueStore.reconcile_schema_async):
+    assert get_type_hints(method)["return"] is SchemaEnsureResult
+"""
+    )
+    return _run_startup_check(f"public_import_order_{order}", script, require_compiled=require_compiled)
+
+
+def _check_concurrent_public_exports(mode: str, *, require_compiled: bool) -> dict[str, Any]:
+    """Resolve mixed facades and direct modules concurrently in a fresh process."""
+    script = """
+import importlib
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+exports = [
+    ("sqlspec", "SQLSpec", "sqlspec.base"),
+    ("sqlspec", "SQL", "sqlspec.core.statement"),
+    ("sqlspec", "sql", "sqlspec.builder._factory"),
+    ("sqlspec", "SyncDatabaseConfig", "sqlspec.config"),
+    ("sqlspec", "EventMessage", "sqlspec.extensions.events._models"),
+    ("sqlspec", "Select", "sqlspec.builder._select"),
+    ("sqlspec", "StatementConfig", "sqlspec.core.statement"),
+    ("sqlspec", "SQLFileLoader", "sqlspec.loader"),
+    ("sqlspec.builder", "sql", "sqlspec.builder._factory"),
+    ("sqlspec.builder", "QueryBuilder", "sqlspec.builder._base"),
+    ("sqlspec.builder", "Select", "sqlspec.builder._select"),
+    ("sqlspec.migrations", "SyncMigrationTracker", "sqlspec.migrations.tracker"),
+    ("sqlspec.migrations", "SyncMigrationCommands", "sqlspec.migrations.commands"),
+    ("sqlspec.migrations", "SchemaTarget", "sqlspec.migrations.schema"),
+    ("sqlspec.extensions.events", "EventMessage", "sqlspec.extensions.events._models"),
+    ("sqlspec.extensions.events", "EventRuntimeHints", "sqlspec.extensions.events._hints"),
+    ("sqlspec.extensions.events", "BaseEventQueueStore", "sqlspec.extensions.events._store"),
+]
+"""
+    if mode == "attributes":
+        script += """
+packages = {package: importlib.import_module(package) for package, _, _ in exports}
+barrier = Barrier(len(exports))
+
+def resolve(item):
+    package, name, _ = item
+    barrier.wait()
+    return getattr(packages[package], name)
+
+with ThreadPoolExecutor(max_workers=len(exports)) as pool:
+    values = list(pool.map(resolve, exports))
+"""
+    else:
+        script += """
+# Initialize every actual parent, including nested packages such as sqlspec.core.
+# Racing parent initialization against its child already fails in baseline native wheels.
+for package, _, defining_module in exports:
+    importlib.import_module(package)
+    importlib.import_module(defining_module.rpartition(".")[0])
+barrier = Barrier(len(exports))
+
+def resolve(index):
+    package, name, defining_module = exports[index]
+    barrier.wait()
+    module = importlib.import_module(defining_module if index % 2 else package)
+    return getattr(module, name)
+
+with ThreadPoolExecutor(max_workers=len(exports)) as pool:
+    values = list(pool.map(resolve, range(len(exports))))
+"""
+    script += """
+for (package, name, defining_module), value in zip(exports, values):
+    assert value is getattr(importlib.import_module(package), name), (package, name)
+    assert value is getattr(importlib.import_module(defining_module), name), (defining_module, name)
+
+from sqlspec import sql
+from sqlspec.adapters.sqlite import SqliteConfig
+
+config = SqliteConfig(connection_config={"database": ":memory:"})
+try:
+    with config.provide_session() as session:
+        assert session.select_value(sql.select("1 AS value")) == 1
+finally:
+    config.close_pool()
+"""
+    return _run_startup_check(f"concurrent_public_exports_{mode}", script, require_compiled=require_compiled)
+
+
+def _check_migration_first_use(*, require_compiled: bool) -> dict[str, Any]:
+    """Exercise supported subclasses and real migrations through helper invalidation."""
+    script = """
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.migrations import SyncMigrationTracker
+
+tracker_calls = []
+
+class AppTracker(SyncMigrationTracker):
+    __slots__ = ()
+
+    def __init__(self, version_table_name="ddl_migrations", version_table_schema=None):
+        tracker_calls.append(version_table_name)
+        super().__init__(version_table_name, version_table_schema)
+
+class AppConfig(SqliteConfig):
+    __slots__ = ()
+    migration_tracker_type = AppTracker
+
+class AppSQLSpec(SQLSpec):
+    __slots__ = ()
+
+with TemporaryDirectory() as root:
+    root = Path(root)
+    migrations = root / "migrations"
+    migrations.mkdir()
+    (migrations / "0001_items.sql").write_text(
+        "-- name: migrate-0001-up\\nCREATE TABLE smoke_items (id INTEGER PRIMARY KEY);\\n"
+        "-- name: migrate-0001-down\\nDROP TABLE smoke_items;\\n"
+    )
+    config = AppConfig(
+        connection_config={"database": ":memory:"},
+        migration_config={"script_location": str(migrations), "echo": False},
+    )
+    try:
+        assert issubclass(AppSQLSpec, SQLSpec)
+        manager = SQLSpec()
+        assert manager.add_config(config) is config
+        loader = config.get_migration_loader()
+        commands = config.get_migration_commands()
+        assert isinstance(commands.tracker, AppTracker)
+        count = len(tracker_calls)
+        assert count == 1
+        assert config.get_migration_commands() is commands
+        assert len(tracker_calls) == count
+        commands.upgrade(echo=False)
+        with manager.provide_session(config) as session:
+            assert session.select_value("SELECT COUNT(*) FROM smoke_items") == 0
+            assert session.select_value("SELECT version_num FROM ddl_migrations") == "0001"
+        extra = root / "extra.sql"
+        extra.write_text("-- name: extra_probe\\nSELECT 7;\\n")
+        config.load_migration_sql_files(extra)
+        extension = root / "extension"
+        extension.mkdir()
+        config.add_extension_migrations("smoke", extension)
+        assert config.get_migration_loader() is loader
+        refreshed = config.get_migration_commands()
+        assert refreshed is not commands
+        with config.provide_session() as session:
+            assert session.select_value(loader.get_sql("extra_probe")) == 7
+        assert config.remove_extension_migrations("smoke")
+        assert config.get_migration_loader() is loader
+        assert config.get_migration_commands() is not refreshed
+        config.set_migration_config({"script_location": str(migrations), "echo": False})
+        assert config.get_migration_loader() is not loader
+        commands = config.get_migration_commands()
+        assert commands.tracker.version_table_name == "ddl_migrations"
+        commands.downgrade("base", echo=False)
+        with config.provide_session() as session:
+            assert session.select_value(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = :name",
+                {"name": "smoke_items"},
+            ) == 0
+    finally:
+        config.close_pool()
+"""
+    return _run_startup_check("migration_first_use", script, require_compiled=require_compiled)
+
+
+def _check_litestar_openapi(*, require_compiled: bool) -> dict[str, Any]:
+    """Resolve public pagination annotations through Litestar's schema generation."""
+    script = """
+import msgspec
+from litestar import Litestar, get
+
+from sqlspec import SQLSpec
+from sqlspec.adapters.sqlite import SqliteConfig
+from sqlspec.core import OffsetPagination
+from sqlspec.extensions.litestar import SQLSpecPlugin
+
+class Item(msgspec.Struct):
+    name: str
+
+@get("/items")
+async def items() -> OffsetPagination[Item]:
+    return OffsetPagination(items=[Item(name="smoke")], limit=10, offset=0, total=1)
+
+config = SqliteConfig(connection_config={"database": ":memory:"})
+try:
+    manager = SQLSpec()
+    manager.add_config(config)
+    app = Litestar(route_handlers=[items], plugins=[SQLSpecPlugin(sqlspec=manager)])
+    schema = app.openapi_schema
+    assert "/items" in schema.paths
+    components = schema.components.schemas
+    assert "Item" in components
+    pagination = next(component for name, component in components.items() if name.startswith("OffsetPagination"))
+    assert set(pagination.required) == {"items", "limit", "offset", "total"}
+    assert set(pagination.properties) == {"items", "limit", "offset", "total"}
+finally:
+    config.close_pool()
+"""
+    return _run_startup_check(
+        "litestar_openapi", script, require_compiled=require_compiled, optional_dependency="litestar"
+    )
+
+
 def run_construction_checks(*, require_compiled: bool = False) -> list[dict[str, Any]]:
     """Run construction-time smoke checks for provider classes."""
     return [
+        *[
+            _check_public_import_order(order, require_compiled=require_compiled)
+            for order in ("facade_first", "definitions_first", "builder_first", "migration_first")
+        ],
+        _check_concurrent_public_exports("attributes", require_compiled=require_compiled),
+        _check_concurrent_public_exports("direct_imports", require_compiled=require_compiled),
+        _check_migration_first_use(require_compiled=require_compiled),
+        _check_litestar_openapi(require_compiled=require_compiled),
         _check_sqlspec_construction(),
         _check_adapter_config_construction(),
         _check_statement_sentinel_identity(require_compiled=require_compiled),

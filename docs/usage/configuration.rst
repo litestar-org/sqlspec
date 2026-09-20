@@ -5,6 +5,10 @@ SQLSpec configuration is centered around adapter-specific config objects. Each c
 captures connection parameters, optional pooling settings, and extension-specific
 options for framework integrations.
 
+Pure-Python installations load public exports on first access. Compiled wheels
+retain eager exports to preserve concurrent access after package initialization.
+Both builds preserve the same public objects and static types.
+
 Core Configuration
 ------------------
 
@@ -74,6 +78,11 @@ Keep Litestar, Events, and ADK table tuning in the extension map.
 Use ``manage_schema`` and
 ``create_schema`` for automatic table checks. Run versioned migrations through
 the migration commands and ``migration_config``.
+
+Configs can run queries before they build migration helpers. To check custom
+tracker setup and find extension migrations at startup, call
+``config.get_migration_commands()``. See :ref:`migration-startup-checks` for a
+full example and the checks that still run when you create a config.
 
 Multiple Databases
 ------------------

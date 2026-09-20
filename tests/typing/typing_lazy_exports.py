@@ -7,9 +7,23 @@ from pyarrow import Table as PyArrowTable
 from pydantic import BaseModel as PydanticBaseModel
 from typing_extensions import assert_type
 
+from sqlspec import SQL, Select, SQLSpec, StatementConfig, sql
+from sqlspec.builder import SQLFactory
+from sqlspec.builder._base import BuiltQuery
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ArrowTable, BaseModel, DTOData
 
 T = TypeVar("T")
+
+
+def public_exports() -> SQL:
+    assert_type(SQLSpec(), SQLSpec)
+    assert_type(StatementConfig(), StatementConfig)
+    assert_type(EventRuntimeHints(), EventRuntimeHints)
+    assert_type(sql, SQLFactory)
+    assert_type(sql.select("1"), Select)
+    assert_type(sql.select("1").build(), BuiltQuery)
+    return SQL("SELECT 1")
 
 
 def arrow_to_vendor(value: ArrowTable) -> PyArrowTable:

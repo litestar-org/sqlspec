@@ -529,3 +529,56 @@ def test_sync_update_version_handles_extension_versions() -> None:
     update_call = driver.execute.call_args_list[0]
     update_sql = str(update_call[0][0])
     assert "UPDATE" in update_sql
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("use_logger", [False, True])
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_tracker_schema_output_initializes_console_on_demand(
+    use_logger: bool,
+    is_async: bool,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Schema updates retain their output routing and reuse the first console."""
+    from unittest.mock import patch
+
+    from rich.console import Console
+
+    from sqlspec.migrations import tracker as tracker_module
+
+    tracker = AsyncMigrationTracker() if is_async else SyncMigrationTracker()
+    tracker.set_output_policy(use_logger=use_logger, echo=True, summary_only=False)
+    driver = Mock()
+    driver.data_dictionary.get_columns = AsyncMock() if is_async else Mock()
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": column.name}
+        for column in tracker._tracking_table_ddl().columns  # pyright: ignore[reportPrivateUsage]
+        if column.name != "checksum"
+    ]
+    driver.execute = AsyncMock() if is_async else Mock()
+    driver.commit = AsyncMock() if is_async else Mock()
+    driver.rollback = AsyncMock() if is_async else Mock()
+    monkeypatch.setattr(tracker_module, "_console", None)
+
+    with (
+        patch("rich.console.Console", wraps=Console) as console_factory,
+        caplog.at_level(logging.INFO, logger="sqlspec.migrations.tracker"),
+    ):
+        for _ in range(2):
+            if isinstance(tracker, AsyncMigrationTracker):
+                await tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+            else:
+                tracker._migrate_schema_if_needed(driver)  # pyright: ignore[reportPrivateUsage]
+        assert console_factory.call_count == (0 if use_logger else 1)
+
+    assert driver.execute.call_count == 2
+    assert all("checksum" in str(call.args[0]) for call in driver.execute.call_args_list)
+    assert sum(getattr(record, "extra_fields", {}).get("status") == "column_added" for record in caplog.records) == 2
+    output = capsys.readouterr().out
+    if use_logger:
+        assert output == ""
+    else:
+        assert output.count("Migration tracking table schema updated successfully") == 2
+        assert "adding columns: checksum" in output

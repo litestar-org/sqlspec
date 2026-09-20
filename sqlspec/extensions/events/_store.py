@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events._buffer import validate_queue_capacity
 from sqlspec.extensions.events._names import normalize_event_channel_name, normalize_queue_table_name
-from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget, ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.schema import SchemaEnsureResult, SchemaTarget
 
 if TYPE_CHECKING:
     from sqlspec.config import DatabaseConfigProtocol
@@ -87,6 +87,8 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
     def reconcile_schema_sync(self, driver: Any) -> SchemaEnsureResult:
         """Apply additive queue-table changes with a synchronous driver."""
+        from sqlspec.migrations.schema import ensure_schema_sync
+
         manage_schema, create_schema = self._schema_management_flags()
         if not manage_schema:
             return ensure_schema_sync(driver, [], manage_schema=False)
@@ -94,6 +96,8 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
     async def reconcile_schema_async(self, driver: Any) -> SchemaEnsureResult:
         """Apply additive queue-table changes with an asynchronous driver."""
+        from sqlspec.migrations.schema import ensure_schema_async
+
         manage_schema, create_schema = self._schema_management_flags()
         if not manage_schema:
             return await ensure_schema_async(driver, [], manage_schema=False)

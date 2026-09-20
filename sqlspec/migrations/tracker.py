@@ -8,21 +8,30 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
-from rich.console import Console
 
 from sqlspec.migrations.base import BaseMigrationTracker
-from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
+    from rich.console import Console
+
     from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
     from sqlspec.migrations.base import AppliedMigrationRecord
 
 __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
 logger = get_logger("sqlspec.migrations.tracker")
-_console = Console()
+_console: "Console | None" = None
+
+
+def _get_console() -> "Console":
+    global _console
+    if _console is None:
+        from rich.console import Console
+
+        _console = Console()
+    return _console
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -211,6 +220,8 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        from sqlspec.migrations.schema import SchemaTarget, ensure_schema_sync
+
         try:
             target = SchemaTarget(self.version_table_name, self._tracking_table_ddl(), self.version_table_schema)
             result = ensure_schema_sync(driver, [target], manage_schema=True, create_schema=False, assume_existing=True)
@@ -219,11 +230,13 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 _log_schema_current(driver, self.version_table)
                 return
             if self._should_echo():
-                _console.print(f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]")
+                _get_console().print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]"
+                )
             for column_name in added_columns:
                 _log_column_added(driver, self.version_table, column_name)
             if self._should_echo():
-                _console.print("[green]Migration tracking table schema updated successfully[/]")
+                _get_console().print("[green]Migration tracking table schema updated successfully[/]")
         except Exception as exc:
             with suppress(Exception):
                 driver.rollback()
@@ -433,6 +446,8 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
+        from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async
+
         try:
             target = SchemaTarget(self.version_table_name, self._tracking_table_ddl(), self.version_table_schema)
             result = await ensure_schema_async(
@@ -443,11 +458,13 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 _log_schema_current(driver, self.version_table)
                 return
             if self._should_echo():
-                _console.print(f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]")
+                _get_console().print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(added_columns)}[/]"
+                )
             for column_name in added_columns:
                 _log_column_added(driver, self.version_table, column_name)
             if self._should_echo():
-                _console.print("[green]Migration tracking table schema updated successfully[/]")
+                _get_console().print("[green]Migration tracking table schema updated successfully[/]")
         except Exception as exc:
             with suppress(Exception):
                 await driver.rollback()

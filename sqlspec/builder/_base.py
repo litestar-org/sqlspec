@@ -12,14 +12,6 @@ import sqlglot
 from sqlglot import Dialect, exp
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
-from sqlglot.optimizer import RULES, optimize
-from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
-from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subqueries_rule
-from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
-from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
-from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
-from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
-from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
 
 from sqlspec.builder._locking import register_lock_generator
@@ -838,6 +830,13 @@ class QueryBuilder:
         if any(isinstance(cte.this, exp.Values) and cte.alias_column_names for cte in expression.find_all(exp.CTE)):
             return expression
 
+        from sqlglot.optimizer import RULES, optimize
+        from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
+        from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subqueries_rule
+        from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
+        from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
+        from sqlglot.optimizer.simplify import simplify as _simplify_rule
+
         excluded_rules = set()
         if not self.optimize_joins:
             excluded_rules.add(_optimize_joins_rule)
@@ -883,6 +882,9 @@ class QueryBuilder:
             expression.set("conflict", conflict)
         if optimized is expression:
             return expression
+        from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
+        from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
+
         dialect_name = self.dialect_name
         quoted_conflict = _quote_identifiers_rule(
             _normalize_identifiers_rule(conflict.copy(), dialect=dialect_name), dialect=dialect_name

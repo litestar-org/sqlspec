@@ -53,7 +53,7 @@ def test_insert_values_mutation_invalidates_sqlglot_structural_hash() -> None:
 def test_optimized_expression_cache_returns_owned_copies(monkeypatch: pytest.MonkeyPatch) -> None:
     cache = _ExpressionCache()
     monkeypatch.setattr("sqlspec.builder._base.get_cache", lambda: cache)
-    monkeypatch.setattr("sqlspec.builder._base.optimize", _copy_expression)
+    monkeypatch.setattr("sqlglot.optimizer.optimize", _copy_expression)
     builder = Select("*").from_("users")
     expression = builder.get_expression()
     assert expression is not None

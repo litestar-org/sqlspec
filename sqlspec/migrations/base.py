@@ -6,15 +6,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
-from rich.console import Console
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.builder import CreateTable, Delete, Insert, Select, Update, sql
 from sqlspec.exceptions import MigrationError
-from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
-from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
-from sqlspec.migrations.utils import resolve_extension_migrations_path
-from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
@@ -22,7 +16,9 @@ from sqlspec.utils.module_loader import module_to_os_path
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
+    from sqlspec.builder import CreateTable, Delete, Insert, Select, Update
     from sqlspec.config import DatabaseConfigProtocol
+    from sqlspec.migrations.templates import MigrationTemplateSettings
     from sqlspec.observability import ObservabilityRuntime
 
 __all__ = ("AppliedMigrationRecord", "BaseMigrationCommands", "BaseMigrationTracker", "LoadedMigrationMetadata")
@@ -147,8 +143,10 @@ class BaseMigrationTracker(Generic[DriverT]):
             return f"{version_table_schema}.{version_table_name}"
         return version_table_name
 
-    def _tracking_table_builder(self) -> CreateTable:
+    def _tracking_table_builder(self) -> "CreateTable":
         """Return a CREATE TABLE builder for the tracker table."""
+        from sqlspec.builder import sql
+
         builder = sql.create_table(self.version_table_name)
         if self.version_table_schema:
             builder.in_schema(self.version_table_schema)
@@ -158,7 +156,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         """Return True when console output should be emitted."""
         return bool(self._output_policy.get("echo", True)) and not bool(self._output_policy.get("use_logger", False))
 
-    def _tracking_table_ddl(self) -> CreateTable:
+    def _tracking_table_ddl(self) -> "CreateTable":
         """Get SQL builder for creating the tracking table.
 
         Schema includes both legacy and new versioning columns:
@@ -189,7 +187,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             .column("replaces", "TEXT")
         )
 
-    def _current_version_query(self) -> Select:
+    def _current_version_query(self) -> "Select":
         """Get SQL builder for retrieving current version.
 
         Uses execution_sequence to get the last applied migration,
@@ -198,9 +196,11 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for version query.
         """
+        from sqlspec.builder import sql
+
         return sql.select("version_num").from_(self.version_table).order_by("execution_sequence DESC").limit(1)
 
-    def _applied_migrations_query(self) -> Select:
+    def _applied_migrations_query(self) -> "Select":
         """Get SQL builder for retrieving all applied migrations.
 
         Orders by execution_sequence to show migrations in application order,
@@ -209,14 +209,18 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for migrations query.
         """
+        from sqlspec.builder import sql
+
         return sql.select("*").from_(self.version_table).order_by("execution_sequence")
 
-    def _next_execution_sequence_query(self) -> Select:
+    def _next_execution_sequence_query(self) -> "Select":
         """Get SQL builder for retrieving next execution sequence.
 
         Returns:
             SQL builder object for sequence query.
         """
+        from sqlspec.builder import sql
+
         return sql.select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
 
     def _record_migration_statement(
@@ -228,7 +232,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         execution_time_ms: int,
         checksum: str,
         applied_by: str,
-    ) -> Insert:
+    ) -> "Insert":
         """Get SQL builder for recording a migration.
 
         Args:
@@ -243,6 +247,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for insert.
         """
+        from sqlspec.builder import sql
+
         return (
             sql
             .insert(self.version_table)
@@ -258,7 +264,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             .values(version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by)
         )
 
-    def _remove_migration_statement(self, version: str) -> Delete:
+    def _remove_migration_statement(self, version: str) -> "Delete":
         """Get SQL builder for removing a migration record.
 
         Args:
@@ -267,9 +273,11 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for delete.
         """
+        from sqlspec.builder import sql
+
         return sql.delete().from_(self.version_table).where(sql.column("version_num") == version)
 
-    def _update_version_statement(self, old_version: str, new_version: str, new_version_type: str) -> Update:
+    def _update_version_statement(self, old_version: str, new_version: str, new_version_type: str) -> "Update":
         """Get SQL builder for updating version record.
 
         Updates version_num and version_type while preserving execution_sequence,
@@ -284,6 +292,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for update.
         """
+        from sqlspec.builder import sql
+
         return (
             sql
             .update(self.version_table)
@@ -292,7 +302,7 @@ class BaseMigrationTracker(Generic[DriverT]):
             .where(sql.column("version_num") == old_version)
         )
 
-    def _delete_versions_statement(self, versions: "list[str]") -> Delete:
+    def _delete_versions_statement(self, versions: "list[str]") -> "Delete":
         """Get SQL builder for deleting multiple version records.
 
         Used by squash operations to remove replaced migration records.
@@ -303,9 +313,11 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for delete.
         """
+        from sqlspec.builder import sql
+
         return sql.delete().from_(self.version_table).where(sql.column("version_num").in_(versions))
 
-    def _check_versions_query(self, versions: "list[str]") -> Select:
+    def _check_versions_query(self, versions: "list[str]") -> "Select":
         """Get SQL builder for checking whether any versions exist.
 
         Args:
@@ -314,6 +326,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for version existence query.
         """
+        from sqlspec.builder import sql
+
         return sql.select("version_num").from_(self.version_table).where(sql.column("version_num").in_(versions))
 
     def _record_squashed_migration_statement(
@@ -326,7 +340,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         checksum: str,
         applied_by: str,
         replaces: str,
-    ) -> Insert:
+    ) -> "Insert":
         """Get SQL builder for recording a squashed migration.
 
         Args:
@@ -342,6 +356,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for insert.
         """
+        from sqlspec.builder import sql
+
         return (
             sql
             .insert(self.version_table)
@@ -415,6 +431,8 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Args:
             config: The SQLSpec configuration.
         """
+        from sqlspec.migrations.templates import build_template_settings
+
         self.config = config
         migration_config = self._get_migration_config()
 
@@ -435,6 +453,8 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
             directory: Directory to initialize migrations in.
             package: Whether to create __init__.py file.
         """
+        from rich.console import Console
+
         console = Console()
 
         migrations_dir = Path(directory)
@@ -489,6 +509,8 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
 
     def _resolve_default_schema(self) -> str | None:
         """Return the configured default migration schema."""
+        from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
+
         return _resolve_default_schema(self._get_migration_config())
 
     def _config_supports_schemas(self) -> bool:
@@ -508,6 +530,8 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
 
     def _resolve_tracker_schema(self) -> str | None:
         """Return tracker schema only for adapters that support schema-qualified migration tables."""
+        from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
+
         if not self._config_supports_schemas():
             return None
         return _resolve_tracker_schema(self._get_migration_config())
@@ -551,6 +575,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Returns:
             Dictionary mapping extension names to their migration paths.
         """
+        from sqlspec.migrations.utils import resolve_extension_migrations_path
 
         extension_migrations = {}
 
