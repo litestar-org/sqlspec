@@ -5,7 +5,7 @@ from typing import Final, Literal
 
 from sqlglot import Dialect, exp
 from sqlglot.generator import Generator
-from sqlglot.tokens import TokenType
+from sqlglot.tokenizer_core import TokenType
 
 __all__ = ("NullsPlacement", "apply_direction", "default_nulls", "has_default_nulls", "ordered")
 
