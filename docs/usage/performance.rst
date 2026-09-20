@@ -219,3 +219,28 @@ materializes rows.
 For ``arrow_odbc``, benchmark both memory and wall time. A larger batch can reduce
 driver round trips but increase peak memory, while smaller batches can make
 streaming steadier for downstream Arrow consumers.
+
+Global Pipeline Caching and Telemetry
+=====================================
+
+SQLSpec maintains high-performance internal LRU caches for compiled SQL statements, SQL fragments, and optimized AST expressions. You can customize cache capacities or monitor cache hit rates programmatically:
+
+.. code-block:: python
+
+    from sqlspec import SQLSpec
+
+    spec = SQLSpec()
+
+    # Configure internal statement, fragment, and expression cache sizes
+    spec.configure_cache(
+        sql_cache_size=2000,
+        fragment_cache_size=1000,
+        optimized_cache_size=1000,
+    )
+
+    # Retrieve real-time cache hit rates, misses, and evictions
+    stats = spec.get_cache_stats()
+    print(f"Statement Cache Hit Rate: {stats['default'].hit_rate:.1f}%")
+
+    # Clear internal statement cache when reloading schemas
+    spec.clear_sql_cache()

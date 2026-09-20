@@ -1022,7 +1022,7 @@ class SQLCommenterMiddleware:
     """ASGI middleware that populates SQLCommenterContext with Litestar request attributes.
 
     Extracts route, controller, and action from the Litestar scope and sets them
-    in :class:`~sqlspec.extensions.sqlcommenter.SQLCommenterContext` for the
+    in :class:`~sqlspec.core.sqlcommenter.SQLCommenterContext` for the
     duration of the request.
     """
 

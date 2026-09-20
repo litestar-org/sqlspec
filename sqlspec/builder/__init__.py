@@ -13,8 +13,11 @@ if TYPE_CHECKING:
     from sqlspec.builder._base import BuiltQuery, ExpressionBuilder, QueryBuilder
     from sqlspec.builder._column import Column, ColumnExpression, FunctionColumn
     from sqlspec.builder._ddl import (
+        AlterOperation,
         AlterTable,
+        ColumnDefinition,
         CommentOn,
+        ConstraintDefinition,
         CreateIndex,
         CreateMaterializedView,
         CreateSchema,
@@ -57,6 +60,7 @@ if TYPE_CHECKING:
     from sqlspec.builder._expression_wrappers import (
         AggregateExpression,
         ConversionExpression,
+        ExpressionWrapper,
         FunctionExpression,
         MathExpression,
         StringExpression,
@@ -68,7 +72,7 @@ if TYPE_CHECKING:
         build_copy_to_statement,
         sql,
     )
-    from sqlspec.builder._insert import Insert
+    from sqlspec.builder._insert import ConflictBuilder, Insert
     from sqlspec.builder._join import JoinBuilder
     from sqlspec.builder._merge import Merge
     from sqlspec.builder._parsing_utils import (
@@ -103,14 +107,18 @@ if TYPE_CHECKING:
 
 __all__ = (
     "AggregateExpression",
+    "AlterOperation",
     "AlterTable",
     "BuiltQuery",
     "Case",
     "CaseBuilder",
     "Column",
+    "ColumnDefinition",
     "ColumnExpression",
     "CommentOn",
     "CommonTableExpressionMixin",
+    "ConflictBuilder",
+    "ConstraintDefinition",
     "ConversionExpression",
     "CreateIndex",
     "CreateMaterializedView",
@@ -129,6 +137,7 @@ __all__ = (
     "Explain",
     "ExplainMixin",
     "ExpressionBuilder",
+    "ExpressionWrapper",
     "FunctionColumn",
     "FunctionExpression",
     "HavingClauseMixin",
@@ -187,14 +196,18 @@ __all__ = (
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     "AggregateExpression": ("sqlspec.builder._expression_wrappers", "AggregateExpression"),
+    "AlterOperation": ("sqlspec.builder._ddl", "AlterOperation"),
     "AlterTable": ("sqlspec.builder._ddl", "AlterTable"),
     "BuiltQuery": ("sqlspec.builder._base", "BuiltQuery"),
     "Case": ("sqlspec.builder._select", "Case"),
     "CaseBuilder": ("sqlspec.builder._select", "CaseBuilder"),
     "Column": ("sqlspec.builder._column", "Column"),
+    "ColumnDefinition": ("sqlspec.builder._ddl", "ColumnDefinition"),
     "ColumnExpression": ("sqlspec.builder._column", "ColumnExpression"),
     "CommentOn": ("sqlspec.builder._ddl", "CommentOn"),
     "CommonTableExpressionMixin": ("sqlspec.builder._select", "CommonTableExpressionMixin"),
+    "ConflictBuilder": ("sqlspec.builder._insert", "ConflictBuilder"),
+    "ConstraintDefinition": ("sqlspec.builder._ddl", "ConstraintDefinition"),
     "ConversionExpression": ("sqlspec.builder._expression_wrappers", "ConversionExpression"),
     "CreateIndex": ("sqlspec.builder._ddl", "CreateIndex"),
     "CreateMaterializedView": ("sqlspec.builder._ddl", "CreateMaterializedView"),
@@ -213,6 +226,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "Explain": ("sqlspec.builder._explain", "Explain"),
     "ExplainMixin": ("sqlspec.builder._explain", "ExplainMixin"),
     "ExpressionBuilder": ("sqlspec.builder._base", "ExpressionBuilder"),
+    "ExpressionWrapper": ("sqlspec.builder._expression_wrappers", "ExpressionWrapper"),
     "FunctionColumn": ("sqlspec.builder._column", "FunctionColumn"),
     "FunctionExpression": ("sqlspec.builder._expression_wrappers", "FunctionExpression"),
     "HavingClauseMixin": ("sqlspec.builder._select", "HavingClauseMixin"),

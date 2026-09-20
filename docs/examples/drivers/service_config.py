@@ -7,9 +7,8 @@ __all__ = ("test_async_service_config", "test_sync_service_config")
 
 def test_sync_service_config(tmp_path: Path) -> None:
     # start-sync-example
-    from sqlspec import sql
+    from sqlspec import SQLFileLoader, sql
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.loader import SQLFileLoader
     from sqlspec.service import SQLSpecSyncService
 
     config = SqliteConfig(connection_config={"database": str(tmp_path / "users.sqlite")})
@@ -53,9 +52,8 @@ def test_sync_service_config(tmp_path: Path) -> None:
 
 async def test_async_service_config(tmp_path: Path) -> None:
     # start-async-example
-    from sqlspec import sql
+    from sqlspec import SQLFileLoader, sql
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.loader import SQLFileLoader
     from sqlspec.service import SQLSpecAsyncService
 
     config = AiosqliteConfig(connection_config={"database": str(tmp_path / "users.sqlite")})

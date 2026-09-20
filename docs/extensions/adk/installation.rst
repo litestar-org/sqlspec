@@ -153,7 +153,7 @@ Install SQLSpec with a database adapter and the Google ADK SDK.
 What This Provides
 ------------------
 
-The ``adk`` extra includes the Google ADK SDK (``google-genai``). SQLSpec provides:
+The ``adk`` extra includes the Google ADK SDK (``google-adk``). SQLSpec provides:
 
 - **Session Service** -- Persist ADK agent sessions and events to your database
   with atomic ``append_event_and_update_state()`` writes.

@@ -118,7 +118,7 @@ SQLSpec provides ``provide_filters`` to parse HTTP query parameters into typed
 
    from typing import Annotated
    from fastapi import Depends, FastAPI
-   from sqlspec.core.filters import FilterTypes
+   from sqlspec.core import FilterTypes
    from sqlspec.extensions.fastapi import provide_filters
 
    app = FastAPI()
@@ -138,10 +138,34 @@ SQLSpec provides ``provide_filters`` to parse HTTP query parameters into typed
    ) -> dict[str, str]:
        return {"status": "ok"}
 
+Observability and SQLCommenter
+==============================
+
+The FastAPI extension includes middleware for request correlation and SQL query commenting:
+
+.. code-block:: python
+
+   from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+   config = AiosqliteConfig(
+       connection_config={"database": "app.db"},
+       extension_config={
+           "fastapi": {
+               "enable_correlation_middleware": True,
+               "correlation_header": "x-request-id",
+               "enable_sqlcommenter_middleware": True,
+               "sqlcommenter_framework": "fastapi",
+           }
+       },
+   )
+
+- **Correlation Middleware**: Extracts or generates a correlation ID from incoming request headers, attaches it to the response as ``X-Correlation-ID``, and stores it in ``request.state.correlation_id`` and ``CorrelationContext``.
+- **SQLCommenter Middleware**: Injects route and action information (e.g. ``/*route='/items',action='list_items',framework='fastapi'*/``) into SQL query comments for downstream query telemetry.
+
 Related Guides
 ==============
 
 - :doc:`/usage/configuration` for detailed config options.
 - :doc:`/usage/filtering` for available filter types.
-- :doc:`/reference/adapters` for adapter-specific settings.
+- :doc:`/reference/adapters/index` for adapter-specific settings.
 - :doc:`starlette` for underlying ASGI middleware details.

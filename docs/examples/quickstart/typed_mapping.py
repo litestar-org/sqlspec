@@ -1,10 +1,21 @@
-__all__ = ("test_first_query",)
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+__all__ = ("test_typed_mapping",)
 
 
-def test_first_query() -> None:
+def test_typed_mapping() -> None:
     # start-example
+
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
+
+    @dataclass
+    class User:
+        id: int
+        name: str
+        points: int
 
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
@@ -12,10 +23,12 @@ def test_first_query() -> None:
     with spec.provide_session(config) as session:
         session.execute("create table if not exists users (id integer primary key, name text, points integer)")
         session.execute("insert into users (name, points) values (:name, :points)", name="Ada", points=42)
-        count = session.execute("select count(*) from users").scalar()
+
         result = session.execute("select id, name, points from users where name = :name", name="Ada")
-        print(f"Count: {count}, Record: {result.one()}")
+        user = result.one(schema_type=User)
+        print(f"Loaded {user.name} with {user.points} points")
     # end-example
 
-    assert count == 1
-    assert result.one() == {"id": 1, "name": "Ada", "points": 42}
+    assert isinstance(user, User)
+    assert user.name == "Ada"
+    assert user.points == 42

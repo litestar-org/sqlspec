@@ -11,7 +11,7 @@ Optional dependency exports
 ===========================
 
 The :mod:`sqlspec.typing` module and its private ``sqlspec._typing`` backing module resolve heavy
-optional-dependency symbols lazily. Importing :mod:`sqlspec` does not import
+optional-dependency symbols lazily. Importing ``sqlspec`` does not import
 Pydantic, Litestar, PyArrow, pandas, Polars, OpenTelemetry, or Prometheus.
 Accessing one of their exported symbols imports its dependency on first use and
 caches the resolved object::
@@ -33,27 +33,8 @@ the deferred integrations.
 Metadata Types
 ==============
 
-.. currentmodule:: sqlspec.data_dictionary
-
-.. autoclass:: ForeignKeyMetadata
-   :members:
-   :show-inheritance:
-
-.. autoclass:: ColumnMetadata
-   :members:
-   :show-inheritance:
-
-.. autoclass:: TableMetadata
-   :members:
-   :show-inheritance:
-
-.. autoclass:: IndexMetadata
-   :members:
-   :show-inheritance:
-
-.. autoclass:: VersionInfo
-   :members:
-   :show-inheritance:
+Schema metadata types (such as ``TableMetadata``, ``ColumnMetadata``, ``ForeignKeyMetadata``,
+and ``IndexMetadata``) are defined in :doc:`data_dictionary`.
 
 Protocols
 =========
@@ -117,16 +98,3 @@ Helper Functions
 ================
 
 .. autofunction:: get_type_adapter
-
-Feature Flags
-=============
-
-.. currentmodule:: sqlspec.data_dictionary
-
-.. autoclass:: FeatureFlags
-   :members:
-   :show-inheritance:
-
-.. autoclass:: FeatureVersions
-   :members:
-   :show-inheritance:

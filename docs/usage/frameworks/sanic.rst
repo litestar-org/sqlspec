@@ -147,4 +147,4 @@ Related Guides
 
 - :doc:`/usage/configuration` for detailed config options.
 - :doc:`/usage/observability` for correlation IDs and SQLCommenter.
-- :doc:`/reference/adapters` for adapter-specific settings.
+- :doc:`/reference/adapters/index` for adapter-specific settings.

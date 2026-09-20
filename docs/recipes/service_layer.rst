@@ -202,7 +202,7 @@ inside ``begin_transaction()`` or through an explicitly provided session.
          from pydantic import BaseModel
          from sqlspec import sql
          from sqlspec.adapters.asyncpg import AsyncpgDriver
-         from sqlspec.core.filters import OffsetPagination, StatementFilter
+         from sqlspec.core import OffsetPagination, StatementFilter
          from sqlspec.service import SQLSpecAsyncService
 
 
@@ -243,7 +243,7 @@ inside ``begin_transaction()`` or through an explicitly provided session.
          from pydantic import BaseModel
          from sqlspec import sql
          from sqlspec.adapters.sqlite import SqliteDriver
-         from sqlspec.core.filters import OffsetPagination, StatementFilter
+         from sqlspec.core import OffsetPagination, StatementFilter
          from sqlspec.service import SQLSpecSyncService
 
 
@@ -290,7 +290,7 @@ provides the service itself alongside the filter dependencies:
    from litestar.di import NamedDependency, Provide
    from litestar.params import SkipValidation
    from sqlspec.adapters.asyncpg import AsyncpgDriver
-   from sqlspec.core.filters import FilterTypes, OffsetPagination
+   from sqlspec.core import FilterTypes, OffsetPagination
    from sqlspec.extensions.litestar.providers import create_filter_dependencies
 
 

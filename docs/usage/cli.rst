@@ -75,7 +75,7 @@ Command Reference
      - (none)
      - Convert legacy timestamp migrations to sequential ``0001_...`` naming.
    * - ``squash``
-     - ``VERSION_RANGE``
+     - ``VERSION_RANGE`` (requires ``-m / --message``)
      - Collapse sequential migrations (e.g. ``1:5`` or ``1..5``) into one file.
    * - ``adk memory cleanup``
      - ``--days N``
@@ -95,7 +95,9 @@ Global & Execution Options
 - ``--bind-key <key>``: Target a specific configuration by its bind key.
 - ``--include <key>`` / ``--exclude <key>``: Filter targeted configurations for multi-database operations (can be repeated).
 - ``--dry-run``: Show what would be applied without modifying database state or files.
-- ``--no-prompt``: Bypass interactive confirmation prompts (ideal for CI/CD).
+- ``--no-prompt`` / ``-y`` / ``--yes``: Bypass interactive confirmation prompts on execution, ``fix``, and ``squash`` (ideal for CI/CD).
+- ``--no-database``: Apply file operations only without updating tracking table records on ``fix`` and ``squash``.
+- ``--package`` / ``--no-package``: Create an ``__init__.py`` inside the target migrations folder during ``init`` (default: enabled).
 - ``--verbose``: Enable detailed output (supported on ``show-current-revision``).
 
 Migration Output & Format Options
@@ -136,8 +138,8 @@ or ``--bind-key``:
 Framework Integration (Litestar)
 --------------------------------
 
-When using the Litestar extension (``SQLSpecPlugin``), all migration commands are
-automatically exposed under Litestar's CLI group:
+When using the Litestar extension (``SQLSpecPlugin``), migration and session management commands are
+automatically exposed under Litestar's CLI group (with alias ``litestar database``):
 
 .. code-block:: console
 
@@ -147,6 +149,10 @@ automatically exposed under Litestar's CLI group:
    litestar db upgrade
    litestar db downgrade
    litestar db show-current-revision
+   litestar db stamp <revision>
+   litestar db fix --yes
+   litestar db squash 1:5 -m "squashed initial migrations"
+   litestar sessions delete-expired
 
 Related Guides
 --------------

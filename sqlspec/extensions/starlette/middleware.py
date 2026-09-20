@@ -219,7 +219,7 @@ class SQLCommenterMiddleware(BaseHTTPMiddleware):
     """Middleware that populates SQLCommenterContext with request attributes.
 
     Extracts route and endpoint information from the Starlette/FastAPI request
-    and sets them in :class:`~sqlspec.extensions.sqlcommenter.SQLCommenterContext`
+    and sets them in :class:`~sqlspec.core.sqlcommenter.SQLCommenterContext`
     for the duration of the request.
     """
 

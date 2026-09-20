@@ -113,9 +113,33 @@ Set ``disable_di=True`` when an external dependency injection framework (such as
 manages request-scoped connections. SQLSpec still initializes and cleans up pools via
 Starlette lifespan, but omits request-scoped session middleware.
 
+Observability and SQLCommenter
+==============================
+
+The Starlette extension supports correlation tracking and query commenting:
+
+.. code-block:: python
+
+   from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+   config = AiosqliteConfig(
+       connection_config={"database": "app.db"},
+       extension_config={
+           "starlette": {
+               "enable_correlation_middleware": True,
+               "correlation_header": "x-request-id",
+               "enable_sqlcommenter_middleware": True,
+               "sqlcommenter_framework": "starlette",
+           }
+       },
+   )
+
+- **Correlation Middleware**: Captures or assigns correlation IDs, injecting ``X-Correlation-ID`` into response headers and synchronizing with ``request.state.correlation_id`` and ``CorrelationContext``.
+- **SQLCommenter Middleware**: Attaches request route and action context to outgoing SQL queries.
+
 Related Guides
 ==============
 
 - :doc:`/usage/configuration` for detailed config options.
-- :doc:`/reference/adapters` for adapter-specific settings.
+- :doc:`/reference/adapters/index` for adapter-specific settings.
 - :doc:`fastapi` extends this Starlette foundation with FastAPI dependency injection.

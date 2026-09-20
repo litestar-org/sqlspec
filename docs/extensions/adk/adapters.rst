@@ -61,4 +61,4 @@ See Also
 
 - :doc:`backends` for the full support matrix and backend-specific notes.
 - :doc:`/usage/drivers_and_querying` for adapter configuration patterns.
-- :doc:`/reference/adapters` for the complete adapter API.
+- :doc:`/reference/adapters/index` for the complete adapter API.

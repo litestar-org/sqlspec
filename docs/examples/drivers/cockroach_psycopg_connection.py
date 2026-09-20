@@ -13,4 +13,4 @@ def test_cockroach_psycopg_connection() -> None:
     config = CockroachPsycopgSyncConfig(connection_config={"dsn": "postgresql://user:pass@localhost:26257/defaultdb"})
     # end-example
 
-    assert "dsn" in config.connection_config
+    assert "conninfo" in config.connection_config

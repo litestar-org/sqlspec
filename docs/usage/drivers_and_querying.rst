@@ -63,13 +63,14 @@ the outer transaction to catch the error, continue, and commit:
 
     from sqlspec.exceptions import UniqueViolationError
 
-    with session.transaction():
-        session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
-        try:
-            with session.transaction():
-                session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
-        except UniqueViolationError:
-            pass
+    with config.provide_session() as session:
+        with session.transaction():
+            session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+            try:
+                with session.transaction():
+                    session.execute("INSERT INTO users (name) VALUES (:name)", name="Ada")
+            except UniqueViolationError:
+                pass
 
 Adapters without savepoint support (DuckDB, BigQuery, Spanner, and ADBC connections
 to DuckDB, BigQuery, or Snowflake) raise ``ImproperConfigurationError`` when a
@@ -190,6 +191,51 @@ trip, while others execute each statement sequentially.
    :end-before: # end-example
    :dedent: 4
    :no-upgrade:
+
+Multi-Statement Scripts
+-----------------------
+
+When initializing schemas or running migration scripts containing multiple SQL statements separated by semicolons, use ``execute_script()``:
+
+.. code-block:: python
+
+    with config.provide_session() as session:
+        session.execute_script("""
+            CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE teams (id INTEGER PRIMARY KEY, title TEXT);
+            INSERT INTO teams (title) VALUES ('Core');
+        """)
+
+Exporting Results to Storage
+----------------------------
+
+Drivers can stream query results directly into local files or cloud object storage (AWS S3, Google Cloud Storage, Azure Blob Storage) in Parquet or CSV format without materializing the full dataset in memory:
+
+.. code-block:: python
+
+    with config.provide_session() as session:
+        # Export query results directly to Parquet on S3 or local disk
+        exported_bytes = session.select_to_storage(
+            "SELECT id, name, email, created_at FROM users WHERE active = :active",
+            destination="s3://my-analytics-bucket/exports/users.parquet",
+            file_format="parquet",
+            active=True,
+        )
+
+Unified Exception Hierarchy
+---------------------------
+
+SQLSpec translates underlying database driver errors into a consistent exception hierarchy:
+
+- :exc:`~sqlspec.exceptions.SQLSpecError`: Base class for all SQLSpec exceptions.
+- :exc:`~sqlspec.exceptions.DatabaseConnectionError`: Connection establishment, pooling, or network failures.
+- :exc:`~sqlspec.exceptions.OperationalError`: Database operational failures (lock timeouts, server disconnection).
+- :exc:`~sqlspec.exceptions.ProgrammingError`: SQL syntax errors or invalid database object names.
+- :exc:`~sqlspec.exceptions.IntegrityError`: Relational constraint violations. Subclasses include:
+  - :exc:`~sqlspec.exceptions.UniqueViolationError`: Unique constraint or primary key violation.
+  - :exc:`~sqlspec.exceptions.ForeignKeyViolationError`: Foreign key reference violation.
+  - :exc:`~sqlspec.exceptions.NotNullViolationError`: NOT NULL constraint violation.
+  - :exc:`~sqlspec.exceptions.CheckViolationError`: Check constraint violation.
 
 Driver Configuration Examples
 -----------------------------
