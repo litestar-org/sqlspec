@@ -25,7 +25,6 @@ SQLSpec defines filter types in ``sqlspec.core`` that can be used independently
 or with framework integrations:
 
 - ``LimitOffsetFilter(limit, offset)`` -- limit and offset based pagination
-- ``PaginationFilter(page, page_size)`` -- page-number based pagination
 - ``OrderByFilter(field_name, sort_order)`` -- sorting (supports expression mode)
 - ``SearchFilter(field_name, value, ignore_case)`` -- text search (LIKE / ILIKE)
 - ``NotInSearchFilter(field_name, value, ignore_case)`` -- negative text search (NOT LIKE / NOT ILIKE)
@@ -108,6 +107,7 @@ Using filters in a Litestar handler:
     user_filter_deps = create_filter_dependencies({
         "pagination_type": "limit_offset",
         "pagination_size": 20,
+        "pagination_max_size": 1000,
         "sort_field": ["created_at", "uploaded_collections", "name"],
         "sort_order": "desc",
         "search": "name,email",
@@ -207,3 +207,7 @@ Related Guides
 - :doc:`query_builder` for building queries with ``.where()`` clauses.
 - :doc:`/recipes/service_layer` for building robust application service layers.
 - :doc:`/reference/core/filters` for the core filter classes and parameters API.
+
+Generated framework filters reject ``pageSize`` above ``pagination_max_size``
+(default ``1000``). Set this key in ``FilterConfig`` to change the limit;
+``pagination_size`` must not exceed it.

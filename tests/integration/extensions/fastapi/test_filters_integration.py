@@ -700,3 +700,20 @@ def test_fastapi_in_fields_with_query_execution() -> None:
         assert data["applied_filters"] == 1
         names = {u["name"] for u in data["users"]}
         assert names == {"Alice", "Bob", "Diana"}
+
+
+@pytest.mark.parametrize("page_size, status", [(1000, 200), (1001, 422)])
+def test_fastapi_page_size_validation(page_size: int, status: int) -> None:
+    from sqlspec.extensions.fastapi.providers import provide_filters
+
+    app = FastAPI()
+    dependency = provide_filters({"pagination_type": "limit_offset"})
+
+    @app.get("/")
+    def handler(filters: Annotated[list[Any], Depends(dependency)]) -> list[Any]:
+        return []
+
+    with TestClient(app) as client:
+        assert client.get("/", params={"pageSize": page_size}).status_code == status
+        parameters = app.openapi()["paths"]["/"]["get"]["parameters"]
+        assert next(param["schema"]["maximum"] for param in parameters if param["name"] == "pageSize") == 1000

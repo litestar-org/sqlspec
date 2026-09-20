@@ -588,3 +588,34 @@ def test_provide_filters_choice_fields() -> None:
     assert isinstance(filters[0], ChoicesFilter)
     assert filters[0].field_name == "status"
     assert filters[0].values == [StatusEnum.ACTIVE]
+
+
+@pytest.mark.parametrize("maximum", [None, 50, 2000])
+def test_page_size_limit_is_applied(maximum: int | None) -> None:
+    from typing import get_args
+
+    config = FilterConfig(pagination_type="limit_offset")
+    if maximum is not None:
+        config["pagination_max_size"] = maximum
+    provider = _get_dependency(provide_filters(config), "limit_offset_filter")
+    assert next(
+        item.le
+        for item in get_args(inspect.signature(provider).parameters["page_size"].annotation)[1].metadata
+        if hasattr(item, "le")
+    ) == (1000 if maximum is None else maximum)
+
+
+@pytest.mark.parametrize(
+    "size, maximum, message",
+    [
+        (21, 20, "pagination_size must not exceed"),
+        (20, 0, "pagination_max_size must be at least 1"),
+        (20, -1, "pagination_max_size must be at least 1"),
+    ],
+)
+def test_page_size_invalid_configuration(size: int, maximum: int, message: str) -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    config = FilterConfig(pagination_type="limit_offset", pagination_size=size, pagination_max_size=maximum)
+    with pytest.raises(ImproperConfigurationError, match=message):
+        _get_dependency(provide_filters(config), "limit_offset_filter")

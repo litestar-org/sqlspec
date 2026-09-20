@@ -33,6 +33,10 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Changed:**
 
+* Generated filter dependencies reject ``pageSize`` values above
+  ``pagination_max_size`` (default ``1000``); set ``pagination_max_size`` in
+  ``FilterConfig`` to change the limit.
+
 * Pure-Python installations defer unused query builders and migration commands.
   Compiled wheels retain eager exports to preserve concurrent access after
   package initialization.
