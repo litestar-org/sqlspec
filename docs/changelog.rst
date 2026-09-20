@@ -9,8 +9,27 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
-----------
+v0.64.0 - Startup performance, connection normalization, and adapter lifecycle hardening
+-----------------------------------------------------------------------------------------
+
+**Added:**
+
+* Defer public exports, query builders, and migration helpers in pure-Python installations
+  on first access to accelerate cold import performance.
+  (`#798 <https://github.com/litestar-org/sqlspec/pull/798>`_)
+* Added :func:`~sqlspec.utils.config_tools.parse_odbc_connection_string` in :mod:`sqlspec.utils.config_tools`
+  to tokenize ODBC connection strings with brace escaping per the MS-ODBCSTR specification.
+  (`#789 <https://github.com/litestar-org/sqlspec/pull/789>`_)
+* Added :func:`~sqlspec.utils.config_tools.parse_mysql_dsn` in :mod:`sqlspec.utils.config_tools`
+  to parse URL and semicolon-delimited key-value MySQL DSN strings into keyword arguments.
+  (`#791 <https://github.com/litestar-org/sqlspec/pull/791>`_, `#796 <https://github.com/litestar-org/sqlspec/pull/796>`_)
+* Added DSN connection URL support across all MySQL adapters: ``aiomysql``, ``asyncmy``, ``mysqlconnector``, and ``pymysql``.
+  (`#791 <https://github.com/litestar-org/sqlspec/pull/791>`_, `#796 <https://github.com/litestar-org/sqlspec/pull/796>`_)
+* The arrow-odbc adapter accepts individual ODBC connection fields alongside a
+  connection string, and the asyncmy adapter accepts ``stmt_cache_size``.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_, `#790 <https://github.com/litestar-org/sqlspec/pull/790>`_)
+* Bulk ingestion uses each driver's native Arrow path where one exists.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Changed:**
 
@@ -18,68 +37,110 @@ Unreleased
   Compiled wheels retain eager exports to preserve concurrent access after
   package initialization.
   Public import paths, typing, and mypyc compilation support stay the same.
+  (`#798 <https://github.com/litestar-org/sqlspec/pull/798>`_)
 * Configs build migration commands and custom trackers on first use. Built-in
   checks still run when you create a config. Call
   ``config.get_migration_commands()`` at startup to check custom tracker setup
   and find extension migrations early; see :ref:`migration-startup-checks`.
+  (`#798 <https://github.com/litestar-org/sqlspec/pull/798>`_)
+* Query optimizer rules load only when queries require optimization, and optional
+  asyncpg serializer registration is deferred until first use.
+  (`#798 <https://github.com/litestar-org/sqlspec/pull/798>`_)
+* Normalized connection parameter aliases across all database adapters:
+
+  - **PostgreSQL & CockroachDB** (``asyncpg``, ``cockroach_asyncpg``, ``cockroach_psycopg``, ``psqlpy``, ``psycopg``):
+    Normalized ``conninfo``, ``dsn``, ``url``, and ``connection_string``; ``database``, ``db``, and ``dbname``;
+    ``user`` and ``username``. Redundant driver-incompatible keys are popped before passing to driver constructors.
+    (`#792 <https://github.com/litestar-org/sqlspec/pull/792>`_)
+  - **SQLite, DuckDB & AioSQLite**: Normalized ``path``, ``db``, and ``file`` aliases to ``database``,
+    and prevented aliases from leaking into driver ``connect()`` kwargs.
+    (`#793 <https://github.com/litestar-org/sqlspec/pull/793>`_)
+  - **OracleDB & PyMSSQL**: Normalized ``url`` and ``connection_string`` to ``dsn``, and ``username`` to ``user`` for OracleDB;
+    mapped ``host`` to ``server``, ``db`` to ``database``, and ``username`` to ``user`` for PyMSSQL.
+    (`#794 <https://github.com/litestar-org/sqlspec/pull/794>`_)
+  - **ADBC**: Normalized ``url``, ``dsn``, and ``connection_string`` aliases to ``uri``.
+    Normalized embedded database path aliases (``database``, ``db``, ``path``, ``file``) and driver/dialect routing.
+    (`#795 <https://github.com/litestar-org/sqlspec/pull/795>`_)
+  - **Google Cloud Platform (BigQuery & Spanner)**: Normalized ``project_id`` to ``project``, and ``dataset``/``database``/``db``
+    to ``dataset_id`` for BigQuery; normalized ``project_id`` to ``project``, ``instance`` to ``instance_id``,
+    and ``database``/``db`` to ``database_id`` for Spanner. Reordered configuration builder definitions before config classes.
+    (`#797 <https://github.com/litestar-org/sqlspec/pull/797>`_)
+  - **MySQL Adapters** (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``):
+    Normalized ``username`` to ``user`` and ``db`` to ``database``.
+    (`#791 <https://github.com/litestar-org/sqlspec/pull/791>`_, `#796 <https://github.com/litestar-org/sqlspec/pull/796>`_)
+* MSSQL and Arrow ODBC discrete connection configuration fields can override connection string options
+  while preserving remaining connection string attributes.
+  (`#789 <https://github.com/litestar-org/sqlspec/pull/789>`_, `#790 <https://github.com/litestar-org/sqlspec/pull/790>`_)
 * Use the types in each adapter's Litestar and Events package to tune its tables.
   Shared settings stay in ``sqlspec.config``. The ``extension_config`` layout stays
   the same. ADK vector, BM25, and ScaNN keys move to the asyncpg and psycopg ADK types.
   BigQuery uses a boolean for ``partitioning``; Oracle uses a mapping.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * Extension stores and event channels reject keys they cannot use. Remove the unused
   ``run_migrations`` key from extension settings. Run migrations with the commands
   and ``migration_config``. The Events ``listener_queue_capacity`` key is for
   asyncpg and psycopg.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * ``create_connection()`` returns a connection the caller owns on the adapters that
   previously handed back a pooled one. It consumes no pool slot and must be closed
   by the caller.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * The MySQL adapters connect with ``utf8mb4`` unless a charset is configured, matching
   the character set their bulk-load path already declares.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * CockroachDB reports that it does not support transactional DDL. A schema migration
   runs without a wrapping transaction unless it carries its own ``transactional``
   directive.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * DuckDB ``extension_flags`` are applied as database startup settings, so an
   unrecognized flag is reported when the database opens instead of being ignored.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * Streaming row sources take an ``error`` flag when they close, and mapping rows to
   dictionaries reports a missing column description rather than returning no rows.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * ``sqlspec.exceptions.TransactionRetryError`` and
   ``sqlspec.utils.type_guards.has_value_attribute`` are removed, along with
   ``build_insert_statement``, ``coerce_records_for_execute_many``, and
   ``encode_records_for_binary_copy`` from the psqlpy adapter. Serialization failures
   are reported as ``SerializationConflictError``.
-
-**Added:**
-
-* The arrow-odbc adapter accepts individual ODBC connection fields alongside a
-  connection string, and the asyncmy adapter accepts ``stmt_cache_size``.
-* Bulk ingestion uses each driver's native Arrow path where one exists.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Fixed:**
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
   a driver error export is missing.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * Oracle AQ visibility accepts ``DEQ_IMMEDIATE`` and ``DEQ_ON_COMMIT`` names.
   The previously advertised ``AQMSG_*`` names do not exist in python-oracledb.
   Omitting visibility continues to use the driver's default.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * DuckDB reports failed commits to the caller. It also closes the file-backed
   connection when a commit fails.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * PostgreSQL and CockroachDB close new connections if a setup hook fails or the
   task is cancelled. This prevents a leak before the caller can take ownership.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * A DuckDB session that exits with an exception no longer discards an in-memory
   database, and opening a standalone connection no longer resets the storage setup
   already prepared for the thread.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * CockroachDB retries a transaction only for a genuine serialization conflict, and an
   error that escapes a failed rollback keeps the cause that identifies it.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * Oracle returns the same value types whether or not a statement was already cached.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * Spanner declares a parameter type for UUID values.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 * ODBC connection values that are already quoted are passed through unchanged, and an
   error code is read only from the driver's own diagnostic field.
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Requirements:**
 
 * The ``duckdb`` extra installs ``pyarrow``. Minimum versions are raised for
   ``oracledb`` (3.4), ``psqlpy`` (0.12.1), and ``mssql-python`` (1.13).
+  (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 v0.63.1 - Slotted service subclass compatibility
 ------------------------------------------------
