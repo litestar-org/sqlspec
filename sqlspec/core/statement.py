@@ -555,7 +555,10 @@ class SQL:
 
     @property
     def parameters(self) -> Any:
-        """Get the original parameters."""
+        """Get the values that will be bound to the statement."""
+        mixed = self._mixed_parameter_inputs()
+        if mixed is not None:
+            return mixed[1]
         if self._named_parameters:
             return self._named_parameters
         return self._positional_parameters or []
@@ -746,8 +749,9 @@ class SQL:
 
         try:
             config = self._statement_config
-            raw_sql = self._materialized_raw_sql()
-            params = self._named_parameters or self._positional_parameters
+            mixed = self._mixed_parameter_inputs()
+            raw_sql = mixed[0] if mixed is not None else self._materialized_raw_sql()
+            params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
             is_many = self._is_many
             param_fingerprint = structural_fingerprint(params, is_many=is_many)
             pipeline_fingerprint: Any | None = (
@@ -758,7 +762,7 @@ class SQL:
                 raw_sql,
                 params,
                 is_many=is_many,
-                expression=self._raw_expression,
+                expression=None if mixed is not None else self._raw_expression,
                 param_fingerprint=pipeline_fingerprint,
             )
 
@@ -786,8 +790,60 @@ class SQL:
         self._compiled_from_cache = False
         return new_state.compiled_sql, new_state.execution_parameters
 
+    def _mixed_parameter_inputs(self) -> "tuple[str, dict[str, Any]] | None":
+        """Normalize coexisting positional and named values without losing either."""
+        positional, named = self._positional_parameters, self._named_parameters
+        if not positional or not named or self._is_many:
+            return None
+        raw = self._materialized_raw_sql()
+        infos = self._statement_config.parameter_validator.extract_parameters(raw)
+        ordinal_styles = {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
+        index_styles = {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}
+        positional_styles = ordinal_styles | index_styles
+        styles = {info.style for info in infos if info.style in positional_styles}
+        unbound = [info for info in infos if info.style not in positional_styles and info.name not in named]
+        if len(styles) > 1 or (styles & index_styles and unbound):
+            return None
+        selected = [info for info in infos if info.style in positional_styles or info.name not in named]
+        if not selected:
+            return None
+        slots: dict[str, int] = {}
+        indexes: list[int] = []
+        counter = 0
+        for info in selected:
+            if info.style in index_styles:
+                index = int(info.name or "0") - 1
+            elif info.style in ordinal_styles:
+                index = counter
+                counter += 1
+            elif info.name in slots:
+                index = slots[info.name]
+            else:
+                index = counter
+                slots[info.name or ""] = index
+                counter += 1
+            if index < 0 or index >= len(positional):
+                return None
+            indexes.append(index)
+        if not styles & index_styles and counter != len(positional):
+            return None
+        names = {index: name for name, index in slots.items()}
+        used = set(named) | set(slots)
+        for index in indexes:
+            if index not in names:
+                name = f"param_{index}"
+                while name in used:
+                    name += "_p"
+                names[index] = name
+                used.add(name)
+        for info, index in reversed(list(zip(selected, indexes, strict=True))):
+            if info.style in positional_styles:
+                raw = raw[: info.position] + ":" + names[index] + raw[info.position + len(info.placeholder_text) :]
+        return raw, {**{name: positional[index] for index, name in names.items()}, **named}
+
     def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
-        params = self._named_parameters or self._positional_parameters
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         if self._rebind_processor is None:
             self._rebind_processor = ParameterProcessor(
                 converter=self._statement_config.parameter_converter,
@@ -834,7 +890,8 @@ class SQL:
             return False
         if state.filter_hash != hash_filters(self._filters):
             return False
-        params = self._named_parameters or self._positional_parameters
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         return bool(structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint)
 
     def as_script(self) -> "SQL":
@@ -954,10 +1011,11 @@ class SQL:
 
     def _handle_compile_failure(self, error: Exception) -> ProcessedState:
         logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
-        params = self._named_parameters or self._positional_parameters
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         return self._build_processed_state(
-            compiled_sql=self._materialized_raw_sql(),
-            execution_parameters=self._named_parameters or self._positional_parameters,
+            compiled_sql=mixed[0] if mixed is not None else self._materialized_raw_sql(),
+            execution_parameters=params,
             parsed_expression=None,
             operation_type="COMMAND",
             input_named_parameters=(),

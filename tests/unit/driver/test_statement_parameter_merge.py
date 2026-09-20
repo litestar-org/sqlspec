@@ -11,7 +11,6 @@ from sqlspec import SQLSpec
 from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.core import SQL
-from sqlspec.exceptions import SQLSpecError
 
 
 @pytest.fixture
@@ -47,7 +46,7 @@ BOUND_A = ("SELECT :a AS a, :b AS b", (), {"a": 1})
         pytest.param(("SELECT ? AS a", (1,), {}), (), {}, {"a": 1}, id="positional-bound-no-extra"),
         pytest.param(("SELECT :a AS a", (), {}), (), {"a": 4}, {"a": 4}, id="unbound-kwargs"),
         pytest.param(("SELECT ? AS a, ? AS b", (1,), {}), (2,), {}, {"a": 1, "b": 2}, id="positional-appends"),
-        pytest.param(BOUND_A, ((2,),), {}, SQLSpecError, id="named-bound-positional-execute-not-merged"),
+        pytest.param(BOUND_A, ((2,),), {}, {"a": 1, "b": 2}, id="named-bound-positional-execute-merged"),
     ],
 )
 def test_sync_statement_parameter_merge(
@@ -87,3 +86,39 @@ async def test_async_kwargs_and_mapping_merge_with_bound_named_parameters(aiosql
     assert await aiosqlite_session.select_one(statement, {"b": 3}) == {"a": 1, "b": 3}
     assert await aiosqlite_session.select_one(statement, a=9, b=4) == {"a": 9, "b": 4}
     assert await aiosqlite_session.select_one(SQL("SELECT :a AS a", a=1)) == {"a": 1}
+
+
+@pytest.mark.parametrize("shape", ["filter", "direct-filter", "where", "kwargs", "named", "repeated", "extra"])
+def test_mixed_values_preserve_tenant_on_every_call(sqlite_session: SqliteDriver, shape: str) -> None:
+    from sqlspec.core import LimitOffsetFilter
+
+    sqlite_session.execute("CREATE TABLE tenant_rows (id INTEGER, tenant INTEGER, v INTEGER)")
+    sqlite_session.execute_many(
+        "INSERT INTO tenant_rows VALUES (?, ?, ?)", [(1, 1, 10), (2, 1, 20), (3, 2, 30), (4, 1, 40)]
+    )
+    for _ in range(3):
+        base = "SELECT id FROM tenant_rows WHERE tenant = ? ORDER BY id"
+        args: tuple[Any, ...] = ()
+        expected = [1, 2]
+        if shape == "filter":
+            statement = SQL(base, 1)
+            args = (LimitOffsetFilter(2, 0),)
+        elif shape == "direct-filter":
+            statement = LimitOffsetFilter(2, 0).append_to_statement(SQL(base, 1))
+        elif shape == "where":
+            statement = SQL(base, 1).where_eq("v", 40)
+            expected = [4]
+        elif shape == "kwargs":
+            statement = SQL("SELECT id FROM tenant_rows WHERE tenant = ? AND v = :x", 1, x=20)
+            expected = [2]
+        elif shape == "named":
+            statement = SQL(base.replace("?", ":tenant"), 1)
+            args = (LimitOffsetFilter(2, 0),)
+        elif shape == "repeated":
+            statement = SQL("SELECT id FROM tenant_rows WHERE tenant = :a AND v > :a", 1).where_eq("v", 40)
+            expected = [4]
+        else:
+            statement = SQL(base).where_eq("v", 40)
+            args = (1,)
+            expected = [4]
+        assert [row["id"] for row in sqlite_session.select(statement, *args)] == expected
