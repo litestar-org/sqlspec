@@ -18,7 +18,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from logging import Logger
     from types import TracebackType
 
@@ -39,7 +39,13 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
-__all__ = ("SpannerConnectionParams", "SpannerDriverFeatures", "SpannerPoolParams", "SpannerSyncConfig")
+__all__ = (
+    "SpannerConnectionParams",
+    "SpannerDriverFeatures",
+    "SpannerPoolParams",
+    "SpannerSyncConfig",
+    "build_connection_config",
+)
 
 _DEFAULT_SESSION_TRANSACTION: bool = True
 """Default ``transaction`` flag for ``provide_session`` / ``provide_connection``.
@@ -85,6 +91,7 @@ class SpannerConnectionParams(TypedDict):
     """Spanner connection parameters."""
 
     project: "NotRequired[str]"
+    project_id: "NotRequired[str]"
     credentials: "NotRequired[Credentials]"
     client_info: "NotRequired[ClientInfo]"
     client_options: "NotRequired[ClientOptions | dict[str, Any]]"
@@ -102,12 +109,15 @@ class SpannerConnectionParams(TypedDict):
     client_key: "NotRequired[str]"
     instance_type: "NotRequired[str]"
     instance_id: "NotRequired[str]"
+    instance: "NotRequired[str]"
     configuration_name: "NotRequired[str]"
     display_name: "NotRequired[str]"
     node_count: "NotRequired[int]"
     processing_units: "NotRequired[int]"
     instance_labels: "NotRequired[dict[str, str]]"
     database_id: "NotRequired[str]"
+    database: "NotRequired[str]"
+    db: "NotRequired[str]"
     ddl_statements: "NotRequired[tuple[str, ...] | list[str]]"
     logger: "NotRequired[Logger]"
     encryption_config: "NotRequired[EncryptionConfig | dict[str, Any]]"
@@ -169,6 +179,23 @@ class SpannerDriverFeatures(TypedDict):
     enable_events: "NotRequired[bool]"
     events_backend: "NotRequired[Literal['poll_queue']]"
     enable_batch_write_api: "NotRequired[bool]"
+
+
+def build_connection_config(
+    connection_config: "SpannerPoolParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize Spanner connection configuration and map aliases."""
+    config = normalize_connection_config(connection_config)
+    project_alias = config.pop("project_id", None)
+    if project_alias is not None and "project" not in config:
+        config["project"] = project_alias
+    instance_alias = config.pop("instance", None)
+    if instance_alias is not None and "instance_id" not in config:
+        config["instance_id"] = instance_alias
+    database_alias = config.pop("database", None) or config.pop("db", None)
+    if database_alias is not None and "database_id" not in config:
+        config["database_id"] = database_alias
+    return config
 
 
 class SpannerConnectionContext(SyncPoolConnectionContext):
@@ -283,7 +310,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        self.connection_config = normalize_connection_config(connection_config)
+        self.connection_config = build_connection_config(connection_config)
         if "min_sessions" in self.connection_config:
             msg = "Spanner session pools do not support 'min_sessions'; use 'size' or 'target_size'."
             raise ImproperConfigurationError(msg)

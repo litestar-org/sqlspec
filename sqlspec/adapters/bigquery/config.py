@@ -24,7 +24,7 @@ from sqlspec.typing import Empty
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from sqlspec.adapters.bigquery._typing import BigQueryClientInfo as ClientInfo
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
-__all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures")
+__all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures", "build_connection_config")
 
 
 class BigQueryConnectionParams(TypedDict):
@@ -43,6 +43,7 @@ class BigQueryConnectionParams(TypedDict):
     """
 
     project: NotRequired[str]
+    project_id: NotRequired[str]
     location: NotRequired[str]
     credentials: NotRequired["Credentials"]
     client_options: NotRequired["ClientOptions"]
@@ -52,6 +53,9 @@ class BigQueryConnectionParams(TypedDict):
     default_load_job_config: NotRequired[LoadJobConfig]
     default_job_creation_mode: NotRequired[str]
     dataset_id: NotRequired[str]
+    dataset: NotRequired[str]
+    database: NotRequired[str]
+    db: NotRequired[str]
     use_query_cache: NotRequired[bool]
     maximum_bytes_billed: NotRequired[int]
     query_timeout_ms: NotRequired[int]
@@ -123,6 +127,20 @@ class BigQueryDriverFeatures(TypedDict):
     enable_storage_write_api: NotRequired[bool]
     enable_native_storage: NotRequired[bool]
     native_export_connection: NotRequired[str]
+
+
+def build_connection_config(
+    connection_config: "BigQueryConnectionParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize BigQuery connection configuration and map aliases."""
+    config = normalize_connection_config(connection_config)
+    project_alias = config.pop("project_id", None)
+    if project_alias is not None and "project" not in config:
+        config["project"] = project_alias
+    dataset_alias = config.pop("dataset", None) or config.pop("database", None) or config.pop("db", None)
+    if dataset_alias is not None and "dataset_id" not in config:
+        config["dataset_id"] = dataset_alias
+    return config
 
 
 class BigQueryConnectionContext(SyncPoolConnectionContext):
@@ -206,7 +224,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
 
-        self.connection_config = normalize_connection_config(connection_config)
+        self.connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
