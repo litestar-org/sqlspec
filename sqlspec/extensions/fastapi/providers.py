@@ -33,6 +33,7 @@ from sqlspec.core import (
     OrderByFilter,
     SearchFilter,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.text import camelize
 
 __all__ = (
@@ -93,6 +94,7 @@ class DependencyDefaults:
     ORDER_BY_FILTER_DEPENDENCY_KEY: str = "order_by_filter"
     SEARCH_FILTER_DEPENDENCY_KEY: str = "search_filter"
     DEFAULT_PAGINATION_SIZE: int = 20
+    DEFAULT_PAGINATION_MAX_SIZE: int = 1000
 
 
 DEPENDENCY_DEFAULTS = DependencyDefaults()
@@ -149,6 +151,8 @@ class FilterConfig(TypedDict):
     """Pagination strategy to enable. Currently supports ``"limit_offset"``."""
     pagination_size: NotRequired[int]
     """Default page size for limit/offset pagination."""
+    pagination_max_size: NotRequired[int]
+    """Largest page size a client may request. Defaults to ``1000``."""
     search: NotRequired[str | set[str] | list[str]]
     """SQL-facing field or fields to search. Strings may be comma-separated."""
     search_ignore_case: NotRequired[bool]
@@ -288,7 +292,10 @@ def _configured_filter_aggregator(
             params,
             annotations,
             dep_defaults.LIMIT_OFFSET_FILTER_DEPENDENCY_KEY,
-            _LimitOffsetFilterProvider(config.get("pagination_size", dep_defaults.DEFAULT_PAGINATION_SIZE)),
+            _LimitOffsetFilterProvider(
+                config.get("pagination_size", dep_defaults.DEFAULT_PAGINATION_SIZE),
+                config.get("pagination_max_size", dep_defaults.DEFAULT_PAGINATION_MAX_SIZE),
+            ),
         )
 
     if search_fields := config.get("search"):
@@ -529,7 +536,14 @@ class _BeforeAfterFilterProvider:
 
 
 class _LimitOffsetFilterProvider:
-    def __init__(self, default_page_size: int) -> None:
+    def __init__(self, default_page_size: int, max_page_size: int) -> None:
+        if max_page_size < 1:
+            msg = "pagination_max_size must be at least 1"
+            raise ImproperConfigurationError(msg)
+        if default_page_size > max_page_size:
+            msg = "pagination_size must not exceed pagination_max_size"
+            raise ImproperConfigurationError(msg)
+        self.max_page_size = max_page_size
         self.default_page_size = default_page_size
         self.return_annotation = LimitOffsetFilter
         self.__signature__ = inspect.Signature(
@@ -546,7 +560,9 @@ class _LimitOffsetFilterProvider:
                     "page_size",
                     kind=inspect.Parameter.KEYWORD_ONLY,
                     default=default_page_size,
-                    annotation=Annotated[int, Query(ge=1, alias="pageSize", description="Number of items per page.")],
+                    annotation=Annotated[
+                        int, Query(ge=1, le=max_page_size, alias="pageSize", description="Number of items per page.")
+                    ],
                 ),
             ],
             return_annotation=self.return_annotation,
@@ -557,7 +573,7 @@ class _LimitOffsetFilterProvider:
         return LimitOffsetFilter(limit=resolved_page_size, offset=resolved_page_size * (current_page - 1))
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "_LimitOffsetFilterProvider":
-        return _memoize_deepcopy(self, _LimitOffsetFilterProvider(self.default_page_size), memo)
+        return _memoize_deepcopy(self, _LimitOffsetFilterProvider(self.default_page_size, self.max_page_size), memo)
 
 
 class _SearchFilterProvider:

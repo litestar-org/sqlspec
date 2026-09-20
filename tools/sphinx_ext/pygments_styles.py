@@ -4,8 +4,6 @@ Provides light and dark themes that match the CodeMirror theme used in the
 SQLSpec playground, unifying code block styling across the documentation.
 """
 
-from __future__ import annotations
-
 from pygments.style import Style
 from pygments.token import (
     Comment,

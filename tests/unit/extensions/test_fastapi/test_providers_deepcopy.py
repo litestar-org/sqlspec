@@ -10,7 +10,7 @@ from sqlspec.extensions.fastapi import providers as fastapi_providers
 from sqlspec.extensions.fastapi.providers import FieldNameType
 
 _FACTORIES: "dict[str, Any]" = {
-    "_LimitOffsetFilterProvider": lambda cls: cls(20),
+    "_LimitOffsetFilterProvider": lambda cls: cls(20, 1000),
     "_IdFilterProvider": lambda cls: cls("id", int),
     "_BeforeAfterFilterProvider": lambda cls: cls("created_at", "createdBefore", "createdAfter"),
     "_SearchFilterProvider": lambda cls: cls({"name", "email"}, False),
