@@ -341,7 +341,7 @@ def build_profile() -> "DriverParameterProfile":
         supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
         has_native_list_expansion=False,
         preserve_parameter_format=True,
-        needs_static_script_compilation=True,
+        needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",

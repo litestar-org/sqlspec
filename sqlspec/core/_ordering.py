@@ -4,14 +4,16 @@ import itertools
 from typing import Final, Literal
 
 from sqlglot import Dialect, exp
+from sqlglot.dialects.postgres import Postgres
 from sqlglot.generator import Generator
 from sqlglot.tokenizer_core import TokenType
 
-__all__ = ("NullsPlacement", "apply_direction", "default_nulls", "has_default_nulls", "ordered")
+__all__ = ("NullsPlacement", "apply_direction", "default_nulls", "has_default_nulls", "has_explicit_nulls", "ordered")
 
 NullsPlacement = Literal["first", "last"]
 
 _DEFAULT_NULLS_ARG: Final[str] = "sqlspec_default_nulls"
+_EXPLICIT_NULLS_ARG: Final[str] = "sqlspec_explicit_nulls"
 
 
 def has_default_nulls(expression: exp.Expr) -> bool:
@@ -26,6 +28,18 @@ def has_default_nulls(expression: exp.Expr) -> bool:
     return isinstance(expression, exp.Ordered) and _DEFAULT_NULLS_ARG in expression.meta
 
 
+def has_explicit_nulls(expression: exp.Expr) -> bool:
+    """Check whether SQLSpec explicitly requested NULL placement.
+
+    Args:
+        expression: Expression to inspect.
+
+    Returns:
+        Whether the ordering has an explicit placement marker.
+    """
+    return isinstance(expression, exp.Ordered) and _EXPLICIT_NULLS_ARG in expression.meta
+
+
 def ordered(expression: exp.Expr, *, desc: "bool | None" = None, nulls: "NullsPlacement | None" = None) -> exp.Ordered:
     """Build an ORDER BY item with optional NULL placement.
 
@@ -38,7 +52,9 @@ def ordered(expression: exp.Expr, *, desc: "bool | None" = None, nulls: "NullsPl
         The ordering expression.
     """
     if nulls is not None:
-        return exp.Ordered(this=expression, desc=desc, nulls_first=nulls == "first")
+        node = exp.Ordered(this=expression, desc=desc, nulls_first=nulls == "first")
+        node.meta[_EXPLICIT_NULLS_ARG] = True
+        return node
     node = exp.Ordered(this=expression, desc=desc, nulls_first=not desc)
     node.meta[_DEFAULT_NULLS_ARG] = True
     return node
@@ -72,7 +88,9 @@ def default_nulls(item: exp.Ordered, source: str, dialect: str | None = None) ->
         ):
             explicit_nulls = True
             break
-    if not explicit_nulls:
+    if explicit_nulls:
+        item.meta[_EXPLICIT_NULLS_ARG] = True
+    else:
         item.set("nulls_first", not item.args.get("desc"))
         item.meta[_DEFAULT_NULLS_ARG] = True
     return item
@@ -98,13 +116,15 @@ def apply_direction(item: exp.Expr, desc: bool) -> exp.Expr:
 
 
 def _ordered_sql(generator: Generator, expression: exp.Ordered) -> str:
-    if not has_default_nulls(expression):
+    explicit_postgres = has_explicit_nulls(expression) and isinstance(generator.dialect, Postgres)
+    if not has_default_nulls(expression) and not explicit_postgres:
         return generator.ordered_sql(expression)
     desc = expression.args.get("desc")
     this = generator.sql(expression, "this")
     direction = " DESC" if desc else (" ASC" if desc is False else "")
     with_fill = generator.sql(expression, "with_fill")
-    return f"{this}{direction}{' ' + with_fill if with_fill else ''}"
+    placement = (" NULLS FIRST" if expression.args.get("nulls_first") else " NULLS LAST") if explicit_postgres else ""
+    return f"{this}{direction}{placement}{' ' + with_fill if with_fill else ''}"
 
 
 def _generator_classes(root: "type[Generator]") -> "list[type[Generator]]":

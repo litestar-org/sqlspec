@@ -1297,3 +1297,71 @@ def test_sync_session_service_joins_open_duckdb_transaction(fail: bool) -> None:
     finally:
         config.close_pool()
     assert values == ([1, 4] if fail else [1, 2, 3, 4])
+
+
+def _check_cursor_pages(pages: list[Any]) -> None:
+    assert [page.items for page in pages] == [[{"value": 1}], [{"value": 2}], [{"value": 3}]]
+    assert pages[0].has_next and not pages[0].has_previous
+    assert pages[-1].next_cursor is None
+
+
+def test_sync_service_paginate_cursor(sync_config: tuple[SqliteConfig, list[tuple[str, SqliteDriver]]]) -> None:
+    from sqlspec.core import CursorFilter, CursorKey
+
+    config, events = sync_config
+    service = SQLSpecSyncService(config=config)
+    with service.provide_session() as driver:
+        driver.execute_many("INSERT INTO service_values VALUES (?)", [(2,), (3,)])
+        driver.commit()
+    events.clear()
+    pages = []
+    cursor = None
+    for _ in range(3):
+        page = service.paginate_cursor(
+            "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1, cursor)
+        )
+        pages.append(page)
+        cursor = page.next_cursor
+    _check_cursor_pages(pages)
+    assert [event for event, _ in events] == ["enter", "exit"] * 3
+    with pytest.raises(ImproperConfigurationError):
+        _ = service.session
+    with service.provide_session() as driver:
+        events.clear()
+        page = service.paginate_cursor(
+            "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1), session=driver
+        )
+        assert page.items == [{"value": 1}]
+        assert events == []
+
+
+async def test_async_service_paginate_cursor(
+    async_config: tuple[AiosqliteConfig, list[tuple[str, AiosqliteDriver]]],
+) -> None:
+    from sqlspec.core import CursorFilter, CursorKey
+
+    config, events = async_config
+    service = SQLSpecAsyncService(config=config)
+    async with service.provide_session() as driver:
+        await driver.execute_many("INSERT INTO service_values VALUES (?)", [(2,), (3,)])
+        await driver.commit()
+    events.clear()
+    pages = []
+    cursor = None
+    for _ in range(3):
+        page = await service.paginate_cursor(
+            "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1, cursor)
+        )
+        pages.append(page)
+        cursor = page.next_cursor
+    _check_cursor_pages(pages)
+    assert [event for event, _ in events] == ["enter", "exit"] * 3
+    with pytest.raises(ImproperConfigurationError):
+        _ = service.session
+    async with service.provide_session() as driver:
+        events.clear()
+        page = await service.paginate_cursor(
+            "SELECT value FROM service_values", CursorFilter([CursorKey("value")], 1), session=driver
+        )
+        assert page.items == [{"value": 1}]
+        assert events == []

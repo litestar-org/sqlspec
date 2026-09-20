@@ -55,6 +55,24 @@ __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSess
 logger = get_logger("sqlspec.adapters.duckdb")
 
 
+def _is_plain_values_insert(expression: exp.Insert, column_count: int) -> bool:
+    if any(expression.args.get(key) for key in ("conflict", "alternative", "with_")):
+        return False
+    values = expression.expression
+    if not isinstance(values, exp.Values) or len(values.expressions) != 1:
+        return False
+    row = values.expressions[0]
+    if not isinstance(row, exp.Tuple) or not column_count or len(row.expressions) != column_count:
+        return False
+    for index, item in enumerate(row.expressions, 1):
+        if isinstance(item, exp.Placeholder):
+            if item.name not in ("", "?", str(index)):
+                return False
+        elif not isinstance(item, exp.Parameter) or item.name != str(index):
+            return False
+    return True
+
+
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling DuckDB database exceptions.
 
@@ -588,6 +606,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if not isinstance(expression.this, exp.Schema):
             return None
 
+        if not _is_plain_values_insert(expression, len(expression.this.expressions)):
+            return None
+        if not isinstance(prepared_parameters[0], (list, tuple)):
+            return None
+
         table_expr = expression.this.this
         if not isinstance(table_expr, exp.Table):
             return None
@@ -602,10 +625,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
             return None
 
         target_table = table_expr.sql(dialect="duckdb")
+        column_sql = ", ".join(column.sql(dialect="duckdb") for column in expression.this.expressions)
         temp_view = f"_sqlspec_batch_{uuid4().hex}"
         self.connection.register(temp_view, arrow_table)
         try:
-            self.connection.execute(f"INSERT INTO {target_table} SELECT * FROM {temp_view}")
+            self.connection.execute(f"INSERT INTO {target_table} ({column_sql}) SELECT * FROM {temp_view}")
         finally:
             with contextlib.suppress(Exception):
                 self.connection.unregister(temp_view)
