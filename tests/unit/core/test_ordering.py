@@ -171,3 +171,23 @@ def test_cross_dialect_and_cache_identity() -> None:
         rendered = implicit.to_sql(dialect=dialect)
         assert "NULLS" not in rendered and "CASE" not in rendered
     assert "NULLS LAST" in explicit.to_sql(dialect="postgres")
+
+
+@pytest.mark.parametrize(
+    ("source", "dialect", "expected"),
+    [
+        ("id NULLS /* placement */ LAST", "sqlite", "id NULLS LAST"),
+        ("id NULLS -- placement\nLAST", "sqlite", "id NULLS LAST"),
+        ("NULLIF(name, 'NULLS FIRST')", "postgres", "NULLIF(name, 'NULLS FIRST')"),
+        ('"NULLS FIRST"', "postgres", '"NULLS FIRST"'),
+        ("`NULLS FIRST`", "mysql", '"NULLS FIRST"'),
+        ("[NULLS FIRST]", "tsql", '"NULLS FIRST"'),
+    ],
+)
+def test_nulls_detection_uses_sql_tokens(source: str, dialect: str, expected: str) -> None:
+    statement = SQL("SELECT * FROM t", statement_config=StatementConfig(dialect=dialect)).order_by(source)
+    expression = statement.expression
+    assert expression is not None
+    order_item = expression.args["order"].expressions[0]
+    rendered = order_item.sql(dialect="sqlite" if dialect in {"sqlite", "postgres"} else "postgres", comments=False)
+    assert rendered == expected

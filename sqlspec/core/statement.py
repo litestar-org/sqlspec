@@ -1896,7 +1896,7 @@ def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bo
         except ParseError:
             parsed = None
         if parsed is not None:
-            return default_nulls(parsed, normalized)
+            return default_nulls(parsed, normalized, dialect)
 
     parts = normalized.rsplit(None, 1)
     if len(parts) == _ORDER_PARTS_COUNT and parts[1].lower() in {"asc", "desc"}:
