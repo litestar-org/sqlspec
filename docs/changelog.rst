@@ -14,6 +14,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Added:**
 
+* FastAPI filter dependencies support cursor pagination, including signed
+  tokens, dynamic sorting, page-size bounds, and HTTP 422 cursor errors.
+
 * Litestar filter dependencies support cursor pagination with signed tokens,
   bounded page sizes, dynamic sorting, and client validation errors.
 
@@ -135,6 +138,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Fixed:**
+
+* Framework dependency caches preserve configured list order so the first
+  sort field and cursor key sequence retain their declared meaning.
 
 * Close async example connection pools before their event loops shut down.
 * Filters supplied to the ``SQL`` constructor are applied once before call-site

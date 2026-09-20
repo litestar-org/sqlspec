@@ -2,7 +2,7 @@
 
 import datetime
 import inspect
-from typing import Any, get_args
+from typing import Any, Literal, get_args
 from uuid import UUID, uuid4
 
 import pytest
@@ -619,3 +619,100 @@ def test_page_size_invalid_configuration(size: int, maximum: int, message: str) 
     config = FilterConfig(pagination_type="limit_offset", pagination_size=size, pagination_max_size=maximum)
     with pytest.raises(ImproperConfigurationError, match=message):
         _get_dependency(provide_filters(config), "limit_offset_filter")
+
+
+def test_cursor_mode_requires_cursor_keys() -> None:
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    with pytest.raises(ImproperConfigurationError, match="requires a non-empty 'cursor_keys'"):
+        provide_filters(FilterConfig(pagination_type="cursor"))
+
+
+def test_cursor_provider_builds_filter_and_preserves_key_order() -> None:
+    from sqlspec.core import CursorFilter, CursorKey
+
+    config = FilterConfig(
+        pagination_type="cursor", cursor_keys=[CursorKey("name"), CursorKey("id")], pagination_size=2, search="name"
+    )
+    provider = _get_dependency(provide_filters(config), "cursor_filter")
+    result = provider()
+    assert isinstance(result, CursorFilter)
+    assert result.keys == tuple(config["cursor_keys"])
+    assert result.limit == 2
+    assert provider(page_size=5).limit == 5
+    config["cursor_keys"] = list(reversed(config["cursor_keys"]))
+    reverse_provider = _get_dependency(provide_filters(config), "cursor_filter")
+    assert reverse_provider().keys == tuple(config["cursor_keys"])
+    assert reverse_provider is not provider
+    assert list(inspect.signature(provide_filters(config)).parameters) == ["search_filter", "cursor_filter"]
+
+
+@pytest.mark.parametrize("field_name, order", [(None, None), ("name", "asc"), ("identifier", "desc")])
+def test_cursor_provider_composes_order_by(field_name: str | None, order: Literal["asc", "desc"] | None) -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(
+        pagination_type="cursor",
+        cursor_keys=[CursorKey("id", nulls="last", result_name="identifier")],
+        sort_field=["name", "id"],
+        sort_field_aliases={"identifier": "id"},
+    )
+    provider = _get_dependency(provide_filters(config), "cursor_filter")
+    keys = provider(field_name=field_name, sort_order=order).keys
+    if field_name == "identifier":
+        assert keys == (CursorKey("id", "desc", nulls="last", result_name="identifier"),)
+    else:
+        assert keys == (CursorKey("name", order or "desc"), config["cursor_keys"][0])
+
+
+def test_cursor_provider_rejects_unknown_order_by() -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], sort_field="name")
+    provider = _get_dependency(provide_filters(config), "cursor_filter")
+    with pytest.raises(RequestValidationError, match="Invalid orderBy"):
+        provider(field_name="unknown")
+
+
+@pytest.mark.parametrize("token", ["garbage", ""])
+def test_cursor_provider_invalid_cursor(token: str) -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")])
+    provider = _get_dependency(provide_filters(config), "cursor_filter")
+    with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
+        provider(cursor=token)
+
+
+def test_cursor_secret_signs_tokens_and_rejects_tampering() -> None:
+    import base64
+    import json
+
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], cursor_secret="secret")
+    provider = _get_dependency(provide_filters(config), "cursor_filter")
+    token = provider().encode({"id": 1}, backward=False)
+    assert provider(cursor=token).limit == 20
+    unsigned_config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")])
+    config = unsigned_config
+    unsigned_provider = _get_dependency(provide_filters(config), "cursor_filter")
+    with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
+        unsigned_provider(cursor=token)
+    payload, signature = token.split(".")
+    decoded = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    decoded["k"][0][0] = "s"
+    tampered = base64.urlsafe_b64encode(json.dumps(decoded).encode()).rstrip(b"=").decode() + "." + signature
+    with pytest.raises(RequestValidationError, match="Invalid pagination cursor"):
+        provider(cursor=tampered)
+
+
+def test_cursor_sort_field_order_changes_cached_default() -> None:
+    from sqlspec.core import CursorKey
+
+    config = FilterConfig(pagination_type="cursor", cursor_keys=[CursorKey("id")], sort_field=["name", "id"])
+    first = _get_dependency(provide_filters(config), "cursor_filter")
+    config["sort_field"] = ["id", "name"]
+    second = _get_dependency(provide_filters(config), "cursor_filter")
+    assert first().keys[0].field_name == "name"
+    assert second().keys[0].field_name == "id"
