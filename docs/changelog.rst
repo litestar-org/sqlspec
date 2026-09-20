@@ -16,8 +16,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * Added a :ref:`cursor pagination guide <cursor-pagination>` with a tested example.
   It shows how to move through pages in both directions and sign page tokens.
-  Examples cover ``select_with_cursor()``, ``fetch_with_cursor()``, and
-  ``paginate_cursor()``, plus Litestar and FastAPI filter setup.
+  Examples cover service ``paginate_cursor()`` and direct driver ``select()``
+  with ``CursorFilter.build_page()``, plus Litestar and FastAPI filter setup.
 
 * FastAPI filter dependencies support cursor pagination, including signed
   tokens, dynamic sorting, page-size bounds, and HTTP 422 cursor errors.
@@ -27,9 +27,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * Added ``paginate_cursor`` to sync and async services with short-session
   acquisition, caller-owned session support, and typed pagination results.
 
-* Added ``select_with_cursor`` and ``fetch_with_cursor`` to sync and async drivers
-  for one-query cursor pages with optional schema conversion. Cursor contract
-  queries use each adapter's dialect, including quoted BigQuery table names.
+* Use cursor filters with sync and async driver ``select()`` calls.
+  ``CursorFilter.build_page()`` builds a page from the rows.
+  Tests cover quoted BigQuery table names.
 
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
   a generic ``CursorPagination`` response container. Malformed cursor inputs raise

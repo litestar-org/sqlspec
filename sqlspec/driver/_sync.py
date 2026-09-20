@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVa
 from mypy_extensions import mypyc_attr
 from typing_extensions import Self
 
-from sqlspec.core import SQL, CursorPagination, StackResult, create_arrow_result
+from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.driver._common import (
@@ -1258,108 +1258,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             statement_config=statement_config,
             count_with_window=count_with_window,
             **kwargs,
-        )
-
-    @overload
-    def select_with_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT]",
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT]": ...
-
-    @overload
-    def select_with_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: None = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[dict[str, Any]]": ...
-
-    def select_with_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
-        """Execute one query and return a bidirectional cursor page.
-
-        Args:
-            statement: SQL statement, query builder, or raw SQL string.
-            *parameters: Statement parameters and filters including one CursorFilter.
-            schema_type: Optional schema type for item conversion.
-            statement_config: Optional statement configuration.
-            **kwargs: Additional statement parameters.
-
-        Returns:
-            Items and adjacent-page cursor tokens.
-
-        Raises:
-            ImproperConfigurationError: Pagination filters are missing or conflicting.
-        """
-        cursor_filter, remaining = self._split_cursor_filter(
-            parameters, statement if isinstance(statement, SQL) else None
-        )
-        sql_statement = self.prepare_statement(
-            statement, remaining, statement_config=statement_config or self.statement_config, kwargs=kwargs
-        )
-        sql_statement = self._apply_filters(sql_statement, [cursor_filter])
-        result = self.dispatch_statement_execution(sql_statement, self.connection)
-        page = cursor_filter.build_page(result.all())
-        if schema_type is None:
-            return page
-        return CursorPagination(
-            items=cast("list[SchemaT]", self.to_schema(list(page.items), schema_type=schema_type)),
-            limit=page.limit,
-            next_cursor=page.next_cursor,
-            previous_cursor=page.previous_cursor,
-            has_next=page.has_next,
-            has_previous=page.has_previous,
-        )
-
-    @overload
-    def fetch_with_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT]",
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT]": ...
-
-    @overload
-    def fetch_with_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: None = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[dict[str, Any]]": ...
-
-    def fetch_with_cursor(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        schema_type: "type[SchemaT] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
-        """Alias for :meth:`select_with_cursor` with identical behavior."""
-        return self.select_with_cursor(
-            statement, *parameters, schema_type=schema_type, statement_config=statement_config, **kwargs
         )
 
     def select_to_arrow(

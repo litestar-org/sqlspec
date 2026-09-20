@@ -141,7 +141,7 @@ class FilterConfig(TypedDict):
     cursor_secret: NotRequired[str | bytes]
     """Secret enabling HMAC-SHA256 signed cursors."""
     pagination_size: NotRequired[int]
-    """Default page size for limit/offset pagination."""
+    """Default page size for limit/offset or cursor pagination."""
     pagination_max_size: NotRequired[int]
     """Largest page size a client may request. Defaults to ``1000``."""
     search: NotRequired[str | set[str] | list[str]]

@@ -29,7 +29,6 @@ from sqlspec.core import (
     split_sql_script,
 )
 from sqlspec.core._pool import get_processed_state_pool, get_sql_pool
-from sqlspec.core.filters import CursorFilter, LimitOffsetFilter, OrderByFilter
 from sqlspec.core.filters import find_filter as _find_filter_impl
 from sqlspec.core.metrics import StackExecutionMetrics
 from sqlspec.core.parameters import (
@@ -979,23 +978,6 @@ class CommonDriverAttributesMixin:
             The match filter instance or None
         """
         return _find_filter_impl(filter_type, filters)
-
-    @staticmethod
-    def _split_cursor_filter(
-        parameters: "tuple[StatementParameters | StatementFilter, ...]", statement: "SQL | None" = None
-    ) -> "tuple[CursorFilter, tuple[StatementParameters | StatementFilter, ...]]":
-        cursor_filter = _find_filter_impl(CursorFilter, parameters)
-        if cursor_filter is None:
-            msg = "select_with_cursor() requires a CursorFilter"
-            raise ImproperConfigurationError(msg)
-        combined = (*parameters, *(statement.filters if statement is not None else ()))
-        if any(isinstance(value, (LimitOffsetFilter, OrderByFilter)) for value in combined):
-            msg = "CursorFilter owns ordering and limits; remove OrderByFilter/LimitOffsetFilter"
-            raise ImproperConfigurationError(msg)
-        if sum(isinstance(value, CursorFilter) for value in combined) != 1:
-            msg = "select_with_cursor() requires exactly one CursorFilter"
-            raise ImproperConfigurationError(msg)
-        return cursor_filter, tuple(value for value in parameters if not isinstance(value, CursorFilter))
 
     def _refresh_statement_cache_state(self) -> None:
         self._stmt_cache_enabled = bool(

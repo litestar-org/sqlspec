@@ -8,6 +8,7 @@ def test_cursor_pagination(tmp_path: Path) -> None:
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig
     from sqlspec.core import CursorFilter, CursorKey
+    from sqlspec.service import SQLSpecSyncService
 
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "cursor.db")}))
@@ -21,9 +22,10 @@ def test_cursor_pagination(tmp_path: Path) -> None:
                 "insert into items (id, name, created_at) values (?, ?, ?)",
                 [(i, f"Item {i}", f"2026-01-{1 + i // 5:02d}") for i in range(1, 26)],
             )
-            page = session.select_with_cursor(query, CursorFilter(keys, limit=10))
-            second = session.select_with_cursor(query, CursorFilter(keys, limit=10, cursor=page.next_cursor))
-            previous = session.select_with_cursor(query, CursorFilter(keys, limit=10, cursor=second.previous_cursor))
+            service = SQLSpecSyncService(session)
+            page = service.paginate_cursor(query, CursorFilter(keys, limit=10))
+            second = service.paginate_cursor(query, CursorFilter(keys, limit=10, cursor=page.next_cursor))
+            previous = service.paginate_cursor(query, CursorFilter(keys, limit=10, cursor=second.previous_cursor))
     finally:
         config.close_pool()
     # end-example

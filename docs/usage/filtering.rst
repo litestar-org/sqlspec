@@ -40,9 +40,26 @@ count query or return a total.
 
 Pass a returned token unchanged to the next request. A ``next_cursor`` moves
 forward; a ``previous_cursor`` moves back while keeping the same row order.
-A missing token means there is no page in that direction. ``fetch_with_cursor()``
-is an alias for ``select_with_cursor()``; async drivers expose both as async
-methods.
+A missing token means there is no page in that direction. Use
+``SQLSpecAsyncService.paginate_cursor()`` with an async session.
+
+For direct driver access, pass the cursor filter after other filters to
+``select()``, then build the page from the returned rows:
+
+.. code-block:: python
+
+    cursor_filter = CursorFilter(keys, limit=10)
+    page = cursor_filter.build_page(session.select(query, *filters, cursor_filter))
+
+With an async driver, await the query before building the page:
+
+.. code-block:: python
+
+    rows = await session.select(query, *filters, cursor_filter)
+    page = cursor_filter.build_page(rows)
+
+Use ``paginate_cursor(..., schema_type=Item)`` on a service when you need
+response conversion after cursor keys have been read.
 
 Choosing keys
 ~~~~~~~~~~~~~
@@ -122,7 +139,9 @@ It fetches one extra row to detect another page, then removes that row from
 subquery before cursor predicates are applied. In that case, these changes apply
 to the outer query; inner ``LIMIT`` and ``OFFSET`` bounds stay in place and cap
 the rows eligible for paging. Pass exactly one ``CursorFilter``
-to the driver helper; it applies other filters first, then the cursor filter.
+to ``paginate_cursor()``; it applies other filters first, then the cursor filter.
+When using ``select()`` directly, place the cursor filter last and pass its
+returned rows to ``build_page()``.
 Do not combine cursor pagination with offset pagination or a separate
 ``OrderByFilter``.
 
@@ -216,6 +235,7 @@ Using filters in a Litestar handler:
     from sqlspec.adapters.asyncpg import AsyncpgDriver
     from sqlspec.core import FilterTypes
     from sqlspec.extensions.litestar.providers import create_filter_dependencies
+    from sqlspec.service import SQLSpecAsyncService
 
     user_filter_deps = create_filter_dependencies({
         "pagination_type": "limit_offset",
@@ -307,6 +327,7 @@ secret in server configuration and pass it as ``cursor_secret``:
     from sqlspec.adapters.asyncpg import AsyncpgDriver
     from sqlspec.core import CursorKey, CursorPagination, FilterTypes
     from sqlspec.extensions.litestar.providers import create_filter_dependencies
+    from sqlspec.service import SQLSpecAsyncService
 
     @dataclass
     class Item:
@@ -326,7 +347,8 @@ secret in server configuration and pass it as ``cursor_secret``:
         db_session: AsyncpgDriver,
         filters: NamedDependency[SkipValidation[list[FilterTypes]]],
     ) -> CursorPagination[Item]:
-        return await db_session.select_with_cursor(
+        service = SQLSpecAsyncService(db_session)
+        return await service.paginate_cursor(
             "SELECT id, name, created_at FROM items", *filters, schema_type=Item
         )
 

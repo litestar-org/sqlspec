@@ -15,6 +15,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig, AiosqliteDriver
 from sqlspec.core import CursorKey, CursorPagination, FilterTypes
 from sqlspec.extensions.fastapi import SQLSpecPlugin
 from sqlspec.extensions.fastapi.providers import dep_cache
+from sqlspec.service import SQLSpecAsyncService
 
 pytestmark = pytest.mark.xdist_group("sqlite")
 
@@ -47,7 +48,9 @@ def cursor_client(tmp_path: Path) -> Generator[TestClient, None, None]:
         filters: Annotated[list[FilterTypes], Depends(filters_dependency)],
         db_session: Annotated[AiosqliteDriver, Depends(plugin.provide_session(config))],
     ) -> CursorPagination[Item]:
-        return await db_session.select_with_cursor("SELECT id, name FROM items", *filters, schema_type=Item)
+        return await SQLSpecAsyncService(session=db_session).paginate_cursor(
+            "SELECT id, name FROM items", *filters, schema_type=Item
+        )
 
     with TestClient(app) as client:
         yield client

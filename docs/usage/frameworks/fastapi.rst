@@ -153,7 +153,8 @@ To page with cursors, pass keys and a signing secret to the provider:
    })
 
 Inject ``cursor_filter_dep`` through ``Depends`` in place of ``filter_dep`` and
-pass ``*filters`` to ``db_session.select_with_cursor()``. Clients use ``cursor``
+pass ``*filters`` to ``SQLSpecAsyncService(db_session).paginate_cursor()``
+(from ``sqlspec.service``). Clients use ``cursor``
 and ``pageSize`` to move through pages. Invalid cursor tokens yield an HTTP 422
 validation response at the ``cursor`` query parameter. See
 :ref:`cursor-pagination` for key selection, NULL values, and signed tokens.

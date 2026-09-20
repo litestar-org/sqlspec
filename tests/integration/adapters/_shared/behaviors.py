@@ -163,10 +163,6 @@ class SyncContractDriver(Protocol):
 
     def execute_stack(self, stack: object, /, *, continue_on_error: bool = False) -> "tuple[Any, ...]": ...
 
-    def select_with_cursor(
-        self, statement: object, /, *parameters: object, **kwargs: Any
-    ) -> CursorPagination[dict[str, Any]]: ...
-
     def select(self, statement: object, /, *parameters: object, **kwargs: Any) -> list[dict[str, Any]]: ...
 
     def select_one(self, statement: object, /, *parameters: object, **kwargs: Any) -> dict[str, Any]: ...
@@ -217,10 +213,6 @@ class AsyncContractDriver(Protocol):
     async def execute_script(self, statement: object, /, *parameters: object, **kwargs: Any) -> SQLResult: ...
 
     async def execute_stack(self, stack: object, /, *, continue_on_error: bool = False) -> "tuple[Any, ...]": ...
-
-    async def select_with_cursor(
-        self, statement: object, /, *parameters: object, **kwargs: Any
-    ) -> CursorPagination[dict[str, Any]]: ...
 
     async def select(self, statement: object, /, *parameters: object, **kwargs: Any) -> list[dict[str, Any]]: ...
 
@@ -1153,7 +1145,8 @@ def assert_sync_cursor_pagination_contract(driver: object, case: DriverCase) -> 
         forward_pages = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):
-            page = cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            cursor_filter = CursorFilter(keys, 2, cursor)
+            page = cursor_filter.build_page(cursor_driver.select(base, cursor_filter))
             forward_pages.append(page)
             cursor = page.next_cursor
             if cursor is None:
@@ -1163,7 +1156,8 @@ def assert_sync_cursor_pagination_contract(driver: object, case: DriverCase) -> 
         for _ in range(len(_CURSOR_SEED_ROWS)):
             if cursor is None:
                 break
-            page = cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            cursor_filter = CursorFilter(keys, 2, cursor)
+            page = cursor_filter.build_page(cursor_driver.select(base, cursor_filter))
             backward_pages.append(page)
             cursor = page.previous_cursor
         _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
@@ -1172,7 +1166,8 @@ def assert_sync_cursor_pagination_contract(driver: object, case: DriverCase) -> 
         groups: list[dict[str, Any]] = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):
-            page = cursor_driver.select_with_cursor(grouped, CursorFilter([CursorKey("value")], 2, cursor))
+            cursor_filter = CursorFilter([CursorKey("value")], 2, cursor)
+            page = cursor_filter.build_page(cursor_driver.select(grouped, cursor_filter))
             groups.extend(page.items)
             cursor = page.next_cursor
             if cursor is None:
@@ -1190,7 +1185,8 @@ async def assert_async_cursor_pagination_contract(driver: object, case: DriverCa
         forward_pages = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):
-            page = await cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            cursor_filter = CursorFilter(keys, 2, cursor)
+            page = cursor_filter.build_page(await cursor_driver.select(base, cursor_filter))
             forward_pages.append(page)
             cursor = page.next_cursor
             if cursor is None:
@@ -1200,7 +1196,8 @@ async def assert_async_cursor_pagination_contract(driver: object, case: DriverCa
         for _ in range(len(_CURSOR_SEED_ROWS)):
             if cursor is None:
                 break
-            page = await cursor_driver.select_with_cursor(base, CursorFilter(keys, 2, cursor))
+            cursor_filter = CursorFilter(keys, 2, cursor)
+            page = cursor_filter.build_page(await cursor_driver.select(base, cursor_filter))
             backward_pages.append(page)
             cursor = page.previous_cursor
         _check_cursor_walk(forward_pages, backward_pages, _expected_cursor_order(_CURSOR_SEED_ROWS, keys))
@@ -1209,7 +1206,8 @@ async def assert_async_cursor_pagination_contract(driver: object, case: DriverCa
         groups: list[dict[str, Any]] = []
         cursor = None
         for _ in range(len(_CURSOR_SEED_ROWS)):
-            page = await cursor_driver.select_with_cursor(grouped, CursorFilter([CursorKey("value")], 2, cursor))
+            cursor_filter = CursorFilter([CursorKey("value")], 2, cursor)
+            page = cursor_filter.build_page(await cursor_driver.select(grouped, cursor_filter))
             groups.extend(page.items)
             cursor = page.next_cursor
             if cursor is None:

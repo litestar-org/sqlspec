@@ -653,9 +653,9 @@ class CursorFilter(PaginationFilter):
     """Paginate by ordered keys whose last key uniquely identifies each row.
 
     Replaces ORDER BY, LIMIT, and OFFSET and fetches ``limit + 1`` rows.
-    Assemble results with ``build_page()`` or the driver/service cursor APIs.
+    Assemble results with ``build_page()`` or the service's ``paginate_cursor()``.
     Apply this filter last so other filters constrain the inner query when
-    grouping or set operations require wrapping. ``select_with_cursor``
+    grouping or set operations require wrapping. ``paginate_cursor()``
     enforces that order automatically.
 
     Args:
