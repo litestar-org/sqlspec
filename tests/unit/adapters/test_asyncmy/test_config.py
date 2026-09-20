@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyDictCursor
-from sqlspec.adapters.asyncmy.config import AsyncmyConfig, _pool_config, _split_pool_config
+from sqlspec.adapters.asyncmy.config import AsyncmyConfig, _pool_config, _split_pool_config, build_connection_config
 from sqlspec.adapters.asyncmy.core import build_statement_config
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -275,3 +275,50 @@ async def test_create_connection_runs_the_connection_hook(monkeypatch: pytest.Mo
     await config.create_connection()
 
     assert seen == [sentinel]
+
+
+def test_build_connection_config_parses_url_dsn() -> None:
+    """DSN URLs should be parsed into individual connection parameters."""
+    cfg = build_connection_config({"dsn": "mysql://testuser:secret@remotehost:3307/appdb"})
+    assert "dsn" not in cfg
+    assert cfg["user"] == "testuser"
+    assert cfg["password"] == "secret"
+    assert cfg["host"] == "remotehost"
+    assert cfg["port"] == 3307
+    assert cfg["database"] == "appdb"
+
+
+def test_build_connection_config_discrete_args_override_dsn() -> None:
+    """Discrete keyword arguments should override values parsed from the DSN."""
+    cfg = build_connection_config({
+        "dsn": "mysql://dsnuser:dsnpass@dsnhost:3307/dsndb",
+        "user": "override_user",
+        "port": 3308,
+        "database": "override_db",
+    })
+    assert "dsn" not in cfg
+    assert cfg["user"] == "override_user"
+    assert cfg["password"] == "dsnpass"
+    assert cfg["host"] == "dsnhost"
+    assert cfg["port"] == 3308
+    assert cfg["database"] == "override_db"
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """Username alias should map to user while preserving db."""
+    cfg = build_connection_config({"username": "alias_user", "db": "alias_db"})
+    assert "username" not in cfg
+    assert cfg["user"] == "alias_user"
+    assert cfg["db"] == "alias_db"
+
+
+def test_asyncmy_config_with_dsn_applies_to_connection_kwargs() -> None:
+    """AsyncmyConfig with DSN must pop DSN and populate connection kwargs."""
+    config = AsyncmyConfig(connection_config={"dsn": "mysql://user1:pass1@dbhost:3306/production"})
+    assert "dsn" not in config.connection_config
+    _pool_kw, conn_kwargs = _split_pool_config(config.connection_config)
+    assert "dsn" not in conn_kwargs
+    assert conn_kwargs["user"] == "user1"
+    assert conn_kwargs["password"] == "pass1"
+    assert conn_kwargs["host"] == "dbhost"
+    assert conn_kwargs["database"] == "production"

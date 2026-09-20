@@ -16,7 +16,7 @@ from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFacto
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import CLOUD_SQL_CONNECTOR_INSTALLED
-from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn
 
 if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
@@ -31,6 +31,7 @@ __all__ = (
     "PyMysqlSslConfig",
     "PyMysqlSslParams",
     "PyMysqlTimeout",
+    "build_connection_config",
 )
 
 
@@ -61,10 +62,15 @@ PyMysqlSslConfig = ssl.SSLContext | PyMysqlSslParams | Mapping[str, Any]
 class PyMysqlConnectionParams(TypedDict):
     """PyMySQL connection parameters."""
 
+    dsn: NotRequired[str]
+    url: NotRequired[str]
+    connection_string: NotRequired[str]
     host: NotRequired[str]
     user: NotRequired[str]
+    username: NotRequired[str]
     password: NotRequired[str]
     database: NotRequired[str]
+    db: NotRequired[str]
     port: NotRequired[int]
     unix_socket: NotRequired[str]
     charset: NotRequired[str]
@@ -160,6 +166,36 @@ _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
 ))
 
 
+def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize PyMySQL local-infile aliases to the native connection flag."""
+    config = dict(connection_config)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
+    return config
+
+
+def build_connection_config(
+    connection_config: "PyMysqlPoolParams | dict[str, Any] | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Normalize pymysql connection configuration, parsing DSN and mapping aliases."""
+    config = normalize_connection_config(connection_config)
+    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if user_alias is not None and "user" not in config:
+        config["user"] = user_alias
+    db_alias = config.pop("db", None)
+    if db_alias is not None and "database" not in config:
+        config["database"] = db_alias
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = parse_mysql_dsn(dsn)
+        for key, value in dsn_params.items():
+            config.setdefault(key, value)
+    config.setdefault("host", "localhost")
+    config.setdefault("port", 3306)
+    config.setdefault("charset", "utf8mb4")
+    return _normalize_local_infile(config)
+
+
 class _PyMysqlCloudSqlConnector:
     __slots__ = ("_config", "_database", "_driver_kwargs", "_password", "_user")
 
@@ -242,11 +278,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        connection_config = _normalize_local_infile(normalize_connection_config(connection_config))
-        connection_config.setdefault("host", "localhost")
-        connection_config.setdefault("port", 3306)
-        connection_config.setdefault("local_infile", False)
-        connection_config.setdefault("charset", "utf8mb4")
+        connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -368,11 +400,3 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
-
-
-def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize PyMySQL local-infile aliases to the native connection flag."""
-    config = dict(connection_config)
-    allow_local_infile = bool(config.pop("allow_local_infile", False))
-    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
-    return config

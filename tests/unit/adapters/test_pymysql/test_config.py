@@ -10,7 +10,7 @@ import pytest
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
-from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams
+from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams, build_connection_config
 from sqlspec.adapters.pymysql.core import create_mapped_exception
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
 from sqlspec.exceptions import DatabaseConnectionError
@@ -188,3 +188,56 @@ def test_pool_close_closes_connections_opened_on_other_threads() -> None:
     pool.close()
 
     assert [connection.close.call_count for connection in created] == [1, 1]
+
+
+def test_build_connection_config_parses_url_dsn() -> None:
+    """DSN URLs should be parsed into individual connection parameters."""
+    cfg = build_connection_config({"dsn": "mysql://testuser:secret@remotehost:3307/appdb"})
+    assert "dsn" not in cfg
+    assert cfg["user"] == "testuser"
+    assert cfg["password"] == "secret"
+    assert cfg["host"] == "remotehost"
+    assert cfg["port"] == 3307
+    assert cfg["database"] == "appdb"
+
+
+def test_build_connection_config_discrete_args_override_dsn() -> None:
+    """Discrete keyword arguments should override values parsed from the DSN."""
+    cfg = build_connection_config({
+        "dsn": "mysql://dsnuser:dsnpass@dsnhost:3307/dsndb",
+        "user": "override_user",
+        "port": 3308,
+        "database": "override_db",
+    })
+    assert "dsn" not in cfg
+    assert cfg["user"] == "override_user"
+    assert cfg["password"] == "dsnpass"
+    assert cfg["host"] == "dsnhost"
+    assert cfg["port"] == 3308
+    assert cfg["database"] == "override_db"
+
+
+def test_build_connection_config_normalizes_aliases() -> None:
+    """Username and db aliases should map to user and database."""
+    cfg = build_connection_config({"username": "alias_user", "db": "alias_db"})
+    assert "username" not in cfg
+    assert "db" not in cfg
+    assert cfg["user"] == "alias_user"
+    assert cfg["database"] == "alias_db"
+
+
+def test_pymysql_config_with_dsn_applies_to_connection_parameters() -> None:
+    """PyMysqlConfig with DSN must pop DSN and populate connection parameters."""
+    config = PyMysqlConfig(connection_config={"dsn": "mysql://user1:pass1@dbhost:3306/production"})
+    assert "dsn" not in config.connection_config
+    assert config.connection_config["user"] == "user1"
+    assert config.connection_config["password"] == "pass1"
+    assert config.connection_config["host"] == "dbhost"
+    assert config.connection_config["database"] == "production"
+
+    pool = config._create_pool()
+    assert "dsn" not in pool._connection_parameters
+    assert pool._connection_parameters["user"] == "user1"
+    assert pool._connection_parameters["password"] == "pass1"
+    assert pool._connection_parameters["host"] == "dbhost"
+    assert pool._connection_parameters["database"] == "production"
