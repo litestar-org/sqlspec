@@ -14,6 +14,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Added:**
 
+* Litestar filter dependencies support cursor pagination with signed tokens,
+  bounded page sizes, dynamic sorting, and client validation errors.
+
 * Added ``select_with_cursor`` and ``fetch_with_cursor`` to sync and async drivers
   for one-query cursor pages with optional schema conversion.
 
