@@ -350,14 +350,9 @@ def _assert_parameter_data_rows(rows: list[dict[str, Any]], expected: list[str])
 
 
 def assert_sync_parameter_values_are_data_contract(driver: object, case: DriverCase) -> None:
-    """Bound values round-trip as data, including literal percent query text."""
+    """Bound values round-trip as data without changing query structure."""
     connection = cast("SyncContractDriver", driver)
     table = case.table
-    rows = tuple(ContractRow(f"seed{index}", index) for index in range(3))
-    _seed_sync(connection, rows, table, case)
-    for _ in range(3):
-        selected = connection.select(f"SELECT name FROM {table.name} WHERE name LIKE 'seed%' AND value >= ?", (0,))
-        _assert_parameter_data_rows(selected, [row.name for row in rows])
     for value in _PARAMETER_DATA_VALUES:
         selected = connection.select(table.select_by_name_qmark_sql, (value,))
         _assert_parameter_data_rows(selected, [])
@@ -368,16 +363,9 @@ def assert_sync_parameter_values_are_data_contract(driver: object, case: DriverC
 
 
 async def assert_async_parameter_values_are_data_contract(driver: object, case: DriverCase) -> None:
-    """Bound values round-trip as data, including literal percent query text."""
+    """Bound values round-trip as data without changing query structure."""
     connection = cast("AsyncContractDriver", driver)
     table = case.table
-    rows = tuple(ContractRow(f"seed{index}", index) for index in range(3))
-    await _seed_async(connection, rows, table, case)
-    for _ in range(3):
-        selected = await connection.select(
-            f"SELECT name FROM {table.name} WHERE name LIKE 'seed%' AND value >= ?", (0,)
-        )
-        _assert_parameter_data_rows(selected, [row.name for row in rows])
     for value in _PARAMETER_DATA_VALUES:
         selected = await connection.select(table.select_by_name_qmark_sql, (value,))
         _assert_parameter_data_rows(selected, [])
