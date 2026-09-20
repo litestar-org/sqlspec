@@ -453,7 +453,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
-        config = build_connection_config(self.connection_config)
+        config = {
+            key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
+        }
 
         if self.driver_features.get("enable_cloud_sql", False):
             self._setup_cloud_sql_connector(config)
@@ -536,7 +538,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Returns:
             An AsyncPG connection instance.
         """
-        config = build_connection_config(self.connection_config)
+        config = {
+            key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
+        }
         for key in _POOL_ONLY_CONFIG_KEYS:
             config.pop(key, None)
 
