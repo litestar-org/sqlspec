@@ -1,9 +1,12 @@
 """Parameter style conversion utilities."""
 
 from collections.abc import Callable, Mapping, Sequence
+from decimal import Decimal
+from math import isfinite
 from typing import Any, Final
 
 from mypy_extensions import mypyc_attr
+from sqlglot import exp
 
 from sqlspec.core.parameters._types import (
     _EXPANDING_POSITIONAL_STYLES,
@@ -22,6 +25,21 @@ from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.exceptions import SQLSpecError
 
 __all__ = ("ParameterConverter",)
+
+_BINARY_LITERAL_TEMPLATES: Final[dict[str | None, str]] = {
+    None: "X'{}'",
+    "mysql": "X'{}'",
+    "sqlite": "X'{}'",
+    "postgres": "decode('{}', 'hex')",
+    "pgvector": "decode('{}', 'hex')",
+    "paradedb": "decode('{}', 'hex')",
+    "pg_textsearch": "decode('{}', 'hex')",
+    "oracle": "HEXTORAW('{}')",
+    "tsql": "0x{}",
+    "bigquery": "FROM_HEX('{}')",
+    "spanner": "FROM_HEX('{}')",
+    "duckdb": "UNHEX('{}')",
+}
 
 _ORDERED_PARAM_INFO_MIN_SIZE = 2
 _OCCURRENCE_KEYED_STYLES: Final[frozenset[ParameterStyle]] = frozenset({
@@ -62,6 +80,7 @@ class ParameterConverter:
         target_style: "ParameterStyle",
         is_many: bool = False,
         *,
+        dialect: "str | None" = None,
         strict_named_parameters: bool = True,
         param_info: "list[ParameterInfo] | None" = None,
         precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
@@ -69,7 +88,7 @@ class ParameterConverter:
         extracted_param_info = param_info if param_info is not None else self.validator.extract_parameters(sql)
 
         if target_style == ParameterStyle.STATIC:
-            return self._embed_static_parameters(sql, parameters, extracted_param_info), None
+            return self._embed_static_parameters(sql, parameters, extracted_param_info, dialect), None
 
         converted_sql, converted_parameters, _ = self._convert_builtin(
             sql,
@@ -439,21 +458,33 @@ class ParameterConverter:
         return None
 
     @staticmethod
-    def _format_literal(param_value: object | None) -> str:
-        """Format a parameter value as a SQL literal string."""
+    def _format_literal(param_value: object | None, dialect: "str | None" = None) -> str:
+        """Render a literal for the server's default SQL mode.
+
+        MySQL NO_BACKSLASH_ESCAPES stores doubled backslashes as two characters.
+        """
         if param_value is None:
             return "NULL"
-        if isinstance(param_value, str):
-            escaped = param_value.replace("'", "''")
-            return f"'{escaped}'"
         if isinstance(param_value, bool):
             return "TRUE" if param_value else "FALSE"
-        if isinstance(param_value, (int, float)):
+        if isinstance(param_value, (float, Decimal)):
+            finite = param_value.is_finite() if isinstance(param_value, Decimal) else isfinite(param_value)
+            if not finite:
+                msg = "Cannot embed a non-finite number in statically compiled SQL"
+                raise SQLSpecError(msg)
             return str(param_value)
-        return f"'{param_value!s}'"
+        if isinstance(param_value, int):
+            return str(param_value)
+        if isinstance(param_value, (bytes, bytearray, memoryview)):
+            template = _BINARY_LITERAL_TEMPLATES.get(dialect.lower() if dialect else None)
+            if template is None:
+                msg = f"Cannot embed a bytes value in statically compiled SQL for dialect '{dialect}'"
+                raise SQLSpecError(msg)
+            return template.format(bytes(param_value).hex())
+        return exp.Literal.string(str(param_value)).sql(dialect=dialect)
 
     def _embed_static_parameters(
-        self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]"
+        self, sql: str, parameters: "ParameterPayload", param_info: "list[ParameterInfo]", dialect: "str | None" = None
     ) -> str:
         if not param_info:
             return sql
@@ -472,7 +503,7 @@ class ParameterConverter:
         last_start = len(sql)
         for param in reversed(param_info):
             param_value = self._parameter_value(parameters, param, unique_params)
-            literal = self._format_literal(param_value)
+            literal = self._format_literal(param_value, dialect)
             segments.extend((sql[param.position + len(param.placeholder_text) : last_start], literal))
             last_start = param.position
         segments.append(sql[:last_start])
@@ -489,7 +520,8 @@ class ParameterConverter:
 
         unique_ordinal = unique_params.get(param_key)
         if unique_ordinal is None:
-            return None
+            msg = f"Missing value for placeholder '{param.placeholder_text}' in statically compiled SQL"
+            raise SQLSpecError(msg)
 
         if isinstance(parameters, Mapping):
             if param.name and param.name in parameters:
@@ -502,7 +534,8 @@ class ParameterConverter:
             if unique_ordinal < len(parameters):
                 return parameters[unique_ordinal]
 
-        return None
+        msg = f"Missing value for placeholder '{param.placeholder_text}' in statically compiled SQL"
+        raise SQLSpecError(msg)
 
 
 def _placeholder_qmark(_: Any) -> str:

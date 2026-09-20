@@ -2826,3 +2826,91 @@ def test_process_positional_json_values_preserves_objects(processor: ParameterPr
 def test_jsonb_exists_operator_distinguishes_operands(sql: str, expected: list[str]) -> None:
     validator = ParameterValidator()
     assert [info.placeholder_text for info in validator.extract_parameters(sql)] == expected
+@pytest.mark.parametrize("dialect", ["mysql", "postgres", "sqlite", "oracle", "tsql", "duckdb", "bigquery", "spanner"])
+def test_static_literal_escapes_per_dialect(dialect: str) -> None:
+    value = "x\\' OR 1=1 -- "
+    literal = ParameterConverter._format_literal(value, dialect)
+    assert literal == sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+    statement = sqlglot.parse_one(f"SELECT * FROM t WHERE name = {literal}", dialect=dialect)
+    equality = statement.args["where"].this
+    assert isinstance(equality, sqlglot.exp.EQ)
+    assert isinstance(equality.expression, sqlglot.exp.Literal)
+    assert equality.expression.this == value
+
+
+def test_static_literal_escapes_non_string_objects() -> None:
+    class Value:
+        def __str__(self) -> str:
+            return "a' OR '1'='1"
+
+    assert ParameterConverter._format_literal(Value(), "mysql") == "'a'' OR ''1''=''1'"
+
+
+@pytest.mark.parametrize(
+    "dialect,template",
+    [
+        (None, "X'{}'"),
+        ("mysql", "X'{}'"),
+        ("sqlite", "X'{}'"),
+        ("postgres", "decode('{}', 'hex')"),
+        ("pgvector", "decode('{}', 'hex')"),
+        ("paradedb", "decode('{}', 'hex')"),
+        ("pg_textsearch", "decode('{}', 'hex')"),
+        ("oracle", "HEXTORAW('{}')"),
+        ("tsql", "0x{}"),
+        ("bigquery", "FROM_HEX('{}')"),
+        ("spanner", "FROM_HEX('{}')"),
+        ("duckdb", "UNHEX('{}')"),
+    ],
+)
+@pytest.mark.parametrize("value", [b"\x00\xffab", b"", bytearray(b"ab"), memoryview(b"ab")])
+def test_static_literal_renders_bytes_per_dialect(dialect: str | None, template: str, value: object) -> None:
+    assert ParameterConverter._format_literal(value, dialect) == template.format(bytes(value).hex())
+
+
+def test_static_literal_rejects_unknown_binary_dialect() -> None:
+    with pytest.raises(SQLSpecError, match="Cannot embed a bytes value"):
+        ParameterConverter._format_literal(b"a", "spangres")
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), Decimal("NaN"), Decimal("Infinity")])
+def test_static_literal_rejects_non_finite_numbers(value: object) -> None:
+    with pytest.raises(SQLSpecError, match="non-finite"):
+        ParameterConverter._format_literal(value, "mysql")
+
+
+def test_static_embedding_raises_on_unresolved_placeholder() -> None:
+    from sqlspec.adapters.asyncmy.core import default_statement_config
+
+    with pytest.raises(SQLSpecError, match="Missing value for placeholder"):
+        SQL(
+            "select * from t where a = ? and b = :x", {"x": 2}, statement_config=default_statement_config
+        ).as_script().compile()
+
+
+def test_static_embedding_explicit_none_renders_null() -> None:
+    from sqlspec.adapters.asyncmy.core import default_statement_config
+
+    sql, parameters = SQL("select :x", {"x": None}, statement_config=default_statement_config).as_script().compile()
+    assert sql == "select NULL"
+    assert parameters is None
+
+
+def test_static_cache_is_dialect_specific() -> None:
+    from sqlspec import StatementConfig
+
+    value = "back\\slash"
+    for dialect in ("mysql", "postgres", "mysql"):
+        sql, parameters = (
+            SQL("select :x", {"x": value}, statement_config=StatementConfig(dialect=dialect)).as_script().compile()
+        )
+        assert sql == "select " + sqlglot.exp.Literal.string(value).sql(dialect=dialect)
+        assert parameters is None
+
+
+@pytest.mark.parametrize("parameters", [{}, (), []])
+def test_static_embedding_rejects_empty_payload(parameters: object) -> None:
+    from sqlspec.adapters.pymysql.core import default_statement_config
+
+    with pytest.raises(SQLSpecError, match="Missing value for placeholder"):
+        SQL("select :x", parameters, statement_config=default_statement_config).as_script().compile()
