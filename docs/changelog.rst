@@ -16,6 +16,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
   a generic ``CursorPagination`` response container.
+* Added ``CursorKey`` and ``CursorFilter`` for bidirectional keyset pagination,
+  including explicit NULL placement, composite sort keys, and page cursor creation.
 
 * Defer public exports, query builders, and migration helpers in pure-Python installations
   on first access to accelerate cold import performance.

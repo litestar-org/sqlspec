@@ -16,6 +16,8 @@ from sqlspec.core import (
     BeforeAfterFilter,
     BooleanFilter,
     ChoicesFilter,
+    CursorFilter,
+    CursorKey,
     InCollectionFilter,
     LimitOffsetFilter,
     NotInCollectionFilter,
@@ -42,6 +44,7 @@ def _filter_samples() -> "list[StatementFilter]":
     """Return one representative instance of every concrete filter class."""
     return [
         LimitOffsetFilter(10, 5),
+        CursorFilter([CursorKey("id")], 10),
         OrderByFilter("id", "desc"),
         SearchFilter("name", "foo", ignore_case=True),
         SearchFilter({"name", "email"}, "bar"),
