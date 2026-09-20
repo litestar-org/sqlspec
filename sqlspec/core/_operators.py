@@ -70,14 +70,19 @@ def _outer_order(expression: exp.Expr, order: exp.Expr) -> exp.Expr:
                     if isinstance(source, exp.Column) and output is not None:
                         outputs[(source.table, source.name)] = output
                         outputs.setdefault(("", source.name), output)
-                    elif output is not None:
-                        expressions[source] = exp.Column(this=output.copy())
                     elif not isinstance(source, (exp.Column, exp.Star)):
-                        expressions[source] = exp.Literal.number(index + 1)
+                        target = exp.Column(this=output.copy()) if output is not None else exp.Literal.number(index + 1)
+                        expressions[source.unnest()] = target
+                        unqualified = source.unnest().copy()
+                        for column in unqualified.find_all(exp.Column):
+                            column.set("table", None)
+                            column.set("db", None)
+                            column.set("catalog", None)
+                        expressions.setdefault(unqualified, target)
     result = order.copy()
     for item in result.expressions:
         source = item.this if isinstance(item, exp.Ordered) else item
-        resolved = expressions.get(source)
+        resolved = expressions.get(source.unnest())
         if resolved is not None:
             if isinstance(item, exp.Ordered):
                 item.set("this", resolved.copy())
