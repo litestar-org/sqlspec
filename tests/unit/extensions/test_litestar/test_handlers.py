@@ -229,15 +229,18 @@ async def test_async_connection_provider_creates_connection() -> None:
 
     provider = connection_provider_maker(config, pool_key, connection_key)
 
-    mock_pool = await config.create_pool()
-    state = MagicMock()
-    state.get.return_value = mock_pool
-    scope = cast("Scope", {})
+    try:
+        pool = await config.create_pool()
+        state = MagicMock()
+        state.get.return_value = pool
+        scope = cast("Scope", {})
 
-    connection: Any
-    async for connection in provider(state, scope):
-        assert connection is not None
-        assert get_sqlspec_scope_state(scope, connection_key) is connection
+        connection: Any
+        async for connection in provider(state, scope):
+            assert connection is not None
+            assert get_sqlspec_scope_state(scope, connection_key) is connection
+    finally:
+        await config.close_pool()
 
 
 async def test_async_connection_provider_raises_when_pool_missing() -> None:

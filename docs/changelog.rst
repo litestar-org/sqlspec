@@ -117,13 +117,13 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * ``limit``, ``offset``, and ``paginate`` on set operations render valid
   SQL Server pagination while retaining the requested result ordering.
 
-* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
-  instead of leaking a sqlglot ``ParseError``.
-
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
 
+
+* Preserve parameter alignment when repeated BigQuery queries inline NULL values,
+  including copied statements and transitions between NULL and non-NULL values.
 
 * Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
   when parameters are bound, including repeated preparation, and retains returned
@@ -162,6 +162,19 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
   now pass statement parameters to the driver for binding.
+  Cross-adapter safety checks cover quotes, backslashes, and placeholder-like
+  text supplied as bound values.
+
+
+* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
+  instead of leaking a sqlglot ``ParseError``, including during concurrent resets.
+
+* Tests, including Litestar connection-provider tests, close aiosqlite pools before
+  their event loops shut down, and unhandled worker-thread exceptions now fail the test suite.
+
+* The SQLite and aiosqlite pools retry enabling WAL mode when several connections
+  first open a new database at the same time; previously this could fail with
+  ``database is locked``.
 
 * Close async example connection pools before their event loops shut down.
 

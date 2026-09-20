@@ -333,3 +333,63 @@ async def test_acquire_enforces_connect_timeout_on_pool_exhaustion() -> None:
     finally:
         await pool.release(held)
         await pool.close()
+
+
+async def test_concurrent_first_acquire_on_new_file_database_succeeds(tmp_path: Path) -> None:
+    for iteration in range(20):
+        pools = [
+            AiosqliteConnectionPool({"database": str(tmp_path / f"concurrent-{iteration}.sqlite")}) for _ in range(4)
+        ]
+
+        async def acquire(pool: AiosqliteConnectionPool) -> str | int:
+            connection = await pool.acquire()
+            try:
+                return await _read_pragma(connection.connection, "PRAGMA journal_mode")
+            finally:
+                await pool.release(connection)
+
+        try:
+            results = await asyncio.gather(*(acquire(pool) for pool in pools), return_exceptions=True)
+            assert results == ["wal"] * 4
+        finally:
+            await asyncio.gather(*(pool.close() for pool in pools))
+
+
+@pytest.mark.parametrize(
+    ("message", "failures", "calls"),
+    [("database is locked", 2, 3), ("database is locked", 50, 50), ("disk I/O error", 1, 1)],
+)
+async def test_wal_setup_retries_locks_and_propagates_errors(
+    monkeypatch: pytest.MonkeyPatch, message: str, failures: int, calls: int
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from sqlspec.adapters.aiosqlite import pool as pool_module
+
+    connection = AsyncMock()
+    connection.execute.side_effect = [sqlite3.OperationalError(message)] * failures + [None]
+    monkeypatch.setattr(pool_module.asyncio, "sleep", AsyncMock())
+    if failures == 2:
+        await pool_module._enable_wal(connection)
+    else:
+        with pytest.raises(sqlite3.OperationalError, match=message):
+            await pool_module._enable_wal(connection)
+    assert connection.execute.call_count == calls
+
+
+async def test_wal_setup_failure_propagates_from_new_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from sqlspec.adapters.aiosqlite import pool as pool_module
+
+    monkeypatch.setattr(
+        pool_module, "_enable_wal", AsyncMock(side_effect=sqlite3.OperationalError("database is locked"))
+    )
+    pool = AiosqliteConnectionPool({"database": str(tmp_path / "failure.sqlite")})
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            await pool.new_connection()
+    finally:
+        await pool.close()
