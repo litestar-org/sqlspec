@@ -201,7 +201,7 @@ def _decode_value(entry: Any) -> Any:
     raise ValueError(msg)
 
 
-def decode_cursor(token: str, fingerprint: str, key_count: int, *, secret: bytes | None = None) -> DecodedCursor:
+def decode_cursor(token: object, fingerprint: str, key_count: int, *, secret: bytes | None = None) -> DecodedCursor:
     """Validate a cursor and recover its sort keys.
 
     Args:
