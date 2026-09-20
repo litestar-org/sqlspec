@@ -138,6 +138,26 @@ SQLSpec provides ``provide_filters`` to parse HTTP query parameters into typed
    ) -> dict[str, str]:
        return {"status": "ok"}
 
+To page with cursors, pass keys and a signing secret to the provider:
+
+.. code-block:: python
+
+   import os
+   from sqlspec.core import CursorKey
+
+   cursor_filter_dep = provide_filters({
+       "pagination_type": "cursor",
+       "cursor_keys": [CursorKey("created_at", "desc"), CursorKey("id", "desc")],
+       "cursor_secret": os.environ["CURSOR_SECRET"],
+       "pagination_size": 20,
+   })
+
+Inject ``cursor_filter_dep`` through ``Depends`` in place of ``filter_dep`` and
+pass ``*filters`` to ``db_session.select_with_cursor()``. Clients use ``cursor``
+and ``pageSize`` to move through pages. Invalid cursor tokens yield an HTTP 422
+validation response at the ``cursor`` query parameter. See
+:ref:`cursor-pagination` for key selection, NULL values, and signed tokens.
+
 Observability and SQLCommenter
 ==============================
 

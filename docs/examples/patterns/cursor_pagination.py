@@ -1,0 +1,34 @@
+from pathlib import Path
+
+__all__ = ("test_cursor_pagination",)
+
+
+def test_cursor_pagination(tmp_path: Path) -> None:
+    # start-example
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.core import CursorFilter, CursorKey
+
+    spec = SQLSpec()
+    config = spec.add_config(SqliteConfig(connection_config={"database": str(tmp_path / "cursor.db")}))
+    keys = [CursorKey("created_at", "desc"), CursorKey("id", "desc")]
+    query = "select id, name, created_at from items"
+
+    try:
+        with spec.provide_session(config) as session:
+            session.execute("create table items (id integer primary key, name text, created_at text)")
+            session.execute_many(
+                "insert into items (id, name, created_at) values (?, ?, ?)",
+                [(i, f"Item {i}", f"2026-01-{1 + i // 5:02d}") for i in range(1, 26)],
+            )
+            page = session.select_with_cursor(query, CursorFilter(keys, limit=10))
+            second = session.select_with_cursor(query, CursorFilter(keys, limit=10, cursor=page.next_cursor))
+            previous = session.select_with_cursor(query, CursorFilter(keys, limit=10, cursor=second.previous_cursor))
+    finally:
+        config.close_pool()
+    # end-example
+
+    assert len(page.items) == 10
+    assert len(second.items) == 10
+    assert {row["id"] for row in page.items}.isdisjoint(row["id"] for row in second.items)
+    assert previous.items == page.items

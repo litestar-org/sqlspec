@@ -18,12 +18,120 @@ to get both the page data and the total matching count.
    :end-before: # end-example
    :dedent: 4
    :no-upgrade:
+
+.. _cursor-pagination:
+
+Cursor Pagination
+-----------------
+
+Cursor pagination starts each page after a row's sort-key values instead of
+skipping rows with an offset. Use it to browse a large result set in either
+direction. Each page includes ``items``, ``limit``, ``next_cursor``,
+``previous_cursor``, ``has_next``, and ``has_previous``; it does not run a
+count query or return a total.
+
+.. literalinclude:: /examples/patterns/cursor_pagination.py
+   :language: python
+   :caption: ``cursor pagination``
+   :start-after: # start-example
+   :end-before: # end-example
+   :dedent: 4
+   :no-upgrade:
+
+Pass a returned token unchanged to the next request. A ``next_cursor`` moves
+forward; a ``previous_cursor`` moves back while keeping the same row order.
+A missing token means there is no page in that direction. ``fetch_with_cursor()``
+is an alias for ``select_with_cursor()``; async drivers expose both as async
+methods.
+
+Choosing keys
+~~~~~~~~~~~~~
+
+Choose stable sort columns and make the final key unique for each result row.
+For example, a timestamp may be shared by many rows, so follow it with the
+primary key. Keep the keys, directions, and NULL placement the same when you
+reuse a token.
+
+Select every key column, even when ``schema_type`` leaves it out of the response.
+For a qualified name such as ``items.created_at``, the default result name is
+``created_at``. If the query gives that column an alias, name it with
+``CursorKey("items.created_at", "desc", result_name="created")``. Grouped,
+``DISTINCT``, and set-operation queries must expose all keys as output columns.
+
+NULL values
+~~~~~~~~~~~
+
+For a nullable key, set ``nulls="first"`` or ``nulls="last"`` on ``CursorKey``.
+For cursor keys, ``nulls=None`` declares that the key is non-nullable; a NULL
+key value raises ``ImproperConfigurationError`` when a page token is built.
+This differs from ``OrderByFilter``, where ``nulls=None`` uses the database's
+NULL order.
+
+Signed cursors
+~~~~~~~~~~~~~~
+
+Pass ``secret=`` to ``CursorFilter`` to sign tokens with HMAC. Use the same
+secret for every request that shares tokens, and keep it in server-side
+configuration. Public endpoints should set a secret: without one, a client
+can change the values and types carried by a token.
+
+Cursors are encoded, not encrypted. Clients can read the sort-key values,
+even when ``schema_type`` omits those columns from the returned items. A
+signature prevents changes to the token; the query's own ``WHERE`` clause
+remains the access-control boundary. Apply tenant and user restrictions on
+every request.
+
+Invalid cursors
+~~~~~~~~~~~~~~~
+
+Malformed tokens, bad signatures, and tokens for a different ordering raise
+``sqlspec.exceptions.InvalidCursorError``. Catch that error at an application
+boundary if you use the driver directly. The framework filter providers map
+it to a validation response: HTTP 400 in Litestar and HTTP 422 in FastAPI.
+
+Custom value types
+~~~~~~~~~~~~~~~~~~
+
+Built-in encoders preserve common Python values, including dates, timestamps,
+UUIDs, decimals, and bytes. Register other types once at application startup
+with a unique tag and functions that turn the value into text and back:
+
+.. code-block:: python
+
+    from ipaddress import IPv4Address
+    from sqlspec.core import register_cursor_type
+
+    register_cursor_type(IPv4Address, "ipv4", str, IPv4Address)
+
+The database driver must still support binding the restored value.
+
+Timestamp precision
+~~~~~~~~~~~~~~~~~~~
+
+Use key values with the same precision as the stored column. A type that
+rounds timestamps, such as SQL Server's legacy ``datetime``, can re-match a
+boundary row when the Python value has finer precision. Prefer a type that
+preserves the full value, and keep a unique final key to break ties.
+
+Query shape
+~~~~~~~~~~~
+
+The cursor filter replaces the query's ``ORDER BY``, ``LIMIT``, and ``OFFSET``.
+It fetches one extra row to detect another page, then removes that row from
+``items``. Grouped, ``DISTINCT``, and set-operation queries are wrapped in a
+subquery before cursor predicates are applied. Pass exactly one ``CursorFilter``
+to the driver helper; it applies other filters first, then the cursor filter.
+Do not combine cursor pagination with offset pagination or a separate
+``OrderByFilter``.
+
 Core Filter Types
 -----------------
 
 SQLSpec defines filter types in ``sqlspec.core`` that can be used independently
 or with framework integrations:
 
+- ``CursorFilter(keys, limit, cursor=None, secret=None)`` -- cursor pagination
+- ``CursorKey(field_name, sort_order="asc", nulls=None, result_name=None)`` -- a cursor sort key
 - ``LimitOffsetFilter(limit, offset)`` -- limit and offset based pagination
 - ``PaginationFilter(page, page_size)`` -- page-number based pagination
 - ``OrderByFilter(field_name, sort_order, nulls=None)`` -- sorting (supports expression mode)
@@ -210,3 +318,55 @@ Related Guides
 - :doc:`query_builder` for building queries with ``.where()`` clauses.
 - :doc:`/recipes/service_layer` for building robust application service layers.
 - :doc:`/reference/core/filters` for the core filter classes and parameters API.
+
+Cursor filter dependencies
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set ``pagination_type="cursor"`` and provide the ordered keys. Keep a signing
+secret in server configuration and pass it as ``cursor_secret``:
+
+.. code-block:: python
+
+    import os
+    from dataclasses import dataclass
+    from datetime import datetime
+
+    from litestar import get
+    from litestar.di import NamedDependency
+    from litestar.params import SkipValidation
+    from sqlspec.adapters.asyncpg import AsyncpgDriver
+    from sqlspec.core import CursorKey, CursorPagination, FilterTypes
+    from sqlspec.extensions.litestar.providers import create_filter_dependencies
+
+    @dataclass
+    class Item:
+        id: int
+        name: str
+        created_at: datetime
+
+    cursor_deps = create_filter_dependencies({
+        "pagination_type": "cursor",
+        "cursor_keys": [CursorKey("created_at", "desc"), CursorKey("id", "desc")],
+        "cursor_secret": os.environ["CURSOR_SECRET"],
+        "pagination_size": 20,
+    })
+
+    @get("/items", dependencies=cursor_deps)
+    async def list_cursor_items(
+        db_session: AsyncpgDriver,
+        filters: SkipValidation[NamedDependency[list[FilterTypes]]],
+    ) -> CursorPagination[Item]:
+        return await db_session.select_with_cursor(
+            "SELECT id, name, created_at FROM items", *filters, schema_type=Item
+        )
+
+Clients send ``cursor`` and ``pageSize``. The first request omits ``cursor``;
+subsequent requests pass ``next_cursor`` or ``previous_cursor`` from the response.
+The default page size is 20 and the default maximum is 1000; set
+``pagination_max_size`` to change the cap.
+
+When ``sort_field`` is configured, clients may also use ``orderBy`` and
+``sortOrder``. The provider keeps the unique final cursor key as a tiebreaker.
+Changing the requested ordering starts a new traversal; an old token for a
+different ordering fails validation. The returned filter list contains a
+``CursorFilter`` instead of separate offset and ordering filters.

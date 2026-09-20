@@ -114,6 +114,40 @@ Both examples leave Ada and Grace in the table. The last transaction rolls back
 its insert when the block raises. Query helpers do not add commits between calls;
 ``begin_transaction()`` commits once when its block succeeds.
 
+Cursor Pages
+============
+
+Use ``paginate_cursor()`` when the caller follows page tokens instead of page
+numbers. It returns ``CursorPagination[T]`` with next and previous tokens,
+without a total count. The helper uses the same session rules as ``paginate()``:
+
+.. code-block:: python
+
+   from dataclasses import dataclass
+
+   from sqlspec.adapters.asyncpg import AsyncpgDriver
+   from sqlspec.core import CursorFilter, CursorKey, CursorPagination
+   from sqlspec.service import SQLSpecAsyncService
+
+   @dataclass
+   class CursorUser:
+       id: int
+       name: str
+
+   async def list_cursor_users(
+       service: SQLSpecAsyncService[AsyncpgDriver],
+       signing_secret: str,
+       cursor: str | None = None,
+   ) -> CursorPagination[CursorUser]:
+       return await service.paginate_cursor(
+           "SELECT id, name FROM users",
+           CursorFilter([CursorKey("id")], limit=20, cursor=cursor, secret=signing_secret),
+           schema_type=CursorUser,
+       )
+
+Sync services expose the same method without ``await``. See
+:ref:`cursor-pagination` for keys, NULL values, and token handling.
+
 Session Ownership
 =================
 
