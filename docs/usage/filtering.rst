@@ -25,7 +25,7 @@ SQLSpec defines filter types in ``sqlspec.core`` that can be used independently
 or with framework integrations:
 
 - ``LimitOffsetFilter(limit, offset)`` -- limit and offset based pagination
-- ``OrderByFilter(field_name, sort_order)`` -- sorting (supports expression mode)
+- ``OrderByFilter(field_name, sort_order, nulls=None)`` -- sorting (supports expression mode)
 - ``SearchFilter(field_name, value, ignore_case)`` -- text search (LIKE / ILIKE)
 - ``NotInSearchFilter(field_name, value, ignore_case)`` -- negative text search (NOT LIKE / NOT ILIKE)
 - ``BeforeAfterFilter(field_name, before, after)`` -- date / timestamp range
@@ -40,6 +40,9 @@ or with framework integrations:
 - ``BooleanFilter(field_name, value)`` -- boolean comparison
 - ``ChoicesFilter(field_name, choices)`` -- enumerated choice matching
 - ``OffsetPagination(items, limit, offset, total)`` -- pagination response container dataclass
+
+``OrderByFilter`` leaves NULL placement to the database by default. Pass
+``nulls="first"`` or ``nulls="last"`` to put NULL rows first or last.
 
 Qualified Field Names
 ~~~~~~~~~~~~~~~~~~~~~

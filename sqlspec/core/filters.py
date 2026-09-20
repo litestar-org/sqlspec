@@ -27,6 +27,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
+from sqlspec.core._ordering import NullsPlacement, ordered
 from sqlspec.core._pagination import OffsetPagination
 from sqlspec.core.query_modifiers import parse_column_for_condition, safe_modify_with_cte, wrap_as_subquery
 from sqlspec.utils.type_guards import has_field_name
@@ -549,18 +550,38 @@ class OrderByFilter(StatementFilter):
     """Filter for ORDER BY clauses.
 
     Adds sorting capability to SQL queries.
+
+    Args:
+        field_name: Column name or expression to order by.
+        sort_order: Ascending or descending direction.
+        nulls: Explicit NULL placement, or None for the database default.
     """
 
-    __slots__ = ("_field_name", "_sort_order")
+    __slots__ = ("_field_name", "_nulls", "_sort_order")
     _field_name: str | exp.Expression
     _sort_order: Literal["asc", "desc"]
+    _nulls: "NullsPlacement | None"
 
-    def __init__(self, field_name: "str | exp.Expression", sort_order: Literal["asc", "desc"] = "asc") -> None:
+    def __init__(
+        self,
+        field_name: "str | exp.Expression",
+        sort_order: Literal["asc", "desc"] = "asc",
+        nulls: "NullsPlacement | None" = None,
+    ) -> None:
         if sort_order not in ("asc", "desc"):
             msg = "sort_order must be 'asc' or 'desc'"
             raise ValueError(msg)
+        if nulls not in (None, "first", "last"):
+            msg = "nulls must be 'first', 'last', or None"
+            raise ValueError(msg)
         self._field_name = field_name
         self._sort_order = sort_order
+        self._nulls = nulls
+
+    @property
+    def nulls(self) -> "NullsPlacement | None":
+        """Return the requested NULL placement, or None for the database default."""
+        return self._nulls
 
     @property
     def field_name(self) -> "str | exp.Expression":
@@ -576,7 +597,7 @@ class OrderByFilter(StatementFilter):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         col_expr = self._get_column_expression(self.field_name)
-        order_expr = col_expr.desc() if self._sort_order == "desc" else col_expr.asc()
+        order_expr = ordered(col_expr, desc=True if self._sort_order == "desc" else None, nulls=self._nulls)
 
         current_statement = statement._filter_expression()
 
@@ -589,10 +610,10 @@ class OrderByFilter(StatementFilter):
 
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
-        return ("OrderByFilter", self.field_name, self.sort_order)
+        return ("OrderByFilter", self.field_name, self.sort_order, self._nulls)
 
     def _reconstruction_args(self) -> "tuple[Any, ...]":
-        return (self._field_name, self._sort_order)
+        return (self._field_name, self._sort_order, self._nulls)
 
 
 class _TextSearchFilter(StatementFilter):
