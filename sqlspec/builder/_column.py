@@ -11,6 +11,7 @@ from typing import Any, cast
 from sqlglot import exp
 
 from sqlspec.builder._vector_distance import VectorDistance
+from sqlspec.core._ordering import NullsPlacement, ordered
 
 __all__ = ("Column", "ColumnExpression", "FunctionColumn")
 
@@ -141,13 +142,27 @@ class _ScalarExpressionMixin:
         """Create an aliased column expression."""
         return exp.Alias(this=self._expression, alias=alias_name)
 
-    def asc(self) -> exp.Ordered:
-        """Create an ASC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=False, nulls_first=False)
+    def asc(self, nulls: "NullsPlacement | None" = None) -> exp.Ordered:
+        """Create a ASC ordering expression.
 
-    def desc(self) -> exp.Ordered:
-        """Create a DESC ordering expression."""
-        return exp.Ordered(this=self._expression, desc=True, nulls_first=False)
+        Args:
+            nulls: Explicit NULL placement, or None for the database default.
+
+        Returns:
+            The ordering expression.
+        """
+        return ordered(self._expression, desc=False, nulls=nulls)
+
+    def desc(self, nulls: "NullsPlacement | None" = None) -> exp.Ordered:
+        """Create a DESC ordering expression.
+
+        Args:
+            nulls: Explicit NULL placement, or None for the database default.
+
+        Returns:
+            The ordering expression.
+        """
+        return ordered(self._expression, desc=True, nulls=nulls)
 
     def as_(self, alias: str) -> exp.Alias:
         """Create an aliased expression."""

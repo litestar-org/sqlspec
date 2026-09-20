@@ -19,6 +19,22 @@ Selects
    :dedent: 4
    :no-upgrade:
 
+NULL placement
+~~~~~~~~~~~~~~
+
+By default, the database decides where NULL rows go. Choose their
+place with ``Column.asc(nulls="first")`` or ``Column.desc(nulls="last")``,
+or use a string item. SQLSpec adds a NULL clause or a CASE sort key,
+as needed for the database.
+
+.. code-block:: python
+
+    from sqlspec import sql
+    from sqlspec.builder import Column
+
+    query = sql.select("id").from_("users").order_by(Column("id").desc(nulls="last"))
+    same_order = sql.select("id").from_("users").order_by("id DESC NULLS LAST")
+
 Inserts and Updates
 -------------------
 
