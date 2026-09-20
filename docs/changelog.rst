@@ -28,7 +28,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   acquisition, caller-owned session support, and typed pagination results.
 
 * Added ``select_with_cursor`` and ``fetch_with_cursor`` to sync and async drivers
-  for one-query cursor pages with optional schema conversion.
+  for one-query cursor pages with optional schema conversion. Cursor contract
+  queries use each adapter's dialect, including quoted BigQuery table names.
 
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
   a generic ``CursorPagination`` response container. Malformed cursor inputs raise
