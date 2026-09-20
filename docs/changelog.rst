@@ -107,6 +107,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
+  order and defaults by restricting bulk loading to plain VALUES inserts.
+
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
   a driver error export is missing.
