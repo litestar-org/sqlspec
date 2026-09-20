@@ -2867,7 +2867,9 @@ def test_static_literal_escapes_non_string_objects() -> None:
     ],
 )
 @pytest.mark.parametrize("value", [b"\x00\xffab", b"", bytearray(b"ab"), memoryview(b"ab")])
-def test_static_literal_renders_bytes_per_dialect(dialect: str | None, template: str, value: object) -> None:
+def test_static_literal_renders_bytes_per_dialect(
+    dialect: str | None, template: str, value: bytes | bytearray | memoryview
+) -> None:
     assert ParameterConverter._format_literal(value, dialect) == template.format(bytes(value).hex())
 
 
