@@ -130,6 +130,9 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Fixed:**
 
+* Explicit NULL placement remains explicit for PostgreSQL-compatible adapters,
+  including CockroachDB, whose default NULL ordering differs from PostgreSQL.
+
 * Arrow ODBC renders SQL Server ``TOP`` page-size controls as validated integers
   while retaining bound data parameters, including queries with CTEs.
 
