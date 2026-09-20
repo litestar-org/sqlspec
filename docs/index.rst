@@ -14,7 +14,7 @@
 
 SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a consistent, modern interface for executing SQL queries across multiple database systems. It empowers you to write raw, efficient SQL while benefiting from type safety, automatic parameter handling, and a powerful, optional query builder.
 
-.. grid:: 1 1 2 2
+.. grid:: 1 1 2 3
     :padding: 0
     :gutter: 2
 
@@ -30,11 +30,17 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
       In-depth guides on configuration, drivers, the query builder, and more.
 
+    .. grid-item-card:: :octicon:`plug` Extensions
+      :link: extensions/index
+      :link-type: doc
+
+      Integrations for AI agents (Google ADK), event systems, and observability.
+
     .. grid-item-card:: :octicon:`beaker` Recipes
       :link: recipes/index
       :link-type: doc
 
-      Production patterns: DI, service layers, multi-tenancy, workers, and more.
+      Production patterns: DI, service layers, multi-tenancy, health checks, and more.
 
     .. grid-item-card:: :octicon:`package` API Reference
       :link: reference/index
@@ -55,6 +61,7 @@ SQLSpec is **NOT an ORM**. It is a flexible connectivity layer that provides a c
 
     getting_started/index
     usage/index
+    extensions/index
     recipes/index
     reference/index
     playground

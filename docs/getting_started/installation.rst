@@ -33,12 +33,16 @@ Install bundles
 
          pdm add sqlspec
 
+.. note::
+
+   Synchronous SQLite support uses Python's built-in ``sqlite3`` module and requires no driver extras. For asynchronous SQLite, install the ``aiosqlite`` extra: ``uv add "sqlspec[aiosqlite]"``.
+
 Performance bundle
 ~~~~~~~~~~~~~~~~~~
 
 For production deployments, install the ``performance`` extra for Rust-backed
-hot-path helpers and high-speed serialization, or the ``mypyc`` extra for
-C-compiled internals:
+hot-path helpers and high-speed serialization (``msgspec`` and ``librt``), or install the ``mypyc`` extra for
+C-compiled ``sqlglot`` parsing. Note that SQLSpec's own C-compiled native wheels are distributed directly on PyPI.
 
 .. tab-set::
 
@@ -113,7 +117,7 @@ Package groups
      - ``psycopg[binary,pool]``, ``asyncpg``
      - CockroachDB drivers.
    * - ``duckdb``
-     - ``duckdb``, ``pytz``
+     - ``duckdb``, ``pytz``, ``pyarrow``
      - DuckDB adapter.
    * - ``fastapi``
      - ``fastapi``

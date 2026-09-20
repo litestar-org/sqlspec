@@ -113,6 +113,11 @@ The table below classifies every backend by its ADK support level.
      - Full
      - Full
      - Google Cloud Spanner (cloud-managed).
+   * - bigquery
+     - Supported (Analytics)
+     - Replay / Search
+     - N/A
+     - Analytical warehouse store for telemetry replay and audit logs.
 
 Status Definitions
 ------------------
@@ -135,19 +140,15 @@ Current scoped-state boundary
    the session row. Loaded sessions merge those scopes back into the ADK state
    view.
 
-**Removed**
-   Previously available but no longer supported. See the removal notice for
-   migration guidance.
+Analytics Replica Stores
+------------------------
 
-Removed Backends
-----------------
-
-**BigQuery** was removed from the ADK backend surface. BigQuery's batch-oriented
-architecture is incompatible with the low-latency, transactional write patterns
-that ADK session and event storage require. If you were using BigQuery for ADK
-storage, migrate to Spanner for a Google-managed operational backend, or to a
-transactional OLTP backend such as PostgreSQL, MySQL, Oracle, SQLite, or
-CockroachDB.
+**BigQuery** is supported as an analytics-replica store (``BigQueryADKStore``) in
+``sqlspec.adapters.bigquery.adk.store``. BigQuery is an analytical data warehouse
+with query latency measured in seconds and without multi-statement ACID transactions.
+It is designed for historical analysis, session telemetry replay, audit logs, and
+search across recorded interactions. For low-latency live agent state, pair with an
+OLTP ADK backend such as Spanner, PostgreSQL, MySQL, or SQLite.
 
 Artifact Storage
 ----------------
@@ -339,6 +340,16 @@ Google Cloud Spanner provides globally distributed ADK storage:
 - Native row-deletion TTL policies generated from ADK retention settings.
 - Strong consistency across regions.
 - Suitable for multi-region agent deployments.
+
+BigQuery (Analytics Replica)
+----------------------------
+
+``BigQueryADKStore`` provides an analytics-replica path for ADK workloads:
+
+- Designed for historical analysis, session telemetry replay, and audit logs.
+- Queries partitions using configurable ``session_lookup_window_days`` (defaults to 30 days).
+- Uses ``BigQueryADKConfig`` with optional ``BigQueryADKRetentionConfig`` for event TTL partitions.
+- Ideal when paired with an operational OLTP store (such as Spanner or PostgreSQL) replicating to BigQuery.
 
 Configuration
 =============

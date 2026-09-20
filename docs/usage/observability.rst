@@ -49,6 +49,7 @@ To enable tracing programmatically, use the ``enable_tracing`` helper:
 
 .. code-block:: python
 
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
     from sqlspec.extensions.otel import enable_tracing
     from sqlspec.observability import ObservabilityConfig
 
@@ -68,6 +69,8 @@ To enable tracing programmatically, use the ``enable_tracing`` helper:
 Alternatively, configure OpenTelemetry declaratively via ``extension_config``:
 
 .. code-block:: python
+
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
     config = AsyncpgConfig(
         connection_config={"dsn": "postgresql://localhost/app"},
@@ -109,6 +112,8 @@ To enable metrics programmatically, use the ``enable_metrics`` helper:
 Or declaratively via ``extension_config``:
 
 .. code-block:: python
+
+    from sqlspec.adapters.asyncpg import AsyncpgConfig
 
     config = AsyncpgConfig(
         connection_config={"dsn": "postgresql://localhost/app"},

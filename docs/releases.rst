@@ -68,22 +68,22 @@ Maintainers prepare releases via dedicated `Makefile` targets that coordinate cl
    make release bump=patch
 
    # Prepare a pre-release
-   make pre-release version=0.63.0-alpha.1
+   make pre-release version=0.65.0-alpha.1
 
 These targets use `bump-my-version` to update the canonical version in `pyproject.toml`, rebuild the distribution artifacts, update lockfiles, and generate git tags.
 
 CI/CD Publishing Pipeline
 +++++++++++++++++++++++++
 
-When a release tag (``v*``) is pushed to the repository, ``.github/workflows/publish.yml`` automatically executes:
+When a GitHub Release is published, ``.github/workflows/publish.yml`` automatically executes:
 
 1. **Standard Distributions**: Builds standard source distribution (``sdist``) and pure Python wheel packages.
 2. **Compiled Mypyc Wheels**: Compiles high-performance C-extensions via `hatch-mypyc` across a matrix of operating systems (Linux, macOS, Windows) and Python versions (3.10 through 3.14).
-3. **Profile-Guided Optimization (PGO)**: Compiles Linux and macOS binary wheels using execution profile data to optimize critical statement translation and dispatch paths.
+3. **Profile-Guided Optimization (PGO)**: Compiles Linux binary wheels using execution profile data (GCC) to optimize critical statement translation and dispatch paths. macOS and Windows use standard mypyc C-extension compilation.
 4. **Smoke Testing**: Validates binary wheel imports across supported architectures before publishing to `PyPI <https://pypi.org/project/sqlspec/>`_.
 
 See Also
 --------
 
 - :doc:`changelog` for release notes, detailed change lists, and migration instructions.
-- :doc:`contribution-guide` for development workflow, testing, and contribution standards.
+- :doc:`contributing/index` for development workflow, testing, and contribution standards.

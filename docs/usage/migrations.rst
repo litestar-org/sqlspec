@@ -187,6 +187,12 @@ Common keys
      - Reject out-of-order migrations. Defaults to ``False``.
    * - ``transactional``
      - Wrap each migration in a transaction where the adapter supports it.
+   * - ``author``
+     - Author name or handle written into generated migration headers.
+   * - ``project_root``
+     - Base directory used to resolve relative ``script_location`` paths.
+   * - ``auto_sync``
+     - Automatically update tracking checksums when migrations are renamed (default: ``True``).
    * - ``include_extensions`` / ``exclude_extensions``
      - Opt extensions into or out of migration discovery by name.
 
@@ -500,8 +506,9 @@ interfaces via ``create_migration_commands(config)`` or ``config.get_migration_c
     current_rev = commands.current(verbose=True)
     commands.stamp("0003")
 
-For async configurations, `create_migration_commands` returns an `AsyncMigrationCommands`
-instance where operations like `init()`, `upgrade()`, and `downgrade()` are awaitable.
+For async configurations, ````create_migration_commands```` returns an ````AsyncMigrationCommands````
+instance where operations like ````init()````, ````upgrade()````, ````downgrade()````, ````revision()````, and ````current()```` are awaitable.
+In addition, configurations provide ````config.get_current_migration(verbose=False)```` for direct revision checks.
 
 Squashing Migrations
 --------------------

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 
-__all__ = ("Insert",)
+__all__ = ("ConflictBuilder", "Insert")
 
 ERR_MSG_TABLE_NOT_SET: Final[str] = "The target table must be set using .into() before adding values."
 ERR_MSG_INTERNAL_EXPRESSION_TYPE: Final[str] = "Internal error: expression is not an Insert instance as expected."

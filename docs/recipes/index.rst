@@ -31,6 +31,17 @@ patterns.
 
       Driver choice, pooling, GO batches, BulkCopy, migrations, ADK stores, the event queue, and Litestar on SQL Server.
 
+   .. grid-item-card:: Multi-Tenancy
+      :link: multi_tenancy
+      :link-type: doc
+
+      Tenant isolation patterns: discriminator columns, schema-per-tenant, and dynamic routing.
+
+   .. grid-item-card:: Health Checks
+      :link: health_checks
+      :link-type: doc
+
+      Liveness and readiness probes, pool teardown, and graceful shutdown.
 
 .. toctree::
    :hidden:
@@ -38,3 +49,5 @@ patterns.
    dishka
    service_layer
    sql_server
+   multi_tenancy
+   health_checks

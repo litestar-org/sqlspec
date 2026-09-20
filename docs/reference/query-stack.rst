@@ -95,4 +95,4 @@ Usage Highlights
 - Build stacks once and reuse them across requests/tasks.
 - Call ``session.execute_stack(stack, continue_on_error=False)`` to run fail-fast or set ``continue_on_error=True`` to record per-operation errors.
 - Inspect ``StackResult.result`` to call helpers like ``all()``, ``one()``, ``to_pandas()``, or ``to_arrow()``.
-- :doc:`/reference/adapters` lists per-adapter capabilities, including whether native pipelines or sequential fallback are used for stacks.
+- :doc:`/reference/adapters/index` lists per-adapter capabilities, including whether native pipelines or sequential fallback are used for stacks.

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 
 __all__ = ("test_litestar_plugin_setup",)
@@ -9,6 +7,7 @@ def test_litestar_plugin_setup() -> None:
     pytest.importorskip("litestar")
     # start-example
     from litestar import Litestar, get
+    from litestar.di import NamedDependency
 
     from sqlspec import SQLSpec
     from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
@@ -21,8 +20,8 @@ def test_litestar_plugin_setup() -> None:
         )
     )
 
-    @get("/health")
-    def health_check(db_session: SqliteDriver) -> dict[str, str]:
+    @get("/health", sync_to_thread=False)
+    def health_check(db_session: NamedDependency[SqliteDriver]) -> dict[str, str]:
         result = db_session.execute("SELECT 'ok' as status")
         return result.one()
 

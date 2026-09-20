@@ -3,9 +3,8 @@ __all__ = ("test_configuration",)
 
 def test_configuration() -> None:
     # start-example
-    from sqlspec import SQLSpec
+    from sqlspec import SQLSpec, StatementConfig
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.core import StatementConfig
 
     statement_config = StatementConfig(enable_validation=False)
 

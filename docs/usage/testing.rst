@@ -30,6 +30,42 @@ Fast In-Memory Fixture
             yield session
         config.close_pool()
 
+Async In-Memory Fixture (aiosqlite)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For asynchronous applications (Litestar, FastAPI, Starlette), use ``AiosqliteConfig``:
+
+.. code-block:: python
+
+    import pytest
+    from sqlspec import SQLSpec
+    from sqlspec.adapters.aiosqlite import AiosqliteConfig
+
+    @pytest.fixture
+    async def async_session():
+        spec = SQLSpec()
+        config = spec.add_config(
+            AiosqliteConfig(connection_config={"database": ":memory:"})
+        )
+        async with spec.provide_session(config) as session:
+            await session.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+            yield session
+        await config.close_pool()
+
+Transaction Rollback Isolation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To avoid recreating tables between test cases, wrap each test in a transaction and roll back at teardown:
+
+.. code-block:: python
+
+    @pytest.fixture
+    def test_session(db_config):
+        with db_config.provide_session() as session:
+            with session.transaction():
+                yield session
+                session.rollback()
+
 Temporary File Fixture
 ~~~~~~~~~~~~~~~~~~~~~~
 

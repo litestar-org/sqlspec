@@ -24,14 +24,23 @@ Core Filter Types
 SQLSpec defines filter types in ``sqlspec.core`` that can be used independently
 or with framework integrations:
 
-- ``LimitOffsetFilter(limit, offset)`` -- pagination
+- ``LimitOffsetFilter(limit, offset)`` -- limit and offset based pagination
+- ``PaginationFilter(page, page_size)`` -- page-number based pagination
 - ``OrderByFilter(field_name, sort_order)`` -- sorting (supports expression mode)
-- ``SearchFilter(field_name, value, ignore_case)`` -- text search
-- ``BeforeAfterFilter(field_name, before, after)`` -- date range
-- ``InCollectionFilter(field_name, values)`` -- set membership
-- ``NotInCollectionFilter(field_name, values)`` -- set exclusion
+- ``SearchFilter(field_name, value, ignore_case)`` -- text search (LIKE / ILIKE)
+- ``NotInSearchFilter(field_name, value, ignore_case)`` -- negative text search (NOT LIKE / NOT ILIKE)
+- ``BeforeAfterFilter(field_name, before, after)`` -- date / timestamp range
+- ``OnBeforeAfterFilter(field_name, on_date, before, after)`` -- exact date or bounded range
+- ``InCollectionFilter(field_name, values)`` -- set membership (IN)
+- ``NotInCollectionFilter(field_name, values)`` -- set exclusion (NOT IN)
+- ``AnyCollectionFilter(field_name, values)`` -- collection contains all values
+- ``NotAnyCollectionFilter(field_name, values)`` -- collection contains none of values
+- ``InAnyFilter(field_name, values)`` -- collection contains any of values
 - ``NullFilter(field_name)`` -- IS NULL check
 - ``NotNullFilter(field_name)`` -- IS NOT NULL check
+- ``BooleanFilter(field_name, value)`` -- boolean comparison
+- ``ChoicesFilter(field_name, choices)`` -- enumerated choice matching
+- ``OffsetPagination(items, limit, offset, total)`` -- pagination response container dataclass
 
 Qualified Field Names
 ~~~~~~~~~~~~~~~~~~~~~
@@ -146,11 +155,19 @@ For FastAPI, use the same configuration with ``Depends()``:
 
 .. code-block:: python
 
-    filters = Depends(
-        db_ext.provide_filters({
-            "sort_field": ["created_at", "uploaded_collections"],
-        })
-    )
+    from fastapi import Depends
+    from sqlspec.core import StatementFilter
+    from sqlspec.extensions.fastapi import provide_filters
+
+    @app.get("/items")
+    async def list_items(
+        filters: list[StatementFilter] = Depends(
+            provide_filters({
+                "sort_field": ["created_at", "uploaded_collections"],
+            })
+        ),
+    ):
+        ...
 
 SQLSpec does not ship generated filter providers for Flask, Starlette, or Sanic;
 their integrations do not have a runtime ``orderBy`` alias surface.

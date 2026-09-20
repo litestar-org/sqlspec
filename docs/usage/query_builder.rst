@@ -169,11 +169,96 @@ The builder also normalizes common dialect aliases during build (e.g., ``mssql``
 
 .. literalinclude:: /examples/builder/query_modifiers.py
    :language: python
-   :caption: ``where helpers + pagination``
+   :caption: ``ordering, pagination, and row-level locking``
    :start-after: # start-example
    :end-before: # end-example
    :dedent: 4
    :no-upgrade:
+
+Deletes
+-------
+
+Construct DELETE statements with target tables, conditions, and optional RETURNING clauses:
+
+.. code-block:: python
+
+    from sqlspec import sql
+
+    # DELETE FROM users WHERE status = 'inactive'
+    delete_query = sql.delete("users").where_eq("status", "inactive")
+
+    # DELETE with RETURNING on supported dialects
+    delete_returning = sql.delete("tasks").where_eq("completed", True).returning("id", "title")
+
+Dynamic Updates with Model Dumps
+--------------------------------
+
+The update builder's ``.set_from()`` method accepts dataclasses, msgspec Structs, Pydantic models, or dictionaries, automatically mapping fields to column assignments:
+
+.. code-block:: python
+
+    from dataclasses import dataclass
+    from sqlspec import sql
+
+    @dataclass
+    class UserProfile:
+        name: str
+        email: str
+
+    profile = UserProfile(name="Ada Lovelace", email="ada@example.com")
+
+    # UPDATE users SET name = :name, email = :email WHERE id = :id
+    query = sql.update("users").set_from(profile).where_eq("id", 1)
+
+Merge Statements
+----------------
+
+For dialects that do not natively support ``ON CONFLICT`` (such as Oracle, T-SQL, and BigQuery), or for complex conditional matching, use ``sql.merge()``:
+
+.. code-block:: python
+
+    from sqlspec import sql
+
+    # MERGE INTO target USING source ON target.id = source.id
+    merge_query = (
+        sql.merge("target_table", dialect="postgres")
+        .using("source_table", "s")
+        .on("target_table.id = s.id")
+        .when_matched_then_update({"status": "s.status"})
+    )
+
+Set Operations
+--------------
+
+Combine queries using ``.union()``, ``.intersect()``, or ``.except_()``:
+
+.. code-block:: python
+
+    from sqlspec import sql
+
+    query_a = sql.select("id", "name").from_("active_users")
+    query_b = sql.select("id", "name").from_("archived_users")
+
+    # UNION ALL via all_=True
+    all_users = query_a.union(query_b, all_=True)
+
+DDL Construction
+----------------
+
+Create tables, indexes, schemas, and views programmatically:
+
+.. code-block:: python
+
+    from sqlspec import sql
+
+    create_table = (
+        sql.create_table("users")
+        .column("id", "integer", primary_key=True)
+        .column("username", "text", nullable=False)
+        .column("email", "text", unique=True)
+    )
+
+    create_idx = sql.create_index("idx_users_email", "users", "email")
 
 Related Guides
 --------------

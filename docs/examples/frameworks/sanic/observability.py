@@ -10,9 +10,8 @@ def test_sanic_observability() -> None:
     from sanic import Request, Sanic, response
     from sanic.response import HTTPResponse
 
-    from sqlspec import SQLSpec
+    from sqlspec import SQLSpec, StatementConfig
     from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    from sqlspec.core import StatementConfig
     from sqlspec.extensions.sanic import SQLSpecPlugin
 
     sqlspec = SQLSpec()

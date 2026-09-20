@@ -49,6 +49,18 @@ parameter processing, result handling, caching, and filtering.
 
       Output and input type conversion for database values.
 
+   .. grid-item-card:: Statement Splitter
+      :link: splitter
+      :link-type: doc
+
+      Dialect-aware script splitting and tokenization.
+
+   .. grid-item-card:: SQLCommenter
+      :link: sqlcommenter
+      :link-type: doc
+
+      Context propagation and SQL comment injection.
+
 .. toctree::
    :hidden:
 
@@ -59,3 +71,5 @@ parameter processing, result handling, caching, and filtering.
    cache
    query-modifiers
    type-converters
+   splitter
+   sqlcommenter

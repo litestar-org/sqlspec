@@ -91,6 +91,18 @@ Core Infrastructure
 
       Full exception hierarchy with SQLSTATE mapping.
 
+   .. grid-item-card:: Data Dictionary
+      :link: data_dictionary
+      :link-type: doc
+
+      Schema introspection, table/column metadata, foreign keys, and capabilities.
+
+   .. grid-item-card:: Protocols
+      :link: protocols
+      :link-type: doc
+
+      Runtime-checkable protocols for drivers, statements, results, and dictionary.
+
 Operations
 ==========
 
@@ -151,6 +163,8 @@ Integrations
    loader
    service
    exceptions
+   data_dictionary
+   protocols
    migrations
    storage
    observability

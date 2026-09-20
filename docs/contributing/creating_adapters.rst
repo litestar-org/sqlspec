@@ -218,5 +218,5 @@ See Also
 ========
 
 - :doc:`/reference/driver` for the complete driver protocol and base class references.
-- :doc:`/reference/adapters` for existing adapter configuration reference.
-- :doc:`/contribution-guide` for repository setup, commit standards, and PR workflows.
+- :doc:`/reference/adapters/index` for existing adapter configuration reference.
+- :doc:`guide` for repository setup, commit standards, and PR workflows.

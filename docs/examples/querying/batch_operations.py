@@ -35,8 +35,7 @@ def test_batch_operations(tmp_path: Path) -> None:
         email = session.select_value_or_none("select email from users where name = ?", "Nobody")
         print(email)  # None
 
-        # select_with_total for pagination
-        from sqlspec.core import SQL
+        from sqlspec import SQL
 
         query = SQL("select id, name from users").paginate(page=1, page_size=2)
         data, total = session.select_with_total(query)

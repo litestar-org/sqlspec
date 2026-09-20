@@ -71,28 +71,6 @@ def _resolve_local_reference(module_path: str, target: str) -> bool:
         return False
 
 
-def _resolve_sqlalchemy_reference(target: str) -> bool:
-    """Attempt to resolve SQLAlchemy references.
-
-    Args:
-        target: The target class/attribute name
-
-    Returns:
-        bool: True if reference exists, False otherwise
-    """
-    try:
-        import sqlalchemy
-
-        if "." in target:
-            # Handle nested attributes (e.g., Connection.in_transaction)
-            obj_name, attr_name = target.rsplit(".", 1)
-            obj = getattr(sqlalchemy, obj_name)
-            return hasattr(obj, attr_name)
-        return hasattr(sqlalchemy, target)
-    except (ImportError, AttributeError):
-        return False
-
-
 def _resolve_litestar_reference(target: str) -> bool:
     """Attempt to resolve Litestar references.
 

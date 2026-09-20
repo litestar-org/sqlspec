@@ -44,7 +44,7 @@ Database operations occur within a managed session:
 
 - **Session provisioning**: Calling ``spec.provide_session(config)`` yields a synchronous (``SyncDriverAdapterBase``) or asynchronous (``AsyncDriverAdapterBase``) driver adapter.
 - **Connection management**: The session acquires a physical connection from the config's pool (``provide_pool()`` / ``create_pool()``) and releases it upon exit.
-- **Transaction control**: Sessions manage transaction boundaries via ``session.begin()``, ``session.commit()``, ``session.rollback()``, savepoints, or the ``service.begin_transaction()`` context manager.
+- **Transaction control**: Sessions manage transaction boundaries via ``session.begin()``, ``session.commit()``, ``session.rollback()``, savepoints, or the ``session.transaction()`` context manager.
 - **Exception mapping**: Low-level database errors (DBAPI exceptions, driver errors) are translated into unified SQLSpec exceptions (:exc:`~sqlspec.exceptions.SQLSpecError`, :exc:`~sqlspec.exceptions.IntegrityError`, :exc:`~sqlspec.exceptions.OperationalError`).
 
 Stage 4: Result Transformation
@@ -57,6 +57,7 @@ Drivers provide flexible consumption patterns for query results:
 - **Schema mapping**: Passing ``schema_type=Model`` automatically maps result rows into dataclasses, msgspec Structs, Pydantic models, attrs classes, or TypedDict instances.
 - **Memory-bounded streaming**: ``session.select_stream(chunk_size=N)`` streams large result sets in bounded chunks using the driver's native cursor streaming primitive.
 - **Arrow integration**: ``session.select_to_arrow()`` yields Apache Arrow Tables, RecordBatches, or RecordBatchReaders for zero-copy analytical processing.
+- **Storage export**: ``session.select_to_storage()`` streams and writes query results directly to local files or cloud object storage (S3, GCS, Azure) in Parquet or CSV format.
 
 Minimal Execution Example
 -------------------------

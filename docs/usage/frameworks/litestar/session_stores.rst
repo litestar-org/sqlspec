@@ -119,8 +119,21 @@ the application:
        extension_config={"litestar": session_settings},
    )
 
-Session Expiry
---------------
+Session Expiry and Cleanup
+--------------------------
 
-Configure session lifetime through Litestar's ``SessionMiddleware`` settings. Expired
-sessions are cleaned up automatically based on the ``max_age`` parameter.
+Configure session lifetime through Litestar's ``SessionMiddleware`` settings using the ``max_age`` parameter.
+Database session stores do not purge expired rows automatically during request handling. To prevent unbounded table growth:
+
+1. **CLI Cleanup**: Run the built-in Litestar CLI command:
+
+   .. code-block:: console
+
+      litestar sessions delete-expired
+
+2. **Programmatic / Scheduled Cleanup**: Call ``delete_expired()`` directly on the store instance within a background task or cron worker:
+
+   .. code-block:: python
+
+      # Purge expired sessions older than their max_age
+      await store.delete_expired()

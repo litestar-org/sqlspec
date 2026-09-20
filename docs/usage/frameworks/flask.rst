@@ -105,8 +105,31 @@ asynchronous database adapters (such as ``AsyncpgConfig`` or ``AiosqliteConfig``
 an internal AnyIO portal runner. In async configurations, ``get_session()`` handles the
 event loop bridge transparently.
 
+Observability and SQLCommenter
+==============================
+
+The Flask extension integrates request correlation and query tagging:
+
+.. code-block:: python
+
+   from sqlspec.adapters.sqlite import SqliteConfig
+
+   config = SqliteConfig(
+       connection_config={"database": "app.db"},
+       extension_config={
+           "flask": {
+               "enable_correlation_middleware": True,
+               "correlation_header": "x-request-id",
+               "enable_sqlcommenter_middleware": True,
+           }
+       },
+   )
+
+- **Correlation Tracking**: Extracts ``x-request-id`` on ``before_request``, populates Flask's request context and ``CorrelationContext``, and writes ``X-Correlation-ID`` on ``after_request``.
+- **SQLCommenter**: Automatically attaches Flask endpoint and blueprint details as SQL comments.
+
 Related Guides
 ==============
 
 - :doc:`/usage/configuration` for detailed config options.
-- :doc:`/reference/adapters` for adapter-specific settings.
+- :doc:`/reference/adapters/index` for adapter-specific settings.

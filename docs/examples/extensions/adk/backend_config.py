@@ -23,4 +23,6 @@ def test_adk_backend_config() -> None:
     )
     # end-example
 
-    assert gizmo.extension_config["adk"]["memory_use_fts"] is True
+    adk_settings = gizmo.extension_config.get("adk")
+    assert isinstance(adk_settings, dict)
+    assert adk_settings.get("memory_use_fts") is True

@@ -85,6 +85,8 @@ intersphinx_mapping = {
     "pydantic": ("https://docs.pydantic.dev/latest/", None),
     "sanic": ("https://sanic.readthedocs.io/en/latest/", None),
     "flask": ("https://flask.palletsprojects.com/en/stable/", None),
+    "fastapi": ("https://fastapi.tiangolo.com/", None),
+    "pyarrow": ("https://arrow.apache.org/docs/", None),
     "typing_extensions": ("https://typing-extensions.readthedocs.io/en/stable/", None),
 }
 PY_CLASS = "py:class"
@@ -142,7 +144,17 @@ autodoc_mock_imports = [
     "adbc_driver_sqlite",
     "adbc_driver_flightsql",
     "google.cloud.bigquery",
+    "google.cloud.spanner",
+    "google.cloud.spanner_v1",
     "flask",
+    "sanic",
+    "fastapi",
+    "starlette",
+    "pymysql",
+    "mysql",
+    "pymssql",
+    "mssql_python",
+    "arrow_odbc",
 ]
 
 autosummary_generate = False
@@ -219,6 +231,12 @@ html_theme_options = {
                     "summary": "Installation and quickstart guide",
                 },
                 {"title": "Usage", "url": "usage/index", "summary": "Detailed usage guides and tutorials"},
+                {"title": "Recipes", "url": "recipes/index", "summary": "Real-world production architecture patterns"},
+                {
+                    "title": "Extensions",
+                    "url": "extensions/index",
+                    "summary": "Framework extensions and ADK persistence",
+                },
                 {"title": "API Reference", "url": "reference/index", "summary": "Comprehensive API documentation"},
                 {"title": "Playground", "url": "playground", "summary": "Interactive SQLSpec playground"},
             ],

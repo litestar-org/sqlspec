@@ -64,6 +64,13 @@ Risk gates describe why metadata may be hidden, expensive, or unavailable:
 Capability-First Usage
 ======================
 
+.. note::
+
+   **Sync vs. Async Drivers and Stateless Design**:
+   The ``driver.data_dictionary`` attribute is a stateless handler whose inspection methods accept ``driver`` as their first parameter.
+   - On **synchronous drivers**, methods execute synchronously: ``db.data_dictionary.get_tables(db)``.
+   - On **asynchronous drivers**, every inspection method is an async coroutine that **must be awaited**: ``await db.data_dictionary.get_tables(db)``.
+
 Ask for capabilities before assuming a domain exists:
 
 .. code-block:: python

@@ -5,9 +5,8 @@ __all__ = ("test_statement_stack",)
 
 def test_statement_stack() -> None:
     # start-example
-    from sqlspec import SQLSpec
+    from sqlspec import SQLResult, SQLSpec, StatementStack
     from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.core.stack import StatementStack
 
     spec = SQLSpec()
     config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
@@ -21,7 +20,9 @@ def test_statement_stack() -> None:
 
     with spec.provide_session(config) as session:
         results = session.execute_stack(stack)
-        rows = results[-1].result.all()
+        final_result = results[-1].result
+        assert isinstance(final_result, SQLResult)
+        rows = final_result.all()
     # end-example
 
     assert rows == [{"id": 1, "name": "Litestar"}, {"id": 2, "name": "SQLSpec"}]

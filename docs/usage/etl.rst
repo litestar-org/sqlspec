@@ -125,12 +125,25 @@ JSON files natively and attach to external PostgreSQL databases.
             "FROM staging GROUP BY date"
         )
 
-        # Export results
-        result = session.select("SELECT * FROM summary ORDER BY date")
+Direct Export to Cloud Storage
+------------------------------
+
+For massive analytical tables, export directly to Parquet or CSV on AWS S3, Google Cloud Storage, or Azure Blob Storage without loading rows into Python memory:
+
+.. code-block:: python
+
+    with spec.provide_session(config) as session:
+        session.select_to_storage(
+            "SELECT * FROM sales_fact WHERE transaction_date >= :cutoff",
+            destination="s3://data-lake/exports/sales_2026.parquet",
+            file_format="parquet",
+            cutoff="2026-01-01",
+        )
 
 Related Guides
 --------------
 
 - :doc:`configuration` for multi-database setup.
+- :doc:`bulk_ingest` for high-volume inbound loading patterns.
 - :doc:`drivers_and_querying` for the full query API.
-- :doc:`../reference/adapters` for adapter-specific Arrow capabilities.
+- :doc:`../reference/adapters/index` for adapter-specific Arrow capabilities.

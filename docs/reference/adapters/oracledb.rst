@@ -335,6 +335,17 @@ Data Dictionary
    :members:
    :show-inheritance:
 
+Migration Trackers
+==================
+
+.. autoclass:: sqlspec.adapters.oracledb.migrations.OracleSyncMigrationTracker
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.oracledb.migrations.OracleAsyncMigrationTracker
+   :members:
+   :show-inheritance:
+
 Extension Settings
 ==================
 

@@ -45,7 +45,11 @@ Supported frameworks
       :link: frameworks/sanic
       :link-type: doc
 
-      Sanic-native ``app.ctx`` pools and ``request.ctx`` sessions.
+      .. image:: /_static/logos/sanic.svg
+         :width: 72
+         :height: 72
+         :align: center
+         :alt: Sanic
 
    .. grid-item-card:: Starlette
       :link: frameworks/starlette

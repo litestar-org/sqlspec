@@ -4,7 +4,14 @@ from typing import cast, final
 
 from sqlglot import exp
 
-__all__ = ("AggregateExpression", "ConversionExpression", "FunctionExpression", "MathExpression", "StringExpression")
+__all__ = (
+    "AggregateExpression",
+    "ConversionExpression",
+    "ExpressionWrapper",
+    "FunctionExpression",
+    "MathExpression",
+    "StringExpression",
+)
 
 
 class ExpressionWrapper:

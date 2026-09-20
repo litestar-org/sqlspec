@@ -9,7 +9,7 @@ Welcome to the SQLSpec developer documentation! SQLSpec is a type-safe SQL query
     :gutter: 2
 
     .. grid-item-card:: :octicon:`git-pull-request` Contribution Guide
-      :link: ../contribution-guide
+      :link: guide
       :link-type: doc
 
       Environment setup with ``uv``, development workflow, coding standards (PEP 604, typing, docstrings), and repository quality gates.
@@ -36,7 +36,7 @@ Welcome to the SQLSpec developer documentation! SQLSpec is a type-safe SQL query
     :maxdepth: 2
     :hidden:
 
-    ../contribution-guide
+    guide
     creating_adapters
     ../releases
     ../changelog

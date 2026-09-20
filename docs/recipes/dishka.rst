@@ -32,7 +32,6 @@ while drivers are ``REQUEST``-scoped (one per HTTP request or task execution).
            config = sqlspec.add_config(
                AsyncpgConfig(
                    connection_config={"dsn": "postgresql://localhost/mydb"},
-                   extension_config={"fastapi": {"disable_di": True}},
                )
            )
            return sqlspec, config
@@ -66,21 +65,22 @@ providers:
 Service Integration
 ===================
 
-Inject drivers into domain services via Dishka's ``FromDishka`` marker:
+Inject drivers directly into domain services or inherit from :class:`~sqlspec.service.SQLSpecAsyncService`:
 
 .. code-block:: python
 
    from typing import Any
    from dishka import FromDishka
    from sqlspec.adapters.asyncpg import AsyncpgDriver
+   from sqlspec.service import SQLSpecAsyncService
 
 
-   class UserService:
+   class UserService(SQLSpecAsyncService[AsyncpgDriver]):
        def __init__(self, driver: FromDishka[AsyncpgDriver]) -> None:
-           self.driver = driver
+           super().__init__(session=driver)
 
        async def get_user(self, user_id: str) -> dict[str, Any] | None:
-           return await self.driver.select_one_or_none(
+           return await self.get_one(
                "SELECT * FROM users WHERE id = :id",
                {"id": user_id},
            )
