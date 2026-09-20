@@ -800,6 +800,9 @@ class CursorFilter(PaginationFilter):
         Raises:
             ImproperConfigurationError: A key is missing or unexpectedly NULL.
         """
+        return encode_cursor(self._row_values(row), self._fingerprint, backward=backward, secret=self._secret)
+
+    def _row_values(self, row: abc.Mapping[str, Any]) -> list[Any]:
         values = []
         for key in self._keys:
             try:
@@ -811,7 +814,7 @@ class CursorFilter(PaginationFilter):
                 msg = f"Cursor key '{key.field_name}' returned NULL; declare nulls='first' or nulls='last'"
                 raise ImproperConfigurationError(msg)
             values.append(value)
-        return encode_cursor(values, self._fingerprint, backward=backward, secret=self._secret)
+        return values
 
     def build_page(self, rows: list[dict[str, Any]]) -> CursorPagination[dict[str, Any]]:
         """Trim the sentinel and mint adjacent-page cursors.
@@ -824,6 +827,8 @@ class CursorFilter(PaginationFilter):
         """
         has_more = len(rows) > self._limit
         items = rows[: self._limit]
+        for row in items:
+            self._row_values(row)
         if self._backward:
             items = items[::-1]
         has_next = bool(items) and (True if self._backward else has_more)
