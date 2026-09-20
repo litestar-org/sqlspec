@@ -44,8 +44,10 @@ def _trailing_branch_order(expression: exp.SetOperation) -> exp.Expr | None:
 def _outer_order(expression: exp.Expr, order: exp.Expr) -> exp.Expr:
     """Resolve hoisted ordering against a derived table's output columns."""
     outputs: dict[tuple[str, str], exp.Expr] = {}
+    output_names: set[str] = set()
     if isinstance(expression, exp.Query):
         projections = expression.selects
+        output_names = {projection.alias_or_name.casefold() for projection in projections}
         pending = [expression]
         while pending:
             branch = pending.pop()
@@ -69,7 +71,9 @@ def _outer_order(expression: exp.Expr, order: exp.Expr) -> exp.Expr:
                         outputs.setdefault(("", source.name), output)
     result = order.copy()
     for column in result.find_all(exp.Column):
-        if column.find_ancestor(exp.Subquery) is not None:
+        if column.find_ancestor(exp.Subquery) is not None or (
+            not column.table and column.name.casefold() in output_names
+        ):
             continue
         output = outputs.get((column.table, column.name))
         if output is not None:
