@@ -25,7 +25,8 @@ Example Usage:
 """
 
 from sqlspec.core import filters
-from sqlspec.core._pagination import OffsetPagination
+from sqlspec.core._cursor import register_cursor_type
+from sqlspec.core._pagination import CursorPagination, OffsetPagination
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -63,6 +64,8 @@ from sqlspec.core.filters import (
     BeforeAfterFilter,
     BooleanFilter,
     ChoicesFilter,
+    CursorFilter,
+    CursorKey,
     FilterTypes,
     FilterTypeT,
     InCollectionFilter,
@@ -198,6 +201,9 @@ __all__ = (
     "CompiledSQL",
     "ConditionFactory",
     "CorrelationExtractor",
+    "CursorFilter",
+    "CursorKey",
+    "CursorPagination",
     "DMLResult",
     "DriverParameterProfile",
     "ExplainFormat",
@@ -308,6 +314,7 @@ __all__ = (
     "normalize_parameter_key",
     "parse_column_for_condition",
     "parse_datetime_rfc3339",
+    "register_cursor_type",
     "register_driver_profile",
     "register_param_type",
     "replace_null_parameters_with_literals",
