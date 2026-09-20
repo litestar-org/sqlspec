@@ -228,13 +228,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        if (
-            "%" in cached.compiled_sql
-            and escape_literal_percent(
-                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
-            )
-            != cached.compiled_sql
-        ):
+        if "%" in cached.compiled_sql:
             statement = self._cached_statement(
                 sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
             )
@@ -256,7 +250,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
 
         execute_with_optional_parameters(cursor, sql, prepared_parameters)
 
-        if statement.returns_rows():
+        if statement.returns_rows() or cursor.description is not None:
             fetched_data = cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
             column_names = self._resolve_column_names(cursor.description)
@@ -751,13 +745,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
-        if (
-            "%" in cached.compiled_sql
-            and escape_literal_percent(
-                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
-            )
-            != cached.compiled_sql
-        ):
+        if "%" in cached.compiled_sql:
             statement = self._cached_statement(
                 sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
             )
@@ -779,7 +767,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
 
         await execute_with_optional_parameters_async(cursor, sql, prepared_parameters)
 
-        if statement.returns_rows():
+        if statement.returns_rows() or cursor.description is not None:
             fetched_data = await cursor.fetchall()
             data = cast("list[Any] | None", fetched_data) or []
             column_names = self._resolve_column_names(cursor.description)

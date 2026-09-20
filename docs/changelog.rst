@@ -108,7 +108,8 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 **Fixed:**
 
 * Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
-  when parameters are bound, including repeated preparation.
+  when parameters are bound, including repeated preparation, and retains returned
+  rows when legacy modulo syntax cannot be classified by the SQL parser.
 
 * Missing positional bindings no longer consume values reserved for named placeholders,
   including names that collide with generated parameter aliases.
