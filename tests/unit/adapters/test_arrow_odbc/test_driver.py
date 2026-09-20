@@ -908,3 +908,11 @@ def test_mssql_top_rejects_noninteger_limit() -> None:
 
     with pytest.raises(ValueError):
         _inline_mssql_pagination_parameters("SELECT TOP (?) id FROM t", ["3); DROP TABLE t; --"])
+
+
+@pytest.mark.parametrize("suffix", ["", " PERCENT"])
+def test_mssql_top_rejects_fractional_limits(suffix: str) -> None:
+    from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
+
+    with pytest.raises(ValueError, match="whole integers"):
+        _inline_mssql_pagination_parameters("SELECT TOP (?)" + suffix + " id FROM t", [12.5])

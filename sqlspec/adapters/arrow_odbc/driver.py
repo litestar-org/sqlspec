@@ -470,7 +470,11 @@ def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[s
 
 def _pagination_int(value: object) -> int:
     unwrapped = getattr(value, "value", value)
-    return int(cast("Any", unwrapped))
+    integer = int(cast("Any", unwrapped))
+    if not isinstance(unwrapped, str) and unwrapped != integer:
+        msg = "SQL Server pagination controls must be whole integers"
+        raise ValueError(msg)
+    return integer
 
 
 def _unwrap_parameter(value: Any) -> Any:
