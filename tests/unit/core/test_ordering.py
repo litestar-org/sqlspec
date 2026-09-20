@@ -191,3 +191,12 @@ def test_nulls_detection_uses_sql_tokens(source: str, dialect: str, expected: st
     order_item = expression.args["order"].expressions[0]
     rendered = order_item.sql(dialect="sqlite" if dialect in {"sqlite", "postgres"} else "postgres", comments=False)
     assert rendered == expected
+
+
+def test_nested_null_placement_does_not_set_outer_ordering() -> None:
+    source = "COALESCE((SELECT x FROM u ORDER BY x NULLS FIRST LIMIT 1), id)"
+    expression = default_nulls(parse_one(source, into=exp.Ordered), source)
+    assert expression.sql(dialect="postgres").endswith("LIMIT 1), id)")
+    explicit_source = source + " NULLS FIRST"
+    explicit = default_nulls(parse_one(explicit_source, into=exp.Ordered), explicit_source)
+    assert explicit.sql(dialect="postgres").endswith("LIMIT 1), id) NULLS FIRST")
