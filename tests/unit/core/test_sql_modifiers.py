@@ -590,3 +590,18 @@ def test_wrapped_order_preserves_output_alias_shadowing_source_column() -> None:
         connection.execute("CREATE TABLE t(v INTEGER, x INTEGER)")
         connection.executemany("INSERT INTO t VALUES (?, ?)", [(1, 9), (2, 8)])
         assert connection.execute(rendered, parameters or ()).fetchall() == [(1, 9), (1, 9), (2, 8), (2, 8)]
+
+
+@pytest.mark.parametrize("branch", ["a", "b"])
+def test_wrapped_order_resolves_computed_projection_alias(branch: str) -> None:
+    import sqlite3
+
+    statement = SQL(
+        "SELECT a.v + 1 AS x FROM t a UNION ALL SELECT b.v + 1 AS x FROM t b ORDER BY " + branch + ".v + 1",
+        statement_config=StatementConfig(dialect="sqlite"),
+    ).where("x > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?)", [(2,), (1,)])
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(2,), (2,), (3,), (3,)]
