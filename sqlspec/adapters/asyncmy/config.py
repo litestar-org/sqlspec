@@ -20,7 +20,7 @@ from sqlspec.adapters.asyncmy.core import apply_driver_features, default_stateme
 from sqlspec.adapters.asyncmy.driver import AsyncmyDriver, AsyncmyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core import TypeCoercionCapabilities
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config, parse_mysql_dsn

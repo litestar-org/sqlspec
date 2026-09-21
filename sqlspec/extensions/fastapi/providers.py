@@ -24,6 +24,9 @@ from sqlspec.core import (
     BeforeAfterFilter,
     BooleanFilter,
     ChoicesFilter,
+    CursorFilter,
+    CursorKey,
+    CursorKeys,
     FilterTypes,
     InCollectionFilter,
     LimitOffsetFilter,
@@ -32,8 +35,9 @@ from sqlspec.core import (
     NullFilter,
     OrderByFilter,
     SearchFilter,
+    normalize_cursor_keys,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
 from sqlspec.utils.text import camelize
 
 __all__ = (
@@ -65,7 +69,7 @@ BooleanOrNone = bool | None
 SortOrder = Literal["asc", "desc"]
 SortOrderOrNone = SortOrder | None
 SortField = str | set[str] | list[str]
-HashableValue = str | int | float | bool | None
+HashableValue = str | bytes | int | float | bool | None
 HashableType = HashableValue | tuple[Any, ...] | tuple[tuple[str, Any], ...] | tuple[HashableValue, ...]
 _ProviderT = TypeVar("_ProviderT")
 _FILTER_CONFIG_KEYS = frozenset({
@@ -93,6 +97,7 @@ class DependencyDefaults:
     UPDATED_FILTER_DEPENDENCY_KEY: str = "updated_filter"
     ORDER_BY_FILTER_DEPENDENCY_KEY: str = "order_by_filter"
     SEARCH_FILTER_DEPENDENCY_KEY: str = "search_filter"
+    CURSOR_FILTER_DEPENDENCY_KEY: str = "cursor_filter"
     DEFAULT_PAGINATION_SIZE: int = 20
     DEFAULT_PAGINATION_MAX_SIZE: int = 1000
 
@@ -147,10 +152,14 @@ class FilterConfig(TypedDict):
     """Whether to accept camel-case aliases for configured sort fields. Defaults to ``True``."""
     sort_order: NotRequired[SortOrder]
     """Default sort order. Defaults to ``"desc"``."""
-    pagination_type: NotRequired[Literal["limit_offset"]]
-    """Pagination strategy to enable. Currently supports ``"limit_offset"``."""
+    pagination_type: NotRequired[Literal["limit_offset", "cursor"]]
+    """Pagination strategy to enable: ``"limit_offset"`` or ``"cursor"``."""
+    cursor_keys: NotRequired[CursorKeys]
+    """Field names, (field, direction) pairs, or CursorKey values. The last key must be unique per row."""
+    cursor_secret: NotRequired[str | bytes]
+    """Secret enabling HMAC-SHA256 signed cursors."""
     pagination_size: NotRequired[int]
-    """Default page size for limit/offset pagination."""
+    """Default page size for limit/offset or cursor pagination."""
     pagination_max_size: NotRequired[int]
     """Largest page size a client may request. Defaults to ``1000``."""
     search: NotRequired[str | set[str] | list[str]]
@@ -306,7 +315,7 @@ def _configured_filter_aggregator(
             _SearchFilterProvider(search_fields, config.get("search_ignore_case", False)),
         )
 
-    if sort_field := config.get("sort_field"):
+    if (sort_field := config.get("sort_field")) and config.get("pagination_type") != "cursor":
         _add_dependency(
             params, annotations, dep_defaults.ORDER_BY_FILTER_DEPENDENCY_KEY, _OrderByProvider(sort_field, config)
         )
@@ -356,6 +365,25 @@ def _configured_filter_aggregator(
                 params, annotations, param_name, _ChoicesFilterProvider(resolved_choice.name, resolved_choice.choices)
             )
 
+    if config.get("pagination_type") == "cursor":
+        cursor_keys = config.get("cursor_keys")
+        if not cursor_keys:
+            msg = "pagination_type='cursor' requires a non-empty 'cursor_keys' value"
+            raise ImproperConfigurationError(msg)
+        _add_dependency(
+            params,
+            annotations,
+            dep_defaults.CURSOR_FILTER_DEPENDENCY_KEY,
+            _CursorFilterProvider(
+                cursor_keys,
+                config.get("pagination_size", dep_defaults.DEFAULT_PAGINATION_SIZE),
+                config.get("pagination_max_size", dep_defaults.DEFAULT_PAGINATION_MAX_SIZE),
+                config.get("cursor_secret"),
+                config.get("sort_field"),
+                config,
+            ),
+        )
+
     return _make_aggregate_filter_provider(params, annotations)
 
 
@@ -373,16 +401,18 @@ def _make_hashable(value: Any) -> HashableType:
         A hashable version of the value.
     """
     if isinstance(value, dict):
-        items = []
+        items: list[tuple[str, HashableType]] = []
         for k in sorted(value.keys()):
             v = value[k]
             items.append((str(k), _make_hashable(v)))
         return tuple(items)
-    if isinstance(value, (list, set)):
+    if isinstance(value, list):
+        return tuple(_make_hashable(item) for item in value)
+    if isinstance(value, set):
         hashable_items = [_make_hashable(item) for item in value]
         filtered_items = [item for item in hashable_items if item is not None]
         return tuple(sorted(filtered_items, key=str))
-    if isinstance(value, (str, int, float, bool, type(None))):
+    if isinstance(value, (str, bytes, int, float, bool, type(None))):
         return value
     return str(value)
 
@@ -574,6 +604,98 @@ class _LimitOffsetFilterProvider:
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "_LimitOffsetFilterProvider":
         return _memoize_deepcopy(self, _LimitOffsetFilterProvider(self.default_page_size, self.max_page_size), memo)
+
+
+class _CursorFilterProvider:
+    def __init__(
+        self,
+        cursor_keys: CursorKeys,
+        default_page_size: int,
+        max_page_size: int,
+        secret: str | bytes | None,
+        sort_field: SortField | None,
+        config: FilterConfig,
+    ) -> None:
+        self.cursor_keys = normalize_cursor_keys(cursor_keys)
+        self.default_page_size = default_page_size
+        self.max_page_size = max_page_size
+        self.secret = secret
+        self.sort_field = sort_field
+        self.config = copy.deepcopy(config)
+        self.sort_resolution = (
+            _resolve_sort_field_aliases(
+                sort_field,
+                sort_field_aliases=config.get("sort_field_aliases"),
+                sort_field_camelize=config.get("sort_field_camelize", True),
+            )
+            if sort_field
+            else None
+        )
+        self.allowed_field_names = ", ".join(self.sort_resolution.allowed_display_names) if self.sort_resolution else ""
+        self.sort_order_default: SortOrder = config.get("sort_order", "desc")
+        self.return_annotation = CursorFilter
+        pagination = _LimitOffsetFilterProvider(default_page_size, max_page_size)
+        parameters = [
+            inspect.Parameter(
+                "cursor",
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=None,
+                annotation=Annotated[str | None, Query(alias="cursor", description="Opaque pagination cursor.")],
+            ),
+            pagination.__signature__.parameters["page_size"],
+        ]
+        if sort_field:
+            parameters.extend(_OrderByProvider(sort_field, config).__signature__.parameters.values())
+        self.__signature__ = inspect.Signature(parameters=parameters, return_annotation=CursorFilter)
+
+    def __call__(
+        self,
+        cursor: str | None = None,
+        page_size: int | None = None,
+        field_name: str | None = None,
+        sort_order: SortOrder | None = None,
+    ) -> CursorFilter:
+        resolved_page_size = page_size if page_size is not None else self.default_page_size
+        keys = _effective_cursor_keys(self, field_name, sort_order)
+        try:
+            return CursorFilter(keys, resolved_page_size, cursor, self.secret)
+        except InvalidCursorError as exc:
+            raise RequestValidationError(
+                errors=[{"loc": ("query", "cursor"), "msg": "Invalid pagination cursor", "type": "value_error"}]
+            ) from exc
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_CursorFilterProvider":
+        return _memoize_deepcopy(
+            self,
+            _CursorFilterProvider(
+                self.cursor_keys,
+                self.default_page_size,
+                self.max_page_size,
+                self.secret,
+                copy.deepcopy(self.sort_field, memo),
+                copy.deepcopy(self.config, memo),
+            ),
+            memo,
+        )
+
+
+def _effective_cursor_keys(
+    context: _CursorFilterProvider, field_name: str | None, sort_order: SortOrder | None
+) -> tuple[CursorKey, ...]:
+    if context.sort_resolution is None:
+        return context.cursor_keys
+    resolved_field = context.sort_resolution.normalize(field_name or context.sort_resolution.default_query_value)
+    if resolved_field is None:
+        msg = f"Invalid orderBy field '{field_name}'. Allowed fields: {context.allowed_field_names}"
+        raise RequestValidationError(errors=[{"loc": ("query", "orderBy"), "msg": msg, "type": "value_error"}])
+    existing = next((key for key in context.cursor_keys if key.field_name == resolved_field), None)
+    leading = CursorKey(
+        resolved_field,
+        sort_order or context.sort_order_default,
+        nulls=existing.nulls if existing else None,
+        result_name=existing.result_name if existing else None,
+    )
+    return (leading, *(key for key in context.cursor_keys if key.field_name != resolved_field))
 
 
 class _SearchFilterProvider:

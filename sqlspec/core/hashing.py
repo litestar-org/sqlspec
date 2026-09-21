@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 
+from sqlspec.core._ordering import has_default_nulls, has_explicit_nulls
 from sqlspec.core.parameters import TypedParameter
 from sqlspec.utils.type_guards import is_expression
 
@@ -56,6 +57,10 @@ def hash_expression(expr: "exp.Expr | None", _seen: "set[int] | None" = None) ->
     if isinstance(expr, exp.Expression):
         for key, value in sorted(expr.args.items()):
             components.extend((key, _hash_value(value, _seen)))
+        if has_default_nulls(expr):
+            components.append("default_nulls")
+        if has_explicit_nulls(expr):
+            components.append("explicit_nulls")
     else:
         components.append(hash(expr.sql()))
 

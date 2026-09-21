@@ -31,7 +31,7 @@ from sqlspec.builder._parsing_utils import (
     parse_table_expression,
     to_expression,
 )
-from sqlspec.core import SQL, ParameterStyle
+from sqlspec.core import SQL, ParameterStyle, apply_direction, ordered
 from sqlspec.core.query_modifiers import expr_eq, expr_gt, expr_gte, expr_lt, expr_lte, expr_neq, expr_not_like
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import (
@@ -198,12 +198,10 @@ class WindowFunctionBuilder:
     def order_by(self, *columns: str | exp.Expr) -> "WindowFunctionBuilder":
         ordered_columns: list[exp.Ordered] = []
         for column in columns:
-            if isinstance(column, str):
-                ordered_columns.append(exp.column(column).asc())
-            elif isinstance(column, exp.Ordered):
+            if isinstance(column, exp.Ordered):
                 ordered_columns.append(column)
             else:
-                ordered_columns.append(exp.Ordered(this=column, desc=False, nulls_first=False))
+                ordered_columns.append(ordered(exp.column(column) if isinstance(column, str) else column))
         self._order_by = ordered_columns
         return self
 
@@ -350,20 +348,14 @@ class OrderByClauseMixin:
         current_expr = select_expr
         for item in items:
             if isinstance(item, str):
-                order_item = parse_order_expression(item)
-                if desc:
-                    order_item = order_item.desc()
+                order_item = apply_direction(parse_order_expression(item), desc)
             else:
                 extracted_item = extract_expression(item)
                 if isinstance(extracted_item, exp.Alias):
                     alias_name = (extracted_item.alias or "").lower()
                     if alias_name in {"asc", "desc"}:
-                        extracted_item = exp.Ordered(
-                            this=extracted_item.this, desc=alias_name == "desc", nulls_first=False
-                        )
-                order_item = (
-                    extracted_item.desc() if desc and not isinstance(extracted_item, exp.Ordered) else extracted_item
-                )
+                        extracted_item = ordered(extracted_item.this, desc=alias_name == "desc")
+                order_item = apply_direction(extracted_item, desc)
             current_expr = current_expr.order_by(order_item, copy=False)
         builder.set_expression(current_expr)
         return cast("Self", builder)

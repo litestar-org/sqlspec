@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.bigquery._typing import BigQueryQueryJob as QueryJob
     from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
     from sqlspec.adapters.bigquery._typing import BigQueryRetry as Retry
-    from sqlspec.driver._common import SyncExceptionHandler
+    from sqlspec.driver import SyncExceptionHandler
     from sqlspec.storage import StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 

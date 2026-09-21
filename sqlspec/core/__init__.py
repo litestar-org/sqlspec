@@ -25,7 +25,9 @@ Example Usage:
 """
 
 from sqlspec.core import filters
-from sqlspec.core._pagination import OffsetPagination
+from sqlspec.core._cursor import register_cursor_type
+from sqlspec.core._ordering import NullsPlacement, apply_direction, default_nulls, ordered
+from sqlspec.core._pagination import CursorPagination, OffsetPagination, Pagination
 from sqlspec.core.cache import (
     CacheConfig,
     CachedStatement,
@@ -63,6 +65,9 @@ from sqlspec.core.filters import (
     BeforeAfterFilter,
     BooleanFilter,
     ChoicesFilter,
+    CursorFilter,
+    CursorKey,
+    CursorKeys,
     FilterTypes,
     FilterTypeT,
     InCollectionFilter,
@@ -75,6 +80,7 @@ from sqlspec.core.filters import (
     StatementFilter,
     apply_filter,
     canonicalize_filters,
+    normalize_cursor_keys,
 )
 from sqlspec.core.hashing import (
     hash_expression,
@@ -198,6 +204,10 @@ __all__ = (
     "CompiledSQL",
     "ConditionFactory",
     "CorrelationExtractor",
+    "CursorFilter",
+    "CursorKey",
+    "CursorKeys",
+    "CursorPagination",
     "DMLResult",
     "DriverParameterProfile",
     "ExplainFormat",
@@ -212,10 +222,12 @@ __all__ = (
     "NotInCollectionFilter",
     "NotNullFilter",
     "NullFilter",
+    "NullsPlacement",
     "OffsetPagination",
     "OperationProfile",
     "OperationType",
     "OrderByFilter",
+    "Pagination",
     "ParamTypeMatcher",
     "ParameterConverter",
     "ParameterDeclaration",
@@ -241,6 +253,7 @@ __all__ = (
     "StatementStack",
     "TypeCoercionCapabilities",
     "TypedParameter",
+    "apply_direction",
     "apply_filter",
     "apply_limit",
     "apply_offset",
@@ -270,6 +283,7 @@ __all__ = (
     "create_not_exists_condition",
     "create_not_in_condition",
     "create_sql_result",
+    "default_nulls",
     "expr_eq",
     "expr_gt",
     "expr_gte",
@@ -305,9 +319,12 @@ __all__ = (
     "log_cache_stats",
     "looks_like_execute_many",
     "matches_param_type",
+    "normalize_cursor_keys",
     "normalize_parameter_key",
+    "ordered",
     "parse_column_for_condition",
     "parse_datetime_rfc3339",
+    "register_cursor_type",
     "register_driver_profile",
     "register_param_type",
     "replace_null_parameters_with_literals",

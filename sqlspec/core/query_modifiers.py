@@ -16,6 +16,7 @@ from typing import Any, Final
 
 from sqlglot import exp
 
+from sqlspec.core._operators import _outer_order
 from sqlspec.exceptions import SQLSpecError
 
 __all__ = (
@@ -45,6 +46,7 @@ __all__ = (
     "extract_column_name",
     "parse_column_for_condition",
     "safe_modify_with_cte",
+    "wrap_as_subquery",
 )
 
 # Type alias for condition factory functions
@@ -405,6 +407,45 @@ def safe_modify_with_cte(expression: "exp.Expr", modification_fn: "Callable[[exp
         result.set("with_", cte)
 
     return result
+
+
+def wrap_as_subquery(expression: exp.Expr, alias: str = "filtered") -> exp.Select:
+    """Wrap a query while keeping CTEs and unrestricted ordering outside.
+
+    Predicates on the result must reference output column names rather than
+    columns qualified by tables inside the original query.
+
+    Args:
+        expression: Query expression to wrap without modifying it.
+        alias: Alias for the derived table.
+
+    Returns:
+        A SELECT over the wrapped query with its CTEs at the top level.
+    """
+    working = expression.copy()
+    with_ = working.args.get("with_")
+    if with_ is not None:
+        working.set("with_", None)
+    order = None
+    bounded = working.args.get("limit") is not None or working.args.get("offset") is not None
+    if not bounded:
+        order = working.args.get("order")
+        if order is not None:
+            working.set("order", None)
+        elif isinstance(working, exp.SetOperation):
+            right = working.expression
+            if isinstance(right, exp.Select) and right.args.get("limit") is None and right.args.get("offset") is None:
+                order = right.args.get("order")
+                if order is not None:
+                    right.set("order", None)
+    subquery = working if isinstance(working, exp.Subquery) and not bounded else exp.Subquery(this=working)
+    subquery.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))
+    outer = exp.Select().select("*").from_(subquery)
+    if with_ is not None:
+        outer.set("with_", with_)
+    if order is not None:
+        outer.set("order", _outer_order(working, order))
+    return outer
 
 
 def apply_column_pruning(

@@ -52,7 +52,7 @@ if TYPE_CHECKING:
         OracleSyncRawCursor,
     )
     from sqlspec.core import SQL
-    from sqlspec.driver._common import AsyncExceptionHandler, SyncExceptionHandler
+    from sqlspec.driver import AsyncExceptionHandler, SyncExceptionHandler
 
 
 __all__ = (

@@ -18,6 +18,7 @@ from sqlspec.core.parameters._declared import (
 from sqlspec.core.parameters._processor import (
     ParameterProcessor,
     apply_type_coercion,
+    executes_qmark,
     structural_fingerprint,
     type_coercion_dispatcher,
     type_coercion_fallbacks,
@@ -49,7 +50,7 @@ from sqlspec.core.parameters._types import (
     is_iterable_parameters,
     wrap_with_type,
 )
-from sqlspec.core.parameters._validator import PARAMETER_REGEX, ParameterValidator
+from sqlspec.core.parameters._validator import PARAMETER_REGEX, ParameterValidator, unescape_qmark_operator
 
 __all__ = (
     "DRIVER_PARAMETER_PROFILES",
@@ -75,6 +76,7 @@ __all__ = (
     "build_null_pruning_transform",
     "build_statement_config_from_profile",
     "collect_null_parameter_ordinals",
+    "executes_qmark",
     "get_driver_profile",
     "is_iterable_parameters",
     "looks_like_execute_many",
@@ -88,6 +90,7 @@ __all__ = (
     "structural_fingerprint",
     "type_coercion_dispatcher",
     "type_coercion_fallbacks",
+    "unescape_qmark_operator",
     "validate_parameter_alignment",
     "value_fingerprint",
     "wrap_with_type",

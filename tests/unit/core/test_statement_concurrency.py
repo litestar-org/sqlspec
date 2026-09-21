@@ -23,10 +23,10 @@ def test_concurrent_compile_reset_vs_current_expression() -> None:
                 sql._raw_sql = raw
                 sql._named_parameters["id"] = 1
                 sql.compile()
-            except (AttributeError, TypeError) as exc:
-                crashes.append(exc)
             except SQLSpecError:
                 pass
+            except Exception as exc:
+                crashes.append(exc)
 
     def reader() -> None:
         start.wait()
@@ -35,10 +35,10 @@ def test_concurrent_compile_reset_vs_current_expression() -> None:
                 sql._current_expression()
                 sql.returns_rows()
                 _ = sql.operation_type
-            except (AttributeError, TypeError) as exc:
-                crashes.append(exc)
             except SQLSpecError:
                 pass
+            except Exception as exc:
+                crashes.append(exc)
 
     threads = [threading.Thread(target=writer), threading.Thread(target=reader), threading.Thread(target=reader)]
     for thread in threads:

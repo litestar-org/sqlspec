@@ -369,3 +369,253 @@ def test_method_chaining_immutability_in_chain() -> None:
     assert "LIMIT" in step2.raw_sql
     assert "id" in step3.raw_sql
     assert "LIMIT" in step3.raw_sql
+
+
+@pytest.mark.parametrize("operation", ["UNION ALL", "INTERSECT", "EXCEPT"])
+def test_where_on_set_operation_wraps_whole_result(operation: str) -> None:
+    import sqlite3
+
+    query = "SELECT 1 AS v UNION ALL SELECT 2 AS v"
+    base = SQL(query, statement_config=StatementConfig(dialect="sqlite"))
+    if operation != "UNION ALL":
+        base = SQL("SELECT 1 AS v " + operation + " SELECT 2 AS v", statement_config=StatementConfig(dialect="sqlite"))
+    modified = base.where("v = 2")
+    rendered, parameters = modified.compile()
+    assert rendered.startswith("SELECT * FROM (")
+    with sqlite3.connect(":memory:") as connection:
+        rows = connection.execute(rendered, parameters or ()).fetchall()
+    assert rows == ([(2,)] if operation == "UNION ALL" else [])
+
+
+def test_where_on_values_wraps() -> None:
+    import sqlite3
+
+    statement = SQL("VALUES (1), (2)", statement_config=StatementConfig(dialect="sqlite")).where("1 = 1")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(1,), (2,)]
+
+
+@pytest.mark.parametrize("prefix", ["", "WITH source AS (SELECT 1 AS v) "])
+def test_where_on_tsql_set_operation_hoists_trailing_order_by(prefix: str) -> None:
+    statement = SQL(
+        prefix + "SELECT 1 AS v UNION ALL SELECT 2 AS v UNION ALL SELECT 3 AS v ORDER BY v DESC",
+        statement_config=StatementConfig(dialect="tsql"),
+    ).where("v = 1")
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    assert rendered.endswith(") AS filtered WHERE v = 1 ORDER BY v DESC")
+    assert rendered.count("ORDER BY") == 1
+    if prefix:
+        assert rendered.startswith("WITH source AS")
+
+
+def test_where_on_update_stays_in_place() -> None:
+    statement = SQL("UPDATE t SET v = 1").where("id = 2")
+    assert statement.raw_sql == "UPDATE t SET v = 1 WHERE id = 2"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT 1 AS v ORDER BY v LIMIT 1",
+        "(SELECT 1 AS v) ORDER BY v LIMIT 1",
+        "(SELECT 1 AS v) ORDER BY v",
+        "SELECT 1 AS v UNION ALL (SELECT 2 AS v ORDER BY v LIMIT 1)",
+    ],
+)
+def test_subquery_wrapper_preserves_bounded_order_and_input(query: str) -> None:
+    import sqlglot
+
+    from sqlspec.core.query_modifiers import wrap_as_subquery
+
+    expression = sqlglot.parse_one(query)
+    original = expression.sql()
+    wrapped = wrap_as_subquery(expression)
+    assert expression.sql() == original
+    assert wrapped.sql().startswith("SELECT * FROM (")
+    if expression.args.get("limit") is not None:
+        assert wrapped.args.get("limit") is None
+        assert "LIMIT 1" in wrapped.sql()
+    elif expression.args.get("order") is not None:
+        assert wrapped.sql().endswith("ORDER BY v")
+
+
+@pytest.mark.parametrize("operation", ["UNION ALL", "INTERSECT", "EXCEPT"])
+@pytest.mark.parametrize(("limit", "offset"), [(10, 20), (None, 20), (10, None)])
+def test_tsql_set_operation_pagination_uses_valid_outer_select(
+    operation: str, limit: int | None, offset: int | None
+) -> None:
+    statement = SQL(
+        "SELECT id FROM a " + operation + " SELECT id FROM b", statement_config=StatementConfig(dialect="tsql")
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+    if offset is not None:
+        statement = statement.offset(offset)
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    if offset is not None:
+        expected = (
+            "SELECT * FROM (SELECT id FROM a "
+            + operation
+            + " SELECT id FROM b) AS _l_0 ORDER BY (SELECT NULL) OFFSET 20 ROWS"
+        )
+        if limit is not None:
+            expected += " FETCH FIRST 10 ROWS ONLY"
+    else:
+        expected = "SELECT TOP 10 * FROM (SELECT id FROM a " + operation + " SELECT id FROM b) AS _l_0"
+    assert rendered == expected
+
+
+def test_tsql_paginate_on_cte_set_operation_keeps_cte_leading() -> None:
+    statement = SQL(
+        "WITH x AS (SELECT 1 AS id) SELECT id FROM x UNION ALL SELECT id FROM x ORDER BY id DESC",
+        statement_config=StatementConfig(dialect="tsql"),
+    ).paginate(2, 10)
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    assert rendered.startswith("WITH x AS")
+    assert rendered.endswith(") AS _l_0 ORDER BY id DESC OFFSET 10 ROWS FETCH FIRST 10 ROWS ONLY")
+
+
+def test_tsql_limit_only_on_set_operation_hoists_trailing_order_by() -> None:
+    statement = SQL(
+        "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id DESC", statement_config=StatementConfig(dialect="tsql")
+    ).limit(10)
+    assert statement._filter_expression().sql(dialect="tsql") == (
+        "SELECT TOP 10 * FROM (SELECT id FROM a UNION ALL SELECT id FROM b) AS _l_0 ORDER BY id DESC"
+    )
+
+
+@pytest.mark.parametrize(
+    ("dialect", "expected"),
+    [
+        ("postgres", "SELECT id FROM a UNION ALL SELECT id FROM b LIMIT 10 OFFSET 20"),
+        ("mysql", "SELECT id FROM a UNION ALL SELECT id FROM b LIMIT 10 OFFSET 20"),
+        ("sqlite", "SELECT id FROM a UNION ALL SELECT id FROM b LIMIT 10 OFFSET 20"),
+        ("oracle", "SELECT id FROM a UNION ALL SELECT id FROM b OFFSET 20 ROWS FETCH FIRST 10 ROWS ONLY"),
+    ],
+)
+def test_non_tsql_set_operation_limit_offset_unchanged(dialect: str, expected: str) -> None:
+    statement = SQL("SELECT id FROM a UNION ALL SELECT id FROM b", statement_config=StatementConfig(dialect=dialect))
+    assert statement.limit(10).offset(20)._filter_expression().sql(dialect=dialect) == expected
+
+
+def test_tsql_set_operation_without_limit_or_offset_is_unchanged() -> None:
+    statement = SQL("SELECT id FROM a UNION ALL SELECT id FROM b", statement_config=StatementConfig(dialect="tsql"))
+    assert statement._filter_expression().sql(dialect="tsql") == "SELECT id FROM a UNION ALL SELECT id FROM b"
+
+
+def test_set_operation_transform_applies_after_generator_was_used() -> None:
+    import subprocess
+    import sys
+
+    probe = """
+import sys
+from sqlglot import exp
+from sqlglot.generator import Generator
+query = exp.select('id').from_('a').union(exp.select('id').from_('b'), distinct=False).limit(10).offset(20)
+generic_before = query.sql()
+assert 'sqlglot.dialects.tsql' not in sys.modules
+import sqlspec.core._operators
+assert 'sqlglot.dialects.tsql' not in sys.modules
+assert query.sql() == generic_before
+assert 'ORDER BY (SELECT NULL) OFFSET 20 ROWS FETCH FIRST 10 ROWS ONLY' in query.sql(dialect='tsql')
+"""
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_set_operation_transform_invalidates_loaded_tsql_dispatch() -> None:
+    import subprocess
+    import sys
+
+    probe = """
+from sqlglot import exp
+query = exp.select('id').from_('a').union(exp.select('id').from_('b'), distinct=False).limit(10).offset(20)
+query.sql(dialect='tsql')
+import sqlspec.core._operators
+assert 'ORDER BY (SELECT NULL) OFFSET 20 ROWS FETCH FIRST 10 ROWS ONLY' in query.sql(dialect='tsql')
+"""
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_tsql_pagination_preserves_parenthesized_branch_limit() -> None:
+    statement = (
+        SQL(
+            "SELECT id FROM a UNION ALL (SELECT TOP 2 id FROM b ORDER BY id DESC)",
+            statement_config=StatementConfig(dialect="tsql"),
+        )
+        .limit(4)
+        .offset(1)
+    )
+    rendered = statement._filter_expression().sql(dialect="tsql")
+    assert "(SELECT TOP 2 id FROM b ORDER BY id DESC)" in rendered
+    assert rendered.endswith("ORDER BY (SELECT NULL) OFFSET 1 ROWS FETCH FIRST 4 ROWS ONLY")
+
+
+@pytest.mark.parametrize("projection", ["a.v", "a.v AS renamed"])
+@pytest.mark.parametrize("order", ["a.v", "b.v", "v"])
+def test_wrapped_set_order_uses_projected_names(projection: str, order: str) -> None:
+    import sqlite3
+
+    result_name = "renamed" if " AS " in projection else "v"
+    statement = SQL(
+        "SELECT " + projection + " FROM t a UNION ALL SELECT b.v FROM t b ORDER BY " + order,
+        statement_config=StatementConfig(dialect="sqlite"),
+    ).where(result_name + " > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?)", [(2,), (1,)])
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(1,), (1,), (2,), (2,)]
+
+
+def test_tsql_paginated_union_resolves_qualified_output_alias() -> None:
+    statement = SQL(
+        "SELECT a.v AS renamed FROM t a UNION ALL SELECT b.v FROM t b ORDER BY a.v DESC",
+        statement_config=StatementConfig(dialect="tsql"),
+    ).limit(2)
+    assert statement._filter_expression().sql(dialect="tsql").endswith("AS _l_0 ORDER BY renamed DESC")
+
+
+def test_wrapped_order_preserves_output_alias_shadowing_source_column() -> None:
+    import sqlite3
+
+    statement = SQL(
+        "SELECT a.v AS x, a.x AS y FROM t a UNION ALL SELECT b.v AS x, b.x AS y FROM t b ORDER BY x",
+        statement_config=StatementConfig(dialect="sqlite"),
+    ).where("x > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER, x INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?, ?)", [(1, 9), (2, 8)])
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(1, 9), (1, 9), (2, 8), (2, 8)]
+
+
+@pytest.mark.parametrize("ordering", ["a.v + 1", "b.v + 1", "v + 1", "(a.v + 1)"])
+def test_wrapped_order_resolves_computed_projection_alias(ordering: str) -> None:
+    import sqlite3
+
+    statement = SQL(
+        "SELECT a.v + 1 AS x FROM t a UNION ALL SELECT b.v + 1 AS x FROM t b ORDER BY " + ordering,
+        statement_config=StatementConfig(dialect="sqlite"),
+    ).where("x > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?)", [(2,), (1,)])
+        assert connection.execute(rendered, parameters or ()).fetchall() == [(2,), (2,), (3,), (3,)]
+
+
+def test_wrapped_order_resolves_ambiguous_source_from_first_branch() -> None:
+    import sqlite3
+
+    base = "SELECT a.v AS x, a.w AS y FROM t a UNION ALL SELECT b.w AS x, b.v AS y FROM t b ORDER BY v"
+    statement = SQL(base, statement_config=StatementConfig(dialect="sqlite")).where("x > 0")
+    rendered, parameters = statement.compile()
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute("CREATE TABLE t(v INTEGER, w INTEGER)")
+        connection.executemany("INSERT INTO t VALUES (?, ?)", [(1, 9), (2, 8)])
+        expected = connection.execute(base).fetchall()
+        assert expected == [(1, 9), (2, 8), (8, 2), (9, 1)]
+        assert connection.execute(rendered, parameters or ()).fetchall() == expected

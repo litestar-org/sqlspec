@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.pymysql._typing import (
+    PYMYSQL_INSERT_VALUES_PATTERN,
     PyMysqlCursor,
     PyMysqlFieldType,
     PyMysqlMySQLError,
@@ -21,6 +22,7 @@ from sqlspec.adapters.pymysql.core import (
     default_statement_config,
     driver_profile,
     encode_records_for_local_infile,
+    escape_literal_percent,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -41,8 +43,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.adapters.pymysql._typing import PyMysqlConnection
-    from sqlspec.core import SQL, StatementConfig
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.core import SQL, SQLResult, StatementConfig
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PyMysqlCursor", "PyMysqlDriver", "PyMysqlExceptionHandler", "PyMysqlSessionContext")
@@ -108,8 +110,25 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PyMysqlDataDictionary | None = None
 
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if (
+            "%" in cached.compiled_sql
+            and escape_literal_percent(
+                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
+            )
+            != cached.compiled_sql
+        ):
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return self._execute_cached_statement(statement)
+        return super()._execute_cache_hit(sql, params, cached)
+
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
@@ -136,6 +155,14 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
     def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        match = PYMYSQL_INSERT_VALUES_PATTERN.match(sql)
+        if match:
+            sql = (
+                escape_literal_percent(match.group(1), prepared_parameters, self.statement_config.parameter_validator)
+                + sql[match.end(1) :]
+            )
+        else:
+            sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -188,6 +215,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         return SyncRowStream(PymysqlStreamSource(self, sql, prepared_parameters, chunk_size, PYMYSQL_JSON_TYPE_CODES))
 
     def handle_database_exceptions(self) -> "PyMysqlExceptionHandler":

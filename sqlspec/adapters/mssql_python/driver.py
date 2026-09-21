@@ -25,8 +25,13 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, rows_to_dicts
-from sqlspec.driver._common import validate_savepoint_name
+from sqlspec.driver import (
+    BaseSyncExceptionHandler,
+    SyncDriverAdapterBase,
+    SyncRowStream,
+    rows_to_dicts,
+    validate_savepoint_name,
+)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger

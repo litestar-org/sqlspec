@@ -375,7 +375,9 @@ class SQLProcessor:
         Returns:
             CompiledSQL with execution information
         """
-        if not self._cache_enabled:
+        # Parameter AST transforms may remove or inline values. Their final SQL
+        # cannot be rebound from a structural parameter fingerprint alone.
+        if not self._cache_enabled or self._parameter_config.ast_transformer is not None:
             return self._apply_dynamic_sqlcommenter(
                 self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
             )
@@ -993,9 +995,6 @@ class SQLProcessor:
         """
         output_transformer = self._config.output_transformer
         if output_transformer:
-            if expression is not None:
-                ast_sql = expression.sql(dialect=dialect_str)
-                return output_transformer(ast_sql, parameters)
             return output_transformer(sql, parameters)
 
         return sql, parameters

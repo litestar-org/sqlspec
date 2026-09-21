@@ -14,6 +14,36 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 **Added:**
 
+* Added a :ref:`cursor pagination guide <cursor-pagination>` with a tested example.
+  It shows how to move through pages in both directions and sign page tokens.
+  Examples cover service ``paginate()`` and direct driver ``select()``
+  with ``CursorFilter.build_page()``, plus Litestar and FastAPI filter setup.
+
+* FastAPI filter dependencies support cursor pagination, including signed
+  tokens, dynamic sorting, page-size bounds, and HTTP 422 cursor errors.
+
+* Litestar filter dependencies support cursor pagination with signed tokens,
+  bounded page sizes, dynamic sorting, and client validation errors.
+* Pass a cursor or offset filter to service ``paginate()`` to choose the page
+  type. Both sync and async calls return typed rows and can use your session.
+  Use ``paginate_limit_offset()`` or ``paginate_cursor()`` to select a mode
+  explicitly and retain a precise return type with dynamic filter lists.
+  Litestar routes can return either page type with typed items and an OpenAPI
+  union response. ``Pagination[T]`` aliases both page types for concise return
+  annotations.
+
+* Use cursor filters with sync and async driver ``select()`` calls.
+  ``CursorFilter.build_page()`` builds a page from the rows.
+  Tests cover quoted BigQuery table names and the SQL Server dialect alias.
+
+* Added type-preserving pagination cursor tokens with optional HMAC signing and
+  a generic ``CursorPagination`` response container. Malformed cursor inputs raise
+  ``InvalidCursorError`` consistently in Python and compiled installations.
+* Added ``CursorKey`` and ``CursorFilter`` for bidirectional keyset pagination,
+  including explicit NULL placement, composite sort keys, and page cursor creation.
+  Use a field name to sort from low to high. Use pairs to set each field's
+  sort order, or ``CursorKey`` for more control.
+
 * Defer public exports, query builders, and migration helpers in pure-Python installations
   on first access to accelerate cold import performance.
   (`#798 <https://github.com/litestar-org/sqlspec/pull/798>`_)
@@ -39,6 +69,17 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 * Generated filter dependencies reject ``pageSize`` values above
   ``pagination_max_size`` (default ``1000``); set ``pagination_max_size`` in
   ``FilterConfig`` to change the limit.
+* SQLSpec-built ordering (``OrderByFilter``, ``SQL.order_by``, builder
+  ``order_by``, ``Column.asc()``/``desc()``, and window ordering) leaves NULL
+  placement to the database unless requested. It no longer adds implicit
+  ``NULLS FIRST``/``NULLS LAST`` clauses or a ``CASE`` sort key.
+  On PostgreSQL, Oracle, Snowflake, and Redshift, affected ascending items
+  move NULL rows from first to last; descending items move them from last
+  to first. On DuckDB, ClickHouse, and Trino, affected ascending items move
+  NULL rows to last. On MySQL, SQL Server, SQLite, BigQuery, and Spanner,
+  ``Column.asc()`` and expression-based window ordering move NULL rows to first.
+  Request placement with ``OrderByFilter(nulls=...)``, ``Column.asc(nulls=...)`` /
+  ``Column.desc(nulls=...)``, or a string such as ``"id DESC NULLS LAST"``.
 
 * Pure-Python installations defer unused query builders and migration commands.
   Compiled wheels retain eager exports to preserve concurrent access after
@@ -113,6 +154,89 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   (`#786 <https://github.com/litestar-org/sqlspec/pull/786>`_)
 
 **Fixed:**
+
+* Parameter-only statement copies preserve the shared parameter-validator cache
+  and its configured size when rebinding values.
+
+* Adapters, services, and builders import shared driver, ordering, and parameter
+  helpers through their owning packages instead of private implementation modules.
+
+* Cursor provider dependency caches distinguish byte secrets from their text
+  representation, preserving each endpoint's configured signing key.
+
+* Framework dependency caches preserve configured list order so the first
+  sort field and cursor key sequence retain their declared meaning.
+
+* Explicit NULL placement remains explicit for PostgreSQL-compatible adapters,
+  including CockroachDB, whose default NULL ordering differs from PostgreSQL.
+
+* Arrow ODBC renders SQL Server ``TOP`` page-size controls as validated integers
+  while retaining bound data parameters, including queries with CTEs. Native
+  ``select_to_arrow`` applies the same SQL Server pagination controls.
+
+* ``SQL.order_by("id", desc=True)`` now sorts descending, and
+  ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+* ``limit``, ``offset``, and ``paginate`` on set operations render valid
+  SQL Server pagination while retaining the requested result ordering.
+
+* Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
+  result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
+  and result ordering. Pagination filters produce valid set-operation SQL.
+
+
+* Preserve parameter alignment when repeated BigQuery queries inline NULL values,
+  including copied statements and transitions between NULL and non-NULL values.
+
+* Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
+  when parameters are bound, including repeated preparation, and retains returned
+  rows when legacy modulo syntax cannot be classified by the SQL parser.
+
+* Missing positional bindings no longer consume values reserved for named placeholders,
+  including names that collide with generated parameter aliases and script literals.
+* Repeated and reordered numeric placeholders bind by their written indexes when
+  converted to another placeholder style; native numeric mappings retain written
+  index order on the first call and cache hits.
+* Sequences for named placeholders and mappings for positional placeholders bind
+  consistently on the first execution and cache hits, including repeated names.
+* Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
+  instead of silently binding values to the wrong slots.
+* PostgreSQL ``??`` escapes become ``?`` operators, including after filters modify
+  the statement; output transformers receive the driver's execution placeholder style.
+* Spanner ``execute_many`` converts tuple rows and mixed placeholder mappings before
+  calling the driver, preserving bindings on cache hits.
+
+* Filters supplied to the ``SQL`` constructor are applied once before call-site
+  filters, including when statements are reused.
+
+* Statements combining positional and named values now bind each value to its
+  own placeholder, including filters and ``where_*`` helpers.
+
+* PostgreSQL JSONB existence operators followed by literals or bound parameters
+  are recognized without consuming a parameter slot.
+
+* DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
+  order and defaults by restricting bulk loading to plain VALUES inserts.
+* Psycopg preserves literal percent characters alongside bound parameters,
+  including cached statements, batch execution, streams, and pipelines.
+
+* Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
+  A placeholder without a value now raises instead of rendering as ``NULL``.
+
+* The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
+  now pass statement parameters to the driver for binding.
+  Cross-adapter safety checks cover quotes, backslashes, and placeholder-like
+  text supplied as bound values.
+
+
+* Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
+  instead of leaking a sqlglot ``ParseError``, including during concurrent resets.
+
+* Tests, including Litestar connection-provider tests, close aiosqlite pools before
+  their event loops shut down, and unhandled worker-thread exceptions now fail the test suite.
+
+* The SQLite and aiosqlite pools retry enabling WAL mode when several connections
+  first open a new database at the same time; previously this could fail with
+  ``database is locked``.
 
 * Close async example connection pools before their event loops shut down.
 

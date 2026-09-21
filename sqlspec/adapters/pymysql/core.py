@@ -34,6 +34,8 @@ from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_ro
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from sqlspec.core import ParameterValidator
+
 __all__ = (
     "PymysqlStreamSource",
     "apply_driver_features",
@@ -246,7 +248,7 @@ def build_profile() -> "DriverParameterProfile":
         supported_execution_styles={ParameterStyle.POSITIONAL_PYFORMAT},
         has_native_list_expansion=False,
         preserve_parameter_format=True,
-        needs_static_script_compilation=True,
+        needs_static_script_compilation=False,
         allow_mixed_parameter_styles=False,
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
@@ -579,3 +581,11 @@ def _deserialize_json_tuple_rows(
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
+    """Escape literal percent characters before driver-side interpolation."""
+    if not parameters or "%" not in sql:
+        return sql
+    keep = {info.position for info in validator.extract_parameters(sql)}
+    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))

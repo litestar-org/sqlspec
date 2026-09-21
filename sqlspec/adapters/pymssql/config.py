@@ -12,7 +12,7 @@ from sqlspec.adapters.pymssql.migrations import PymssqlSyncMigrationTracker
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 

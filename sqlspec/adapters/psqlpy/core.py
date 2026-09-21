@@ -27,7 +27,7 @@ from sqlspec.core.config_runtime import (
     resolve_runtime_statement_config,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher
-from sqlspec.driver._query_cache import CachedQuery
+from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     CheckViolationError,
     ConnectionTimeoutError,

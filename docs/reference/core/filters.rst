@@ -97,6 +97,23 @@ Pagination
    :members:
    :show-inheritance:
 
+.. autoclass:: CursorFilter
+   :members:
+   :show-inheritance:
+
+.. autoclass:: CursorKey
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.core.CursorPagination
+   :members:
+   :show-inheritance:
+
+Cursor value types
+~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: sqlspec.core.register_cursor_type
+
 Ordering
 ========
 
@@ -119,6 +136,10 @@ Search
 
 Type Aliases
 ============
+
+.. data:: sqlspec.core.Pagination
+
+   Generic alias for ``CursorPagination[T] | OffsetPagination[T]``.
 
 .. data:: FilterTypes
 

@@ -144,25 +144,31 @@ def test_sync_select_stream_close_mid_iteration_stops() -> None:
 async def test_async_select_stream_uses_native_source_by_default() -> None:
     spec = SQLSpec()
     config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
-    async with spec.provide_session(config) as session:
-        await _seed_async(session)
-        async with session.select_stream(_SELECT, chunk_size=10) as stream:
-            assert isinstance(stream._source, AiosqliteStreamSource)  # pyright: ignore[reportPrivateUsage]
-            first = await anext(aiter(stream))
-    assert first["id"] == 0
+    try:
+        async with spec.provide_session(config) as session:
+            await _seed_async(session)
+            async with session.select_stream(_SELECT, chunk_size=10) as stream:
+                assert isinstance(stream._source, AiosqliteStreamSource)  # pyright: ignore[reportPrivateUsage]
+                first = await anext(aiter(stream))
+        assert first["id"] == 0
+    finally:
+        await config.close_pool()
 
 
 async def test_async_select_stream_native_only_without_native_stream_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     spec = SQLSpec()
     config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
-    async with spec.provide_session(config) as session:
-        await _seed_async(session)
-        _disable_native(session, monkeypatch)
-        with pytest.raises(ImproperConfigurationError) as excinfo:
-            session.select_stream(_SELECT, native_only=True)
-        message = str(excinfo.value)
-        assert type(session).__name__ in message
-        assert "native_only=False" in message
+    try:
+        async with spec.provide_session(config) as session:
+            await _seed_async(session)
+            _disable_native(session, monkeypatch)
+            with pytest.raises(ImproperConfigurationError) as excinfo:
+                session.select_stream(_SELECT, native_only=True)
+            message = str(excinfo.value)
+            assert type(session).__name__ in message
+            assert "native_only=False" in message
+    finally:
+        await config.close_pool()
 
 
 @pytest.mark.parametrize("chunk_size", [0, -1])
@@ -171,34 +177,43 @@ async def test_async_select_stream_rejects_non_positive_chunk_size(
 ) -> None:
     spec = SQLSpec()
     config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
-    async with spec.provide_session(config) as session:
-        await _seed_async(session)
-        monkeypatch.setattr(type(session), "dispatch_select_stream", _fail_dispatch)
-        with pytest.raises(ValueError, match="chunk_size must be greater than or equal to 1"):
-            session.select_stream(_SELECT, chunk_size=chunk_size, native_only=True)
+    try:
+        async with spec.provide_session(config) as session:
+            await _seed_async(session)
+            monkeypatch.setattr(type(session), "dispatch_select_stream", _fail_dispatch)
+            with pytest.raises(ValueError, match="chunk_size must be greater than or equal to 1"):
+                session.select_stream(_SELECT, chunk_size=chunk_size, native_only=True)
+    finally:
+        await config.close_pool()
 
 
 async def test_async_select_stream_eager_fallback_yields_all_rows_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
     spec = SQLSpec()
     config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
-    async with spec.provide_session(config) as session:
-        await _seed_async(session)
-        _disable_native(session, monkeypatch)
-        expected = (await session.execute(_SELECT)).get_data()
-        async with session.select_stream(_SELECT, chunk_size=10) as stream:
-            streamed = [row async for row in stream]
-    assert streamed == expected
-    assert len(streamed) == 25
+    try:
+        async with spec.provide_session(config) as session:
+            await _seed_async(session)
+            _disable_native(session, monkeypatch)
+            expected = (await session.execute(_SELECT)).get_data()
+            async with session.select_stream(_SELECT, chunk_size=10) as stream:
+                streamed = [row async for row in stream]
+        assert streamed == expected
+        assert len(streamed) == 25
+    finally:
+        await config.close_pool()
 
 
 async def test_async_select_stream_eager_fallback_applies_schema_type(monkeypatch: pytest.MonkeyPatch) -> None:
     spec = SQLSpec()
     config = spec.add_config(AiosqliteConfig(connection_config={"database": ":memory:"}))
-    async with spec.provide_session(config) as session:
-        await _seed_async(session)
-        _disable_native(session, monkeypatch)
-        async with session.select_stream(_SELECT, chunk_size=10, schema_type=StreamItem) as stream:
-            streamed = [row async for row in stream]
-    assert len(streamed) == 25
-    assert all(isinstance(row, StreamItem) for row in streamed)
-    assert [(row.id, row.name) for row in streamed[:3]] == [(0, "n0"), (1, "n1"), (2, "n2")]
+    try:
+        async with spec.provide_session(config) as session:
+            await _seed_async(session)
+            _disable_native(session, monkeypatch)
+            async with session.select_stream(_SELECT, chunk_size=10, schema_type=StreamItem) as stream:
+                streamed = [row async for row in stream]
+        assert len(streamed) == 25
+        assert all(isinstance(row, StreamItem) for row in streamed)
+        assert [(row.id, row.name) for row in streamed[:3]] == [(0, "n0"), (1, "n1"), (2, "n2")]
+    finally:
+        await config.close_pool()

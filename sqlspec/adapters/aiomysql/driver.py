@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.aiomysql._typing import (
+    AIOMYSQL_INSERT_VALUES_PATTERN,
     AiomysqlCursor,
     AiomysqlFieldType,
     AiomysqlPymysqlError,
@@ -28,6 +29,7 @@ from sqlspec.adapters.aiomysql.core import (
     default_statement_config,
     driver_profile,
     encode_records_for_local_infile,
+    escape_literal_percent,
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
@@ -48,8 +50,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlspec.adapters.aiomysql._typing import AiomysqlConnection
-    from sqlspec.core import SQL, StatementConfig
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.core import SQL, SQLResult, StatementConfig
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("AiomysqlCursor", "AiomysqlDriver", "AiomysqlExceptionHandler", "AiomysqlSessionContext")
@@ -137,6 +139,22 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     # CORE DISPATCH METHODS - The Execution Engine
     # ─────────────────────────────────────────────────────────────────────────────
 
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if (
+            "%" in cached.compiled_sql
+            and escape_literal_percent(
+                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
+            )
+            != cached.compiled_sql
+        ):
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return await self._execute_cached_statement(statement)
+        return await super()._execute_cache_hit(sql, params, cached)
+
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
@@ -148,6 +166,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             ExecutionResult: Statement execution results with data or row counts
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         if statement.returns_rows():
@@ -183,6 +202,14 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
             ExecutionResult: Batch execution results
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        match = AIOMYSQL_INSERT_VALUES_PATTERN.match(sql)
+        if match:
+            sql = (
+                escape_literal_percent(match.group(1), prepared_parameters, self.statement_config.parameter_validator)
+                + sql[match.end(1) :]
+            )
+        else:
+            sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -268,6 +295,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         return AsyncRowStream(
             AiomysqlStreamSource(self, sql, prepared_parameters, chunk_size, AIOMYSQL_JSON_TYPE_CODES)
         )

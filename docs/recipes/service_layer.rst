@@ -34,7 +34,7 @@ does not resolve named SQL for you.
    * - Member
      - Purpose
    * - ``paginate(statement, *parameters, schema_type=None, count_with_window=False, session=None)``
-     - Runs the query and returns an ``OffsetPagination`` with a total count.
+     - Returns a cursor page when passed a ``CursorFilter``. Otherwise returns an offset page with a total count.
    * - ``get_one(statement, *parameters, schema_type=None, error_message=None, session=None)``
      - Returns a row or raises ``NotFoundError`` when no row matches.
    * - ``exists(statement, *parameters, session=None)``
@@ -113,6 +113,109 @@ to that session.
 Both examples leave Ada and Grace in the table. The last transaction rolls back
 its insert when the block raises. Query helpers do not add commits between calls;
 ``begin_transaction()`` commits once when its block succeeds.
+
+Offset and Cursor Pages
+=======================
+
+Use the same ``paginate()`` method for either page type. The filter selects the
+mode. Offset pages include a total count; cursor pages include next and previous
+tokens and do not run a count query.
+
+.. code-block:: python
+
+   from sqlspec.core import CursorFilter, LimitOffsetFilter
+
+   query = "SELECT id, name FROM users ORDER BY id"
+
+   # Offset page with a total count.
+   offset_page = await service.paginate(
+       query, LimitOffsetFilter(limit=20, offset=40)
+   )
+
+   # Cursor page with next and previous tokens.
+   cursor_page = await service.paginate(
+       query, CursorFilter("id", limit=20, cursor=cursor, secret=signing_secret)
+   )
+
+Here ``service`` is a ``SQLSpecAsyncService``. Pass the request's token as
+``cursor``, or ``None`` for the first page. Keep ``signing_secret`` in server
+configuration.
+Pass ``schema_type=User`` to either call to return typed items. Sync services
+expose the same method without ``await``.
+
+With no pagination filter, ``paginate()`` keeps its offset-page behavior.
+Do not mix ``CursorFilter`` and ``LimitOffsetFilter`` in one call. The
+``count_with_window=True`` option applies only to offset pages and raises an
+error with a cursor filter.
+
+For an explicit mode, use ``paginate_limit_offset()`` or ``paginate_cursor()``.
+These methods keep a precise return type even when filters come from a dynamic
+list:
+
+.. code-block:: python
+
+   offset_page = await service.paginate_limit_offset(
+       query, *offset_filters, schema_type=User
+   )  # OffsetPagination[User]
+
+   cursor_page = await service.paginate_cursor(
+       query, *cursor_filters, schema_type=User
+   )  # CursorPagination[User]
+
+``paginate_cursor()`` requires one ``CursorFilter``. ``paginate_limit_offset()``
+rejects cursor filters and preserves default offset behavior when no pagination
+filter is supplied. Both methods validate the mode before executing the query.
+
+The runnable :ref:`cursor-pagination` example shows both modes and a return trip
+to the previous cursor page. That guide also covers key shorthand, NULL values,
+and token handling.
+
+One Route for Both Page Types
+-----------------------------
+
+A Litestar handler can return either page type. ``User`` can be a
+``msgspec.Struct``; no DTO is needed for this response:
+
+.. code-block:: python
+
+   from litestar import get
+   from litestar.di import NamedDependency
+   from litestar.params import SkipValidation
+   from msgspec import Struct
+
+   from sqlspec.adapters.asyncpg import AsyncpgDriver
+   from sqlspec.core import FilterTypes, Pagination
+   from sqlspec.service import SQLSpecAsyncService
+
+
+   class User(Struct):
+       id: int
+       name: str
+
+   @get("/users")
+   async def list_users(
+       service: NamedDependency[SQLSpecAsyncService[AsyncpgDriver]],
+       filters: NamedDependency[SkipValidation[list[FilterTypes]]],
+   ) -> Pagination[User]:
+       return await service.paginate(
+           "SELECT id, name FROM users ORDER BY id", *filters, schema_type=User
+       )
+
+Register dependencies for ``service`` and ``filters`` on the route or app.
+The filter dependency must choose one pagination mode per request. Litestar
+encodes either returned page and describes both response shapes using OpenAPI
+``oneOf``. ``Pagination[User]`` is an alias for
+``CursorPagination[User] | OffsetPagination[User]``; it adds no response wrapper.
+To document only one mode, annotate the handler with ``CursorPagination[User]``
+or ``OffsetPagination[User]``. OpenAPI uses the handler return annotation, not
+the service overload selected within its body.
+
+This response encoding does not imply typed union decoding support.
+``msgspec.json.Decoder(CursorPagination[User] | OffsetPagination[User])`` cannot
+decode the union of these two dataclasses. If a client needs that typed union,
+define tagged ``msgspec.Struct`` response envelopes in your application. See
+`msgspec union restrictions <https://msgspec.dev/supported-types#union-optional>`_
+and `tagged unions <https://msgspec.dev/structs#tagged-unions>`_.
 
 Session Ownership
 =================

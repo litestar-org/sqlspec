@@ -37,7 +37,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.driver._async import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED, CLOUD_SQL_CONNECTOR_INSTALLED, PGVECTOR_INSTALLED

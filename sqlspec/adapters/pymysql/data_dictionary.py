@@ -207,7 +207,9 @@ class PyMysqlDataDictionary(SyncDataDictionaryBase):
         """Get tables sorted by topological dependency order using the MySQL catalog."""
         schema_name = self._resolve_metadata_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
-        return driver.select(self.get_query("tables", "by_schema"), schema_name=schema_name, schema_type=TableMetadata)
+        return driver.select(
+            self.get_query("tables", "by_schema"), schema_name=schema_name, table_name=None, schema_type=TableMetadata
+        )
 
     def get_columns(
         self, driver: "PyMysqlDriver", table: "str | None" = None, schema: "str | None" = None

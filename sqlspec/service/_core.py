@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, cast
 
 from typing_extensions import TypeVar
 
-from sqlspec.core import OffsetPagination
-from sqlspec.core.filters import LimitOffsetFilter
-from sqlspec.driver._async import AsyncDriverAdapterBase
-from sqlspec.driver._sync import SyncDriverAdapterBase
+from sqlspec.core import SQL, CursorFilter, CursorPagination, LimitOffsetFilter, OffsetPagination, OrderByFilter
+from sqlspec.core.filters import find_filter
+from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.exceptions import ImproperConfigurationError, NotFoundError
 from sqlspec.utils.logging import get_logger
 
@@ -64,8 +63,22 @@ async def _async_paginate(
     schema_type: "type[SchemaT] | None",
     count_with_window: bool,
     kwargs: dict[str, Any],
-) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]":
+    mode: Literal["limit_offset", "cursor"] | None = None,
+) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]] | CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
     """Execute the async service paginate operation in the supplied session context."""
+    cursor_parameters = _cursor_pagination_parameters(statement, parameters)
+    if mode == "cursor" and cursor_parameters is None:
+        msg = "paginate_cursor() requires a CursorFilter"
+        raise ImproperConfigurationError(msg)
+    if mode == "limit_offset" and cursor_parameters is not None:
+        msg = "paginate_limit_offset() does not accept CursorFilter"
+        raise ImproperConfigurationError(msg)
+    if cursor_parameters is not None:
+        if count_with_window:
+            msg = "count_with_window is incompatible with cursor pagination"
+            raise ImproperConfigurationError(msg)
+        statement, parameters = cursor_parameters
+        return await _async_paginate_cursor(context, statement, parameters, schema_type, kwargs)
     async with context as driver:
         limit_offset: LimitOffsetFilter | None = driver.find_filter(LimitOffsetFilter, parameters)
 
@@ -86,6 +99,49 @@ async def _async_paginate(
             limit=limit_offset.limit if limit_offset is not None else len(items),
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
+        )
+
+
+def _cursor_pagination_parameters(
+    statement: "Statement | QueryBuilder", parameters: "tuple[StatementParameters | StatementFilter, ...]"
+) -> "tuple[Statement | QueryBuilder, tuple[StatementParameters | StatementFilter, ...]] | None":
+    pending = statement.filters if isinstance(statement, SQL) else []
+    filters = (*pending, *parameters)
+    cursor_filter = find_filter(CursorFilter, filters)
+    if cursor_filter is None:
+        return None
+    if any(isinstance(value, (LimitOffsetFilter, OrderByFilter)) for value in filters):
+        msg = "CursorFilter owns ordering and limits; remove OrderByFilter/LimitOffsetFilter"
+        raise ImproperConfigurationError(msg)
+    if sum(isinstance(value, CursorFilter) for value in filters) != 1:
+        msg = "paginate() requires exactly one CursorFilter"
+        raise ImproperConfigurationError(msg)
+    if pending and isinstance(statement, SQL):
+        statement, _ = statement._take_pending_filters()
+    return statement, (*(value for value in filters if not isinstance(value, CursorFilter)), cursor_filter)
+
+
+async def _async_paginate_cursor(
+    context: AbstractAsyncContextManager[AsyncDriverAdapterBase],
+    statement: "Statement | QueryBuilder",
+    parameters: "tuple[StatementParameters | StatementFilter, ...]",
+    schema_type: "type[SchemaT] | None",
+    kwargs: dict[str, Any],
+) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
+    """Execute cursor pagination inside the supplied service session context."""
+    async with context as driver:
+        cursor_filter = cast("CursorFilter", parameters[-1])
+        items = await driver.select(statement, *parameters, **kwargs)
+        page = cursor_filter.build_page(items)
+        if schema_type is None:
+            return page
+        return CursorPagination(
+            items=cast("list[SchemaT]", driver.to_schema(list(page.items), schema_type=schema_type)),
+            limit=page.limit,
+            next_cursor=page.next_cursor,
+            previous_cursor=page.previous_cursor,
+            has_next=page.has_next,
+            has_previous=page.has_previous,
         )
 
 
@@ -123,8 +179,22 @@ def _sync_paginate(
     schema_type: "type[SchemaT] | None",
     count_with_window: bool,
     kwargs: dict[str, Any],
-) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]]":
+    mode: Literal["limit_offset", "cursor"] | None = None,
+) -> "OffsetPagination[SchemaT] | OffsetPagination[dict[str, Any]] | CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
     """Execute the sync service paginate operation in the supplied session context."""
+    cursor_parameters = _cursor_pagination_parameters(statement, parameters)
+    if mode == "cursor" and cursor_parameters is None:
+        msg = "paginate_cursor() requires a CursorFilter"
+        raise ImproperConfigurationError(msg)
+    if mode == "limit_offset" and cursor_parameters is not None:
+        msg = "paginate_limit_offset() does not accept CursorFilter"
+        raise ImproperConfigurationError(msg)
+    if cursor_parameters is not None:
+        if count_with_window:
+            msg = "count_with_window is incompatible with cursor pagination"
+            raise ImproperConfigurationError(msg)
+        statement, parameters = cursor_parameters
+        return _sync_paginate_cursor(context, statement, parameters, schema_type, kwargs)
     with context as driver:
         limit_offset: LimitOffsetFilter | None = driver.find_filter(LimitOffsetFilter, parameters)
 
@@ -145,6 +215,30 @@ def _sync_paginate(
             limit=limit_offset.limit if limit_offset is not None else len(items),
             offset=limit_offset.offset if limit_offset is not None else 0,
             total=total,
+        )
+
+
+def _sync_paginate_cursor(
+    context: AbstractContextManager[SyncDriverAdapterBase],
+    statement: "Statement | QueryBuilder",
+    parameters: "tuple[StatementParameters | StatementFilter, ...]",
+    schema_type: "type[SchemaT] | None",
+    kwargs: dict[str, Any],
+) -> "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]":
+    """Execute cursor pagination inside the supplied service session context."""
+    with context as driver:
+        cursor_filter = cast("CursorFilter", parameters[-1])
+        items = driver.select(statement, *parameters, **kwargs)
+        page = cursor_filter.build_page(items)
+        if schema_type is None:
+            return page
+        return CursorPagination(
+            items=cast("list[SchemaT]", driver.to_schema(list(page.items), schema_type=schema_type)),
+            limit=page.limit,
+            next_cursor=page.next_cursor,
+            previous_cursor=page.previous_cursor,
+            has_next=page.has_next,
+            has_previous=page.has_previous,
         )
 
 

@@ -411,6 +411,7 @@ addopts = ["-q", "-ra", "--capture=sys"]
 anyio_mode = "auto"
 faulthandler_timeout = 240
 filterwarnings = [
+  "error::pytest.PytestUnhandledThreadExceptionWarning",
   "ignore::DeprecationWarning:pkg_resources.*",
   "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
   "ignore::DeprecationWarning:pkg_resources",

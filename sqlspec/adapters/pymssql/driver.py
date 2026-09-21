@@ -30,8 +30,8 @@ from sqlspec.driver import (
     SyncDriverAdapterBase,
     SyncRowStream,
     rows_to_dicts,
+    validate_savepoint_name,
 )
-from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 

@@ -81,3 +81,11 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig
    :members:
    :show-inheritance:
+
+JSONB existence operator
+------------------------
+
+All PostgreSQL adapters support ``data ? 'key'``, ``data ? $1``,
+``data ? :key``, ``?|``, and ``?&`` without treating the operator as a
+placeholder. Write ``data ?? other_col`` for identifier or function right-hand operands. Write parameterized intervals as ``? * interval '1 day'``
+(or use ``$1``).

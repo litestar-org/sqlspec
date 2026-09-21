@@ -22,7 +22,7 @@ from sqlspec.adapters.arrow_odbc.core import (
 from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config

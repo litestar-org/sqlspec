@@ -38,8 +38,7 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.core.compiler import OperationType
-    from sqlspec.driver import ExecutionResult
-    from sqlspec.driver._query_cache import CachedQuery
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 

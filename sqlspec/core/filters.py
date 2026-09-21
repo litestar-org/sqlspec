@@ -8,6 +8,7 @@ Components:
     - BeforeAfterFilter: Date range filtering
     - InCollectionFilter: IN clause filtering
     - LimitOffsetFilter: Pagination support
+    - CursorFilter: Bidirectional keyset pagination
     - OrderByFilter: Sorting support
     - SearchFilter: Text search filtering
     - Various collection and negation filters
@@ -18,17 +19,21 @@ Features:
     - Cacheable filter configurations
 """
 
+import re
 from abc import abstractmethod
 from collections import abc
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
 from typing_extensions import TypeVar
 
-from sqlspec.core._pagination import OffsetPagination
-from sqlspec.core.query_modifiers import parse_column_for_condition
+from sqlspec.core._cursor import decode_cursor, encode_cursor, order_fingerprint
+from sqlspec.core._ordering import NullsPlacement, ordered
+from sqlspec.core._pagination import CursorPagination, OffsetPagination
+from sqlspec.core.query_modifiers import parse_column_for_condition, safe_modify_with_cte, wrap_as_subquery
+from sqlspec.exceptions import ImproperConfigurationError, InvalidCursorError
 from sqlspec.utils.type_guards import has_field_name
 from sqlspec.utils.uuids import uuid4
 
@@ -42,6 +47,10 @@ __all__ = (
     "BeforeAfterFilter",
     "BooleanFilter",
     "ChoicesFilter",
+    "CursorFilter",
+    "CursorKey",
+    "CursorKeys",
+    "CursorPagination",
     "FilterTypeT",
     "FilterTypes",
     "InAnyFilter",
@@ -61,6 +70,7 @@ __all__ = (
     "apply_filter",
     "canonicalize_filters",
     "find_filter",
+    "normalize_cursor_keys",
 )
 
 T = TypeVar("T")
@@ -521,10 +531,17 @@ class LimitOffsetFilter(PaginationFilter):
 
         current_statement = statement._filter_expression()
 
-        if isinstance(current_statement, exp.Select):
-            new_statement = current_statement.limit(limit_placeholder).offset(offset_placeholder)
-        else:
-            new_statement = exp.Select().from_(current_statement).limit(limit_placeholder).offset(offset_placeholder)
+        target = (
+            current_statement
+            if isinstance(current_statement, (exp.Select, exp.SetOperation))
+            else wrap_as_subquery(current_statement)
+        )
+        new_statement = safe_modify_with_cte(
+            target,
+            lambda expression: (
+                cast("exp.Select | exp.SetOperation", expression).limit(limit_placeholder).offset(offset_placeholder)
+            ),
+        )
 
         result = statement.copy(statement=new_statement)
         result = result.add_named_parameter(limit_param_name, self.limit)
@@ -538,22 +555,382 @@ class LimitOffsetFilter(PaginationFilter):
         return (self._limit, self._offset)
 
 
+class CursorKey:
+    """Declare a sort key and its result-column name.
+
+    Args:
+        field_name: Nonempty SQL column name, optionally qualified.
+        sort_order: Ascending or descending traversal.
+        nulls: Explicit NULL placement, or ``None`` for a non-nullable key.
+        result_name: Selected column name used to extract cursor values.
+
+    Raises:
+        ValueError: A name, direction, or NULL placement is invalid.
+    """
+
+    __slots__ = ("_field_name", "_nulls", "_result_name", "_sort_order")
+    _sort_order: Literal["asc", "desc"]
+    _nulls: Literal["first", "last"] | None
+
+    def __init__(
+        self,
+        field_name: str,
+        sort_order: Literal["asc", "desc"] = "asc",
+        nulls: Literal["first", "last"] | None = None,
+        result_name: str | None = None,
+    ) -> None:
+        if not field_name:
+            msg = "field_name must not be empty"
+            raise ValueError(msg)
+        if sort_order not in ("asc", "desc"):
+            msg = "sort_order must be 'asc' or 'desc'"
+            raise ValueError(msg)
+        if nulls not in (None, "first", "last"):
+            msg = "nulls must be 'first', 'last', or None"
+            raise ValueError(msg)
+        name = field_name.rsplit(".", 1)[-1] if result_name is None else result_name
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
+            msg = "result_name must be a simple column name"
+            raise ValueError(msg)
+        self._field_name = field_name
+        self._sort_order = sort_order
+        self._nulls = nulls
+        self._result_name = name
+
+    @property
+    def field_name(self) -> str:
+        return self._field_name
+
+    @property
+    def sort_order(self) -> Literal["asc", "desc"]:
+        return self._sort_order
+
+    @property
+    def nulls(self) -> Literal["first", "last"] | None:
+        return self._nulls
+
+    @property
+    def result_name(self) -> str:
+        return self._result_name
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CursorKey):
+            return NotImplemented
+        return self._identity() == other._identity()
+
+    def __hash__(self) -> int:
+        return hash(self._identity())
+
+    def __repr__(self) -> str:
+        return f"CursorKey({self._field_name!r}, {self._sort_order!r}, nulls={self._nulls!r}, result_name={self._result_name!r})"
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return CursorKey, self._identity()
+
+    def _identity(self) -> tuple[str, str, str | None, str]:
+        return self._field_name, self._sort_order, self._nulls, self._result_name
+
+
+def _fold_or(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
+    if a is True or b is True:
+        return True
+    if a is False:
+        return b
+    if b is False:
+        return a
+    return exp.Paren(this=exp.Or(this=a, expression=b))
+
+
+_CURSOR_KEY_PAIR_LENGTH = 2
+
+CursorKeys: TypeAlias = str | abc.Sequence[CursorKey | str | tuple[str, Literal["asc", "desc"]]]
+
+
+def normalize_cursor_keys(keys: CursorKeys) -> tuple[CursorKey, ...]:
+    """Normalize column names and direction pairs into cursor keys.
+
+    Args:
+        keys: A column name or ordered sequence of names, ``(name, direction)``
+            tuples, and explicit cursor keys. Bare names sort ascending.
+
+    Returns:
+        Cursor keys in the supplied order.
+
+    Raises:
+        ValueError: A key specification is invalid or the sequence is empty.
+    """
+    normalized: list[CursorKey] = []
+    for key in (keys,) if isinstance(keys, str) else keys:
+        if isinstance(key, CursorKey):
+            normalized.append(key)
+        elif isinstance(key, str):
+            normalized.append(CursorKey(key))
+        elif isinstance(key, tuple) and len(key) == _CURSOR_KEY_PAIR_LENGTH and isinstance(key[0], str):
+            normalized.append(CursorKey(key[0], key[1]))
+        else:
+            msg = "Cursor keys must be column names, (name, direction) tuples, or CursorKey objects"
+            raise ValueError(msg)
+    if not normalized:
+        msg = "CursorFilter requires at least one cursor key"
+        raise ValueError(msg)
+    return tuple(normalized)
+
+
+def _fold_and(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
+    if a is False or b is False:
+        return False
+    if a is True:
+        return b
+    if b is True:
+        return a
+    return exp.And(this=a, expression=b)
+
+
+class CursorFilter(PaginationFilter):
+    """Paginate by ordered keys whose last key uniquely identifies each row.
+
+    Replaces ORDER BY, LIMIT, and OFFSET and fetches ``limit + 1`` rows.
+    Assemble results with ``build_page()`` or the service's ``paginate()``.
+    Apply this filter last so other filters constrain the inner query when
+    grouping or set operations require wrapping. ``paginate()``
+    enforces that order automatically.
+
+    Args:
+        keys: A column name or sequence of names, ``(name, direction)`` tuples,
+            or ``CursorKey`` objects, including a unique final tiebreaker.
+            Bare names sort ascending.
+        limit: Maximum page size.
+        cursor: Optional token identifying the next or previous page.
+        secret: Optional nonempty signing key.
+
+    Raises:
+        ValueError: Keys, limit, or secret are invalid.
+        InvalidCursorError: The token does not match the requested ordering.
+    """
+
+    __slots__ = ("_backward", "_cursor", "_fingerprint", "_keys", "_limit", "_secret", "_values")
+    _keys: tuple[CursorKey, ...]
+    _secret: bytes | None
+    _values: tuple[Any, ...] | None
+
+    def __init__(
+        self, keys: CursorKeys, limit: int, cursor: str | None = None, secret: str | bytes | None = None
+    ) -> None:
+        self._keys = normalize_cursor_keys(keys)
+        if len({key.field_name for key in self._keys}) != len(self._keys) or len({
+            key.result_name for key in self._keys
+        }) != len(self._keys):
+            msg = "CursorFilter keys must have unique field and result names"
+            raise ValueError(msg)
+        if limit < 1:
+            msg = "limit must be at least 1"
+            raise ValueError(msg)
+        self._secret = secret.encode("utf-8") if isinstance(secret, str) else secret
+        if self._secret == b"":
+            msg = "secret must not be empty"
+            raise ValueError(msg)
+        self._limit = limit
+        self._cursor = cursor
+        self._fingerprint = order_fingerprint([(key.field_name, key.sort_order, key.nulls) for key in self._keys])
+        self._values = None
+        self._backward = False
+        if cursor is not None:
+            decoded = decode_cursor(cursor, self._fingerprint, len(self._keys), secret=self._secret)
+            self._values = decoded.values
+            self._backward = decoded.backward
+            if any(value is None and key.nulls is None for key, value in zip(self._keys, self._values, strict=True)):
+                msg = "Invalid pagination cursor: ordering mismatch"
+                raise InvalidCursorError(msg)
+
+    @property
+    def keys(self) -> tuple[CursorKey, ...]:
+        return self._keys
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @property
+    def cursor(self) -> str | None:
+        return self._cursor
+
+    @property
+    def backward(self) -> bool:
+        return self._backward
+
+    @property
+    def values(self) -> tuple[Any, ...] | None:
+        return self._values
+
+    @property
+    def fingerprint(self) -> str:
+        return self._fingerprint
+
+    def append_to_statement(self, statement: "SQL") -> "SQL":
+        """Apply cursor predicates, ordering and sentinel over-fetch.
+
+        Args:
+            statement: Base query with any earlier filters applied.
+
+        Returns:
+            A query with cursor values bound as named parameters.
+        """
+        current = statement._filter_expression()
+        wrap = not isinstance(current, exp.Select) or bool(
+            current.args.get("group") or current.args.get("having") or current.args.get("distinct")
+        )
+        target = (
+            current if isinstance(current, exp.Select) and not wrap else wrap_as_subquery(current, alias="cursor_page")
+        )
+        proposed = list(self.extract_parameters()[1])
+        resolved = dict(zip(proposed, self._resolve_parameter_conflicts(statement, proposed), strict=True))
+        items: list[exp.Ordered] = []
+        predicates: list[tuple[exp.Expr | bool, exp.Expr | bool]] = []
+        for index, key in enumerate(self._keys):
+            col = exp.column(key.result_name) if wrap else self._get_column_expression(key.field_name)
+            ascending = (key.sort_order == "asc") != self._backward
+            nulls = key.nulls
+            if self._backward and nulls is not None:
+                nulls = "last" if nulls == "first" else "first"
+            items.append(ordered(col.copy(), desc=not ascending, nulls=nulls))
+            if self._values is not None:
+                value = self._values[index]
+                is_null = exp.Is(this=col.copy(), expression=exp.Null())
+                if value is None:
+                    after: exp.Expr | bool = exp.Not(this=is_null.copy()) if nulls == "first" else False
+                    aoe: exp.Expr | bool = True if nulls == "first" else is_null
+                else:
+                    ph = exp.Placeholder(this=resolved[f"cursor_k{index}"])
+                    after = (exp.GT if ascending else exp.LT)(this=col.copy(), expression=ph.copy())
+                    aoe = (exp.GTE if ascending else exp.LTE)(this=col.copy(), expression=ph.copy())
+                    if nulls == "last":
+                        after = _fold_or(after, is_null.copy())
+                        aoe = _fold_or(aoe, is_null.copy())
+                predicates.append((after, aoe))
+        target.order_by(*items, append=False, copy=False)
+        if predicates:
+            predicate = predicates[-1][0]
+            for after, aoe in reversed(predicates[:-1]):
+                predicate = _fold_and(aoe, _fold_or(after, predicate))
+            if predicate is False:
+                target.where(exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0)), copy=False)
+            elif predicate is not True:
+                target.where(predicate, copy=False)
+        target.limit(exp.Placeholder(this=resolved["cursor_limit"]), copy=False)
+        target.set("offset", None)
+        result = statement.copy(statement=target)
+        for name, value in self.extract_parameters()[1].items():
+            result = result.add_named_parameter(resolved[name], value)
+        return result
+
+    def encode(self, row: abc.Mapping[str, Any], *, backward: bool) -> str:
+        """Mint a token from a selected row.
+
+        Args:
+            row: Result row containing all declared key columns.
+            backward: Whether the token traverses backward.
+
+        Returns:
+            A token bound to this filter's ordering and signing key.
+
+        Raises:
+            ImproperConfigurationError: A key is missing or unexpectedly NULL.
+        """
+        return encode_cursor(self._row_values(row), self._fingerprint, backward=backward, secret=self._secret)
+
+    def _row_values(self, row: abc.Mapping[str, Any]) -> list[Any]:
+        values = []
+        for key in self._keys:
+            try:
+                value = row[key.result_name]
+            except KeyError as exc:
+                msg = f"Cursor key column '{key.result_name}' is not present in the result row; select it or set CursorKey.result_name"
+                raise ImproperConfigurationError(msg) from exc
+            if value is None and key.nulls is None:
+                msg = f"Cursor key '{key.field_name}' returned NULL; declare nulls='first' or nulls='last'"
+                raise ImproperConfigurationError(msg)
+            values.append(value)
+        return values
+
+    def build_page(self, rows: list[dict[str, Any]]) -> CursorPagination[dict[str, Any]]:
+        """Trim the sentinel and mint adjacent-page cursors.
+
+        Args:
+            rows: Raw result rows in effective query order.
+
+        Returns:
+            Items in declared order with page availability and cursor tokens.
+        """
+        has_more = len(rows) > self._limit
+        items = rows[: self._limit]
+        for row in items:
+            self._row_values(row)
+        if self._backward:
+            items = items[::-1]
+        has_next = bool(items) and (True if self._backward else has_more)
+        has_previous = bool(items) and (has_more if self._backward else self._cursor is not None)
+        return CursorPagination(
+            items=items,
+            limit=self._limit,
+            next_cursor=self.encode(items[-1], backward=False) if has_next else None,
+            previous_cursor=self.encode(items[0], backward=True) if has_previous else None,
+            has_next=has_next,
+            has_previous=has_previous,
+        )
+
+    def get_cache_key(self) -> tuple[Any, ...]:
+        """Return SQL-affecting configuration without the signing secret."""
+        return ("CursorFilter", tuple(key._identity() for key in self._keys), self._limit, self._cursor)
+
+    def _reconstruction_args(self) -> tuple[Any, ...]:
+        return self._keys, self._limit, self._cursor, self._secret
+
+    def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
+        """Return the proposed names and values for cursor parameters."""
+        parameters: dict[str, Any] = {"cursor_limit": self._limit + 1}
+        if self._values is not None:
+            parameters.update({
+                f"cursor_k{index}": value for index, value in enumerate(self._values) if value is not None
+            })
+        return [], parameters
+
+
 class OrderByFilter(StatementFilter):
     """Filter for ORDER BY clauses.
 
     Adds sorting capability to SQL queries.
+
+    Args:
+        field_name: Column name or expression to order by.
+        sort_order: Ascending or descending direction.
+        nulls: Explicit NULL placement, or None for the database default.
     """
 
-    __slots__ = ("_field_name", "_sort_order")
+    __slots__ = ("_field_name", "_nulls", "_sort_order")
     _field_name: str | exp.Expression
     _sort_order: Literal["asc", "desc"]
+    _nulls: "NullsPlacement | None"
 
-    def __init__(self, field_name: "str | exp.Expression", sort_order: Literal["asc", "desc"] = "asc") -> None:
+    def __init__(
+        self,
+        field_name: "str | exp.Expression",
+        sort_order: Literal["asc", "desc"] = "asc",
+        nulls: "NullsPlacement | None" = None,
+    ) -> None:
         if sort_order not in ("asc", "desc"):
             msg = "sort_order must be 'asc' or 'desc'"
             raise ValueError(msg)
+        if nulls not in (None, "first", "last"):
+            msg = "nulls must be 'first', 'last', or None"
+            raise ValueError(msg)
         self._field_name = field_name
         self._sort_order = sort_order
+        self._nulls = nulls
+
+    @property
+    def nulls(self) -> "NullsPlacement | None":
+        """Return the requested NULL placement, or None for the database default."""
+        return self._nulls
 
     @property
     def field_name(self) -> "str | exp.Expression":
@@ -569,23 +946,23 @@ class OrderByFilter(StatementFilter):
 
     def append_to_statement(self, statement: "SQL") -> "SQL":
         col_expr = self._get_column_expression(self.field_name)
-        order_expr = col_expr.desc() if self._sort_order == "desc" else col_expr.asc()
+        order_expr = ordered(col_expr, desc=True if self._sort_order == "desc" else None, nulls=self._nulls)
 
         current_statement = statement._filter_expression()
 
-        if isinstance(current_statement, exp.Select):
+        if isinstance(current_statement, (exp.Select, exp.SetOperation)):
             new_statement = current_statement.order_by(order_expr)
         else:
-            new_statement = exp.Select().from_(current_statement).order_by(order_expr)
+            new_statement = wrap_as_subquery(current_statement).order_by(order_expr)
 
         return statement.copy(statement=new_statement)
 
     def get_cache_key(self) -> "tuple[Any, ...]":
         """Return cache key for this filter configuration."""
-        return ("OrderByFilter", self.field_name, self.sort_order)
+        return ("OrderByFilter", self.field_name, self.sort_order, self._nulls)
 
     def _reconstruction_args(self) -> "tuple[Any, ...]":
-        return (self._field_name, self._sort_order)
+        return (self._field_name, self._sort_order, self._nulls)
 
 
 class _TextSearchFilter(StatementFilter):
@@ -904,6 +1281,7 @@ FilterTypes: TypeAlias = (
     BeforeAfterFilter
     | OnBeforeAfterFilter
     | InCollectionFilter[Any]
+    | CursorFilter
     | LimitOffsetFilter
     | OrderByFilter
     | SearchFilter

@@ -25,7 +25,7 @@ from sqlspec.core.config_runtime import (
     resolve_postgres_extension_state,
     resolve_runtime_statement_config,
 )
-from sqlspec.driver._sync import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
