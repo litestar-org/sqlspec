@@ -12,6 +12,13 @@ from sqlspec.adapters.db2._typing import (
     Db2RawCursor,
     Db2SessionContext,
 )
+from sqlspec.adapters.db2.config import (
+    Db2Config,
+    Db2ConnectionContext,
+    Db2ConnectionParams,
+    Db2DriverFeatures,
+    Db2PoolParams,
+)
 from sqlspec.adapters.db2.core import (
     apply_driver_features,
     build_connection_config,
@@ -26,19 +33,30 @@ from sqlspec.adapters.db2.core import (
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
+    parse_db2_dsn,
     resolve_column_names,
     resolve_many_rowcount,
     resolve_rowcount,
 )
+from sqlspec.adapters.db2.driver import Db2Driver, Db2ExceptionHandler
+from sqlspec.adapters.db2.pool import Db2ConnectionPool
 
 __all__ = (
     "IBM_DB_DBI_INSTALLED",
     "IBM_DB_INSTALLED",
+    "Db2Config",
     "Db2Connection",
+    "Db2ConnectionContext",
+    "Db2ConnectionParams",
+    "Db2ConnectionPool",
     "Db2ConnectionProtocol",
     "Db2Cursor",
     "Db2CursorProtocol",
+    "Db2Driver",
+    "Db2DriverFeatures",
     "Db2Error",
+    "Db2ExceptionHandler",
+    "Db2PoolParams",
     "Db2QueryParams",
     "Db2RawCursor",
     "Db2SessionContext",
@@ -55,6 +73,7 @@ __all__ = (
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
+    "parse_db2_dsn",
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
