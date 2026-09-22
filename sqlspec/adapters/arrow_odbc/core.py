@@ -62,6 +62,7 @@ _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("sqlite", ("sqlite",)),
     ("duckdb", ("duckdb",)),
     ("snowflake", ("snowflake",)),
+    ("db2", ("db2", "ibm db2", "ibm db2 odbc driver", "clidriver", "libdb2o")),
 )
 _ARROW_ODBC_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"Native error:\s*(-?\d+)")
 _ODBC_PUNCTUATION: Final[str] = "[]{}(),;?*=!@"
@@ -82,6 +83,13 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 }
 _ARROW_ODBC_SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"State:\s*([0-9A-Z]{5})")
 _SQLSTATE_CLASS_CODE_LEN: Final[int] = 2
+_SPECIFIC_SQLSTATE_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
+    "23505": (UniqueViolationError, "unique constraint violation"),
+    "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
+    "23502": (NotNullViolationError, "not-null constraint violation"),
+    "40001": (DeadlockError, "deadlock detected"),
+    "57014": (QueryTimeoutError, "query timeout or cancellation"),
+}
 _SQLSTATE_CLASS_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "08": (DatabaseConnectionError, "connection error"),
     "22": (DataError, "data error"),
@@ -119,6 +127,10 @@ def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> S
 
     sqlstate = _extract_sqlstate(message)
     if sqlstate is not None:
+        specific = _SPECIFIC_SQLSTATE_MAPPING.get(sqlstate)
+        if specific is not None:
+            error_class, description = specific
+            return error_class(f"ODBC error {sqlstate}: {description}. Original error: {error}")
         mapped = _SQLSTATE_CLASS_MAPPING.get(sqlstate[:_SQLSTATE_CLASS_CODE_LEN])
         if mapped is not None:
             error_class, description = mapped
