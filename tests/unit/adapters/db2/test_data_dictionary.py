@@ -233,3 +233,122 @@ def test_db2_feature_flags_and_optimal_types() -> None:
     assert dd.get_optimal_type(mock_driver, "uuid") == "VARCHAR(36)"
     assert dd.get_optimal_type(mock_driver, "boolean") == "BOOLEAN"
     assert dd.get_optimal_type(mock_driver, "decimal") == "DECFLOAT"
+
+
+def test_db2_get_tables_empty_and_no_schema() -> None:
+    """Verify get_tables handles empty results and query without schema parameter."""
+    mock_driver = MagicMock()
+    mock_driver.select.return_value = []
+
+    dd = Db2SyncDataDictionary()
+    tables = dd.get_tables(mock_driver, schema=None)
+
+    assert tables == []
+    mock_driver.select.assert_called_once()
+    sql = mock_driver.select.call_args[0][0]
+    assert "AND TABSCHEMA = ?" not in sql
+
+
+def test_db2_get_columns_empty_and_no_schema() -> None:
+    """Verify get_columns handles empty results and queries without schema and table filters."""
+    mock_driver = MagicMock()
+    mock_driver.select.return_value = []
+
+    dd = Db2SyncDataDictionary()
+    columns = dd.get_columns(mock_driver, table=None, schema=None)
+
+    assert columns == []
+    mock_driver.select.assert_called_once()
+    sql = mock_driver.select.call_args[0][0]
+    assert "AND c.TABSCHEMA = ?" not in sql
+    assert "AND c.TABNAME = ?" not in sql
+
+
+def test_db2_get_columns_primary_key_variations() -> None:
+    """Verify get_columns accurately sets is_primary and is_unique across various keyseq indicators."""
+    mock_driver = MagicMock()
+    mock_driver.select.return_value = [
+        {
+            "schema_name": "MYSCHEMA",
+            "table_name": "ITEMS",
+            "column_name": "PK_COL",
+            "data_type": "INTEGER",
+            "is_nullable": 0,
+            "column_default": None,
+            "ordinal_position": 1,
+            "max_length": 4,
+            "numeric_scale": 0,
+            "is_primary": "1",
+            "identity_generation": None,
+            "is_generated": None,
+        },
+        {
+            "schema_name": "MYSCHEMA",
+            "table_name": "ITEMS",
+            "column_name": "REG_COL",
+            "data_type": "VARCHAR",
+            "is_nullable": 1,
+            "column_default": None,
+            "ordinal_position": 2,
+            "max_length": 50,
+            "numeric_scale": 0,
+            "is_primary": 0,
+            "identity_generation": None,
+            "is_generated": None,
+        },
+    ]
+
+    dd = Db2SyncDataDictionary()
+    columns = dd.get_columns(mock_driver, table="ITEMS", schema="MYSCHEMA")
+
+    assert len(columns) == 2
+    assert columns[0]["is_primary"] is True
+    assert columns[0]["is_unique"] is True
+    assert columns[1]["is_primary"] is False
+    assert columns[1]["is_unique"] is False
+
+
+def test_db2_get_indexes_empty_and_no_schema() -> None:
+    """Verify get_indexes handles empty results and queries without table and schema filters."""
+    mock_driver = MagicMock()
+    mock_driver.select.return_value = []
+
+    dd = Db2SyncDataDictionary()
+    indexes = dd.get_indexes(mock_driver, table=None, schema=None)
+
+    assert indexes == []
+    mock_driver.select.assert_called_once()
+    sql = mock_driver.select.call_args[0][0]
+    assert "AND i.TABSCHEMA = ?" not in sql
+    assert "AND i.TABNAME = ?" not in sql
+
+
+def test_db2_get_foreign_keys_empty_and_no_schema() -> None:
+    """Verify get_foreign_keys handles empty results and queries without table and schema filters."""
+    mock_driver = MagicMock()
+    mock_driver.select.return_value = []
+
+    dd = Db2SyncDataDictionary()
+    fks = dd.get_foreign_keys(mock_driver, table=None, schema=None)
+
+    assert fks == []
+    mock_driver.select.assert_called_once()
+    sql = mock_driver.select.call_args[0][0]
+    assert "AND r.TABSCHEMA = ?" not in sql
+    assert "AND r.TABNAME = ?" not in sql
+
+
+def test_db2_version_detection_fallback_on_error() -> None:
+    """Verify get_version falls back to default version when driver query fails."""
+    mock_driver = MagicMock()
+    mock_driver.select_one_or_none.side_effect = RuntimeError("Db2 communication failure")
+
+    dd = Db2SyncDataDictionary()
+    version = dd.get_version(mock_driver)
+
+    assert isinstance(version, Db2VersionInfo)
+    assert version.major == 11
+    assert version.minor == 5
+    assert version.patch == 0
+    assert version.service_level is None
+
