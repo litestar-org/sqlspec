@@ -105,10 +105,7 @@ def test_db2_config_provide_pool_and_create_connection() -> None:
 
     config = Db2Config(
         connection_config={"database": "TESTDB"},
-        driver_features={
-            "connection_factory": mock_factory,
-            "on_connection_create": hook,
-        },
+        driver_features={"connection_factory": mock_factory, "on_connection_create": hook},
     )
 
     pool = config.provide_pool()

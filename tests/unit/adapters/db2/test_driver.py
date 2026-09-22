@@ -16,10 +16,7 @@ class FakeCursor:
     """Fake Db2 cursor for driver testing."""
 
     def __init__(
-        self,
-        rows: list[Any] | None = None,
-        description: list[tuple[str, ...]] | None = None,
-        rowcount: int = 0,
+        self, rows: list[Any] | None = None, description: list[tuple[str, ...]] | None = None, rowcount: int = 0
     ) -> None:
         self.rows = list(rows) if rows is not None else []
         self.description = description
@@ -162,9 +159,7 @@ def test_dispatch_execute_script() -> None:
     cursor = FakeCursor()
     driver = Db2Driver(FakeConnection(cursor), statement_config=default_statement_config)
     statement = SQL(
-        "CREATE TABLE t1 (id INT); CREATE TABLE t2 (id INT);",
-        statement_config=default_statement_config,
-        is_script=True,
+        "CREATE TABLE t1 (id INT); CREATE TABLE t2 (id INT);", statement_config=default_statement_config, is_script=True
     )
 
     result = driver.dispatch_execute_script(cursor, statement)
@@ -213,11 +208,7 @@ def test_dispatch_select_stream() -> None:
         result_rows = list(stream)
 
     assert len(result_rows) == 3
-    assert result_rows == [
-        {"id": 1, "name": "Ada"},
-        {"id": 2, "name": "Grace"},
-        {"id": 3, "name": "Margaret"},
-    ]
+    assert result_rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}, {"id": 3, "name": "Margaret"}]
 
 
 def test_exception_handler_maps_db2_error() -> None:
@@ -237,6 +228,7 @@ def test_exception_handler_maps_db2_error() -> None:
 
 def test_driver_execute_raises_mapped_exception() -> None:
     """driver.execute translates database errors into mapped SQLSpecError."""
+
     class FakeDb2Error(Exception):
         pass
 

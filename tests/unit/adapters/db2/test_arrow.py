@@ -18,10 +18,7 @@ class FakeCursor:
     """Fake Db2 cursor for driver testing."""
 
     def __init__(
-        self,
-        rows: list[Any] | None = None,
-        description: Sequence[tuple[str, ...]] | None = None,
-        rowcount: int = 0,
+        self, rows: list[Any] | None = None, description: Sequence[tuple[str, ...]] | None = None, rowcount: int = 0
     ) -> None:
         self.rows = list(rows) if rows is not None else []
         self.description = description
@@ -103,11 +100,7 @@ def test_select_to_arrow_batches_format() -> None:
     cursor = FakeCursor(rows=rows, description=[("id",), ("item",)])
     driver = Db2Driver(FakeConnection(cursor), statement_config=default_statement_config)
 
-    result = driver.select_to_arrow(
-        "SELECT id, item FROM inventory",
-        return_format="batches",
-        batch_size=2,
-    )
+    result = driver.select_to_arrow("SELECT id, item FROM inventory", return_format="batches", batch_size=2)
     batches = result.get_data()
 
     assert isinstance(batches, list)
@@ -259,4 +252,3 @@ def test_select_to_arrow_result_methods_and_conversions() -> None:
 
     df = table.to_pandas()
     assert list(df["name"]) == ["Alice", "Bob"]
-

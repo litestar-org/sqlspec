@@ -94,10 +94,7 @@ def test_pool_connects_with_factory() -> None:
         factory_calls += 1
         return connection
 
-    pool = Db2ConnectionPool(
-        {"database": "TESTDB"},
-        connection_factory=custom_factory,
-    )
+    pool = Db2ConnectionPool({"database": "TESTDB"}, connection_factory=custom_factory)
 
     acquired = pool.acquire()
 
@@ -197,6 +194,7 @@ def test_pool_close_removes_thread_local_connection(monkeypatch: pytest.MonkeyPa
 
 def test_pool_close_closes_connections_opened_on_other_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     """Calling close() reaches connections opened by worker threads."""
+
     class SequencedModule:
         def connect(self, dsn: str, user: str = "", password: str = "") -> FakeDb2Connection:
             return FakeDb2Connection()
@@ -226,6 +224,7 @@ def test_pool_close_closes_connections_opened_on_other_threads(monkeypatch: pyte
 
 def test_pool_registry_does_not_grow_across_replacements(monkeypatch: pytest.MonkeyPatch) -> None:
     """Registry size remains bounded during connection replacement."""
+
     class SequencedModule:
         def connect(self, dsn: str, user: str = "", password: str = "") -> FakeDb2Connection:
             return FakeDb2Connection()

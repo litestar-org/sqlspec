@@ -96,10 +96,7 @@ class Db2ConnectionPool:
             connection = self._connection_factory()
         else:
             if ibm_db_dbi is None:
-                raise MissingDependencyError(
-                    package="ibm_db",
-                    install_package="db2",
-                )
+                raise MissingDependencyError(package="ibm_db", install_package="db2")
             if "dsn" in self._connection_parameters:
                 connection = ibm_db_dbi.connect(self._connection_parameters["dsn"], "", "")
             else:

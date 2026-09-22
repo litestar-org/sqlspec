@@ -109,20 +109,14 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
     supports_native_parquet_import: "ClassVar[bool]" = False
     supports_native_row_streaming: "ClassVar[bool]" = True
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
-        datetime_binding="native",
-        timestamp_precision="microsecond",
-        json_columns_decoded=False,
-        uuid_binding="text",
+        datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
     )
     _connection_context_class: "ClassVar[type[Db2ConnectionContext]]" = Db2ConnectionContext
     _session_factory_class: "ClassVar[type[_Db2SessionConnectionHandler]]" = _Db2SessionConnectionHandler
     _session_context_class: "ClassVar[type[Db2SessionContext]]" = Db2SessionContext
     _default_statement_config = default_statement_config
 
-    __slots__ = (
-        "_connection_factory",
-        "_user_connection_hook",
-    )
+    __slots__ = ("_connection_factory", "_user_connection_hook")
 
     def __init__(
         self,
@@ -148,9 +142,7 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
         self._user_connection_hook: Callable[[Db2Connection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
-        self._connection_factory: Callable[[], Db2Connection] | None = features_dict.pop(
-            "connection_factory", None
-        )
+        self._connection_factory: Callable[[], Db2Connection] | None = features_dict.pop("connection_factory", None)
 
         super().__init__(
             connection_config=normalized_connection_config,

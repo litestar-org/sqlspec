@@ -198,8 +198,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
 
 
 def resolve_column_names(
-    description: Sequence[Any] | None,
-    column_name_cache: dict[int, tuple[Any, list[str]]] | None = None,
+    description: Sequence[Any] | None, column_name_cache: dict[int, tuple[Any, list[str]]] | None = None
 ) -> list[str]:
     """Extract ordered column names from Db2 cursor description metadata."""
     if not description:
@@ -283,9 +282,7 @@ def build_profile() -> DriverParameterProfile:
 
 
 def build_statement_config(
-    *,
-    json_serializer: Callable[[Any], str] | None = None,
-    json_deserializer: Callable[[str], Any] | None = None,
+    *, json_serializer: Callable[[Any], str] | None = None, json_deserializer: Callable[[str], Any] | None = None
 ) -> StatementConfig:
     """Construct the Db2 statement configuration."""
     return build_statement_config_from_profile(
@@ -297,8 +294,7 @@ def build_statement_config(
 
 
 def apply_driver_features(
-    statement_config: StatementConfig,
-    driver_features: Mapping[str, Any] | None,
+    statement_config: StatementConfig, driver_features: Mapping[str, Any] | None
 ) -> tuple[StatementConfig, dict[str, Any]]:
     """Apply Db2 driver feature flags to statement configuration."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}

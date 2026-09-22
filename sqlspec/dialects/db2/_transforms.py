@@ -37,8 +37,7 @@ def _transform_anonymous(generator: Any, expression: exp.Anonymous) -> str:
 
 
 def _transform_date_add(
-    generator: Any,
-    expression: exp.DateAdd | exp.DateSub | exp.DatetimeAdd | exp.DatetimeSub,
+    generator: Any, expression: exp.DateAdd | exp.DateSub | exp.DatetimeAdd | exp.DatetimeSub
 ) -> str:
     """Transform date addition and subtraction to Db2 labeled duration syntax."""
     this = generator.sql(expression, "this")

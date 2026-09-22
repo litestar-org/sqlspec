@@ -28,16 +28,8 @@ def test_db2_get_tables() -> None:
     tables = dd.get_tables(mock_driver, schema="MYSCHEMA")
 
     assert len(tables) == 2
-    assert tables[0] == TableMetadata(
-        schema_name="MYSCHEMA",
-        table_name="USERS",
-        table_type="BASE TABLE",
-    )
-    assert tables[1] == TableMetadata(
-        schema_name="MYSCHEMA",
-        table_name="ACTIVE_USERS",
-        table_type="VIEW",
-    )
+    assert tables[0] == TableMetadata(schema_name="MYSCHEMA", table_name="USERS", table_type="BASE TABLE")
+    assert tables[1] == TableMetadata(schema_name="MYSCHEMA", table_name="ACTIVE_USERS", table_type="VIEW")
     mock_driver.select.assert_called_once()
     args, _ = mock_driver.select.call_args
     assert "FROM SYSCAT.TABLES" in args[0]
@@ -351,4 +343,3 @@ def test_db2_version_detection_fallback_on_error() -> None:
     assert version.minor == 5
     assert version.patch == 0
     assert version.service_level is None
-

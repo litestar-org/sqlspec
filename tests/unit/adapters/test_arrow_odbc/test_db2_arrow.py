@@ -95,9 +95,7 @@ def test_arrow_odbc_db2_connection_string_configuration(conn_str: str) -> None:
 def test_arrow_odbc_db2_select_to_arrow_streaming() -> None:
     """Verify ArrowOdbcDriver streams Arrow batches using db2 configuration."""
     connection = FakeConnection()
-    config = ArrowOdbcConfig(
-        connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"}
-    )
+    config = ArrowOdbcConfig(connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"})
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection),
         statement_config=config.statement_config,
@@ -115,9 +113,7 @@ def test_arrow_odbc_db2_select_to_arrow_streaming() -> None:
 def test_arrow_odbc_db2_select_to_arrow_with_parameters() -> None:
     """Verify ArrowOdbcDriver compiles named parameters into positional ? markers for Db2."""
     connection = FakeConnection()
-    config = ArrowOdbcConfig(
-        connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"}
-    )
+    config = ArrowOdbcConfig(connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"})
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection),
         statement_config=config.statement_config,
@@ -134,9 +130,7 @@ def test_arrow_odbc_db2_select_to_arrow_with_parameters() -> None:
 def test_arrow_odbc_db2_pagination_offset_fetch() -> None:
     """Verify ArrowOdbcDriver compiles LimitOffsetFilter to Db2 OFFSET FETCH syntax with positional parameters."""
     connection = FakeConnection()
-    config = ArrowOdbcConfig(
-        connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"}
-    )
+    config = ArrowOdbcConfig(connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"})
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection),
         statement_config=config.statement_config,
@@ -153,9 +147,7 @@ def test_arrow_odbc_db2_pagination_offset_fetch() -> None:
 def test_arrow_odbc_db2_batch_sizes_forwarded() -> None:
     """Verify batch_size parameter is forwarded to connection read_arrow_batches."""
     connection = FakeConnection()
-    config = ArrowOdbcConfig(
-        connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"}
-    )
+    config = ArrowOdbcConfig(connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"})
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection),
         statement_config=config.statement_config,
@@ -170,11 +162,7 @@ def test_arrow_odbc_db2_batch_sizes_forwarded() -> None:
 
 @pytest.mark.parametrize(
     ("sqlstate", "expected_exception"),
-    [
-        ("23505", UniqueViolationError),
-        ("40001", DeadlockError),
-        ("57014", QueryTimeoutError),
-    ],
+    [("23505", UniqueViolationError), ("40001", DeadlockError), ("57014", QueryTimeoutError)],
 )
 def test_arrow_odbc_db2_error_mapping_on_select_to_arrow(
     monkeypatch: pytest.MonkeyPatch, sqlstate: str, expected_exception: type[Exception]
@@ -182,9 +170,7 @@ def test_arrow_odbc_db2_error_mapping_on_select_to_arrow(
     """Verify Db2 ODBC errors during select_to_arrow map to specific SQLSpec exceptions."""
     monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
     connection = ErrorConnection(sqlstate=sqlstate)
-    config = ArrowOdbcConfig(
-        connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"}
-    )
+    config = ArrowOdbcConfig(connection_config={"connection_string": "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"})
     driver = ArrowOdbcDriver(
         cast("ArrowOdbcConnection", connection),
         statement_config=config.statement_config,

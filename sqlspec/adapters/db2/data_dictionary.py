@@ -22,11 +22,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from sqlspec.adapters.db2.driver import Db2Driver
 
-__all__ = (
-    "DB2_CONFIG",
-    "Db2SyncDataDictionary",
-    "Db2VersionInfo",
-)
+__all__ = ("DB2_CONFIG", "Db2SyncDataDictionary", "Db2VersionInfo")
 
 logger = get_logger("sqlspec.adapters.db2.data_dictionary")
 
@@ -75,13 +71,7 @@ class Db2VersionInfo(VersionInfo):
 
     __slots__ = ("service_level",)
 
-    def __init__(
-        self,
-        major: int,
-        minor: int = 0,
-        patch: int = 0,
-        service_level: str | None = None,
-    ) -> None:
+    def __init__(self, major: int, minor: int = 0, patch: int = 0, service_level: str | None = None) -> None:
         """Initialize Db2 version information."""
         super().__init__(major, minor, patch)
         self.service_level = service_level

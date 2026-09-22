@@ -26,11 +26,7 @@ def clean_users_table(db2_session: Db2Driver) -> Generator[None, None, None]:
         pass
 
     db2_session.execute_script(
-        "CREATE TABLE TEST_INTEGRATION_USERS ("
-        "id INT NOT NULL PRIMARY KEY, "
-        "name VARCHAR(64) NOT NULL, "
-        "balance DECFLOAT"
-        ")"
+        "CREATE TABLE TEST_INTEGRATION_USERS (id INT NOT NULL PRIMARY KEY, name VARCHAR(64) NOT NULL, balance DECFLOAT)"
     )
     db2_session.commit()
 
@@ -52,8 +48,7 @@ def test_db2_integration_connection_ping(db2_session: Db2Driver) -> None:
 def test_db2_integration_crud_and_parameters(db2_session: Db2Driver, clean_users_table: None) -> None:
     """Verify CRUD execution and positional parameter binding against live Db2."""
     db2_session.execute(
-        "INSERT INTO TEST_INTEGRATION_USERS (id, name, balance) VALUES (?, ?, ?)",
-        (1, "Alice", Decimal("100.50")),
+        "INSERT INTO TEST_INTEGRATION_USERS (id, name, balance) VALUES (?, ?, ?)", (1, "Alice", Decimal("100.50"))
     )
     db2_session.commit()
 
@@ -147,8 +142,7 @@ def test_db2_integration_arrow_conversion(db2_session: Db2Driver, clean_users_ta
     pa = pytest.importorskip("pyarrow")
 
     db2_session.execute(
-        "INSERT INTO TEST_INTEGRATION_USERS (id, name, balance) VALUES (?, ?, ?)",
-        (42, "ArrowUser", Decimal("99.99")),
+        "INSERT INTO TEST_INTEGRATION_USERS (id, name, balance) VALUES (?, ?, ?)", (42, "ArrowUser", Decimal("99.99"))
     )
     db2_session.commit()
 

@@ -108,12 +108,7 @@ class Db2StreamSource:
 class Db2Driver(SyncDriverAdapterBase):
     """IBM Db2 database driver."""
 
-    __slots__ = (
-        "_column_name_cache",
-        "_data_dictionary",
-        "_explicit_transaction",
-        "_transaction_active",
-    )
+    __slots__ = ("_column_name_cache", "_data_dictionary", "_explicit_transaction", "_transaction_active")
     dialect = "db2"
 
     def __init__(
