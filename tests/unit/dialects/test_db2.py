@@ -89,3 +89,30 @@ def test_type_mappings() -> None:
 
     blob_sql = parse_one("CAST(x AS BYTEA)", dialect="postgres").sql(dialect="db2")
     assert "CAST(x AS BLOB)" in blob_sql
+
+
+def test_parameter_binding_qmark() -> None:
+    """Verify parameters render as positional question mark placeholders."""
+    expr = exp.Select(expressions=[exp.Parameter()]).from_("tbl")
+    rendered = expr.sql(dialect="db2")
+    assert rendered == "SELECT ? FROM tbl"
+
+
+def test_quoted_identifier_preservation() -> None:
+    """Verify quoted identifiers preserve exact case with double quotes."""
+    result = transpile('SELECT "myCol" FROM "mySchema"."myTable"', read="postgres", write="db2")[0]
+    assert '"myCol"' in result
+    assert '"mySchema"."myTable"' in result
+
+
+def test_string_concatenation() -> None:
+    """Verify string concatenation renders with double pipe operator."""
+    result = transpile("SELECT 'a' || 'b'", read="postgres", write="db2")[0]
+    assert "'a' || 'b'" in result
+    assert "FROM SYSIBM.SYSDUMMY1" in result
+
+
+def test_select_current_date_adds_dummy() -> None:
+    """Verify SELECT CURRENT_DATE adds dummy table."""
+    result = transpile("SELECT CURRENT_DATE", read="postgres", write="db2")[0]
+    assert "FROM SYSIBM.SYSDUMMY1" in result

@@ -5,6 +5,7 @@ import sys
 from importlib.metadata import entry_points
 
 DIALECT_ENTRY_POINTS = {
+    "db2": "sqlspec.dialects.db2",
     "paradedb": "sqlspec.dialects.postgres",
     "pg_textsearch": "sqlspec.dialects.postgres",
     "pgvector": "sqlspec.dialects.postgres",
@@ -53,10 +54,12 @@ def test_importing_sqlspec_does_not_eagerly_load_dialect_machinery() -> None:
 def test_lazy_dialects_attribute_still_works() -> None:
     code = (
         "import sqlspec\n"
-        "from sqlspec.dialects import Spanner, Spangres, PGVector, ParadeDB, PGTextSearch\n"
+        "from sqlspec.dialects import DB2, Spanner, Spangres, PGVector, ParadeDB, PGTextSearch\n"
+        "assert sqlspec.dialects.DB2 is DB2\n"
         "assert sqlspec.dialects.Spanner is Spanner\n"
         "assert sqlspec.dialects.PGTextSearch is PGTextSearch\n"
         "from sqlglot.dialects.dialect import Dialect\n"
+        "assert Dialect.get('db2') is DB2\n"
         "assert Dialect.get('spanner') is Spanner\n"
         "assert Dialect.get('spangres') is Spangres\n"
         "assert Dialect.get('pgvector') is PGVector\n"
@@ -102,13 +105,13 @@ def test_concurrent_first_use_registers_all_dialects() -> None:
         "import concurrent.futures, sys\n"
         "import sqlglot\n"
         "assert not [m for m in sys.modules if m.startswith('sqlspec')]\n"
-        "QUERIES = {'pgvector': 'SELECT a <=> b FROM t', 'paradedb': \"SELECT * FROM t WHERE body @@@ 'shoes'\",\n"
+        "QUERIES = {'db2': 'SELECT 1', 'pgvector': 'SELECT a <=> b FROM t', 'paradedb': \"SELECT * FROM t WHERE body @@@ 'shoes'\",\n"
         "           'spanner': 'SELECT 1', 'spangres': 'SELECT 1'}\n"
         "def run(name):\n"
         "    return sqlglot.parse_one(QUERIES[name], dialect=name).sql(dialect=name)\n"
         "with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:\n"
         "    results = list(pool.map(run, list(QUERIES) * 8))\n"
-        "assert len(results) == 32 and all(results)\n"
+        "assert len(results) == 40 and all(results)\n"
         "print('ok')\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
