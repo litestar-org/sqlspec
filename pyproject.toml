@@ -44,6 +44,7 @@ attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-bigquery-storage", "google-cloud-storage"]
 cloud-sql = ["cloud-sql-python-connector"]
 cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
+db2 = ["ibm_db>=3.2.5"]
 duckdb = ["duckdb", "pytz", "pyarrow"]
 fastapi = ["fastapi"]
 flask = ["flask"]
@@ -470,6 +471,7 @@ markers = [
   "arrow_odbc: marks tests using the arrow_odbc adapter",
   "asyncmy: marks tests using asyncmy",
   "asyncpg: marks tests using asyncpg",
+  "db2: marks tests using ibm_db",
   "duckdb_driver: marks tests using the duckdb driver",
   "google_bigquery: marks tests using google-cloud-bigquery",
   "google_spanner: marks tests using google-cloud-spanner",
@@ -531,6 +533,10 @@ module = [
   "prometheus_client.*",
   "fsspec",
   "fsspec.*",
+  "ibm_db",
+  "ibm_db.*",
+  "ibm_db_dbi",
+  "ibm_db_dbi.*",
   "sqlglot",
   "sqlglot.*",
 ]
