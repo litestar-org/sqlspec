@@ -41,6 +41,7 @@ __all__ = (
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
+    "parse_db2_dsn",
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
@@ -313,6 +314,66 @@ def apply_driver_features(
     return statement_config, features
 
 
+def parse_db2_dsn(dsn: str) -> dict[str, Any]:
+    """Parse a Db2 connection DSN or URL into keyword arguments.
+
+    Supports:
+        - URL format: db2://user:password@host:port/database
+        - DSN format: DATABASE=name;HOSTNAME=host;PORT=port;PROTOCOL=TCPIP;UID=user;PWD=password;
+    """
+    params: dict[str, Any] = {}
+    if "://" in dsn:
+        from urllib.parse import parse_qs, unquote, urlsplit
+
+        parsed = urlsplit(dsn)
+        if parsed.username is not None:
+            params["username"] = unquote(parsed.username)
+        if parsed.password is not None:
+            params["password"] = unquote(parsed.password)
+        if parsed.hostname is not None:
+            params["hostname"] = parsed.hostname
+        if parsed.port is not None:
+            params["port"] = parsed.port
+        path = parsed.path.lstrip("/")
+        if path:
+            params["database"] = unquote(path)
+        if parsed.query:
+            query = parse_qs(parsed.query)
+            for q_key, q_vals in query.items():
+                if q_vals:
+                    val_str = q_vals[-1]
+                    if val_str.lower() == "true":
+                        params[q_key] = True
+                    elif val_str.lower() == "false":
+                        params[q_key] = False
+                    elif val_str.isdigit():
+                        params[q_key] = int(val_str)
+                    else:
+                        params[q_key] = val_str
+        return params
+
+    for item in dsn.split(";"):
+        if "=" in item:
+            key_part, val_part = item.split("=", 1)
+            key = key_part.strip().upper()
+            val = val_part.strip()
+            if key in ("DATABASE", "DB"):
+                params["database"] = val
+            elif key in ("HOSTNAME", "HOST", "SERVER"):
+                params["hostname"] = val
+            elif key == "PORT":
+                params["port"] = int(val) if val.isdigit() else val
+            elif key == "PROTOCOL":
+                params["protocol"] = val
+            elif key in ("UID", "USER", "USERNAME"):
+                params["username"] = val
+            elif key in ("PWD", "PASSWORD"):
+                params["password"] = val
+            else:
+                params[key_part.strip()] = val
+    return params
+
+
 def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize raw connection configuration mapping for Db2.
 
@@ -323,6 +384,12 @@ def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, A
         dict[str, Any]: Normalized configuration dictionary.
     """
     config = dict(connection_config)
+    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
+    if dsn is not None and isinstance(dsn, str):
+        dsn_params = parse_db2_dsn(dsn)
+        for key, value in dsn_params.items():
+            config.setdefault(key, value)
+
     database = config.pop("db", None) or config.pop("database", "SAMPLE")
     config["database"] = database
 

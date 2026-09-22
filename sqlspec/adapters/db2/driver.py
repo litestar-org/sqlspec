@@ -4,7 +4,7 @@ import contextlib
 from collections.abc import Sequence, Sized
 from typing import Any, cast
 
-from sqlspec.adapters.db2._typing import Db2Cursor, Db2Error, Db2SessionContext
+from sqlspec.adapters.db2._typing import Db2Cursor, Db2SessionContext
 from sqlspec.adapters.db2.core import (
     collect_rows,
     create_mapped_exception,
