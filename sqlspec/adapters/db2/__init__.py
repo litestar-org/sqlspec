@@ -38,6 +38,7 @@ from sqlspec.adapters.db2.core import (
     resolve_many_rowcount,
     resolve_rowcount,
 )
+from sqlspec.adapters.db2.data_dictionary import Db2SyncDataDictionary, Db2VersionInfo
 from sqlspec.adapters.db2.driver import Db2Driver, Db2ExceptionHandler
 from sqlspec.adapters.db2.pool import Db2ConnectionPool
 
@@ -60,6 +61,8 @@ __all__ = (
     "Db2QueryParams",
     "Db2RawCursor",
     "Db2SessionContext",
+    "Db2SyncDataDictionary",
+    "Db2VersionInfo",
     "apply_driver_features",
     "build_connection_config",
     "build_dsn_string",
