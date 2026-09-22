@@ -121,6 +121,12 @@ exports a typed config class and a driver implementation.
 
       Sync SQL Server via pymssql / FreeTDS.
 
+   .. grid-item-card:: Db2
+      :link: db2
+      :link-type: doc
+
+      Sync IBM Db2 via ibm_db with in-tree SQLGlot dialect and Arrow support.
+
 Feature Comparison
 ==================
 
@@ -358,6 +364,17 @@ means the parameter pipeline preserves the Python value for the driver.
      - Microsecond
      -
      - Text
+   * - db2
+     - Yes
+     -
+     -
+     -
+     -
+     - Yes
+     - ISO Text
+     - Microsecond
+     -
+     - Text
 
 .. toctree::
    :hidden:
@@ -381,3 +398,4 @@ means the parameter pipeline preserves the Python value for the driver.
    arrow_odbc
    mssql_python
    pymssql
+   db2
