@@ -178,7 +178,7 @@ class Db2SessionContext:
         import importlib
 
         driver_module = importlib.import_module("sqlspec.adapters.db2.driver")
-        driver_cls = getattr(driver_module, "Db2Driver")
+        driver_cls = driver_module.Db2Driver
 
         self._connection = self._acquire_connection()
         self._driver = driver_cls(
