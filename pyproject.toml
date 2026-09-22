@@ -155,6 +155,7 @@ test = [
 sqlspec = "sqlspec.__main__:run_cli"
 
 [project.entry-points."sqlglot.dialects"]
+db2 = "sqlspec.dialects.db2:DB2"
 paradedb = "sqlspec.dialects.postgres:ParadeDB"
 pg_textsearch = "sqlspec.dialects.postgres:PGTextSearch"
 pgvector = "sqlspec.dialects.postgres:PGVector"

@@ -13,9 +13,9 @@ __all__ = (
 )
 
 
-def _add_sysibm_dual(expression: exp.Expr) -> exp.Expr:
+def _add_sysibm_dual(expression: exp.Select) -> exp.Select:
     """Add FROM SYSIBM.SYSDUMMY1 to SELECT statements lacking a FROM clause."""
-    if isinstance(expression, exp.Select) and expression.args.get("from_") is None:
+    if expression.args.get("from_") is None:
         expression = expression.copy()
         expression.set(
             "from_", exp.From(this=exp.Table(this=exp.to_identifier("SYSDUMMY1"), db=exp.to_identifier("SYSIBM")))
@@ -36,7 +36,10 @@ def _transform_anonymous(generator: Any, expression: exp.Anonymous) -> str:
     return str(generator.function_fallback_sql(expression))
 
 
-def _transform_date_add(generator: Any, expression: exp.DateAdd | exp.DateSub) -> str:
+def _transform_date_add(
+    generator: Any,
+    expression: exp.DateAdd | exp.DateSub | exp.DatetimeAdd | exp.DatetimeSub,
+) -> str:
     """Transform date addition and subtraction to Db2 labeled duration syntax."""
     this = generator.sql(expression, "this")
     unit = expression.args.get("unit")
