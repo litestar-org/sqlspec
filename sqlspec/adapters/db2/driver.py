@@ -2,7 +2,12 @@
 
 import contextlib
 from collections.abc import Sequence, Sized
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import ArrowResult, Statement, StatementFilter
+    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 from sqlspec.adapters.db2._typing import Db2Cursor, Db2SessionContext
 from sqlspec.adapters.db2.core import (
@@ -225,6 +230,33 @@ class Db2Driver(SyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(Db2StreamSource(self, sql, prepared_parameters, chunk_size))
+
+    def select_to_arrow(
+        self,
+        statement: "Statement | QueryBuilder",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        return_format: "ArrowReturnFormat" = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute query and return results converted to Apache Arrow format.
+
+        Db2 driver utilizes in-memory conversion since ibm_db lacks native Arrow C export.
+        """
+        return super().select_to_arrow(
+            statement,
+            *parameters,
+            statement_config=statement_config,
+            return_format=return_format,
+            native_only=native_only,
+            batch_size=batch_size,
+            arrow_schema=arrow_schema,
+            **kwargs,
+        )
 
     def create_savepoint(self, name: str) -> None:
         """Create a transaction savepoint retaining open cursors."""
