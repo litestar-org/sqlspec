@@ -1,0 +1,262 @@
+"""IBM Db2 database driver implementation."""
+
+import contextlib
+from collections.abc import Sequence, Sized
+from typing import Any, cast
+
+from sqlspec.adapters.db2._typing import Db2Cursor, Db2Error, Db2SessionContext
+from sqlspec.adapters.db2.core import (
+    collect_rows,
+    create_mapped_exception,
+    default_statement_config,
+    driver_profile,
+    normalize_execute_many_parameters,
+    normalize_execute_parameters,
+    resolve_column_names,
+    resolve_many_rowcount,
+    resolve_rowcount,
+)
+from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.driver import (
+    BaseSyncExceptionHandler,
+    ExecutionResult,
+    SyncDriverAdapterBase,
+    SyncRowStream,
+    rows_to_dicts,
+    validate_savepoint_name,
+)
+from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.logging import get_logger
+
+__all__ = ("Db2Cursor", "Db2Driver", "Db2ExceptionHandler", "Db2SessionContext")
+
+logger = get_logger("sqlspec.adapters.db2")
+
+
+class Db2ExceptionHandler(BaseSyncExceptionHandler):
+    """Context manager for handling IBM Db2 exceptions."""
+
+    __slots__ = ()
+
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        if exc_type is None:
+            return False
+        if isinstance(exc_val, Exception):
+            self.pending_exception = create_mapped_exception(exc_val, logger=logger)
+            return True
+        return False
+
+
+class Db2StreamSource:
+    """Native Db2 chunk source backed by cursor.fetchmany()."""
+
+    __slots__ = ("_chunk_size", "_column_names", "_cursor_manager", "_driver", "_parameters", "_sql")
+
+    def __init__(self, driver: "Db2Driver", sql: str, parameters: Any, chunk_size: int) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._parameters = parameters
+        self._chunk_size = chunk_size
+        self._cursor_manager: Db2Cursor | None = None
+        self._column_names: list[str] | None = None
+
+    def start(self) -> None:
+        cursor_manager = self._driver.with_cursor(self._driver.connection)
+        try:
+            cursor = cursor_manager.__enter__()
+            handler = self._driver.handle_database_exceptions()
+            with handler:
+                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._driver._check_pending_exception(handler)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+            raise
+        self._cursor_manager = cursor_manager
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        cursor_manager = self._cursor_manager
+        if cursor_manager is None or cursor_manager.cursor is None:
+            return []
+        cursor = cursor_manager.cursor
+        handler = self._driver.handle_database_exceptions()
+        rows: Any = []
+        with handler:
+            rows = cursor.fetchmany(self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        column_names = self._column_names
+        if column_names is None:
+            column_names = resolve_column_names(cursor.description or None, self._driver._column_name_cache)
+            self._column_names = column_names
+        return rows_to_dicts(rows, column_names)
+
+    def close(self, error: bool = False) -> None:
+        cursor_manager = self._cursor_manager
+        self._cursor_manager = None
+        if cursor_manager is not None:
+            with contextlib.suppress(Exception):
+                cursor_manager.__exit__(None, None, None)
+
+
+class Db2Driver(SyncDriverAdapterBase):
+    """IBM Db2 database driver."""
+
+    __slots__ = (
+        "_column_name_cache",
+        "_data_dictionary",
+        "_explicit_transaction",
+        "_transaction_active",
+    )
+    dialect = "db2"
+
+    def __init__(
+        self,
+        connection: Any,
+        statement_config: "StatementConfig | None" = None,
+        driver_features: "dict[str, Any] | None" = None,
+    ) -> None:
+        if statement_config is None:
+            statement_config = default_statement_config.replace(
+                enable_caching=get_cache_config().compiled_cache_enabled
+            )
+
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        self._data_dictionary: Any = None
+        self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._transaction_active = False
+        self._explicit_transaction = False
+
+    def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
+
+        if statement.returns_rows():
+            fetched_data = cursor.fetchall()
+            description = cursor.description or None
+            rows, column_names, row_format = collect_rows(fetched_data, description, self._column_name_cache)
+            return self.create_execution_result(
+                cursor,
+                selected_data=rows,
+                column_names=column_names,
+                data_row_count=len(rows),
+                is_select_result=True,
+                row_format=row_format,
+            )
+
+        return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
+
+    def dispatch_execute_many(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+
+        prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
+        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else 0
+        cursor.executemany(sql, cast("Sequence[Any]", prepared_parameters))
+
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
+
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+
+        successful_count = 0
+        for stmt in statements:
+            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            successful_count += 1
+        return self.create_execution_result(
+            cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+        )
+
+    def begin(self) -> None:
+        """Begin a transaction on the Db2 connection."""
+        try:
+            if hasattr(self.connection, "autocommit_state") and self.connection.autocommit_state:
+                self.connection.autocommit_state = False
+                self._explicit_transaction = True
+            elif hasattr(self.connection, "set_autocommit"):
+                self.connection.set_autocommit(False)
+                self._explicit_transaction = True
+            self._transaction_active = True
+        except Exception as exc:
+            msg = f"Failed to begin Db2 transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+
+    def commit(self) -> None:
+        """Commit the active Db2 transaction."""
+        try:
+            self.connection.commit()
+            if self._explicit_transaction:
+                if hasattr(self.connection, "autocommit_state"):
+                    self.connection.autocommit_state = True
+                elif hasattr(self.connection, "set_autocommit"):
+                    self.connection.set_autocommit(True)
+                self._explicit_transaction = False
+            self._transaction_active = False
+        except Exception as exc:
+            msg = f"Failed to commit Db2 transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+
+    def rollback(self) -> None:
+        """Rollback the active Db2 transaction."""
+        try:
+            self.connection.rollback()
+            if self._explicit_transaction:
+                if hasattr(self.connection, "autocommit_state"):
+                    self.connection.autocommit_state = True
+                elif hasattr(self.connection, "set_autocommit"):
+                    self.connection.set_autocommit(True)
+                self._explicit_transaction = False
+            self._transaction_active = False
+        except Exception as exc:
+            msg = f"Failed to rollback Db2 transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+
+    def with_cursor(self, connection: Any) -> "Db2Cursor":
+        return Db2Cursor(connection)
+
+    def handle_database_exceptions(self) -> "Db2ExceptionHandler":
+        return Db2ExceptionHandler()
+
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+        """Return a native Db2 row stream backed by cursor.fetchmany()."""
+        if not statement.returns_rows():
+            return None
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        return SyncRowStream(Db2StreamSource(self, sql, prepared_parameters, chunk_size))
+
+    def create_savepoint(self, name: str) -> None:
+        """Create a transaction savepoint retaining open cursors."""
+        self.execute_script(f"SAVEPOINT {validate_savepoint_name(name)} ON ROLLBACK RETAIN CURSORS")
+
+    def release_savepoint(self, name: str) -> None:
+        """Release a transaction savepoint."""
+        self.execute_script(f"RELEASE SAVEPOINT {validate_savepoint_name(name)}")
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        """Rollback to a named transaction savepoint."""
+        self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
+
+    @property
+    def data_dictionary(self) -> Any:
+        if self._data_dictionary is None:
+            import importlib
+
+            dd_module = importlib.import_module("sqlspec.adapters.db2.data_dictionary")
+            self._data_dictionary = dd_module.Db2SyncDataDictionary()
+        return self._data_dictionary
+
+    def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        column_names = resolve_column_names(cursor.description or None, self._column_name_cache)
+        return fetched, column_names, len(fetched)
+
+    def resolve_rowcount(self, cursor: Any) -> int:
+        return resolve_rowcount(cursor)
+
+    def _connection_in_transaction(self) -> bool:
+        """Return whether a transaction opened by this driver remains active."""
+        return self._transaction_active
+
+
+register_driver_profile("db2", driver_profile)

@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -232,12 +232,29 @@ def resolve_many_rowcount(cursor: Any, parameters: Any, fallback_count: int = 0)
     return fallback_count
 
 
-def collect_rows(cursor: Any) -> list[tuple[Any, ...]]:
-    """Fetch all remaining rows from cursor as a list of tuples."""
-    rows = cursor.fetchall()
-    if rows is None:
-        return []
-    return [tuple(row) if not isinstance(row, tuple) else row for row in rows]
+def collect_rows(
+    fetched_data: Any,
+    description: Sequence[Any] | None = None,
+    column_name_cache: dict[int, tuple[Any, list[str]]] | None = None,
+) -> tuple[list[Any], list[str], Literal["dict", "tuple", "record"]]:
+    """Collect Db2 rows, preserving dictionary or tuple row shape."""
+    if hasattr(fetched_data, "fetchall") and not isinstance(fetched_data, (list, tuple)):
+        cursor = fetched_data
+        fetched = cursor.fetchall() or []
+        desc = getattr(cursor, "description", None)
+        column_names = resolve_column_names(desc, column_name_cache)
+        if not fetched:
+            return [], column_names, "tuple"
+        if isinstance(fetched[0], dict):
+            return list(fetched), column_names, "dict"
+        return list(fetched), column_names, "tuple"
+
+    column_names = resolve_column_names(description, column_name_cache)
+    if not fetched_data:
+        return [], column_names, "tuple"
+    if isinstance(fetched_data[0], dict):
+        return list(fetched_data), column_names, "dict"
+    return list(fetched_data), column_names, "tuple"
 
 
 def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
