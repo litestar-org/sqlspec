@@ -234,3 +234,29 @@ def test_select_to_arrow_with_parameters() -> None:
     assert table["id"].to_pylist() == [42]
     assert len(cursor.calls) == 1
     assert cursor.calls[0][1] == (42,)
+
+
+def test_select_to_arrow_result_methods_and_conversions() -> None:
+    """Verify ArrowResult metadata properties and downstream conversion methods."""
+    rows = [(1, "Alice"), (2, "Bob")]
+    cursor = FakeCursor(rows=rows, description=[("id",), ("name",)])
+    driver = Db2Driver(FakeConnection(cursor), statement_config=default_statement_config)
+
+    result = driver.select_to_arrow("SELECT id, name FROM users")
+
+    assert result.is_success() is True
+    assert result.column_names == ["id", "name"]
+    assert result.num_rows == 2
+    assert result.num_columns == 2
+
+    table = result.get_data()
+    batches = table.to_batches()
+    assert len(batches) >= 1
+    assert batches[0].num_rows == 2
+
+    pydict = table.to_pydict()
+    assert pydict == {"id": [1, 2], "name": ["Alice", "Bob"]}
+
+    df = table.to_pandas()
+    assert list(df["name"]) == ["Alice", "Bob"]
+
