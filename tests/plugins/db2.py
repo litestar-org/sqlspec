@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pytest_databases._service import DockerService
@@ -134,7 +134,9 @@ def db2_service(
         database = os.environ.get("DB2_DATABASE", db2_database)
         user = os.environ.get("DB2_USER", db2_user)
         password = os.environ.get("DB2_PASSWORD", db2_password)
-        yield Db2Service(container=None, host=host, port=port, user=user, password=password, database=database)
+        yield Db2Service(
+            container=cast("Any", None), host=host, port=port, user=user, password=password, database=database
+        )
         return
 
     with _provide_db2_service(
