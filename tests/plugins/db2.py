@@ -31,11 +31,14 @@ def db2_responsive(host: str, port: int, database: str, user: str, password: str
         return False
 
     try:
-        from sqlspec.adapters.db2._typing import ibm_db_dbi
+        import ibm_db_dbi
+    except (ImportError, AttributeError):
+        return True
 
-        if ibm_db_dbi is None:
-            return True
+    if ibm_db_dbi is None:
+        return True
 
+    try:
         dsn = f"DATABASE={database};HOSTNAME={host};PORT={port};PROTOCOL=TCPIP;UID={user};PWD={password};"
         conn = ibm_db_dbi.connect(dsn, "", "")
         cursor = conn.cursor()

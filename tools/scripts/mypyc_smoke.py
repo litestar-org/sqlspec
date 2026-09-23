@@ -48,6 +48,7 @@ SMOKE_IMPORTS: tuple[SmokeImport, ...] = (
     SmokeImport("data_dictionary_loader", "sqlspec.data_dictionary._loader", "DataDictionaryLoader", True),
     SmokeImport("pgvector_dialect", "sqlspec.dialects.postgres._pgvector", "PGVector"),
     SmokeImport("spanner_dialect", "sqlspec.dialects.spanner._spanner", "Spanner"),
+    SmokeImport("db2_dialect", "sqlspec.dialects.db2", "DB2"),
     SmokeImport("fastapi_providers", "sqlspec.extensions.fastapi.providers", "provide_filters", True, "fastapi"),
     SmokeImport(
         "litestar_providers", "sqlspec.extensions.litestar.providers", "create_filter_dependencies", True, "litestar"

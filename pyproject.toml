@@ -259,6 +259,9 @@ include = [
   "sqlspec/dialects/postgres/_operators.py",       # Postgres extension operator registry
   "sqlspec/dialects/spanner/_generators.py",       # Spanner custom dialect render hooks
   "sqlspec/dialects/spanner/_parsers.py",          # Spanner PROPERTY_PARSERS entries (explicit-arg dict dispatch)
+  "sqlspec/dialects/db2/_generators.py",           # Db2 custom dialect render hooks
+  "sqlspec/dialects/db2/_parsers.py",              # Db2 custom dialect parser hooks
+  "sqlspec/dialects/db2/_transforms.py",           # Db2 custom dialect transform helpers
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling

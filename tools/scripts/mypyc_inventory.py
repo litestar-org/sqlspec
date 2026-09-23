@@ -137,6 +137,18 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "hard_block",
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled render helpers stay in _generators.",
     },
+    "sqlspec/dialects/db2/_generators.py": {
+        "classification": "compile_now",
+        "reason": "Db2 custom dialect render hooks compile with sqlglot[c] and patch the base generator directly.",
+    },
+    "sqlspec/dialects/db2/_parsers.py": {
+        "classification": "compile_now",
+        "reason": "Db2 custom dialect parser hooks compile cleanly with mypyc.",
+    },
+    "sqlspec/dialects/db2/_transforms.py": {
+        "classification": "compile_now",
+        "reason": "Db2 custom dialect transform helpers compile cleanly with mypyc.",
+    },
     "sqlspec/extensions/events/_models.py": {
         "classification": "compile_now",
         "reason": "EventMessage has concrete datetime annotations and slot dataclass layout compatible with mypyc.",

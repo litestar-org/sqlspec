@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
+from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.db2._typing import Db2Connection, Db2Cursor, Db2RawCursor, Db2SessionContext
@@ -96,6 +97,7 @@ class _Db2SessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
 
 
+@mypyc_attr(native_class=False)
 class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver]):
     """Configuration for IBM Db2 synchronous connections."""
 

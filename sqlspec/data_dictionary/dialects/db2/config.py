@@ -4,7 +4,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-from sqlspec.data_dictionary import (
+from sqlspec.data_dictionary import register_dialect
+from sqlspec.data_dictionary._types import (
     DialectConfig,
     FeatureFlags,
     FeatureVersions,
@@ -14,7 +15,6 @@ from sqlspec.data_dictionary import (
     MetadataSource,
     MetadataSupport,
     VersionInfo,
-    register_dialect,
 )
 
 if TYPE_CHECKING:
@@ -129,7 +129,7 @@ def resolve_db2_feature_flag(feature: str, version_info: VersionInfo | None) -> 
     """Resolve a Db2 feature flag using config and version details."""
     flag = DB2_CONFIG.get_feature_flag(feature)
     if flag is not None:
-        return flag
+        return bool(flag)
     required_version = DB2_CONFIG.get_feature_version(feature)
     if required_version is None or version_info is None:
         return False

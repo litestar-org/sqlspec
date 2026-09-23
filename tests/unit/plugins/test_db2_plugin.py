@@ -67,6 +67,30 @@ def test_db2_responsive_socket_success_without_driver() -> None:
             assert db2_responsive("127.0.0.1", 50000, "testdb", "user", "pass") is True
 
 
+def test_db2_responsive_query_success() -> None:
+    """Verify db2_responsive returns True when socket and query succeed."""
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (1,)
+    mock_conn.cursor.return_value = mock_cursor
+    mock_dbi = MagicMock()
+    mock_dbi.connect.return_value = mock_conn
+
+    with patch("socket.create_connection", return_value=MagicMock()):
+        with patch.dict("sys.modules", {"ibm_db_dbi": mock_dbi}):
+            assert db2_responsive("127.0.0.1", 50000, "testdb", "user", "pass") is True
+
+
+def test_db2_responsive_query_failure() -> None:
+    """Verify db2_responsive returns False when query execution raises an exception."""
+    mock_dbi = MagicMock()
+    mock_dbi.connect.side_effect = Exception("Database starting up")
+
+    with patch("socket.create_connection", return_value=MagicMock()):
+        with patch.dict("sys.modules", {"ibm_db_dbi": mock_dbi}):
+            assert db2_responsive("127.0.0.1", 50000, "testdb", "user", "pass") is False
+
+
 def test_provide_db2_service_runs_container() -> None:
     """Verify _provide_db2_service configures DockerService.run with expected parameters."""
     mock_container_service = MagicMock(spec=ServiceContainer)

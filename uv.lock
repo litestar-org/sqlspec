@@ -3,46 +3,22 @@ revision = 3
 requires-python = ">=3.10, <4.0"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.11.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version < '3.11'",
 ]
-
-[options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
-exclude-newer-span = "P7D"
-
-[options.exclude-newer-package]
-litestar-queues = false
-litestar-htmx = false
-litestar-saq = false
-sqlglot = false
-litestar-asyncapi = false
-sqlglotc = false
-litestar-mcp = false
-litestar-oracledb = false
-litestar = false
-pytest-databases = false
-litestar-vite = false
-litestar-security = false
-advanced-alchemy = false
-litestar-asyncpg = false
-litestar-email = false
-litestar-granian = false
-polyfactory = false
-litestar-autowire = false
 
 [manifest]
 overrides = [
@@ -1432,16 +1408,16 @@ version = "0.22.4"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
@@ -2486,6 +2462,44 @@ wheels = [
 ]
 
 [[package]]
+name = "ibm-db"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/9d/9f31efe9462a220d3e4e19dc96839b97a8dcd4203e9245a0497cfae6f683/ibm_db-3.3.0.tar.gz", hash = "sha256:75c6749957d202e0b6b37e1e823583bfc37b65293ee123fb287e409d7426b53d", size = 315316, upload-time = "2026-08-11T21:00:35.04Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/29/78/4922d6557e0be0618df915d69aa0d434385cfe093b292a84ce5804730452/ibm_db-3.3.0-cp310-cp310-macosx_10_15_x86_64.whl", hash = "sha256:6509d856d339c0faa79efa1dc67425a3fe8e677d228f661bbc2ba16881c8bc87", size = 24195122, upload-time = "2026-08-11T20:58:02.45Z" },
+    { url = "https://files.pythonhosted.org/packages/94/db/4195a6112d9732d096b728bf8aec611c7c2e5bddef80256a91caefb08219/ibm_db-3.3.0-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:4dba74cf0742412df3a23bd19d9b15cf21eef3f3bcff5471090c87272e6571d6", size = 20864607, upload-time = "2026-08-11T20:58:06.07Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/26/ba431a1fe94325eeded62f1fbe752407a95425978fcf333bd41cbedc1113/ibm_db-3.3.0-cp310-cp310-manylinux_2_34_i686.whl", hash = "sha256:c61b5e913a98c6d94eca64b70f8dea695cd24da2855b4abbdf4eb468e52011da", size = 43829217, upload-time = "2026-08-11T20:58:11.178Z" },
+    { url = "https://files.pythonhosted.org/packages/43/0d/744c9d0a6b43e711835ccba3b94fe816d6acde573ae34a1319f2372a6017/ibm_db-3.3.0-cp310-cp310-manylinux_2_34_x86_64.whl", hash = "sha256:169e7c055e9b72c6539c3663704c6c59d16d22ad3ff92819a5c3953c04effed6", size = 48180042, upload-time = "2026-08-11T20:58:16.905Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/12/985afe97f3b4558cc0004ffd2e9b2f4298ddb18f060ea352c3cacbbafe63/ibm_db-3.3.0-cp310-cp310-win32.whl", hash = "sha256:eabb1610bcff637233355f1db50b7fde59281ad9919e14016f54ef7276859bf7", size = 24602258, upload-time = "2026-08-11T20:58:21.023Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/5b/4d9c2f34a63768cbcebb41d1d2789478e2ccfec8b46925db0fa30431f54c/ibm_db-3.3.0-cp310-cp310-win_amd64.whl", hash = "sha256:dcd02f8252cf861dc1fe87c2b86854a249a40259ce7a69216bb410c922b70a96", size = 28420687, upload-time = "2026-08-11T20:58:25.09Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/c9/0d94968ff00bbba05e3646d84210f03c06ff7d80b0d4b3da8d052d9c1670/ibm_db-3.3.0-cp311-cp311-macosx_10_15_x86_64.whl", hash = "sha256:57af3415e9a41f3921929496ce2335378c475dcbe29e37d8b7a2cca12b7845d5", size = 24195127, upload-time = "2026-08-11T20:58:28.871Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/16/ab95afef216322c76d9ff88df376f5d4be3eb06278d0f3ace519f815c065/ibm_db-3.3.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:16daafed613d3863ac06f0509cae6121e9a9131d52914ed0de30ab70583f7122", size = 20864603, upload-time = "2026-08-11T20:58:32.539Z" },
+    { url = "https://files.pythonhosted.org/packages/03/14/844dd4840e4b721fbbdcaefae8a214a486377924c5354937816c93639cf2/ibm_db-3.3.0-cp311-cp311-manylinux_2_34_i686.whl", hash = "sha256:5ee32bbeca54f1fcc9f0d4495ea4c174c5afadd9dbe2228b037b9f92d122399e", size = 43834559, upload-time = "2026-08-11T20:58:36.818Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/8c/67a13a6cee20ad264ad1c63c957e14ff043f3bf2a7550bf0a2581e7afe19/ibm_db-3.3.0-cp311-cp311-manylinux_2_34_x86_64.whl", hash = "sha256:85c16961dc98e13dbd58209f40e8e99cf383b7b7d8f57038aa84a59e1412ba21", size = 48184086, upload-time = "2026-08-11T20:58:41.151Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/db/6d61caefc8c375b17c44f7b6577d94a5dd6b82d0227ae895e39bc6b61e0e/ibm_db-3.3.0-cp311-cp311-win32.whl", hash = "sha256:ee7b7c1a93b03062a563c927338970cf0df2986b9ba9b996aaaaccc891c6fe28", size = 24602190, upload-time = "2026-08-11T20:58:44.723Z" },
+    { url = "https://files.pythonhosted.org/packages/76/e0/49672bfa0f707fb78cac8a85ae359aea32cae9b8f0f3732d3a7722f8b30f/ibm_db-3.3.0-cp311-cp311-win_amd64.whl", hash = "sha256:d0f732b57776cbda5d5e4d8ee0c4f43a362ff0e4bb0ed67d2983090a0ebbfa95", size = 28420718, upload-time = "2026-08-11T20:58:48.31Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/75/d60e93559b1b0ff8684622ab54901416834a27a5ff11391d341523cbce0b/ibm_db-3.3.0-cp312-cp312-macosx_10_15_x86_64.whl", hash = "sha256:17335ee3f401f32c10db831a727ea365ca22c12a6ae1f97cab5357c85d8fda27", size = 24195236, upload-time = "2026-08-11T20:58:51.819Z" },
+    { url = "https://files.pythonhosted.org/packages/60/34/761cb391e31b952696a5756738aa14840d09e144d662c9d7a8f49f2c43c8/ibm_db-3.3.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:b801774c68c303e5a53fbd982b79bbfa5905b789eb3476b8ae1db22ce6726c20", size = 20865076, upload-time = "2026-08-11T20:58:55.181Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/3d/0832755c8d6e164f6b25a8dcee5408a497f80780a1f8044cee2896ef0113/ibm_db-3.3.0-cp312-cp312-manylinux_2_34_i686.whl", hash = "sha256:e15138cfeb6e2a0fa5c248bfae7ba9cee7b83856048c81b9e7e36f461df74f8c", size = 43810768, upload-time = "2026-08-11T20:59:00.559Z" },
+    { url = "https://files.pythonhosted.org/packages/61/8a/6c57f4c4fcaa4eef419d5eae30f9b7ce620560c3cbd103324dcab5f1e9b1/ibm_db-3.3.0-cp312-cp312-manylinux_2_34_x86_64.whl", hash = "sha256:f282dcc731a33cd19bf310a6f0f28088fa9bd64fb42f28b955b38a5e8f240990", size = 48156737, upload-time = "2026-08-11T20:59:06.154Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/4d/5d14c9ae0051879b4bd4aa6e16b3a8bc0f3ba638c3852d30a2ce77ec76a5/ibm_db-3.3.0-cp312-cp312-win32.whl", hash = "sha256:e3908f9af3e038797a95b60ee0ccfb1a10f35d01cfb623151f534461e9f2691f", size = 24601597, upload-time = "2026-08-11T20:59:10.363Z" },
+    { url = "https://files.pythonhosted.org/packages/29/12/890970bbd9e1232ad8e612e133eb40032011a5a24b632d85b4d1d5a6bdbf/ibm_db-3.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:70147f6885ae7b02f440e5a73be6cf44667d0d708ffec9695d2e5881b9e0ed41", size = 28421640, upload-time = "2026-08-11T20:59:14.33Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/38/76e8500c1c1fa110a7f0c3dcf3d035b4439427b260776a06c027d84a0892/ibm_db-3.3.0-cp313-cp313-macosx_10_15_x86_64.whl", hash = "sha256:52207e096ce82876eb52f734e8c4b32f61a43c6d7ffe46d29412820ff04b609d", size = 24195288, upload-time = "2026-08-11T20:59:18.277Z" },
+    { url = "https://files.pythonhosted.org/packages/40/5a/5c22f27aa512437ef7842e83a8ae8467c80ce863045900088d6d86d08462/ibm_db-3.3.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:a349e175fe8da30986894be872287a160e4a28c29af3729fe9f1ce28ad4db314", size = 20865099, upload-time = "2026-08-11T20:59:21.774Z" },
+    { url = "https://files.pythonhosted.org/packages/34/10/fc67c404a6c605d0efee15b4f05d700c89c05381035e26d1acd9d54fffa8/ibm_db-3.3.0-cp313-cp313-manylinux_2_34_i686.whl", hash = "sha256:c69df4190577193afa3e12cadfd72011d08f2b53c456345e64a458790133ac53", size = 43810828, upload-time = "2026-08-11T20:59:27.046Z" },
+    { url = "https://files.pythonhosted.org/packages/12/22/c1032bf3ab47ed702d0c7b49ecb54840e647d980373ec21361aae73f1980/ibm_db-3.3.0-cp313-cp313-manylinux_2_34_x86_64.whl", hash = "sha256:d12a9bb6f3a3eb4cd87e907b25efc2ad487e2e85e481fa5be590fa0722d86db8", size = 48156798, upload-time = "2026-08-11T20:59:33.147Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/9a/762d92fc91dc68d3889e89898d0a21f2595718f4579fc3a35de655657f09/ibm_db-3.3.0-cp313-cp313-win32.whl", hash = "sha256:ae629b4c967bbc84c7993f5d023b7be1ffda1c54d7baf6968b5569657598ca15", size = 24601604, upload-time = "2026-08-11T20:59:37.222Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/5e/2d467702d09d64a048b1ec12bdf2d9f515c1279357d376235780eea06ea2/ibm_db-3.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:29f55f6ee27c5f2005c1c24b3f70f2d0f67921cb4021c4227cc3620176c1cf3e", size = 28421649, upload-time = "2026-08-11T20:59:41.346Z" },
+    { url = "https://files.pythonhosted.org/packages/30/05/ab600ea4f0f363a718301538d5486e78d8fe161cf43e54a11158894a829c/ibm_db-3.3.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:ca2b883ff25917e8d4dfed803237fbc4338f410c02a9903dfa7f520200949917", size = 24195267, upload-time = "2026-08-11T20:59:45.087Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/0b/de56a5604863271d02e8ec9d0678624e539a16ada629b7e51099abc079a6/ibm_db-3.3.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:d581fb7ee2f530c201421885449ec006f5aaf7f75777dece784fe814b837464a", size = 20865092, upload-time = "2026-08-11T20:59:48.855Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/ff/d98118f15ba99833ac06ba5fac971b55ec4fdbf884bd41ccd616de6f0a20/ibm_db-3.3.0-cp314-cp314-manylinux_2_34_i686.whl", hash = "sha256:0a636f497ef04f91539f74f9fd87565ed5fdcbadfc0bfbb23f25cfafd9074c75", size = 43810863, upload-time = "2026-08-11T20:59:53.818Z" },
+    { url = "https://files.pythonhosted.org/packages/86/03/01f4e2b5c24c215c617bcd7847fa2b1589af956ff54cbf2df647355db21b/ibm_db-3.3.0-cp314-cp314-manylinux_2_34_x86_64.whl", hash = "sha256:298601d9398e5607e0c5a6ff8e199c62f8022f40ef0539d7d0d049023027bb68", size = 48156194, upload-time = "2026-08-11T20:59:58.45Z" },
+    { url = "https://files.pythonhosted.org/packages/59/40/b51baa290894a1a03cda1bc9dcc2fa894646d6667104a2c5e20403a96cc3/ibm_db-3.3.0-cp314-cp314-win32.whl", hash = "sha256:5388f49c02b8c0a85b4185dda769c4c235bde834a4226c7702cf346c082d84cb", size = 25564711, upload-time = "2026-08-11T21:00:02.255Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/c6/56cd5755b4d8d8ada62892ae3e857242fe1c497f6e1ca8484c351e6cb728/ibm_db-3.3.0-cp314-cp314-win_amd64.whl", hash = "sha256:c546059d68a032f960b0e26208877cd79b1e3102928034998c5d40093be61dc9", size = 29016957, upload-time = "2026-08-11T21:00:06.427Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.19"
 source = { registry = "https://pypi.org/simple" }
@@ -2776,16 +2790,16 @@ version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
@@ -3524,16 +3538,16 @@ version = "5.1.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
@@ -3717,16 +3731,16 @@ version = "2.5.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/13/01/11703282db468b85f6f7b8c7f22d058de5970d5c7e60a3a8aaa313c3de36/numpy-2.5.3.tar.gz", hash = "sha256:df2d5874ff183595a4ba404edd04f6bd9b5505c1d7708573f6a6c17489a67563", size = 20791231, upload-time = "2026-09-06T16:27:47.073Z" }
@@ -4153,16 +4167,16 @@ version = "3.0.5"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
@@ -5528,16 +5542,16 @@ version = "2026.6.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
@@ -5877,16 +5891,16 @@ version = "9.1.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -5939,16 +5953,16 @@ version = "2025.8.25"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
@@ -6006,16 +6020,16 @@ version = "3.13.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
@@ -6078,16 +6092,16 @@ version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and sys_platform == 'emscripten'",
@@ -6376,6 +6390,9 @@ cockroachdb = [
     { name = "asyncpg" },
     { name = "psycopg", extra = ["binary", "pool"] },
 ]
+db2 = [
+    { name = "ibm-db" },
+]
 duckdb = [
     { name = "duckdb" },
     { name = "pyarrow" },
@@ -6643,6 +6660,7 @@ requires-dist = [
     { name = "google-cloud-bigquery-storage", marker = "extra == 'bigquery'" },
     { name = "google-cloud-spanner", marker = "extra == 'spanner'" },
     { name = "google-cloud-storage", marker = "extra == 'bigquery'" },
+    { name = "ibm-db", marker = "extra == 'db2'", specifier = ">=3.2.5" },
     { name = "librt", marker = "extra == 'performance'", specifier = ">=0.10.0" },
     { name = "litestar", marker = "extra == 'litestar'", specifier = ">=2.23.0" },
     { name = "msgspec", marker = "extra == 'msgspec'" },
@@ -6680,7 +6698,7 @@ requires-dist = [
     { name = "typing-extensions" },
     { name = "uuid-utils", marker = "extra == 'uuid'", specifier = ">=0.17.0" },
 ]
-provides-extras = ["adbc", "adk", "aiomysql", "aiosqlite", "alloydb", "arrow-odbc", "asyncmy", "asyncpg", "attrs", "bigquery", "cloud-sql", "cockroachdb", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mssql-python", "mypyc", "mysql-connector", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "sanic", "spanner", "starlette", "uuid"]
+provides-extras = ["adbc", "adk", "aiomysql", "aiosqlite", "alloydb", "arrow-odbc", "asyncmy", "asyncpg", "attrs", "bigquery", "cloud-sql", "cockroachdb", "db2", "duckdb", "fastapi", "flask", "fsspec", "litestar", "msgspec", "mssql-python", "mypyc", "mysql-connector", "nanoid", "obstore", "opentelemetry", "oracledb", "orjson", "pandas", "performance", "polars", "prometheus", "psqlpy", "psycopg", "pydantic", "pymssql", "pymysql", "sanic", "spanner", "starlette", "uuid"]
 
 [package.metadata.requires-dev]
 benchmarks = [
