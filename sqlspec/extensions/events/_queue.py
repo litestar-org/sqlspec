@@ -102,7 +102,9 @@ class _BaseTableEventQueue:
         top_clause = select_limit_prefix(self._dialect, 1)
         limit_clause = "" if self._uses_oracle_locking_select(select_for_update) else self._row_limit_clause()
         base = f"SELECT {top_clause}event_id, channel, payload_json, metadata_json, attempts, available_at, lease_expires_at, created_at FROM {self._table_name} WHERE channel = :channel AND available_at <= :available_cutoff AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_cutoff))) ORDER BY created_at ASC, event_id ASC"
-        locking_clause = lock_clause(select_for_update=select_for_update, skip_locked=skip_locked)
+        locking_clause = lock_clause(
+            select_for_update=select_for_update, skip_locked=skip_locked, dialect=self._dialect
+        )
         return base + limit_clause + locking_clause
 
     def _select_by_id_sql(self) -> str:

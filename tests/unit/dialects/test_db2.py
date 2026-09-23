@@ -116,3 +116,33 @@ def test_select_current_date_adds_dummy() -> None:
     """Verify SELECT CURRENT_DATE adds dummy table."""
     result = transpile("SELECT CURRENT_DATE", read="postgres", write="db2")[0]
     assert "FROM SYSIBM.SYSDUMMY1" in result
+
+
+def test_concat_multi_arg() -> None:
+    """Verify multi-argument CONCAT transpiles to double-pipe concatenation."""
+    result = transpile("SELECT CONCAT('a', 'b', 'c')", read="postgres", write="db2")[0]
+    assert "'a' || 'b' || 'c'" in result
+
+
+def test_mod_operator() -> None:
+    """Verify modulo operator % transpiles to MOD(a, b)."""
+    result = transpile("SELECT a % b FROM tbl", read="postgres", write="db2")[0]
+    assert "MOD(a, b)" in result
+
+
+def test_ilike_operator() -> None:
+    """Verify ILIKE operator transpiles to LOWER(a) LIKE LOWER(b)."""
+    result = transpile("SELECT a ILIKE b FROM tbl", read="postgres", write="db2")[0]
+    assert "LOWER(a) LIKE LOWER(b)" in result
+
+
+def test_dateadd_negative_interval() -> None:
+    """Verify negative intervals transpile to subtraction without double signs."""
+    result = transpile("SELECT DATEADD(day, -5, x)", read="tsql", write="db2")[0]
+    assert "x - 5 DAY" in result
+
+
+def test_dbclob_tokenization() -> None:
+    """Verify DBCLOB tokenizes as text."""
+    tokens = DB2Tokenizer().tokenize("DBCLOB")
+    assert tokens[0].token_type == sqlglot.TokenType.TEXT

@@ -17,6 +17,7 @@ from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
+from sqlspec.migrations.tracker import SyncMigrationTracker
 from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
@@ -100,7 +101,7 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
 
     driver_type: "ClassVar[type[Db2Driver]]" = Db2Driver
     connection_type: "ClassVar[type[Db2Connection]]" = cast("type[Db2Connection]", Db2Connection)
-    migration_tracker_type: "ClassVar[Any]" = None
+    migration_tracker_type: "ClassVar[type[SyncMigrationTracker]]" = SyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = False

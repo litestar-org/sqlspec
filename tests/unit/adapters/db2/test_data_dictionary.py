@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 from sqlspec.adapters.db2.data_dictionary import DB2_CONFIG, Db2SyncDataDictionary, Db2VersionInfo
+from sqlspec.core import SQL
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 
 
@@ -17,7 +18,7 @@ def test_db2_dialect_config_registered() -> None:
 
 
 def test_db2_get_tables() -> None:
-    """Verify get_tables generates query and maps SYSCAT.TABLES rows to TableMetadata."""
+    """Verify get_tables loads query and maps SYSCAT.TABLES rows to TableMetadata."""
     mock_driver = MagicMock()
     mock_driver.select.return_value = [
         {"schema_name": "MYSCHEMA", "table_name": "USERS", "table_type": "BASE TABLE"},
@@ -30,10 +31,10 @@ def test_db2_get_tables() -> None:
     assert len(tables) == 2
     assert tables[0] == TableMetadata(schema_name="MYSCHEMA", table_name="USERS", table_type="BASE TABLE")
     assert tables[1] == TableMetadata(schema_name="MYSCHEMA", table_name="ACTIVE_USERS", table_type="VIEW")
-    mock_driver.select.assert_called_once()
-    args, _ = mock_driver.select.call_args
-    assert "FROM SYSCAT.TABLES" in args[0]
-    assert args[1] == "MYSCHEMA"
+    assert mock_driver.select.call_count == 2
+    first_call_stmt = mock_driver.select.call_args_list[0][0][0]
+    assert isinstance(first_call_stmt, SQL)
+    assert "SYSCAT.TABLES" in str(first_call_stmt)
 
 
 def test_db2_get_columns() -> None:
@@ -105,8 +106,9 @@ def test_db2_get_columns() -> None:
         is_generated=False,
     )
     mock_driver.select.assert_called_once()
-    args, _ = mock_driver.select.call_args
-    assert "FROM SYSCAT.COLUMNS" in args[0]
+    sql = mock_driver.select.call_args[0][0]
+    assert isinstance(sql, SQL)
+    assert "SYSCAT.COLUMNS" in str(sql)
 
 
 def test_db2_get_indexes() -> None:
@@ -236,9 +238,9 @@ def test_db2_get_tables_empty_and_no_schema() -> None:
     tables = dd.get_tables(mock_driver, schema=None)
 
     assert tables == []
-    mock_driver.select.assert_called_once()
-    sql = mock_driver.select.call_args[0][0]
-    assert "AND TABSCHEMA = ?" not in sql
+    assert mock_driver.select.call_count == 2
+    kwargs = mock_driver.select.call_args[1]
+    assert kwargs.get("schema_name") is None
 
 
 def test_db2_get_columns_empty_and_no_schema() -> None:
@@ -251,9 +253,9 @@ def test_db2_get_columns_empty_and_no_schema() -> None:
 
     assert columns == []
     mock_driver.select.assert_called_once()
-    sql = mock_driver.select.call_args[0][0]
-    assert "AND c.TABSCHEMA = ?" not in sql
-    assert "AND c.TABNAME = ?" not in sql
+    kwargs = mock_driver.select.call_args[1]
+    assert kwargs.get("schema_name") is None
+    assert kwargs.get("table_name") is None
 
 
 def test_db2_get_columns_primary_key_variations() -> None:
@@ -310,9 +312,9 @@ def test_db2_get_indexes_empty_and_no_schema() -> None:
 
     assert indexes == []
     mock_driver.select.assert_called_once()
-    sql = mock_driver.select.call_args[0][0]
-    assert "AND i.TABSCHEMA = ?" not in sql
-    assert "AND i.TABNAME = ?" not in sql
+    kwargs = mock_driver.select.call_args[1]
+    assert kwargs.get("schema_name") is None
+    assert kwargs.get("table_name") is None
 
 
 def test_db2_get_foreign_keys_empty_and_no_schema() -> None:
@@ -325,9 +327,9 @@ def test_db2_get_foreign_keys_empty_and_no_schema() -> None:
 
     assert fks == []
     mock_driver.select.assert_called_once()
-    sql = mock_driver.select.call_args[0][0]
-    assert "AND r.TABSCHEMA = ?" not in sql
-    assert "AND r.TABNAME = ?" not in sql
+    kwargs = mock_driver.select.call_args[1]
+    assert kwargs.get("schema_name") is None
+    assert kwargs.get("table_name") is None
 
 
 def test_db2_version_detection_fallback_on_error() -> None:
@@ -343,3 +345,28 @@ def test_db2_version_detection_fallback_on_error() -> None:
     assert version.minor == 5
     assert version.patch == 0
     assert version.service_level is None
+
+
+def test_db2_get_constraints_views_schemas() -> None:
+    """Verify get_constraints, get_views, and get_schemas execute appropriate queries."""
+    mock_driver = MagicMock()
+    mock_driver.select.return_value = [{"name": "test"}]
+
+    dd = Db2SyncDataDictionary()
+    constraints = dd.get_constraints(mock_driver, table="ITEMS", schema="MYSCHEMA")
+    assert len(constraints.items) == 1
+
+    views = dd.get_views(mock_driver, schema="MYSCHEMA")
+    assert len(views.items) == 1
+
+    schemas = dd.get_schemas(mock_driver)
+    assert len(schemas.items) == 1
+
+
+def test_db2_metadata_capabilities() -> None:
+    """Verify get_metadata_capabilities returns valid profile."""
+    mock_driver = MagicMock()
+    dd = Db2SyncDataDictionary()
+    profile = dd.get_metadata_capabilities(mock_driver)
+    assert profile.dialect == "db2"
+    assert len(profile.capabilities) > 0

@@ -46,12 +46,7 @@ def test_db2_connection_config_helper() -> None:
     }
 
 
-def test_db2_default_fixtures(
-    db2_image: str,
-    db2_database: str,
-    db2_user: str,
-    db2_password: str,
-) -> None:
+def test_db2_default_fixtures(db2_image: str, db2_database: str, db2_user: str, db2_password: str) -> None:
     """Verify default fixture values for Db2 Docker service."""
     assert db2_image == "icr.io/db2_community/db2:11.5.9.0"
     assert db2_database == "testdb"

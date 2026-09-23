@@ -16,6 +16,7 @@ from sqlspec.exceptions import (
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
 )
@@ -67,6 +68,7 @@ _SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "22003": (DataError, "numeric value out of range"),
     "22007": (DataError, "invalid datetime format"),
     "22012": (DataError, "division by zero"),
+    "42601": (SQLParsingError, "sql syntax error"),
 }
 
 _SQLCODE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
@@ -80,6 +82,7 @@ _SQLCODE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "SQL0900N": (DatabaseConnectionError, "connection does not exist or was severed"),
     "SQL1042C": (DatabaseConnectionError, "unexpected system error occurred"),
     "SQL30081N": (DatabaseConnectionError, "communication failure"),
+    "SQL0104N": (SQLParsingError, "sql syntax error"),
 }
 
 

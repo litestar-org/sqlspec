@@ -1,7 +1,7 @@
 """IBM Db2 adapter type definitions and context managers."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.utils.module_loader import import_optional
 
@@ -18,62 +18,6 @@ ibm_db_dbi = import_optional("ibm_db_dbi")
 IBM_DB_INSTALLED = ibm_db is not None
 IBM_DB_DBI_INSTALLED = ibm_db_dbi is not None
 
-
-@runtime_checkable
-class Db2CursorProtocol(Protocol):
-    """Protocol representing a Db2 PEP 249 cursor object."""
-
-    description: Any
-    rowcount: int
-
-    def execute(self, operation: str, parameters: Any = ...) -> Any:
-        """Execute a database operation."""
-        ...
-
-    def executemany(self, operation: str, seq_of_parameters: Any) -> Any:
-        """Execute a database operation against a sequence of parameters."""
-        ...
-
-    def fetchone(self) -> Any:
-        """Fetch the next row of a query result set."""
-        ...
-
-    def fetchmany(self, size: int = ...) -> Any:
-        """Fetch the next set of rows of a query result set."""
-        ...
-
-    def fetchall(self) -> Any:
-        """Fetch all remaining rows of a query result set."""
-        ...
-
-    def close(self) -> None:
-        """Close the cursor."""
-        ...
-
-
-@runtime_checkable
-class Db2ConnectionProtocol(Protocol):
-    """Protocol representing a Db2 PEP 249 connection object."""
-
-    autocommit_state: bool
-
-    def cursor(self) -> Any:
-        """Return a new cursor object."""
-        ...
-
-    def commit(self) -> None:
-        """Commit current transaction."""
-        ...
-
-    def rollback(self) -> None:
-        """Rollback current transaction."""
-        ...
-
-    def close(self) -> None:
-        """Close the connection."""
-        ...
-
-
 if TYPE_CHECKING:
     Db2Connection: TypeAlias = Any
     Db2RawCursor: TypeAlias = Any
@@ -89,9 +33,7 @@ __all__ = (
     "IBM_DB_DBI_INSTALLED",
     "IBM_DB_INSTALLED",
     "Db2Connection",
-    "Db2ConnectionProtocol",
     "Db2Cursor",
-    "Db2CursorProtocol",
     "Db2Error",
     "Db2QueryParams",
     "Db2RawCursor",

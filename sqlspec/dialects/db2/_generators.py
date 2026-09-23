@@ -8,7 +8,10 @@ from sqlspec.builder._generation import invalidate_generator_dispatch
 from sqlspec.dialects.db2._transforms import (
     _add_sysibm_dual,
     _transform_anonymous,
+    _transform_concat,
     _transform_date_add,
+    _transform_ilike,
+    _transform_mod,
     _transform_posstr,
     _transform_varchar_format,
 )
@@ -68,6 +71,9 @@ _orig_timetostr = generator.Generator.TRANSFORMS.get(exp.TimeToStr)
 _orig_tochar = generator.Generator.TRANSFORMS.get(exp.ToChar)
 _orig_anonymous = generator.Generator.TRANSFORMS.get(exp.Anonymous)
 _orig_parameter = generator.Generator.TRANSFORMS.get(exp.Parameter)
+_orig_concat = generator.Generator.TRANSFORMS.get(exp.Concat)
+_orig_mod = generator.Generator.TRANSFORMS.get(exp.Mod)
+_orig_ilike = generator.Generator.TRANSFORMS.get(exp.ILike)
 
 
 def _db2_select_transform(gen: Any, expression: exp.Select) -> str:
@@ -203,6 +209,33 @@ def _db2_parameter_transform(gen: Any, expression: exp.Parameter) -> str:
     return str(gen.parameter_sql(expression))
 
 
+def _db2_concat_transform(gen: Any, expression: exp.Concat) -> str:
+    """Render Concat expressions using Db2 string concatenation operator."""
+    if _is_db2(gen):
+        return _transform_concat(gen, expression)
+    if _orig_concat:
+        return str(_orig_concat(gen, expression))
+    return str(gen.concat_sql(expression))
+
+
+def _db2_mod_transform(gen: Any, expression: exp.Mod) -> str:
+    """Render Mod expressions as Db2 MOD function."""
+    if _is_db2(gen):
+        return _transform_mod(gen, expression)
+    if _orig_mod:
+        return str(_orig_mod(gen, expression))
+    return str(gen.mod_sql(expression))
+
+
+def _db2_ilike_transform(gen: Any, expression: exp.ILike) -> str:
+    """Render ILike expressions using LOWER() LIKE LOWER()."""
+    if _is_db2(gen):
+        return _transform_ilike(gen, expression)
+    if _orig_ilike:
+        return str(_orig_ilike(gen, expression))
+    return str(gen.ilike_sql(expression))
+
+
 generator.Generator.TRANSFORMS[exp.Select] = _db2_select_transform
 generator.Generator.TRANSFORMS[exp.Offset] = _db2_offset_transform
 generator.Generator.TRANSFORMS[exp.DataType] = _db2_datatype_transform
@@ -216,6 +249,9 @@ generator.Generator.TRANSFORMS[exp.TimeToStr] = _db2_timetostr_transform
 generator.Generator.TRANSFORMS[exp.ToChar] = _db2_tochar_transform
 generator.Generator.TRANSFORMS[exp.Anonymous] = _db2_anonymous_transform
 generator.Generator.TRANSFORMS[exp.Parameter] = _db2_parameter_transform
+generator.Generator.TRANSFORMS[exp.Concat] = _db2_concat_transform
+generator.Generator.TRANSFORMS[exp.Mod] = _db2_mod_transform
+generator.Generator.TRANSFORMS[exp.ILike] = _db2_ilike_transform
 
 invalidate_generator_dispatch(generator.Generator)
 

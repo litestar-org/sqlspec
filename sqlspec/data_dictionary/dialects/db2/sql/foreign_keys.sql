@@ -1,0 +1,43 @@
+-- name: by_schema
+-- dialect: db2
+SELECT
+    RTRIM(r.TABSCHEMA) AS schema_name,
+    RTRIM(r.TABNAME) AS table_name,
+    RTRIM(r.CONSTNAME) AS constraint_name,
+    RTRIM(k.COLNAME) AS column_name,
+    RTRIM(r.REFTABSCHEMA) AS referenced_schema,
+    RTRIM(r.REFTABNAME) AS referenced_table,
+    RTRIM(refk.COLNAME) AS referenced_column
+FROM SYSCAT.REFERENCES r
+JOIN SYSCAT.KEYCOLUSE k
+  ON r.TABSCHEMA = k.TABSCHEMA AND r.CONSTNAME = k.CONSTNAME
+JOIN SYSCAT.KEYCOLUSE refk
+  ON r.REFTABSCHEMA = refk.TABSCHEMA AND r.REFKEYNAME = refk.CONSTNAME AND k.COLSEQ = refk.COLSEQ
+WHERE r.TABSCHEMA NOT LIKE 'SYS%'
+  AND r.TABSCHEMA NOT LIKE 'NULLID%'
+  AND r.TABSCHEMA NOT LIKE 'SQLJ%'
+  AND (:schema_name IS NULL OR r.TABSCHEMA = :schema_name)
+  AND (:table_name IS NULL OR r.TABNAME = :table_name)
+ORDER BY r.TABSCHEMA, r.TABNAME, r.CONSTNAME, k.COLSEQ;
+
+-- name: by_table
+-- dialect: db2
+SELECT
+    RTRIM(r.TABSCHEMA) AS schema_name,
+    RTRIM(r.TABNAME) AS table_name,
+    RTRIM(r.CONSTNAME) AS constraint_name,
+    RTRIM(k.COLNAME) AS column_name,
+    RTRIM(r.REFTABSCHEMA) AS referenced_schema,
+    RTRIM(r.REFTABNAME) AS referenced_table,
+    RTRIM(refk.COLNAME) AS referenced_column
+FROM SYSCAT.REFERENCES r
+JOIN SYSCAT.KEYCOLUSE k
+  ON r.TABSCHEMA = k.TABSCHEMA AND r.CONSTNAME = k.CONSTNAME
+JOIN SYSCAT.KEYCOLUSE refk
+  ON r.REFTABSCHEMA = refk.TABSCHEMA AND r.REFKEYNAME = refk.CONSTNAME AND k.COLSEQ = refk.COLSEQ
+WHERE r.TABSCHEMA NOT LIKE 'SYS%'
+  AND r.TABSCHEMA NOT LIKE 'NULLID%'
+  AND r.TABSCHEMA NOT LIKE 'SQLJ%'
+  AND r.TABNAME = :table_name
+  AND (:schema_name IS NULL OR r.TABSCHEMA = :schema_name)
+ORDER BY r.CONSTNAME, k.COLSEQ;

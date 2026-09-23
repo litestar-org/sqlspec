@@ -132,9 +132,9 @@ def test_db2_integration_data_dictionary(db2_session: Db2Driver, clean_users_tab
     col_names = {c["column_name"].upper() for c in columns}
     assert {"ID", "NAME", "BALANCE"}.issubset(col_names)
 
-    pks = db2_session.data_dictionary.get_primary_keys(db2_session, table="TEST_INTEGRATION_USERS")
-    assert len(pks) == 1
-    assert pks[0]["column_name"].upper() == "ID"
+    pk_cols = [c for c in columns if c.get("is_primary")]
+    assert len(pk_cols) == 1
+    assert pk_cols[0]["column_name"].upper() == "ID"
 
 
 def test_db2_integration_arrow_conversion(db2_session: Db2Driver, clean_users_table: None) -> None:

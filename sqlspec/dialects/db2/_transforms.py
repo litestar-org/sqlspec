@@ -7,7 +7,10 @@ from sqlglot import exp
 __all__ = (
     "_add_sysibm_dual",
     "_transform_anonymous",
+    "_transform_concat",
     "_transform_date_add",
+    "_transform_ilike",
+    "_transform_mod",
     "_transform_posstr",
     "_transform_varchar_format",
 )
@@ -32,7 +35,11 @@ def _transform_anonymous(generator: Any, expression: exp.Anonymous) -> str:
         unit = generator.sql(expression.expressions[0]).upper()
         amount = generator.sql(expression.expressions[1])
         this = generator.sql(expression.expressions[2])
-        return f"{this} + {amount} {unit}"
+        op = "+"
+        if amount.startswith("-"):
+            op = "-"
+            amount = amount[1:].lstrip()
+        return f"{this} {op} {amount} {unit}"
     return str(generator.function_fallback_sql(expression))
 
 
@@ -60,7 +67,30 @@ def _transform_date_add(
             amount_sql = amount.name
 
     op = "-" if isinstance(expression, (exp.DateSub, exp.DatetimeSub)) else "+"
+    if amount_sql.startswith("-"):
+        amount_sql = amount_sql[1:].lstrip()
+        op = "+" if op == "-" else "-"
+
     return f"{this} {op} {amount_sql} {unit_str}"
+
+
+def _transform_concat(generator: Any, expression: exp.Concat) -> str:
+    """Render Concat expressions using Db2 string concatenation operator."""
+    return " || ".join(generator.sql(e) for e in expression.expressions)
+
+
+def _transform_mod(generator: Any, expression: exp.Mod) -> str:
+    """Render Mod expressions as Db2 MOD(this, expression) function."""
+    this = generator.sql(expression, "this")
+    exp_arg = generator.sql(expression, "expression")
+    return f"MOD({this}, {exp_arg})"
+
+
+def _transform_ilike(generator: Any, expression: exp.ILike) -> str:
+    """Render ILike expressions using LOWER(this) LIKE LOWER(expression)."""
+    this = generator.sql(expression, "this")
+    exp_arg = generator.sql(expression, "expression")
+    return f"LOWER({this}) LIKE LOWER({exp_arg})"
 
 
 def _transform_posstr(generator: Any, expression: exp.StrPosition) -> str:

@@ -45,7 +45,7 @@ def db2_responsive(host: str, port: int, database: str, user: str, password: str
         conn.close()
         return row is not None and row[0] == 1
     except Exception:
-        return True
+        return False
 
 
 @dataclass
@@ -59,23 +59,12 @@ class Db2Service(ServiceContainer):
 
 @contextlib.contextmanager
 def _provide_db2_service(
-    docker_service: DockerService,
-    image: str,
-    name: str,
-    database: str,
-    user: str,
-    password: str,
+    docker_service: DockerService, image: str, name: str, database: str, user: str, password: str
 ) -> Generator[Db2Service, None, None]:
     """Launch IBM Db2 Docker container service with xdist isolation."""
 
     def check(_service: ServiceContainer) -> bool:
-        return db2_responsive(
-            host=_service.host,
-            port=_service.port,
-            database=database,
-            user=user,
-            password=password,
-        )
+        return db2_responsive(host=_service.host, port=_service.port, database=database, user=user, password=password)
 
     worker_num = get_xdist_worker_num()
     if worker_num is not None:
@@ -132,11 +121,7 @@ def db2_password() -> str:
 
 @pytest.fixture(autouse=False, scope="session")
 def db2_service(
-    docker_service: DockerService,
-    db2_image: str,
-    db2_database: str,
-    db2_user: str,
-    db2_password: str,
+    docker_service: DockerService, db2_image: str, db2_database: str, db2_user: str, db2_password: str
 ) -> Generator[Db2Service, None, None]:
     """Session-scoped IBM Db2 container service fixture."""
     with _provide_db2_service(

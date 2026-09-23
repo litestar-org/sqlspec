@@ -42,13 +42,7 @@ config = Db2Config(
         "pwd": "password",
         "protocol": "TCPIP",
     },
-    pool_config={
-        "min_size": 2,
-        "max_size": 10,
-        "timeout": 30.0,
-        "recycle": 3600,
-        "pre_ping": True,
-    },
+    pool_config={"min_size": 2, "max_size": 10, "timeout": 30.0, "recycle": 3600, "pre_ping": True},
 )
 ```
 
@@ -59,10 +53,7 @@ You can also provide a raw connection string or DSN:
 ```python
 config = Db2Config(
     connection_config={
-        "connection_string": (
-            "DATABASE=SAMPLE;HOSTNAME=db2host;PORT=50000;PROTOCOL=TCPIP;"
-            "UID=db2inst1;PWD=password;"
-        ),
+        "connection_string": ("DATABASE=SAMPLE;HOSTNAME=db2host;PORT=50000;PROTOCOL=TCPIP;UID=db2inst1;PWD=password;")
     }
 )
 ```
@@ -79,17 +70,24 @@ with config.provide_session() as driver:
     users = driver.execute("SELECT id, name FROM users WHERE active = ?", (1,))
 
     # Transactions
-    with driver.begin():
+    with driver.transaction():
         driver.execute("INSERT INTO users (id, name) VALUES (?, ?)", (101, "Ada"))
 ```
 
 ### Async Execution (Offloaded)
 
-Because `ibm_db` is a synchronous C-extension (`threadsafety = 0`), SQLSpec offloads operations to worker threads via AnyIO:
+Because `ibm_db` is a synchronous C-extension (`threadsafety = 0`), asynchronous frameworks offload operations to worker threads:
 
 ```python
-async with config.provide_session() as driver:
-    users = await driver.execute("SELECT id, name FROM users WHERE active = ?", (1,))
+from sqlspec.utils.sync_tools import async_
+
+
+def fetch_active_users():
+    with config.provide_session() as driver:
+        return driver.execute("SELECT id, name FROM users WHERE active = ?", (1,))
+
+
+users = await async_(fetch_active_users)()
 ```
 
 ---
@@ -114,6 +112,7 @@ with config.provide_session() as driver:
 
     # Polars DataFrame
     import polars as pl
+
     pldf = pl.from_arrow(table)
 ```
 
@@ -151,7 +150,10 @@ with config.provide_session() as driver:
     # Reflect columns
     columns = driver.data_dictionary.get_columns(driver, table="USERS", schema="DB2INST1")
 
-    # Reflect primary and foreign keys
-    pks = driver.data_dictionary.get_primary_keys(driver, table="USERS", schema="DB2INST1")
+    # Primary keys from columns metadata
+    pks = [col for col in columns if col.get("is_primary")]
+
+    # Reflect foreign keys and constraints
     fks = driver.data_dictionary.get_foreign_keys(driver, table="ORDERS", schema="DB2INST1")
+    constraints = driver.data_dictionary.get_constraints(driver, table="USERS", schema="DB2INST1")
 ```

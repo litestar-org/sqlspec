@@ -18,7 +18,7 @@ class DB2Tokenizer(tokens.Tokenizer):
     KEYWORDS = {
         **tokens.Tokenizer.KEYWORDS,
         "DECFLOAT": getattr(TokenType, "DECFLOAT", TokenType.VAR),
-        "DBCLOB": TokenType.VAR,
+        "DBCLOB": TokenType.TEXT,
         "VARCHAR_FORMAT": TokenType.VAR,
         "POSSTR": TokenType.VAR,
     }
