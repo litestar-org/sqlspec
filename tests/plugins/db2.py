@@ -127,6 +127,16 @@ def db2_service(
     docker_service: DockerService, db2_image: str, db2_database: str, db2_user: str, db2_password: str
 ) -> Generator[Db2Service, None, None]:
     """Session-scoped IBM Db2 container service fixture."""
+    import os
+
+    if host := os.environ.get("DB2_HOST"):
+        port = int(os.environ.get("DB2_PORT", "50000"))
+        database = os.environ.get("DB2_DATABASE", db2_database)
+        user = os.environ.get("DB2_USER", db2_user)
+        password = os.environ.get("DB2_PASSWORD", db2_password)
+        yield Db2Service(container=None, host=host, port=port, user=user, password=password, database=database)
+        return
+
     with _provide_db2_service(
         docker_service=docker_service,
         image=db2_image,

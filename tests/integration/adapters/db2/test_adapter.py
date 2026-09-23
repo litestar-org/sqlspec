@@ -1,5 +1,6 @@
 """Integration tests for the IBM Db2 adapter against live or mock container."""
 
+import os
 from collections.abc import Generator
 from decimal import Decimal
 
@@ -10,7 +11,18 @@ pytest.importorskip("ibm_db_dbi")
 
 from sqlspec.adapters.db2.driver import Db2Driver
 
-pytestmark = [pytest.mark.db2, pytest.mark.xdist_group("db2")]
+DB2_INTEGRATION_ENABLED = bool(
+    os.environ.get("DB2_HOST") or os.environ.get("SQLSPEC_ENABLE_DB2_INTEGRATION_TESTS") == "1"
+)
+
+pytestmark = [
+    pytest.mark.db2,
+    pytest.mark.xdist_group("db2"),
+    pytest.mark.skipif(
+        not DB2_INTEGRATION_ENABLED,
+        reason="Db2 integration tests require a live database; set DB2_HOST or SQLSPEC_ENABLE_DB2_INTEGRATION_TESTS=1",
+    ),
+]
 
 
 @pytest.fixture
