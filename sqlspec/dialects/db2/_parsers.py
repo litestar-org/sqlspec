@@ -1,26 +1,32 @@
-"""Db2 dialect parser."""
+"""Db2 AST normalisation helpers."""
 
-from typing import Any
+from sqlglot import exp
 
-from sqlglot import exp, parser
-from sqlglot.helper import seq_get
+__all__ = ("normalize_db2_expression",)
 
-__all__ = ("DB2Parser", "register_db2_function_parsers")
-
-
-def _parse_posstr(self: Any) -> exp.StrPosition:
-    """Parse POSSTR(haystack, needle) into canonical exp.StrPosition."""
-    args = self._parse_csv(self._parse_conjunction)
-    this = seq_get(args, 0)
-    substr = seq_get(args, 1)
-    return exp.StrPosition(this=this, substr=substr)
+_POSSTR_ARGUMENT_COUNT = 2
 
 
-def register_db2_function_parsers() -> None:
-    """Register Db2 function parsers idempotently."""
-    parser.Parser.FUNCTION_PARSERS["POSSTR"] = _parse_posstr
+def _posstr_to_str_position(node: exp.Expr) -> exp.Expr:
+    if (
+        isinstance(node, exp.Anonymous)
+        and str(node.this).upper() == "POSSTR"
+        and len(node.expressions) == _POSSTR_ARGUMENT_COUNT
+    ):
+        haystack, needle = node.expressions
+        return exp.StrPosition(this=haystack, substr=needle)
+    return node
 
 
-register_db2_function_parsers()
+def normalize_db2_expression(expression: exp.Expr) -> exp.Expr:
+    """Rewrite Db2-only function spellings into canonical sqlglot expressions.
 
-DB2Parser: type[parser.Parser] = parser.Parser
+    ``POSSTR(haystack, needle)`` becomes ``exp.StrPosition``.
+
+    Args:
+        expression: Expression parsed from Db2 SQL.
+
+    Returns:
+        The normalised expression.
+    """
+    return expression.transform(_posstr_to_str_position, copy=False)

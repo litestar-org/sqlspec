@@ -1,33 +1,46 @@
-"""Db2 dialect generator."""
+"""Db2 render handlers layered onto a per-instance sqlglot generator dispatch.
 
+Each handler takes explicit ``(generator, expression)`` arguments. ``db2_dispatch``
+returns a dispatch table that combines a root generator's handlers with
+``DB2_TRANSFORMS``; the Db2 dialect installs it on the generator instances it
+creates, so no shared sqlglot class is modified.
+"""
+
+from collections.abc import Callable
 from typing import Any, Final
 
 from sqlglot import exp, generator
 
-from sqlspec.builder._generation import invalidate_generator_dispatch
 from sqlspec.dialects.db2._transforms import (
-    _add_sysibm_dual,
-    _transform_anonymous,
-    _transform_concat,
-    _transform_date_add,
-    _transform_ilike,
-    _transform_mod,
-    _transform_posstr,
-    _transform_varchar_format,
+    add_sysibm_dual,
+    render_anonymous,
+    render_concat,
+    render_date_add,
+    render_ilike,
+    render_mod,
+    render_posstr,
+    render_varchar_format,
 )
 
-__all__ = ("DB2Generator",)
+__all__ = (
+    "DB2_TRANSFORMS",
+    "DB2_TYPE_MAPPING",
+    "anonymous_sql",
+    "concat_sql",
+    "datatype_sql",
+    "date_add_sql",
+    "db2_dispatch",
+    "ilike_sql",
+    "interval_sql",
+    "mod_sql",
+    "offset_sql",
+    "parameter_sql",
+    "select_sql",
+    "str_position_sql",
+    "time_to_str_sql",
+)
 
-_DB2_DIALECT_NAME: Final[str] = "DB2"
-
-
-def _is_db2(gen: Any) -> bool:
-    """Return True if generator target dialect is Db2."""
-    dialect_class = getattr(gen.dialect, "__class__", None)
-    return dialect_class is not None and dialect_class.__name__ == _DB2_DIALECT_NAME
-
-
-_DB2_TYPE_MAPPING: dict[exp.DType, str] = {
+DB2_TYPE_MAPPING: dict[exp.DType, str] = {
     **generator.Generator.TYPE_MAPPING,
     exp.DType.BOOLEAN: "BOOLEAN",
     exp.DType.BLOB: "BLOB",
@@ -52,207 +65,133 @@ _DB2_TYPE_MAPPING: dict[exp.DType, str] = {
 
 _DECFLOAT = getattr(exp.DType, "DECFLOAT", None)
 if _DECFLOAT is not None:
-    _DB2_TYPE_MAPPING[_DECFLOAT] = "DECFLOAT"
+    DB2_TYPE_MAPPING[_DECFLOAT] = "DECFLOAT"
 
 _DBCLOB = getattr(exp.DType, "DBCLOB", None)
 if _DBCLOB is not None:
-    _DB2_TYPE_MAPPING[_DBCLOB] = "DBCLOB"
-
-_orig_select = generator.Generator.TRANSFORMS.get(exp.Select)
-_orig_offset = generator.Generator.TRANSFORMS.get(exp.Offset)
-_orig_datatype = generator.Generator.TRANSFORMS.get(exp.DataType)
-_orig_interval = generator.Generator.TRANSFORMS.get(exp.Interval)
-_orig_dateadd = generator.Generator.TRANSFORMS.get(exp.DateAdd)
-_orig_datesub = generator.Generator.TRANSFORMS.get(exp.DateSub)
-_orig_datetimeadd = generator.Generator.TRANSFORMS.get(exp.DatetimeAdd)
-_orig_datetimesub = generator.Generator.TRANSFORMS.get(exp.DatetimeSub)
-_orig_strposition = generator.Generator.TRANSFORMS.get(exp.StrPosition)
-_orig_timetostr = generator.Generator.TRANSFORMS.get(exp.TimeToStr)
-_orig_tochar = generator.Generator.TRANSFORMS.get(exp.ToChar)
-_orig_anonymous = generator.Generator.TRANSFORMS.get(exp.Anonymous)
-_orig_parameter = generator.Generator.TRANSFORMS.get(exp.Parameter)
-_orig_concat = generator.Generator.TRANSFORMS.get(exp.Concat)
-_orig_mod = generator.Generator.TRANSFORMS.get(exp.Mod)
-_orig_ilike = generator.Generator.TRANSFORMS.get(exp.ILike)
+    DB2_TYPE_MAPPING[_DBCLOB] = "DBCLOB"
 
 
-def _db2_select_transform(gen: Any, expression: exp.Select) -> str:
-    """Transform Select nodes for Db2, adding dual table and pagination fetch."""
-    if _is_db2(gen):
-        expression = _add_sysibm_dual(expression)
-        limit = expression.args.get("limit")
-        if isinstance(limit, exp.Limit):
-            expression = expression.copy()
-            direction = "NEXT" if expression.args.get("offset") else "FIRST"
-            fetch = exp.Fetch(direction=direction, count=exp.maybe_copy(limit.expression))
-            expression.set("limit", fetch)
-    if _orig_select:
-        return str(_orig_select(gen, expression))
-    return str(gen.select_sql(expression))
+def select_sql(generator: "generator.Generator", expression: exp.Select) -> str:
+    """Render a SELECT with a Db2 dummy table and FETCH pagination."""
+    expression = add_sysibm_dual(expression)
+    limit = expression.args.get("limit")
+    if isinstance(limit, exp.Limit):
+        expression = expression.copy()
+        direction = "NEXT" if expression.args.get("offset") else "FIRST"
+        fetch = exp.Fetch(direction=direction, count=exp.maybe_copy(limit.expression))
+        expression.set("limit", fetch)
+    return generator.select_sql(expression)
 
 
-def _db2_offset_transform(gen: Any, expression: exp.Offset) -> str:
-    """Transform Offset nodes to include ROWS suffix required by Db2."""
-    if _is_db2(gen):
-        return f"{gen.offset_sql(expression)} ROWS"
-    if _orig_offset:
-        return str(_orig_offset(gen, expression))
-    return str(gen.offset_sql(expression))
+def offset_sql(generator: "generator.Generator", expression: exp.Offset) -> str:
+    """Render OFFSET with the ROWS keyword Db2 requires."""
+    return f"{generator.offset_sql(expression)} ROWS"
 
 
-def _db2_datatype_transform(gen: Any, expression: exp.DataType) -> str:
-    """Map generic DataType expressions to Db2 native type declarations."""
-    if _is_db2(gen):
-        type_str = _DB2_TYPE_MAPPING.get(expression.this)
-        if type_str:
-            if expression.expressions:
-                params = ", ".join(gen.sql(e) for e in expression.expressions)
-                return f"{type_str}({params})"
-            return type_str
-    if _orig_datatype:
-        return str(_orig_datatype(gen, expression))
-    return str(gen.datatype_sql(expression))
+def datatype_sql(generator: "generator.Generator", expression: exp.DataType) -> str:
+    """Render a data type using the Db2 type name."""
+    type_str = DB2_TYPE_MAPPING.get(expression.this)
+    if type_str:
+        if expression.expressions:
+            params = ", ".join(generator.sql(e) for e in expression.expressions)
+            return f"{type_str}({params})"
+        return type_str
+    return generator.datatype_sql(expression)
 
 
-def _db2_interval_transform(gen: Any, expression: exp.Interval) -> str:
-    """Render Interval expressions in Db2 labeled duration syntax."""
-    if _is_db2(gen):
-        unit = gen.sql(expression, "unit")
-        this = gen.sql(expression, "this")
-        if isinstance(expression.this, exp.Literal) and expression.this.is_string:
-            this = expression.this.name
-        unit_str = f" {unit.upper()}" if unit else ""
-        return f"{this}{unit_str}"
-    if _orig_interval:
-        return str(_orig_interval(gen, expression))
-    return str(gen.interval_sql(expression))
+def interval_sql(generator: "generator.Generator", expression: exp.Interval) -> str:
+    """Render an interval as a Db2 labeled duration."""
+    unit = generator.sql(expression, "unit")
+    this = generator.sql(expression, "this")
+    if isinstance(expression.this, exp.Literal) and expression.this.is_string:
+        this = expression.this.name
+    unit_str = f" {unit.upper()}" if unit else ""
+    return f"{this}{unit_str}"
 
 
-def _db2_dateadd_transform(gen: Any, expression: exp.DateAdd) -> str:
-    """Render DateAdd expressions in Db2 labeled duration syntax."""
-    if _is_db2(gen):
-        return _transform_date_add(gen, expression)
-    if _orig_dateadd:
-        return str(_orig_dateadd(gen, expression))
-    return str(gen.dateadd_sql(expression))
+def date_add_sql(
+    generator: "generator.Generator", expression: exp.DateAdd | exp.DateSub | exp.DatetimeAdd | exp.DatetimeSub
+) -> str:
+    """Render date arithmetic as a Db2 labeled duration."""
+    return render_date_add(generator, expression)
 
 
-def _db2_datesub_transform(gen: Any, expression: exp.DateSub) -> str:
-    """Render DateSub expressions in Db2 labeled duration syntax."""
-    if _is_db2(gen):
-        return _transform_date_add(gen, expression)
-    if _orig_datesub:
-        return str(_orig_datesub(gen, expression))
-    return str(gen.datesub_sql(expression))
+def str_position_sql(generator: "generator.Generator", expression: exp.StrPosition) -> str:
+    """Render a string position search with Db2 POSSTR."""
+    return render_posstr(generator, expression)
 
 
-def _db2_datetimeadd_transform(gen: Any, expression: exp.DatetimeAdd) -> str:
-    """Render DatetimeAdd expressions in Db2 labeled duration syntax."""
-    if _is_db2(gen):
-        return _transform_date_add(gen, expression)
-    if _orig_datetimeadd:
-        return str(_orig_datetimeadd(gen, expression))
-    return str(gen.datetimeadd_sql(expression))
+def time_to_str_sql(generator: "generator.Generator", expression: exp.TimeToStr | exp.ToChar) -> str:
+    """Render datetime formatting with Db2 VARCHAR_FORMAT."""
+    return render_varchar_format(generator, expression)
 
 
-def _db2_datetimesub_transform(gen: Any, expression: exp.DatetimeSub) -> str:
-    """Render DatetimeSub expressions in Db2 labeled duration syntax."""
-    if _is_db2(gen):
-        return _transform_date_add(gen, expression)
-    if _orig_datetimesub:
-        return str(_orig_datetimesub(gen, expression))
-    return str(gen.datetimesub_sql(expression))
+def anonymous_sql(generator: "generator.Generator", expression: exp.Anonymous) -> str:
+    """Render anonymous functions, rewriting DATEADD into a Db2 labeled duration."""
+    return render_anonymous(generator, expression)
 
 
-def _db2_strposition_transform(gen: Any, expression: exp.StrPosition) -> str:
-    """Render StrPosition expressions using Db2 POSSTR."""
-    if _is_db2(gen):
-        return _transform_posstr(gen, expression)
-    if _orig_strposition:
-        return str(_orig_strposition(gen, expression))
-    return str(gen.strposition_sql(expression))
+def parameter_sql(generator: "generator.Generator", expression: exp.Parameter) -> str:
+    """Render a parameter as a positional question-mark placeholder."""
+    return "?"
 
 
-def _db2_timetostr_transform(gen: Any, expression: exp.TimeToStr) -> str:
-    """Render TimeToStr expressions using Db2 VARCHAR_FORMAT."""
-    if _is_db2(gen):
-        return _transform_varchar_format(gen, expression)
-    if _orig_timetostr:
-        return str(_orig_timetostr(gen, expression))
-    return str(gen.timetostr_sql(expression))
+def concat_sql(generator: "generator.Generator", expression: exp.Concat) -> str:
+    """Render concatenation with the Db2 ``||`` operator."""
+    return render_concat(generator, expression)
 
 
-def _db2_tochar_transform(gen: Any, expression: exp.ToChar) -> str:
-    """Render ToChar expressions using Db2 VARCHAR_FORMAT."""
-    if _is_db2(gen):
-        return _transform_varchar_format(gen, expression)
-    if _orig_tochar:
-        return str(_orig_tochar(gen, expression))
-    return str(gen.tochar_sql(expression))
+def mod_sql(generator: "generator.Generator", expression: exp.Mod) -> str:
+    """Render modulo as the Db2 MOD function."""
+    return render_mod(generator, expression)
 
 
-def _db2_anonymous_transform(gen: Any, expression: exp.Anonymous) -> str:
-    """Render anonymous functions including DATEADD into Db2 duration syntax."""
-    if _is_db2(gen):
-        return _transform_anonymous(gen, expression)
-    if _orig_anonymous:
-        return str(_orig_anonymous(gen, expression))
-    return str(gen.anonymous_sql(expression))
+def ilike_sql(generator: "generator.Generator", expression: exp.ILike) -> str:
+    """Render ILIKE as a case-insensitive LIKE over LOWER()."""
+    return render_ilike(generator, expression)
 
 
-def _db2_parameter_transform(gen: Any, expression: exp.Parameter) -> str:
-    """Render Parameter expressions as positional question mark placeholders."""
-    if _is_db2(gen):
-        return "?"
-    if _orig_parameter:
-        return str(_orig_parameter(gen, expression))
-    return str(gen.parameter_sql(expression))
+DB2_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
+    exp.Select: select_sql,
+    exp.Offset: offset_sql,
+    exp.DataType: datatype_sql,
+    exp.Interval: interval_sql,
+    exp.DateAdd: date_add_sql,
+    exp.DateSub: date_add_sql,
+    exp.DatetimeAdd: date_add_sql,
+    exp.DatetimeSub: date_add_sql,
+    exp.StrPosition: str_position_sql,
+    exp.TimeToStr: time_to_str_sql,
+    exp.ToChar: time_to_str_sql,
+    exp.Anonymous: anonymous_sql,
+    exp.Parameter: parameter_sql,
+    exp.Concat: concat_sql,
+    exp.Mod: mod_sql,
+    exp.ILike: ilike_sql,
+}
+
+_overlay_cache: "tuple[dict[type[exp.Expr], Callable[..., str]], dict[type[exp.Expr], Callable[..., str]]] | None" = (
+    None
+)
 
 
-def _db2_concat_transform(gen: Any, expression: exp.Concat) -> str:
-    """Render Concat expressions using Db2 string concatenation operator."""
-    if _is_db2(gen):
-        return _transform_concat(gen, expression)
-    if _orig_concat:
-        return str(_orig_concat(gen, expression))
-    return str(gen.concat_sql(expression))
+def db2_dispatch(base: "dict[type[exp.Expr], Callable[..., str]]") -> "dict[type[exp.Expr], Callable[..., str]]":
+    """Return the Db2 dispatch table layered over a root generator dispatch table.
 
+    The combined table is cached for as long as ``base`` is the same object, so
+    a rebuilt root dispatch table produces a fresh overlay.
 
-def _db2_mod_transform(gen: Any, expression: exp.Mod) -> str:
-    """Render Mod expressions as Db2 MOD function."""
-    if _is_db2(gen):
-        return _transform_mod(gen, expression)
-    if _orig_mod:
-        return str(_orig_mod(gen, expression))
-    return str(gen.mod_sql(expression))
+    Args:
+        base: Dispatch table of a root sqlglot generator instance.
 
-
-def _db2_ilike_transform(gen: Any, expression: exp.ILike) -> str:
-    """Render ILike expressions using LOWER() LIKE LOWER()."""
-    if _is_db2(gen):
-        return _transform_ilike(gen, expression)
-    if _orig_ilike:
-        return str(_orig_ilike(gen, expression))
-    return str(gen.ilike_sql(expression))
-
-
-generator.Generator.TRANSFORMS[exp.Select] = _db2_select_transform
-generator.Generator.TRANSFORMS[exp.Offset] = _db2_offset_transform
-generator.Generator.TRANSFORMS[exp.DataType] = _db2_datatype_transform
-generator.Generator.TRANSFORMS[exp.Interval] = _db2_interval_transform
-generator.Generator.TRANSFORMS[exp.DateAdd] = _db2_dateadd_transform
-generator.Generator.TRANSFORMS[exp.DateSub] = _db2_datesub_transform
-generator.Generator.TRANSFORMS[exp.DatetimeAdd] = _db2_datetimeadd_transform
-generator.Generator.TRANSFORMS[exp.DatetimeSub] = _db2_datetimesub_transform
-generator.Generator.TRANSFORMS[exp.StrPosition] = _db2_strposition_transform
-generator.Generator.TRANSFORMS[exp.TimeToStr] = _db2_timetostr_transform
-generator.Generator.TRANSFORMS[exp.ToChar] = _db2_tochar_transform
-generator.Generator.TRANSFORMS[exp.Anonymous] = _db2_anonymous_transform
-generator.Generator.TRANSFORMS[exp.Parameter] = _db2_parameter_transform
-generator.Generator.TRANSFORMS[exp.Concat] = _db2_concat_transform
-generator.Generator.TRANSFORMS[exp.Mod] = _db2_mod_transform
-generator.Generator.TRANSFORMS[exp.ILike] = _db2_ilike_transform
-
-invalidate_generator_dispatch(generator.Generator)
-
-DB2Generator: type[generator.Generator] = generator.Generator
+    Returns:
+        A dispatch table whose Db2 handlers take precedence over ``base``.
+    """
+    global _overlay_cache
+    cache = _overlay_cache
+    if cache is not None and cache[0] is base:
+        return cache[1]
+    overlay = {**base, **DB2_TRANSFORMS}
+    _overlay_cache = (base, overlay)
+    return overlay

@@ -139,16 +139,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/dialects/db2/_generators.py": {
         "classification": "compile_now",
-        "reason": "Db2 custom dialect render hooks compile with sqlglot[c] and patch the base generator directly.",
+        "reason": "Db2 render handlers compiled as explicit-argument callables; the DB2 dialect layers them onto a per-instance generator dispatch.",
     },
-    "sqlspec/dialects/db2/_parsers.py": {
-        "classification": "compile_now",
-        "reason": "Db2 custom dialect parser hooks compile cleanly with mypyc.",
-    },
-    "sqlspec/dialects/db2/_transforms.py": {
-        "classification": "compile_now",
-        "reason": "Db2 custom dialect transform helpers compile cleanly with mypyc.",
-    },
+    "sqlspec/dialects/db2/_parsers.py": {"classification": "compile_now", "reason": "Db2 AST normalisation helpers."},
+    "sqlspec/dialects/db2/_transforms.py": {"classification": "compile_now", "reason": "Db2 render helper functions."},
     "sqlspec/extensions/events/_models.py": {
         "classification": "compile_now",
         "reason": "EventMessage has concrete datetime annotations and slot dataclass layout compatible with mypyc.",

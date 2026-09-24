@@ -3,16 +3,17 @@
 import sqlglot
 from sqlglot import exp, parse_one, transpile
 
-from sqlspec.dialects.db2 import DB2, DB2Generator, DB2Parser, DB2Tokenizer
+from sqlspec.dialects.db2 import DB2, DB2Tokenizer
 
 
 def test_db2_dialect_registration() -> None:
     """Verify Db2 dialect is registered and resolvable by name."""
     dialect = sqlglot.Dialect.get_or_raise("db2")
     assert dialect.__class__ is DB2
-    assert issubclass(dialect.tokenizer_class, DB2Tokenizer)
-    assert issubclass(dialect.parser_class, DB2Parser)
-    assert issubclass(dialect.generator_class, DB2Generator)
+    assert dialect.tokenizer_class is DB2Tokenizer
+    assert dialect.generate(parse_one("SELECT STRPOS(a, 'b')", read="postgres")) == (
+        "SELECT POSSTR(a, 'b') FROM SYSIBM.SYSDUMMY1"
+    )
 
 
 def test_select_without_from_adds_sysibm_dummy() -> None:
@@ -146,3 +147,22 @@ def test_dbclob_tokenization() -> None:
     """Verify DBCLOB tokenizes as text."""
     tokens = DB2Tokenizer().tokenize("DBCLOB")
     assert tokens[0].token_type == sqlglot.TokenType.TEXT
+
+
+def test_parse_into_normalizes_posstr() -> None:
+    """Verify parsing into a target type rewrites POSSTR into a string position node."""
+    parsed = parse_one("SELECT POSSTR(a, 'b') FROM t", read="db2", into=exp.Select)
+    assert parsed.find(exp.StrPosition) is not None
+    assert parsed.sql(dialect="postgres") == "SELECT POSITION('b' IN a) FROM t"
+
+
+def test_parameterized_and_unmapped_types() -> None:
+    """Verify type parameters are kept and types without a Db2 mapping render unchanged."""
+    result = transpile("SELECT CAST(a AS VARCHAR(10)), CAST(b AS CHAR(3)) FROM t", read="postgres", write="db2")[0]
+    assert result == "SELECT CAST(a AS VARCHAR(10)), CAST(b AS CHAR(3)) FROM t"
+
+
+def test_interval_renders_labeled_duration() -> None:
+    """Verify numeric and column intervals render as Db2 labeled durations."""
+    result = transpile("SELECT a + INTERVAL 1 DAY, b - INTERVAL c HOUR FROM t", read="mysql", write="db2")[0]
+    assert result == "SELECT a + 1 DAY, b - c HOUR FROM t"

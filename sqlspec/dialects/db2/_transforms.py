@@ -1,22 +1,22 @@
-"""Db2 dialect AST transformations."""
+"""Db2 render helper functions."""
 
 from typing import Any
 
 from sqlglot import exp
 
 __all__ = (
-    "_add_sysibm_dual",
-    "_transform_anonymous",
-    "_transform_concat",
-    "_transform_date_add",
-    "_transform_ilike",
-    "_transform_mod",
-    "_transform_posstr",
-    "_transform_varchar_format",
+    "add_sysibm_dual",
+    "render_anonymous",
+    "render_concat",
+    "render_date_add",
+    "render_ilike",
+    "render_mod",
+    "render_posstr",
+    "render_varchar_format",
 )
 
 
-def _add_sysibm_dual(expression: exp.Select) -> exp.Select:
+def add_sysibm_dual(expression: exp.Select) -> exp.Select:
     """Add FROM SYSIBM.SYSDUMMY1 to SELECT statements lacking a FROM clause."""
     if expression.args.get("from_") is None:
         expression = expression.copy()
@@ -29,7 +29,7 @@ def _add_sysibm_dual(expression: exp.Select) -> exp.Select:
 _EXPECTED_DATEADD_ARGS_LEN = 3
 
 
-def _transform_anonymous(generator: Any, expression: exp.Anonymous) -> str:
+def render_anonymous(generator: Any, expression: exp.Anonymous) -> str:
     """Transform anonymous functions such as DATEADD into Db2 syntax."""
     if expression.this.upper() == "DATEADD" and len(expression.expressions) == _EXPECTED_DATEADD_ARGS_LEN:
         unit = generator.sql(expression.expressions[0]).upper()
@@ -43,9 +43,7 @@ def _transform_anonymous(generator: Any, expression: exp.Anonymous) -> str:
     return str(generator.function_fallback_sql(expression))
 
 
-def _transform_date_add(
-    generator: Any, expression: exp.DateAdd | exp.DateSub | exp.DatetimeAdd | exp.DatetimeSub
-) -> str:
+def render_date_add(generator: Any, expression: exp.DateAdd | exp.DateSub | exp.DatetimeAdd | exp.DatetimeSub) -> str:
     """Transform date addition and subtraction to Db2 labeled duration syntax."""
     this = generator.sql(expression, "this")
     unit = expression.args.get("unit")
@@ -74,33 +72,33 @@ def _transform_date_add(
     return f"{this} {op} {amount_sql} {unit_str}"
 
 
-def _transform_concat(generator: Any, expression: exp.Concat) -> str:
+def render_concat(generator: Any, expression: exp.Concat) -> str:
     """Render Concat expressions using Db2 string concatenation operator."""
     return " || ".join(generator.sql(e) for e in expression.expressions)
 
 
-def _transform_mod(generator: Any, expression: exp.Mod) -> str:
+def render_mod(generator: Any, expression: exp.Mod) -> str:
     """Render Mod expressions as Db2 MOD(this, expression) function."""
     this = generator.sql(expression, "this")
     exp_arg = generator.sql(expression, "expression")
     return f"MOD({this}, {exp_arg})"
 
 
-def _transform_ilike(generator: Any, expression: exp.ILike) -> str:
+def render_ilike(generator: Any, expression: exp.ILike) -> str:
     """Render ILike expressions using LOWER(this) LIKE LOWER(expression)."""
     this = generator.sql(expression, "this")
     exp_arg = generator.sql(expression, "expression")
     return f"LOWER({this}) LIKE LOWER({exp_arg})"
 
 
-def _transform_posstr(generator: Any, expression: exp.StrPosition) -> str:
+def render_posstr(generator: Any, expression: exp.StrPosition) -> str:
     """Map string position functions to Db2 POSSTR(haystack, needle)."""
     this = generator.sql(expression, "this")
     substr = generator.sql(expression, "substr")
     return f"POSSTR({this}, {substr})"
 
 
-def _transform_varchar_format(generator: Any, expression: exp.TimeToStr | exp.ToChar) -> str:
+def render_varchar_format(generator: Any, expression: exp.TimeToStr | exp.ToChar) -> str:
     """Map datetime formatting functions to Db2 VARCHAR_FORMAT(ts, fmt)."""
     this = generator.sql(expression, "this")
     if isinstance(expression, exp.TimeToStr):
