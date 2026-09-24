@@ -125,7 +125,7 @@ exports a typed config class and a driver implementation.
       :link: db2
       :link-type: doc
 
-      Sync IBM Db2 via ibm_db with in-tree SQLGlot dialect and Arrow support.
+      Sync + Async IBM Db2 LUW via ibm_db with a built-in SQLGlot dialect.
 
 Feature Comparison
 ==================
@@ -366,12 +366,12 @@ means the parameter pipeline preserves the Python value for the driver.
      - Text
    * - db2
      - Yes
-     -
-     -
+     - Yes
+     - Yes
      -
      -
      - Yes
-     - ISO Text
+     - Native
      - Microsecond
      -
      - Text
