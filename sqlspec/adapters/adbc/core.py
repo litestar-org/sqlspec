@@ -181,6 +181,15 @@ _DRIVER_MANAGER_CONNECT: Final[str] = "adbc_driver_manager.dbapi.connect"
 _FLIGHTSQL_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("username", "password")
 _FLIGHTSQL_TLS_SKIP_VERIFY_KEY: Final[str] = "adbc.flight.sql.client_option.tls_skip_verify"
 _FLIGHTSQL_AUTHORIZATION_HEADER_KEY: Final[str] = "adbc.flight.sql.authorization_header"
+_FLIGHTSQL_WITH_MAX_MSG_SIZE_KEY: Final[str] = "adbc.flight.sql.client_option.with_max_msg_size"
+_FLIGHTSQL_TIMEOUT_QUERY_KEY: Final[str] = "adbc.flight.sql.rpc.timeout_seconds.query"
+_FLIGHTSQL_TIMEOUT_FETCH_KEY: Final[str] = "adbc.flight.sql.rpc.timeout_seconds.fetch"
+_FLIGHTSQL_TLS_ROOT_CERTS_KEY: Final[str] = "adbc.flight.sql.client_option.tls_root_certs"
+_FLIGHTSQL_MTLS_CERT_CHAIN_KEY: Final[str] = "adbc.flight.sql.client_option.mtls_cert_chain"
+_FLIGHTSQL_MTLS_PRIVATE_KEY_KEY: Final[str] = "adbc.flight.sql.client_option.mtls_private_key"
+_FLIGHTSQL_WITH_COOKIE_MIDDLEWARE_KEY: Final[str] = "adbc.flight.sql.rpc.with_cookie_middleware"
+_FLIGHTSQL_SESSION_OPTION_PREFIX: Final[str] = "adbc.flight.sql.session.option."
+_FLIGHTSQL_RPC_CALL_HEADER_PREFIX: Final[str] = "adbc.flight.sql.rpc.call_header."
 _SQLSTATE_CLASS_CODE_LEN = 2
 _SQLSTATE_DESCRIPTIONS: dict[str, str] = {
     "23": "integrity constraint violation",
@@ -1411,6 +1420,42 @@ def _lift_flightsql_db_kwargs(config: "dict[str, Any]") -> None:
 
     if "authorization_header" in config:
         db_kwargs_dict.setdefault(authorization_header_key, config.pop("authorization_header"))
+
+    if "grpc_max_message_size" in config:
+        db_kwargs_dict.setdefault(_FLIGHTSQL_WITH_MAX_MSG_SIZE_KEY, str(config.pop("grpc_max_message_size")))
+
+    if "query_timeout" in config:
+        db_kwargs_dict.setdefault(_FLIGHTSQL_TIMEOUT_QUERY_KEY, str(config.pop("query_timeout")))
+
+    if "fetch_timeout" in config:
+        db_kwargs_dict.setdefault(_FLIGHTSQL_TIMEOUT_FETCH_KEY, str(config.pop("fetch_timeout")))
+
+    if "tls_root_certs" in config:
+        db_kwargs_dict.setdefault(_FLIGHTSQL_TLS_ROOT_CERTS_KEY, str(config.pop("tls_root_certs")))
+
+    if "mtls_cert_chain" in config:
+        db_kwargs_dict.setdefault(_FLIGHTSQL_MTLS_CERT_CHAIN_KEY, str(config.pop("mtls_cert_chain")))
+
+    if "mtls_private_key" in config:
+        db_kwargs_dict.setdefault(_FLIGHTSQL_MTLS_PRIVATE_KEY_KEY, str(config.pop("mtls_private_key")))
+
+    if "with_cookie_middleware" in config:
+        val = config.pop("with_cookie_middleware")
+        db_kwargs_dict.setdefault(
+            _FLIGHTSQL_WITH_COOKIE_MIDDLEWARE_KEY, str(val).lower() if isinstance(val, bool) else str(val)
+        )
+
+    if "session_options" in config:
+        session_options = config.pop("session_options")
+        if isinstance(session_options, dict):
+            for opt_key, opt_val in session_options.items():
+                db_kwargs_dict[f"{_FLIGHTSQL_SESSION_OPTION_PREFIX}{opt_key}"] = str(opt_val)
+
+    if "headers" in config:
+        headers = config.pop("headers")
+        if isinstance(headers, dict):
+            for hdr_key, hdr_val in headers.items():
+                db_kwargs_dict[f"{_FLIGHTSQL_RPC_CALL_HEADER_PREFIX}{hdr_key}"] = str(hdr_val)
 
     config.pop("gizmosql_backend", None)
     if db_kwargs_dict:

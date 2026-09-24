@@ -91,10 +91,12 @@ class ArrowOdbcDriverFeatures(TypedDict):
     """arrow-odbc driver feature flags."""
 
     chunk_size: NotRequired[int]
+    max_batch_size: NotRequired[int]
     max_bytes_per_batch: NotRequired[int]
     max_text_size: NotRequired[int]
     max_binary_size: NotRequired[int]
     fetch_concurrently: NotRequired[bool]
+    falliable_allocations: NotRequired[bool]
     query_timeout_sec: NotRequired[int]
     payload_text_encoding: NotRequired["TextEncoding"]
     enable_driver_pooling: NotRequired[bool]
@@ -276,9 +278,19 @@ def _apply_json_serializer_override(statement_config: "StatementConfig", feature
 
 
 def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
-    """Close connection objects from compatible wrappers when they expose close()."""
+    """Close connection objects and reclaim underlying arrow-odbc resources."""
     if supports_close(connection):
         connection.close()
+        return
+
+    handle = getattr(connection, "handle", None)
+    if handle:
+        from arrow_odbc.reader import ffi, lib
+
+        free_fn = getattr(lib, "arrow_odbc_connection_free", None)
+        if callable(free_fn):
+            free_fn(handle)
+        setattr(connection, "handle", ffi.NULL)
 
 
 def _resolve_statement_config(features: dict[str, Any]) -> "StatementConfig":

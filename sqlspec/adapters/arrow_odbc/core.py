@@ -134,16 +134,20 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Merge arrow-odbc driver feature defaults with caller overrides."""
     defaults: dict[str, Any] = {
-        "chunk_size": 65_536,
+        "chunk_size": 65535,
         "max_bytes_per_batch": 512 * 1024 * 1024,
         "max_text_size": 1024 * 1024,
         "max_binary_size": 1024 * 1024,
         "fetch_concurrently": True,
         "query_timeout_sec": None,
+        "falliable_allocations": True,
+        "enable_driver_pooling": True,
         "json_serializer": to_json,
         "json_deserializer": from_json,
     }
     defaults.update(driver_features or {})
+    if "max_batch_size" in defaults and "chunk_size" not in (driver_features or {}):
+        defaults["chunk_size"] = defaults["max_batch_size"]
     return statement_config, defaults
 
 
@@ -306,16 +310,23 @@ def build_statement_config(*, dialect: str = "sqlite", json_serializer: "Any" = 
     )
 
 
+def _identity(value: Any) -> Any:
+    return value
+
+
+_CUSTOM_TYPE_COERCIONS: Final[dict[type, Any]] = {
+    bool: _identity,
+    int: _identity,
+    float: _identity,
+    str: _identity,
+    bytes: _identity,
+    **build_uuid_coercions(native=False),
+}
+
+
 def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for arrow-odbc."""
-    return {
-        bool: _identity,
-        int: _identity,
-        float: _identity,
-        str: _identity,
-        bytes: _identity,
-        **build_uuid_coercions(native=False),
-    }
+    return dict(_CUSTOM_TYPE_COERCIONS)
 
 
 def _extract_sqlstate(message: str) -> "str | None":
@@ -331,10 +342,6 @@ def _extract_error_number(error: Exception) -> "int | None":
         return int(match.group(1))
     except ValueError:
         return None
-
-
-def _identity(value: Any) -> Any:
-    return value
 
 
 def _is_sql_server_diagnostic(message: str) -> bool:

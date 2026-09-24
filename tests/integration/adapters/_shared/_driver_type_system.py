@@ -128,6 +128,8 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "json_deserializer",
         "enable_events",
         "on_connection_create",
+        "max_batch_size",
+        "falliable_allocations",
     ),
     "asyncmy": (
         "json_serializer",
