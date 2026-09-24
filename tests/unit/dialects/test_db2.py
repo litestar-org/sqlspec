@@ -89,7 +89,7 @@ def test_type_mappings() -> None:
     assert "CAST(x AS CLOB)" in text_sql
 
     blob_sql = parse_one("CAST(x AS BYTEA)", dialect="postgres").sql(dialect="db2")
-    assert "CAST(x AS BLOB)" in blob_sql
+    assert "CAST(x AS VARBINARY(32672))" in blob_sql
 
 
 def test_parameter_binding_qmark() -> None:
@@ -143,10 +143,10 @@ def test_dateadd_negative_interval() -> None:
     assert "x - 5 DAY" in result
 
 
-def test_dbclob_tokenization() -> None:
-    """Verify DBCLOB tokenizes as text."""
-    tokens = DB2Tokenizer().tokenize("DBCLOB")
-    assert tokens[0].token_type == sqlglot.TokenType.TEXT
+def test_dbclob_round_trips() -> None:
+    """Verify DBCLOB column definitions keep the Db2 type name."""
+    result = transpile("CREATE TABLE t (d DBCLOB(10))", read="db2", write="db2")[0]
+    assert result == "CREATE TABLE t (d DBCLOB(10))"
 
 
 def test_parse_into_normalizes_posstr() -> None:

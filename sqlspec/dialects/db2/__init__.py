@@ -13,7 +13,13 @@ from sqlglot import TokenType, exp, generator, tokens
 from sqlglot.dialects.dialect import Dialect, NormalizationStrategy
 
 from sqlspec.dialects.db2._generators import db2_dispatch
-from sqlspec.dialects.db2._parsers import apply_statement_tails, normalize_db2_tokens, split_statement_tails
+from sqlspec.dialects.db2._parsers import (
+    DB2_INVERSE_TIME_MAPPING,
+    DB2_TIME_MAPPING,
+    apply_statement_tails,
+    normalize_db2_tokens,
+    split_statement_tails,
+)
 
 if TYPE_CHECKING:
     from sqlglot.tokenizer_core import Token
@@ -29,8 +35,7 @@ class DB2Tokenizer(tokens.Tokenizer):
 
     KEYWORDS = {
         **tokens.Tokenizer.KEYWORDS,
-        "DECFLOAT": getattr(TokenType, "DECFLOAT", TokenType.VAR),
-        "DBCLOB": TokenType.TEXT,
+        "BLOB": TokenType.BLOB,
         "VARCHAR_FORMAT": TokenType.VAR,
         "POSSTR": TokenType.VAR,
         "CURRENT TIMESTAMP": TokenType.CURRENT_TIMESTAMP,
@@ -58,19 +63,8 @@ class DB2(Dialect):
     NORMALIZATION_STRATEGY = NormalizationStrategy.UPPERCASE
     NULL_ORDERING = "nulls_are_large"
 
-    TIME_MAPPING = {
-        "YYYY": "%Y",
-        "YY": "%y",
-        "MM": "%m",
-        "DD": "%d",
-        "HH24": "%H",
-        "HH12": "%I",
-        "HH": "%I",
-        "MI": "%M",
-        "SS": "%S",
-        "NNNNNN": "%f",
-        "SSSSSS": "%f",
-    }
+    TIME_MAPPING = DB2_TIME_MAPPING
+    INVERSE_TIME_MAPPING = DB2_INVERSE_TIME_MAPPING
 
     Tokenizer = DB2Tokenizer
     Generator = generator.Generator

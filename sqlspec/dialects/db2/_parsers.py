@@ -10,12 +10,16 @@ from typing import Final, final
 
 from sqlglot import exp
 from sqlglot.errors import ParseError
+from sqlglot.time import format_time
 from sqlglot.tokenizer_core import Token, TokenType
+from sqlglot.trie import new_trie
 
 __all__ = (
     "DB2_DURATION_UNITS",
+    "DB2_INVERSE_TIME_MAPPING",
     "DB2_SPECIAL_REGISTERS",
     "DB2_TAIL_ARG_KEYS",
+    "DB2_TIME_MAPPING",
     "Db2StatementTail",
     "apply_statement_tail",
     "apply_statement_tails",
@@ -65,7 +69,29 @@ DB2_DURATION_UNITS: Final[frozenset[str]] = frozenset({
     "MICROSECONDS",
 })
 
+DB2_TIME_MAPPING: Final[dict[str, str]] = {
+    "YYYY": "%Y",
+    "YY": "%y",
+    "MM": "%m",
+    "DD": "%d",
+    "HH24": "%H",
+    "HH12": "%I",
+    "HH": "%I",
+    "MI": "%M",
+    "SS": "%S",
+    "NNNNNN": "%f",
+    "FF6": "%f",
+    "FF": "%f",
+    "MONTH": "%B",
+    "MON": "%b",
+    "DAY": "%A",
+    "DY": "%a",
+}
+DB2_INVERSE_TIME_MAPPING: Final[dict[str, str]] = {"%f": "FF6", "%I": "HH12", "%H": "HH24"}
+
 _POSSTR_ARGUMENT_COUNT: Final[int] = 2
+_VARCHAR_FORMAT_ARGUMENT_COUNT: Final[int] = 2
+_TIME_TRIE: Final = new_trie(DB2_TIME_MAPPING)
 _REGISTER_WORDS: Final[tuple[tuple[str, ...], ...]] = tuple(
     sorted((tuple(register.split()) for register in DB2_SPECIAL_REGISTERS), key=len, reverse=True)
 )
@@ -310,14 +336,26 @@ def _canonical_db2_node(node: exp.Expr) -> exp.Expr:
     ):
         haystack, needle = node.expressions
         return exp.StrPosition(this=haystack, substr=needle)
+    if (
+        isinstance(node, exp.Anonymous)
+        and str(node.this).upper() == "VARCHAR_FORMAT"
+        and len(node.expressions) == _VARCHAR_FORMAT_ARGUMENT_COUNT
+        and isinstance(node.expressions[1], exp.Literal)
+        and node.expressions[1].is_string
+    ):
+        value, db2_format = node.expressions
+        python_format = format_time(db2_format.name, DB2_TIME_MAPPING, _TIME_TRIE)
+        return exp.TimeToStr(this=value, format=exp.Literal.string(python_format or db2_format.name))
     return node
 
 
 def normalize_db2_expression(expression: exp.Expr) -> exp.Expr:
     """Rewrite Db2-only spellings into canonical sqlglot expressions.
 
-    ``POSSTR(haystack, needle)`` becomes ``exp.StrPosition`` and the
-    ``CURRENT SCHEMA`` special register becomes ``exp.CurrentSchema``.
+    ``POSSTR(haystack, needle)`` becomes ``exp.StrPosition``,
+    ``VARCHAR_FORMAT(value, 'format')`` becomes ``exp.TimeToStr`` with the Db2
+    format elements translated, and the ``CURRENT SCHEMA`` special register
+    becomes ``exp.CurrentSchema``.
 
     Args:
         expression: Expression parsed from Db2 SQL.

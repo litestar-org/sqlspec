@@ -25,6 +25,7 @@ from sqlspec.dialects.db2._transforms import (
 )
 
 __all__ = (
+    "DB2_DEFAULT_TYPE_LENGTHS",
     "DB2_TRANSFORMS",
     "DB2_TYPE_MAPPING",
     "anonymous_sql",
@@ -55,31 +56,38 @@ DB2_TYPE_MAPPING: dict[exp.DType, str] = {
     exp.DType.BOOLEAN: "BOOLEAN",
     exp.DType.BLOB: "BLOB",
     exp.DType.TEXT: "CLOB",
+    exp.DType.JSON: "CLOB",
+    exp.DType.JSONB: "CLOB",
+    exp.DType.UUID: "VARCHAR(36)",
     exp.DType.VARCHAR: "VARCHAR",
     exp.DType.NVARCHAR: "VARGRAPHIC",
     exp.DType.NCHAR: "GRAPHIC",
     exp.DType.TIMESTAMP: "TIMESTAMP",
     exp.DType.TIMESTAMPTZ: "TIMESTAMP",
+    exp.DType.TIMESTAMPLTZ: "TIMESTAMP",
     exp.DType.TIMESTAMPNTZ: "TIMESTAMP",
+    exp.DType.DATETIME: "TIMESTAMP",
     exp.DType.DATE: "DATE",
     exp.DType.TIME: "TIME",
+    exp.DType.TINYINT: "SMALLINT",
     exp.DType.SMALLINT: "SMALLINT",
     exp.DType.INT: "INTEGER",
     exp.DType.BIGINT: "BIGINT",
     exp.DType.FLOAT: "DOUBLE",
     exp.DType.DOUBLE: "DOUBLE",
     exp.DType.DECIMAL: "DECIMAL",
-    exp.DType.BINARY: "BLOB",
-    exp.DType.VARBINARY: "BLOB",
+    exp.DType.DECFLOAT: "DECFLOAT",
+    exp.DType.BINARY: "BINARY",
+    exp.DType.VARBINARY: "VARBINARY",
 }
 
-_DECFLOAT = getattr(exp.DType, "DECFLOAT", None)
-if _DECFLOAT is not None:
-    DB2_TYPE_MAPPING[_DECFLOAT] = "DECFLOAT"
+DB2_DEFAULT_TYPE_LENGTHS: Final[dict[exp.DType, str]] = {
+    exp.DType.VARCHAR: "VARCHAR(32672)",
+    exp.DType.NVARCHAR: "VARGRAPHIC(16336)",
+    exp.DType.VARBINARY: "VARBINARY(32672)",
+}
 
-_DBCLOB = getattr(exp.DType, "DBCLOB", None)
-if _DBCLOB is not None:
-    DB2_TYPE_MAPPING[_DBCLOB] = "DBCLOB"
+_ZONED_TIMESTAMP_TYPES: Final[frozenset[exp.DType]] = frozenset({exp.DType.TIMESTAMPTZ, exp.DType.TIMESTAMPLTZ})
 
 
 def _detach_statement_tail(expression: "exp.Query") -> "tuple[exp.Query, list[exp.Lock], dict[str, object]]":
@@ -176,14 +184,21 @@ def offset_sql(generator: "generator.Generator", expression: exp.Offset) -> str:
 
 
 def datatype_sql(generator: "generator.Generator", expression: exp.DataType) -> str:
-    """Render a data type using the Db2 type name."""
+    """Render a data type using the Db2 type name.
+
+    Variable-length types without a length get the Db2 maximum length, and
+    zoned timestamps are reported as unsupported because Db2 TIMESTAMP stores
+    no offset.
+    """
+    if expression.this in _ZONED_TIMESTAMP_TYPES:
+        generator.unsupported("Db2 TIMESTAMP stores no time zone offset")
     type_str = DB2_TYPE_MAPPING.get(expression.this)
-    if type_str:
-        if expression.expressions:
-            params = ", ".join(generator.sql(e) for e in expression.expressions)
-            return f"{type_str}({params})"
-        return type_str
-    return generator.datatype_sql(expression)
+    if not type_str:
+        return generator.datatype_sql(expression)
+    if expression.expressions:
+        params = ", ".join(generator.sql(e) for e in expression.expressions)
+        return f"{type_str}({params})"
+    return DB2_DEFAULT_TYPE_LENGTHS.get(expression.this, type_str)
 
 
 def interval_sql(generator: "generator.Generator", expression: exp.Interval) -> str:

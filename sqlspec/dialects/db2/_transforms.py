@@ -86,27 +86,24 @@ def render_anonymous(generator: Any, expression: exp.Anonymous) -> str:
 
 
 def render_date_add(generator: Any, expression: exp.DateAdd | exp.DateSub | exp.DatetimeAdd | exp.DatetimeSub) -> str:
-    """Transform date addition and subtraction to Db2 labeled duration syntax."""
+    """Render date addition and subtraction as a Db2 labeled duration.
+
+    The amount is rendered with ``render_duration_amount``; a negated or
+    negative amount flips the operator. The unit comes from an interval amount, then the
+    expression, then a unit embedded in a string amount, and defaults to DAY.
+    """
     this = generator.sql(expression, "this")
-    unit = expression.args.get("unit")
-    unit_str = generator.sql(unit).upper() if unit else "DAY"
     amount = expression.expression
+    unit_node = expression.args.get("unit")
     if isinstance(amount, exp.Interval):
-        amount_sql = generator.sql(amount.this)
-        interval_unit = amount.args.get("unit")
-        if interval_unit:
-            unit_str = generator.sql(interval_unit).upper()
-    else:
-        amount_sql = generator.sql(amount)
-
-    if isinstance(amount, exp.Literal) and amount.is_string:
-        try:
-            val = int(amount.name)
-            amount_sql = str(val)
-        except ValueError:
-            amount_sql = amount.name
-
+        unit_node = amount.args.get("unit") or unit_node
+        amount = amount.this
     op = "-" if isinstance(expression, (exp.DateSub, exp.DatetimeSub)) else "+"
+    if isinstance(amount, exp.Neg):
+        amount = amount.this
+        op = "+" if op == "-" else "-"
+    amount_sql, embedded_unit = render_duration_amount(generator, amount)
+    unit_str = generator.sql(unit_node).upper() if unit_node else embedded_unit or "DAY"
     if amount_sql.startswith("-"):
         amount_sql = amount_sql[1:].lstrip()
         op = "+" if op == "-" else "-"

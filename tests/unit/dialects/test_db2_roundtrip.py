@@ -74,3 +74,83 @@ def test_interval_amounts_render_as_db2_operands() -> None:
     numeric = exp.Interval(this=exp.Literal.number(2), unit=exp.var("DAY"))
     assert compound.sql(dialect="db2") == "(x + 1) DAY"
     assert numeric.sql(dialect="db2") == "2 DAY"
+
+
+@pytest.mark.parametrize(
+    ("source", "read", "expected"),
+    [
+        (
+            "SELECT LISTAGG(a, ',') WITHIN GROUP (ORDER BY a) FROM t",
+            "db2",
+            "SELECT LISTAGG(a, ',') WITHIN GROUP (ORDER BY a) FROM t",
+        ),
+        (
+            "CREATE TABLE t (j JSON, v VARCHAR, b VARBINARY(10), z TIMESTAMPTZ)",
+            "postgres",
+            "CREATE TABLE t (j CLOB, v VARCHAR(32672), b VARBINARY(10), z TIMESTAMP)",
+        ),
+        (
+            "CREATE TABLE t (u UUID, n NVARCHAR, vb VARBINARY, jb JSONB, ti TINYINT, dt DATETIME)",
+            "mysql",
+            "CREATE TABLE t (u VARCHAR(36), n VARGRAPHIC(16336), vb VARBINARY(32672), jb CLOB, ti SMALLINT, dt TIMESTAMP)",
+        ),
+        ("CREATE TABLE t (d DBCLOB(10))", "db2", "CREATE TABLE t (d DBCLOB(10))"),
+        ("CREATE TABLE t (d DBCLOB(1M))", "db2", "CREATE TABLE t (d DBCLOB(1M))"),
+        (
+            "CREATE TABLE t (g GRAPHIC(5), vg VARGRAPHIC(10), x XML, df DECFLOAT(34), bn BINARY(4))",
+            "db2",
+            "CREATE TABLE t (g GRAPHIC(5), vg VARGRAPHIC(10), x XML, df DECFLOAT(34), bn BINARY(4))",
+        ),
+        ("SELECT DATE_ADD(a, INTERVAL '1' DAY)", "mysql", "SELECT a + 1 DAY FROM SYSIBM.SYSDUMMY1"),
+        ("SELECT DATE_ADD(a, INTERVAL x + 1 DAY) FROM t", "mysql", "SELECT a + (x + 1) DAY FROM t"),
+    ],
+)
+def test_db2_types_functions_and_date_arithmetic(source: str, read: str, expected: str) -> None:
+    assert sqlglot.transpile(source, read=read, write="db2") == [expected]
+
+
+def test_timestamptz_is_reported() -> None:
+    with pytest.raises(UnsupportedError):
+        sqlglot.transpile(
+            "CREATE TABLE t (z TIMESTAMPTZ)", read="postgres", write="db2", unsupported_level=ErrorLevel.RAISE
+        )
+
+
+def test_time_mapping_to_db2() -> None:
+    assert sqlglot.transpile("SELECT STRFTIME(ts, '%Y-%m-%d %H:%M:%S.%f') FROM t", read="duckdb", write="db2") == [
+        "SELECT VARCHAR_FORMAT(ts, 'YYYY-MM-DD HH24:MI:SS.FF6') FROM t"
+    ]
+
+
+def test_time_mapping_from_db2() -> None:
+    assert sqlglot.transpile("SELECT VARCHAR_FORMAT(ts, 'HH12:MI NNNNNN') FROM t", read="db2", write="duckdb") == [
+        "SELECT STRFTIME(ts, '%I:%M %f') FROM t"
+    ]
+
+
+def test_exists_subselect_gets_dummy_table() -> None:
+    assert sqlglot.transpile("SELECT 1 FROM t WHERE EXISTS (SELECT 1)", read="db2", write="db2") == [
+        "SELECT 1 FROM t WHERE EXISTS(SELECT 1 FROM SYSIBM.SYSDUMMY1)"
+    ]
+
+
+def test_date_add_never_interpolates_literal_text() -> None:
+    expression = exp.DateAdd(
+        this=exp.column("a"), expression=exp.Literal.string("1; DROP TABLE t"), unit=exp.var("DAY")
+    )
+    assert expression.sql(dialect="db2") == "a + '1; DROP TABLE t' DAY"
+    with pytest.raises(UnsupportedError):
+        expression.sql(dialect="db2", unsupported_level=ErrorLevel.RAISE)
+
+
+def test_date_arithmetic_sign_and_embedded_unit() -> None:
+    negated = exp.DateSub(this=exp.column("a"), expression=exp.Neg(this=exp.Literal.number(2)), unit=exp.var("DAY"))
+    embedded = exp.DateAdd(this=exp.column("a"), expression=exp.Literal.string("-3 months"))
+    interval = exp.DateAdd(
+        this=exp.column("a"),
+        expression=exp.Interval(this=exp.Literal.string("4"), unit=exp.var("HOUR")),
+        unit=exp.var("DAY"),
+    )
+    assert negated.sql(dialect="db2") == "a + 2 DAY"
+    assert embedded.sql(dialect="db2") == "a - 3 MONTHS"
+    assert interval.sql(dialect="db2") == "a + 4 HOUR"
