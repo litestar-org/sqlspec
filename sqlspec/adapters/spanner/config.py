@@ -414,6 +414,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return cast("SpannerConnection", self.get_database().snapshot(multi_use=True))  # type: ignore[no-untyped-call]
 
     def _create_pool(self) -> "AbstractSessionPool":
+        from sqlspec.adapters.spanner._typing import SpannerAbstractSessionPool as AbstractSessionPool
         from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
         from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
         from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
@@ -425,6 +426,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             raise ImproperConfigurationError(msg)
 
         raw_pool_type = self.connection_config.get("pool_type")
+        pool_type: type[AbstractSessionPool | PingingPool]
         if raw_pool_type is None or raw_pool_type == "multiplexed":
             pool_type = PingingPool
         else:
@@ -637,7 +639,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                     raise cause from exc
                 raise
 
-        return database.run_in_transaction(_callback, *args, **kwargs)
+        return cast("Any", database).run_in_transaction(_callback, *args, **kwargs)
 
     def execute_partitioned_dml(
         self,
@@ -689,7 +691,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         if effective_request_options is not None:
             call_kwargs["request_options"] = effective_request_options
 
-        return database.execute_partitioned_dml(sql, **call_kwargs)
+        result = cast("Any", database).execute_partitioned_dml(sql, **call_kwargs)
+        return int(result)
 
     def _session_driver_features(
         self,
