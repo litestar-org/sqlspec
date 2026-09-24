@@ -62,7 +62,7 @@ _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("sqlite", ("sqlite",)),
     ("duckdb", ("duckdb",)),
     ("snowflake", ("snowflake",)),
-    ("db2", ("db2", "ibm db2", "ibm db2 odbc driver", "clidriver", "libdb2o")),
+    ("db2", ("db2", "ibm data server driver", "clidriver", "libdb2o")),
 )
 _ARROW_ODBC_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"Native error:\s*(-?\d+)")
 _ODBC_PUNCTUATION: Final[str] = "[]{}(),;?*=!@"
@@ -103,14 +103,39 @@ _SQLSTATE_CLASS_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
 
 
 def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
-    """Resolve an ODBC DBMS or driver name to a SQLSpec dialect name."""
+    """Resolve an ODBC DBMS name, driver name, or connection string to a SQLSpec dialect name.
+
+    A value containing ``=`` is read as an ODBC connection string, and only its
+    first ``Driver`` value (or, without one, its first ``DSN`` value) is
+    matched. Database, host, and user names in the string never select a
+    dialect.
+
+    Args:
+        dbms_name: A DBMS name, an ODBC driver name, or an ODBC connection string.
+
+    Returns:
+        The matched dialect name, or ``"sqlite"`` when nothing identifies the driver.
+    """
     if not dbms_name:
         return "sqlite"
-    lowered = dbms_name.lower()
+    driver_name = _connection_string_driver_name(dbms_name) if "=" in dbms_name else dbms_name
+    if not driver_name:
+        return "sqlite"
+    lowered = driver_name.lower()
     for dialect, patterns in _DIALECT_PATTERNS:
         if any(pattern in lowered for pattern in patterns):
             return dialect
     return "sqlite"
+
+
+def _connection_string_driver_name(connection_string: str) -> "str | None":
+    """Return the unbraced Driver value of a connection string, falling back to its DSN value."""
+    options = parse_odbc_connection_string(connection_string)
+    for wanted in ("driver", "dsn"):
+        for key, value in options:
+            if key.lower() == wanted:
+                return value.strip().removeprefix("{").removesuffix("}").strip()
+    return None
 
 
 def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> SQLSpecError:

@@ -107,8 +107,6 @@ def test_arrow_odbc_config_applies_driver_feature_json_serializer_to_statement_c
 class NoCloseConnection:
     """Connection stub matching arrow-odbc 10.4's no-close public surface."""
 
-    dbms_name = "Microsoft SQL Server"
-
 
 class FakeOdbcError(Exception):
     """Constructible stand-in for arrow_odbc.Error."""

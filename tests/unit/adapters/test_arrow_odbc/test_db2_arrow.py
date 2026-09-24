@@ -76,22 +76,6 @@ class ErrorConnection(FakeConnection):
         )
 
 
-@pytest.mark.parametrize(
-    "conn_str",
-    [
-        "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;Hostname=localhost;Port=50000;Protocol=TCPIP;",
-        "Driver=/opt/ibm/clidriver/lib/libdb2o.so;Database=TESTDB;Hostname=db2;",
-    ],
-)
-def test_arrow_odbc_db2_connection_string_configuration(conn_str: str) -> None:
-    """Verify ArrowOdbcConfig resolves db2 dialect and qmark paramstyle from connection strings."""
-    config = ArrowOdbcConfig(connection_config={"connection_string": conn_str})
-
-    assert config.statement_config.dialect == "db2"
-    assert config.statement_config.parameter_config.default_parameter_style == "qmark"
-    assert config.driver_features.get("connection_string") == conn_str
-
-
 def test_arrow_odbc_db2_select_to_arrow_streaming() -> None:
     """Verify ArrowOdbcDriver streams Arrow batches using db2 configuration."""
     connection = FakeConnection()

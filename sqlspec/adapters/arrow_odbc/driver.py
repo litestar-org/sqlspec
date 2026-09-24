@@ -121,7 +121,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         features = dict(driver_features or {})
-        self._dbms_name = self._resolve_dbms_name(connection, features)
+        self._dbms_name = self._resolve_dbms_name(features)
         self._dialect = resolve_dialect_from_dbms_name(self._dbms_name)
         statement_dialect = _statement_dialect_for(self._dialect)
         if statement_config is None:
@@ -399,10 +399,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return self._chunk_size_val
 
     @staticmethod
-    def _resolve_dbms_name(connection: "ArrowOdbcConnection", features: "dict[str, Any]") -> str | None:
-        dbms_name = getattr(connection, "dbms_name", None)
-        if dbms_name:
-            return str(dbms_name)
+    def _resolve_dbms_name(features: "dict[str, Any]") -> str | None:
         dbms_name = features.get("dbms_name")
         if dbms_name:
             return str(dbms_name)

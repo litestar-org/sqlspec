@@ -27,10 +27,6 @@ class _RecordingConnection:
     def read_arrow_batches(self, **kwargs: Any) -> None:
         self.read_kwargs.append(kwargs)
 
-    @property
-    def dbms_name(self) -> str:
-        return "SQLite"
-
 
 def test_connection_string_keeps_extra_options() -> None:
     """An explicit connection string must not discard the other declared options."""
