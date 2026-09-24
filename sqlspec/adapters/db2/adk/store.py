@@ -4,7 +4,15 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
-from sqlspec.config import ADKConfig
+from sqlspec.adapters.db2.config import Db2SyncConfig
+from sqlspec.adapters.db2.core import (
+    INDEX_EXISTS_SQL,
+    TABLE_EXISTS_SQL,
+    extract_sqlstate,
+    split_db2_table_name,
+    to_db_timestamp,
+    utc_now,
+)
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk import (
     BaseSyncADKStore,
@@ -17,35 +25,27 @@ from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.db2.config import Db2SyncConfig
-else:
-    Db2SyncConfig = Any
+    from sqlspec.adapters.db2.driver import Db2SyncDriver
 
-__all__ = ("Db2ADKConfig", "Db2SyncADKMemoryStore", "Db2SyncADKStore")
+__all__ = ("Db2SyncADKMemoryStore", "Db2SyncADKStore")
 
 JSON_COLUMN_TYPE: Final[str] = "CLOB(1M)"
+MISSING_OBJECT_SQLSTATE: Final[str] = "42704"
 
 
-class Db2ADKConfig(ADKConfig):
-    """IBM Db2 ADK extension settings."""
-
-
-class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
+class Db2SyncADKStore(BaseSyncADKStore[Db2SyncConfig]):
     """Synchronous IBM Db2 ADK session/event store."""
 
     connector_name: ClassVar[str] = "db2"
     __slots__ = ()
 
     def create_tables(self) -> None:
-        """Create the ADK tables and indexes the data dictionary reports as missing."""
+        """Create the ADK tables and indexes the Db2 catalog does not list."""
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
 
         with self._config.provide_session() as driver:
-            dd = driver.data_dictionary
-            existing_tables = _casefold_names(dd.get_tables(driver), "table_name")
-            existing_indexes = _casefold_names(dd.get_indexes(driver), "index_name")
             table_ddls = (
                 (self._session_table, self._sessions_table_ddl()),
                 (self._events_table, self._events_table_ddl()),
@@ -54,31 +54,32 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
                 (self._metadata_table, self._metadata_table_ddl()),
             )
             for table, ddl in table_ddls:
-                if _bare_name(table) not in existing_tables:
-                    driver.execute(ddl)
+                _create_missing(driver, TABLE_EXISTS_SQL, table, ddl)
             for index_name, index_table, columns in self._index_specs():
-                if _bare_name(index_name) not in existing_indexes:
-                    driver.execute(_create_index_sql(index_table, index_name, columns))
+                _create_missing(
+                    driver, INDEX_EXISTS_SQL, index_name, _create_index_sql(index_table, index_name, columns)
+                )
             driver.commit()
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
     ) -> StoredSession:
         """Create a new ADK session."""
-        owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
+        owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_param = ", ?" if self._owner_id_column_name else ""
+        now = utc_now()
         params: tuple[Any, ...]
         if self._owner_id_column_name:
-            params = (session_id, app_name, user_id, owner_id, to_json(state))
+            params = (session_id, app_name, user_id, owner_id, to_json(state), now, now)
         else:
-            params = (session_id, app_name, user_id, to_json(state))
+            params = (session_id, app_name, user_id, to_json(state), now, now)
         with self._config.provide_session() as driver:
             driver.execute(
                 f"""
-                INSERT INTO {_table_ref(self._session_table)} (
+                INSERT INTO {self._session_table} (
                     id, app_name, user_id{owner_column}, state, create_time, update_time
                 )
-                VALUES (?, ?, ?{owner_param}, ?, CURRENT TIMESTAMP, CURRENT TIMESTAMP)
+                VALUES (?, ?, ?{owner_param}, ?, ?, ?)
                 """,
                 params,
             )
@@ -98,11 +99,11 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     driver.execute(
                         f"""
-                        UPDATE {_table_ref(self._session_table)}
-                        SET update_time = CURRENT TIMESTAMP
+                        UPDATE {self._session_table}
+                        SET update_time = ?
                         WHERE app_name = ? AND user_id = ? AND id = ?
                         """,
-                        (app_name, user_id, session_id),
+                        (utc_now(), app_name, user_id, session_id),
                     )
                 row = driver.select_one_or_none(
                     _session_select_sql(self._session_table), (app_name, user_id, session_id)
@@ -119,11 +120,11 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
         """Replace a session durable state."""
         self._execute(
             f"""
-            UPDATE {_table_ref(self._session_table)}
-            SET state = ?, update_time = CURRENT TIMESTAMP
+            UPDATE {self._session_table}
+            SET state = ?, update_time = ?
             WHERE app_name = ? AND user_id = ? AND id = ?
             """,
-            (to_json(state), app_name, user_id, session_id),
+            (to_json(state), utc_now(), app_name, user_id, session_id),
             commit=True,
         )
 
@@ -156,7 +157,7 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         """Delete a session. Event rows cascade through the FK."""
         self._execute(
-            f"DELETE FROM {_table_ref(self._session_table)} WHERE app_name = ? AND user_id = ? AND id = ?",
+            f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?",
             (app_name, user_id, session_id),
             commit=True,
         )
@@ -180,20 +181,20 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
         with self._config.provide_session() as driver:
             driver.execute(
                 f"""
-                UPDATE {_table_ref(self._session_table)}
-                SET state = ?, update_time = CURRENT TIMESTAMP
+                UPDATE {self._session_table}
+                SET state = ?, update_time = ?
                 WHERE app_name = ? AND user_id = ? AND id = ?
                 """,
-                (to_json(state), app_name, user_id, session_id),
+                (to_json(state), utc_now(), app_name, user_id, session_id),
             )
             row = driver.select_one_or_none(_session_select_sql(self._session_table), (app_name, user_id, session_id))
             if row is None:
                 _raise_session_not_found(session_id)
             driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
             if app_state is not None:
-                driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state)))
+                driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state), utc_now()))
             if user_state is not None:
-                driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
+                driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state), utc_now()))
             driver.commit()
         return _session_record_from_row(row)
 
@@ -219,9 +220,9 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
 
     def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
         """Delete events older than before."""
-        count_sql = f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._events_table)} WHERE timestamp < ?"
-        delete_sql = f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < ?"
-        params: list[Any] = [_format_datetime(before)]
+        count_sql = f"SELECT COUNT(*) AS row_count FROM {self._events_table} WHERE timestamp < ?"
+        delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
+        params: list[Any] = [to_db_timestamp(before)]
         if app_name is not None:
             count_sql += " AND app_name = ?"
             delete_sql += " AND app_name = ?"
@@ -238,9 +239,9 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
 
     def delete_idle_sessions(self, updated_before: datetime, app_name: str | None = None) -> int:
         """Delete sessions whose update_time is older than updated_before."""
-        count_sql = f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._session_table)} WHERE update_time < ?"
-        delete_sql = f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?"
-        params: list[Any] = [_format_datetime(updated_before)]
+        count_sql = f"SELECT COUNT(*) AS row_count FROM {self._session_table} WHERE update_time < ?"
+        delete_sql = f"DELETE FROM {self._session_table} WHERE update_time < ?"
+        params: list[Any] = [to_db_timestamp(updated_before)]
         if app_name is not None:
             count_sql += " AND app_name = ?"
             delete_sql += " AND app_name = ?"
@@ -257,9 +258,9 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
 
     def delete_idle_user_states(self, updated_before: datetime, app_name: str | None = None) -> int:
         """Delete user state rows whose update_time is older than updated_before."""
-        count_sql = f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
-        delete_sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
-        params: list[Any] = [_format_datetime(updated_before)]
+        count_sql = f"SELECT COUNT(*) AS row_count FROM {self._user_state_table} WHERE update_time < ?"
+        delete_sql = f"DELETE FROM {self._user_state_table} WHERE update_time < ?"
+        params: list[Any] = [to_db_timestamp(updated_before)]
         if app_name is not None:
             count_sql += " AND app_name = ?"
             delete_sql += " AND app_name = ?"
@@ -278,14 +279,13 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
         """Return app-scoped state."""
         try:
             row = self._execute_fetchone(
-                f"SELECT state FROM {_table_ref(self._app_state_table)} WHERE app_name = ? FETCH FIRST 1 ROWS ONLY",
-                (app_name,),
+                f"SELECT state FROM {self._app_state_table} WHERE app_name = ? FETCH FIRST 1 ROWS ONLY", (app_name,)
             )
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return None
             raise
-        return _json_dict(_row_value(row, "state", 0)) if row is not None else None
+        return _json_dict(row["state"]) if row is not None else None
 
     def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Return user-scoped state."""
@@ -293,7 +293,7 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
             row = self._execute_fetchone(
                 f"""
                 SELECT state
-                FROM {_table_ref(self._user_state_table)}
+                FROM {self._user_state_table}
                 WHERE app_name = ? AND user_id = ?
                 FETCH FIRST 1 ROWS ONLY
                 """,
@@ -303,21 +303,21 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
             if _is_table_missing(exc):
                 return None
             raise
-        return _json_dict(_row_value(row, "state", 0)) if row is not None else None
+        return _json_dict(row["state"]) if row is not None else None
 
     def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
         """Insert or update app-scoped state."""
-        self._execute(self._upsert_app_state_sql(), (app_name, to_json(state)), commit=True)
+        self._execute(self._upsert_app_state_sql(), (app_name, to_json(state), utc_now()), commit=True)
 
     def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, Any]) -> None:
         """Insert or update user-scoped state."""
-        self._execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(state)), commit=True)
+        self._execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(state), utc_now()), commit=True)
 
     def get_metadata(self, key: str) -> str | None:
         """Return a metadata value."""
         try:
             row = self._execute_fetchone(
-                f'SELECT value FROM {_table_ref(self._metadata_table)} WHERE "key" = ? FETCH FIRST 1 ROWS ONLY', (key,)
+                f'SELECT value FROM {self._metadata_table} WHERE "KEY" = ? FETCH FIRST 1 ROWS ONLY', (key,)
             )
         except SQLSpecError as exc:
             if _is_table_missing(exc):
@@ -325,7 +325,7 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
             raise
         if row is None:
             return None
-        value = _row_value(row, "value", 0)
+        value = row["value"]
         return str(value) if value is not None else None
 
     def set_metadata(self, key: str, value: str) -> None:
@@ -356,21 +356,21 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
         return _metadata_table_ddl(self._metadata_table)
 
     def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE {_table_ref(self._app_state_table)}"
+        return f"DROP TABLE {self._app_state_table}"
 
     def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE {_table_ref(self._user_state_table)}"
+        return f"DROP TABLE {self._user_state_table}"
 
     def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE {_table_ref(self._metadata_table)}"
+        return f"DROP TABLE {self._metadata_table}"
 
     def _drop_tables_sql(self) -> list[str]:
         return [
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"DROP TABLE {_table_ref(self._events_table)}",
-            f"DROP TABLE {_table_ref(self._session_table)}",
+            f"DROP TABLE {self._events_table}",
+            f"DROP TABLE {self._session_table}",
         ]
 
     def _upsert_app_state_sql(self) -> str:
@@ -413,13 +413,13 @@ class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
         return int(value or 0)
 
 
-class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
+class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore[Db2SyncConfig]):
     """IBM Db2 ADK memory store."""
 
     __slots__ = ()
 
     def create_tables(self) -> None:
-        """Create the memory table and indexes the data dictionary reports as missing."""
+        """Create the memory table and indexes the Db2 catalog does not list."""
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
@@ -427,14 +427,11 @@ class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
         if not self._enabled:
             return
         with self._config.provide_session() as driver:
-            dd = driver.data_dictionary
-            existing_tables = _casefold_names(dd.get_tables(driver), "table_name")
-            existing_indexes = _casefold_names(dd.get_indexes(driver), "index_name")
-            if _bare_name(self._memory_table) not in existing_tables:
-                driver.execute(self._memory_table_ddl())
+            _create_missing(driver, TABLE_EXISTS_SQL, self._memory_table, self._memory_table_ddl())
             for index_name, index_table, columns in self._memory_index_specs():
-                if _bare_name(index_name) not in existing_indexes:
-                    driver.execute(_create_index_sql(index_table, index_name, columns))
+                _create_missing(
+                    driver, INDEX_EXISTS_SQL, index_name, _create_index_sql(index_table, index_name, columns)
+                )
             driver.commit()
 
     def insert_memory_entries(self, entries: list[StoredMemory], owner_id: object | None = None) -> int:
@@ -449,14 +446,12 @@ class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
         with self._config.provide_session() as driver:
             for entry in entries:
                 exists = driver.select_one_or_none(
-                    f"SELECT id FROM {_table_ref(self._memory_table)} WHERE event_id = ? FETCH FIRST 1 ROWS ONLY",
+                    f"SELECT id FROM {self._memory_table} WHERE event_id = ? FETCH FIRST 1 ROWS ONLY",
                     (entry["event_id"],),
                 )
                 if exists is not None:
                     continue
-                owner_column = (
-                    f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
-                )
+                owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
                 owner_param = ", ?" if self._owner_id_column_name else ""
                 params: tuple[Any, ...]
                 if self._owner_id_column_name:
@@ -465,7 +460,7 @@ class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
                     params = _memory_insert_params(entry)
                 driver.execute(
                     f"""
-                    INSERT INTO {_table_ref(self._memory_table)} (
+                    INSERT INTO {self._memory_table} (
                         id, session_id, app_name, user_id, scope, event_id, author,
                         timestamp, content_json, content_text, metadata_json, inserted_at{owner_column}
                     )
@@ -498,7 +493,7 @@ class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
             f"""
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
                    timestamp, content_json, content_text, metadata_json, inserted_at
-            FROM {_table_ref(self._memory_table)}
+            FROM {self._memory_table}
             WHERE {where_scope}
               AND POSSTR(LOWER(content_text), LOWER(?)) > 0
             ORDER BY timestamp DESC
@@ -511,17 +506,15 @@ class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         count = self._select_count(
-            f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,)
+            f"SELECT COUNT(*) AS row_count FROM {self._memory_table} WHERE session_id = ?", (session_id,)
         )
-        self._execute(f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True)
+        self._execute(f"DELETE FROM {self._memory_table} WHERE session_id = ?", (session_id,), commit=True)
         return count
 
     def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
         """Delete memory entries older than specified days."""
-        cutoff = datetime.now(timezone.utc).timestamp() - (days * 86_400)
-        cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
         clauses = ["inserted_at < ?"]
-        params: list[Any] = [_format_datetime(cutoff_dt)]
+        params: list[Any] = [utc_now() - timedelta(days=days)]
         if app_name is not None:
             clauses.append("app_name = ?")
             params.append(app_name)
@@ -530,15 +523,15 @@ class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
             params.append(scope)
         where_sql = " AND ".join(clauses)
         count = self._select_count(
-            f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params)
+            f"SELECT COUNT(*) AS row_count FROM {self._memory_table} WHERE {where_sql}", tuple(params)
         )
-        self._execute(f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True)
+        self._execute(f"DELETE FROM {self._memory_table} WHERE {where_sql}", tuple(params), commit=True)
         return count
 
     def _memory_table_ddl(self) -> str:
         owner_line = f",\n    {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
-CREATE TABLE {_table_ref(self._memory_table)} (
+CREATE TABLE {self._memory_table} (
     id VARCHAR(128) NOT NULL,
     session_id VARCHAR(128) NOT NULL,
     app_name VARCHAR(128) NOT NULL,
@@ -565,7 +558,7 @@ CREATE TABLE {_table_ref(self._memory_table)} (
         ]
 
     def _drop_memory_table_sql(self) -> list[str]:
-        return [f"DROP TABLE {_table_ref(self._memory_table)}"]
+        return [f"DROP TABLE {self._memory_table}"]
 
     def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         with self._config.provide_session() as driver:
@@ -587,7 +580,7 @@ CREATE TABLE {_table_ref(self._memory_table)} (
 def _sessions_table_ddl(table: str, owner_id_column_ddl: str | None) -> str:
     owner_line = f",\n    {owner_id_column_ddl}" if owner_id_column_ddl else ""
     return f"""
-CREATE TABLE {_table_ref(table)} (
+CREATE TABLE {table} (
     id VARCHAR(128) NOT NULL,
     app_name VARCHAR(128) NOT NULL,
     user_id VARCHAR(128) NOT NULL{owner_line},
@@ -605,7 +598,7 @@ def _sessions_index_specs(table: str) -> list[tuple[str, str, str]]:
 
 def _events_table_ddl(table: str, session_table: str) -> str:
     return f"""
-CREATE TABLE {_table_ref(table)} (
+CREATE TABLE {table} (
     id VARCHAR(128) NOT NULL,
     app_name VARCHAR(128) NOT NULL,
     user_id VARCHAR(128) NOT NULL,
@@ -615,7 +608,7 @@ CREATE TABLE {_table_ref(table)} (
     event_data {JSON_COLUMN_TYPE} NOT NULL,
     CONSTRAINT pk_{table}_id PRIMARY KEY (id),
     CONSTRAINT fk_{table}_session FOREIGN KEY (session_id)
-        REFERENCES {_table_ref(session_table)}(id) ON DELETE CASCADE
+        REFERENCES {session_table}(id) ON DELETE CASCADE
 )
 """
 
@@ -632,7 +625,7 @@ def _events_index_specs(table: str) -> list[tuple[str, str, str]]:
 
 def _app_states_table_ddl(table: str) -> str:
     return f"""
-CREATE TABLE {_table_ref(table)} (
+CREATE TABLE {table} (
     app_name VARCHAR(128) NOT NULL,
     state {JSON_COLUMN_TYPE} NOT NULL,
     update_time TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP,
@@ -643,7 +636,7 @@ CREATE TABLE {_table_ref(table)} (
 
 def _user_states_table_ddl(table: str) -> str:
     return f"""
-CREATE TABLE {_table_ref(table)} (
+CREATE TABLE {table} (
     app_name VARCHAR(128) NOT NULL,
     user_id VARCHAR(128) NOT NULL,
     state {JSON_COLUMN_TYPE} NOT NULL,
@@ -655,31 +648,37 @@ CREATE TABLE {_table_ref(table)} (
 
 def _metadata_table_ddl(table: str) -> str:
     return f"""
-CREATE TABLE {_table_ref(table)} (
-    "key" VARCHAR(128) NOT NULL,
+CREATE TABLE {table} (
+    "KEY" VARCHAR(128) NOT NULL,
     value VARCHAR(512) NOT NULL,
-    CONSTRAINT pk_{table}_key PRIMARY KEY ("key")
+    CONSTRAINT pk_{table}_key PRIMARY KEY ("KEY")
 )
 """
 
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
-    return f"CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns})"
+    return f"CREATE INDEX {index_name} ON {table} ({columns})"
 
 
-def _casefold_names(rows: list[Any], key: str) -> set[str]:
-    """Collapse data-dictionary rows into a case-folded, schema-stripped name set."""
-    return {str(row.get(key, "")).rsplit(".", 1)[-1].casefold() for row in rows}
+def _create_missing(driver: "Db2SyncDriver", probe_sql: str, name: str, ddl: str) -> None:
+    """Run ``ddl`` unless the catalog probe finds the object.
 
+    Object names are written unquoted in the DDL, so they are probed by their upper-folded
+    catalog name.
 
-def _bare_name(name: str) -> str:
-    """Return the case-folded, schema-stripped object name for membership checks."""
-    return name.rsplit(".", 1)[-1].casefold()
+    Args:
+        driver: Session driver.
+        probe_sql: ``TABLE_EXISTS_SQL`` or ``INDEX_EXISTS_SQL``.
+        name: Unquoted table or index name.
+        ddl: Statement creating the object.
+    """
+    if driver.select_one_or_none(probe_sql, split_db2_table_name(name.upper())) is None:
+        driver.execute(ddl)
 
 
 def _insert_event_sql(table: str) -> str:
     return f"""
-    INSERT INTO {_table_ref(table)} (
+    INSERT INTO {table} (
         id, app_name, user_id, session_id, invocation_id, timestamp, event_data
     )
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -688,34 +687,31 @@ def _insert_event_sql(table: str) -> str:
 
 def _upsert_state_sql(table: str, key_columns: tuple[str, ...]) -> str:
     source_values = ", ".join("CAST(? AS VARCHAR(128))" for _ in key_columns)
-    source_columns = ", ".join(_quote_identifier(column) for column in (*key_columns, "state"))
-    match_clause = " AND ".join(
-        f"target.{_quote_identifier(column)} = source.{_quote_identifier(column)}" for column in key_columns
-    )
-    insert_columns = ", ".join(_quote_identifier(column) for column in (*key_columns, "state", "update_time"))
-    insert_values = ", ".join(f"source.{_quote_identifier(column)}" for column in (*key_columns, "state"))
+    source_columns = ", ".join((*key_columns, "state", "update_time"))
+    match_clause = " AND ".join(f"target.{column} = source.{column}" for column in key_columns)
+    insert_values = ", ".join(f"source.{column}" for column in (*key_columns, "state", "update_time"))
     return f"""
-    MERGE INTO {_table_ref(table)} AS target
-    USING (VALUES ({source_values}, CAST(? AS CLOB(1M)))) AS source ({source_columns})
+    MERGE INTO {table} AS target
+    USING (VALUES ({source_values}, CAST(? AS CLOB(1M)), CAST(? AS TIMESTAMP))) AS source ({source_columns})
     ON ({match_clause})
     WHEN MATCHED THEN
-        UPDATE SET target.state = source.state, target.update_time = CURRENT TIMESTAMP
+        UPDATE SET state = source.state, update_time = source.update_time
     WHEN NOT MATCHED THEN
-        INSERT ({insert_columns})
-        VALUES ({insert_values}, CURRENT TIMESTAMP)
+        INSERT ({source_columns})
+        VALUES ({insert_values})
     """
 
 
 def _upsert_metadata_sql(table: str) -> str:
     return f"""
-    MERGE INTO {_table_ref(table)} AS target
-    USING (VALUES (CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(512)))) AS source ("key", value)
-    ON (target."key" = source."key")
+    MERGE INTO {table} AS target
+    USING (VALUES (CAST(? AS VARCHAR(128)), CAST(? AS VARCHAR(512)))) AS source ("KEY", value)
+    ON (target."KEY" = source."KEY")
     WHEN MATCHED THEN
-        UPDATE SET target.value = source.value
+        UPDATE SET value = source.value
     WHEN NOT MATCHED THEN
-        INSERT ("key", value)
-        VALUES (source."key", source.value)
+        INSERT ("KEY", value)
+        VALUES (source."KEY", source.value)
     """
 
 
@@ -726,13 +722,13 @@ def _events_query(
     after_clause = ""
     if after_timestamp is not None:
         after_clause = " AND timestamp > ?"
-        params.append(_format_datetime(after_timestamp))
+        params.append(to_db_timestamp(after_timestamp))
     limit_clause = ""
     if limit is not None:
         limit_clause = f" FETCH FIRST {int(limit)} ROWS ONLY"
     sql = f"""
     SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data
-    FROM {_table_ref(table)}
+    FROM {table}
     WHERE app_name = ? AND user_id = ? AND session_id = ?{after_clause}
     ORDER BY timestamp ASC{limit_clause}
     """
@@ -746,26 +742,26 @@ def _event_insert_params(event_record: StoredEvent) -> tuple[Any, ...]:
         event_record["user_id"],
         event_record["session_id"],
         event_record["invocation_id"],
-        _format_datetime(event_record["timestamp"]),
+        to_db_timestamp(event_record["timestamp"]),
         to_json(event_record["event_data"]),
     )
 
 
 def _session_record_from_row(row: Any) -> StoredSession:
     return StoredSession(
-        id=str(_row_value(row, "id", 0)),
-        app_name=str(_row_value(row, "app_name", 1)),
-        user_id=str(_row_value(row, "user_id", 2)),
-        state=_json_dict(_row_value(row, "state", 3)),
-        create_time=_datetime_value(_row_value(row, "create_time", 4)),
-        update_time=_datetime_value(_row_value(row, "update_time", 5)),
+        id=str(row["id"]),
+        app_name=str(row["app_name"]),
+        user_id=str(row["user_id"]),
+        state=_json_dict(row["state"]),
+        create_time=_datetime_value(row["create_time"]),
+        update_time=_datetime_value(row["update_time"]),
     )
 
 
 def _session_select_sql(table: str) -> str:
     return f"""
     SELECT id, app_name, user_id, state, create_time, update_time
-    FROM {_table_ref(table)}
+    FROM {table}
     WHERE app_name = ? AND user_id = ? AND id = ?
     FETCH FIRST 1 ROWS ONLY
     """
@@ -773,13 +769,13 @@ def _session_select_sql(table: str) -> str:
 
 def _event_record_from_row(row: Any) -> StoredEvent:
     return StoredEvent(
-        id=str(_row_value(row, "id", 0)),
-        app_name=str(_row_value(row, "app_name", 1)),
-        user_id=str(_row_value(row, "user_id", 2)),
-        session_id=str(_row_value(row, "session_id", 3)),
-        invocation_id=str(_row_value(row, "invocation_id", 4)),
-        timestamp=_datetime_value(_row_value(row, "timestamp", 5)),
-        event_data=_json_dict(_row_value(row, "event_data", 6)),
+        id=str(row["id"]),
+        app_name=str(row["app_name"]),
+        user_id=str(row["user_id"]),
+        session_id=str(row["session_id"]),
+        invocation_id=str(row["invocation_id"]),
+        timestamp=_datetime_value(row["timestamp"]),
+        event_data=_json_dict(row["event_data"]),
     )
 
 
@@ -792,43 +788,30 @@ def _memory_insert_params(entry: StoredMemory) -> tuple[Any, ...]:
         entry.get("scope", "user"),
         entry["event_id"],
         entry["author"],
-        _format_datetime(entry["timestamp"]),
+        to_db_timestamp(entry["timestamp"]),
         to_json(entry["content_json"]),
         entry["content_text"],
         to_json(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-        _format_datetime(entry["inserted_at"]),
+        to_db_timestamp(entry["inserted_at"]),
     )
 
 
 def _memory_record_from_row(row: Any) -> StoredMemory:
     return StoredMemory(
-        id=str(_row_value(row, "id", 0)),
-        session_id=str(_row_value(row, "session_id", 1)),
-        app_name=str(_row_value(row, "app_name", 2)),
-        user_id=str(_row_value(row, "user_id", 3)),
-        scope=str(_row_value(row, "scope", 4) or "user"),
-        event_id=str(_row_value(row, "event_id", 5)),
-        author=cast("str | None", _row_value(row, "author", 6)),
-        timestamp=_datetime_value(_row_value(row, "timestamp", 7)),
-        content_json=_json_dict(_row_value(row, "content_json", 8)),
-        content_text=str(_row_value(row, "content_text", 9) or ""),
-        metadata_json=_optional_json_dict(_row_value(row, "metadata_json", 10)),
-        inserted_at=_datetime_value(_row_value(row, "inserted_at", 11)),
+        id=str(row["id"]),
+        session_id=str(row["session_id"]),
+        app_name=str(row["app_name"]),
+        user_id=str(row["user_id"]),
+        scope=str(row["scope"] or "user"),
+        event_id=str(row["event_id"]),
+        author=cast("str | None", row["author"]),
+        timestamp=_datetime_value(row["timestamp"]),
+        content_json=_json_dict(row["content_json"]),
+        content_text=str(row["content_text"] or ""),
+        metadata_json=_optional_json_dict(row["metadata_json"]),
+        inserted_at=_datetime_value(row["inserted_at"]),
         embedding=None,
     )
-
-
-def _row_value(row: Any, key: str, index: int) -> Any:
-    if isinstance(row, dict):
-        if key in row:
-            return row[key]
-        upper_key = key.upper()
-        if upper_key in row:
-            return row[upper_key]
-        return None
-    if isinstance(row, (list, tuple)) and len(row) > index:
-        return row[index]
-    return getattr(row, key, None)
 
 
 def _json_dict(value: Any) -> dict[str, Any]:
@@ -852,6 +835,19 @@ def _optional_json_dict(value: Any) -> dict[str, Any] | None:
 
 
 def _datetime_value(value: Any) -> datetime:
+    """Decode a Db2 timestamp value as an aware UTC datetime.
+
+    Naive datetimes and ISO text without an offset are taken to be UTC.
+
+    Args:
+        value: ``datetime``, or ISO-8601 text as ``str`` or ``bytes``.
+
+    Returns:
+        The aware UTC datetime.
+
+    Raises:
+        TypeError: When the value is of any other type.
+    """
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
@@ -866,30 +862,13 @@ def _datetime_value(value: Any) -> datetime:
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
-    return datetime.now(timezone.utc)
-
-
-def _format_datetime(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-    return normalized.replace(tzinfo=None).isoformat(timespec="microseconds")
+    msg = f"Unsupported Db2 timestamp value: {type(value).__name__}"
+    raise TypeError(msg)
 
 
 def _is_table_missing(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return "42704" in text or "sql0204n" in text or "undefined name" in text
-
-
-def _quote_identifier(identifier: str) -> str:
-    return f'"{identifier.replace(chr(34), chr(34) + chr(34))}"'
-
-
-def _table_ref(table: str) -> str:
-    if "." in table:
-        schema, tbl = table.split(".", 1)
-        return f"{_quote_identifier(schema)}.{_quote_identifier(tbl)}"
-    return _quote_identifier(table)
+    """Return whether an error reports an undefined object (SQLSTATE 42704)."""
+    return extract_sqlstate(exc) == MISSING_OBJECT_SQLSTATE
 
 
 def _raise_session_not_found(session_id: str) -> None:
@@ -924,7 +903,7 @@ def _session_list_query(
 
     sql = f"""
     SELECT id, app_name, user_id, state, create_time, update_time
-    FROM {_table_ref(session_table)}
+    FROM {session_table}
     WHERE {where_clause}
     ORDER BY {column} {direction}, id {direction}{page_clause}
     """
