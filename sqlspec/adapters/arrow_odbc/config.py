@@ -217,7 +217,10 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         if self.connection_instance is not None:
             return cast("ArrowOdbcConnection", self.connection_instance)
         _apply_driver_pooling(bool(self.driver_features.get("enable_driver_pooling", False)))
-        connection_string, connect_kwargs = build_connection_config(self.connection_config)
+        dialect = resolve_dialect_from_dbms_name(
+            self.driver_features.get("dbms_name") or self.driver_features.get("connection_string")
+        )
+        connection_string, connect_kwargs = build_connection_config(self.connection_config, dialect=dialect)
         try:
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))
             if self._user_connection_hook is not None:

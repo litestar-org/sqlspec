@@ -3,6 +3,7 @@
 import contextlib
 import re
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -153,7 +154,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
-        parameters = _odbc_parameters(prepared_parameters)
+        parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
 
         if statement.returns_rows():
             reader = self._read_arrow_batches(sql, parameters, self._chunk_size())
@@ -184,7 +185,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 cursor, rowcount_override=-1, statement_count=1, successful_statements=1, is_script_result=True
             )
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        parameters = _odbc_parameters(prepared_parameters)
+        parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
         successful_count = 0
         for stmt in statements:
             cursor.execute(query=stmt, parameters=parameters)
@@ -200,7 +201,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
-        return SyncRowStream(ArrowOdbcStreamSource(self, sql, _odbc_parameters(prepared_parameters), chunk_size))
+        return SyncRowStream(
+            ArrowOdbcStreamSource(
+                self, sql, _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"), chunk_size
+            )
+        )
 
     def collect_rows(self, cursor: "ArrowOdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         return fetched, [], len(fetched)
@@ -290,7 +295,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
         exc_handler = self.handle_database_exceptions()
         with exc_handler, self.with_cursor(self.connection):
-            reader = self._read_arrow_batches(sql, _odbc_parameters(prepared_parameters), resolved_batch_size)
+            reader = self._read_arrow_batches(
+                sql,
+                _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"),
+                resolved_batch_size,
+            )
             if return_format in {"reader", "batches"}:
                 arrow_reader = _to_pyarrow_reader(reader)
                 return build_arrow_result_from_reader(
@@ -473,21 +482,34 @@ def _pagination_int(value: object) -> int:
     return integer
 
 
-def _unwrap_parameter(value: Any) -> Any:
+def _unwrap_parameter(value: Any, naive_utc_datetimes: bool = False) -> Any:
     wrapped = getattr(value, "value", value)
-    return None if wrapped is None else str(wrapped)
+    if wrapped is None:
+        return None
+    if naive_utc_datetimes and isinstance(wrapped, datetime) and wrapped.tzinfo is not None:
+        wrapped = wrapped.astimezone(timezone.utc).replace(tzinfo=None)
+    return str(wrapped)
 
 
-def _odbc_parameters(parameters: Any) -> "list[str | None] | None":
+def _odbc_parameters(parameters: Any, *, naive_utc_datetimes: bool = False) -> "list[str | None] | None":
+    """Render statement parameters as the text values arrow-odbc binds.
+
+    Args:
+        parameters: Compiled statement parameters.
+        naive_utc_datetimes: Convert timezone-aware datetimes to naive UTC before rendering.
+
+    Returns:
+        The text parameters, or ``None`` when the statement has none.
+    """
     if parameters is None:
         return None
     if isinstance(parameters, Mapping):
-        return [_unwrap_parameter(value) for value in parameters.values()]
+        return [_unwrap_parameter(value, naive_utc_datetimes) for value in parameters.values()]
     if isinstance(parameters, (list, tuple)):
         if not parameters:
             return None
-        return [_unwrap_parameter(value) for value in parameters]
-    return [_unwrap_parameter(parameters)]
+        return [_unwrap_parameter(value, naive_utc_datetimes) for value in parameters]
+    return [_unwrap_parameter(parameters, naive_utc_datetimes)]
 
 
 def _reader_to_table(reader: Any) -> Any:

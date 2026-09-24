@@ -54,6 +54,29 @@ _CONNECTION_STRING_KEYS: Final[tuple[tuple[str, str], ...]] = (
     ("trust_server_certificate", "TrustServerCertificate"),
     ("encrypt", "Encrypt"),
 )
+_DB2_CANONICAL_KEY_LOOKUP: Final[dict[str, str]] = {
+    "dsn": "DSN",
+    "driver": "Driver",
+    "hostname": "Hostname",
+    "host": "Hostname",
+    "server": "Hostname",
+    "address": "Hostname",
+    "addr": "Hostname",
+    "port": "Port",
+    "protocol": "Protocol",
+    "database": "Database",
+    "db": "Database",
+    "uid": "UID",
+    "username": "UID",
+    "pwd": "PWD",
+}
+_DB2_KEYWORD_ORDER: Final[tuple[str, ...]] = ("dsn", "driver", "hostname", "port", "protocol", "database", "uid", "pwd")
+_SQL_SERVER_ONLY_OPTIONS: Final[frozenset[str]] = frozenset({
+    "trusted_connection",
+    "trust_server_certificate",
+    "trustservercertificate",
+    "encrypt",
+})
 _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("mssql", ("sql server", "sqlserver", "microsoft sql", "msodbcsql")),
     ("oracle", ("oracle",)),
@@ -222,7 +245,7 @@ def _append_port(server: str, port: Any) -> str:
     return f"{server},{port_str}"
 
 
-def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def build_connection_config(params: dict[str, Any], *, dialect: str = "mssql") -> tuple[str, dict[str, Any]]:
     """Build arrow-odbc connection arguments with explicit-field precedence and key deduplication.
 
     When both ``connection_string`` and discrete connection fields are provided,
@@ -230,14 +253,21 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     are appended, and keys are deduplicated. When only ``connection_string`` is provided,
     it passes through unchanged.
 
+    For the ``db2`` dialect, host and port render as the IBM CLI ``Hostname`` and
+    ``Port`` keywords, ``Protocol=TCPIP`` is added when a host is present and no
+    protocol is configured, and SQL Server-only options are refused. Every other
+    dialect uses the SQL Server keyword set with ``Server=host,port``.
+
     Args:
         params: Raw connection configuration.
+        dialect: The resolved SQLSpec dialect of the target database.
 
     Returns:
         The ODBC connection string and the ``connect`` keyword arguments.
 
     Raises:
-        ImproperConfigurationError: If required connection parameters are missing.
+        ImproperConfigurationError: If required connection parameters are missing,
+            or a SQL Server-only option is configured for Db2.
     """
     config = dict(params)
     extra = config.pop("extra", None)
@@ -251,10 +281,13 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     connect_kwargs = {key: config.pop(key) for key in tuple(config) if key in _CONNECT_KWARG_KEYS}
     connection_string = config.pop("connection_string", None)
 
-    if connection_string is not None:
-        if not config:
-            return str(connection_string), connect_kwargs
+    if connection_string is not None and not config:
+        return str(connection_string), connect_kwargs
 
+    if dialect == "db2":
+        return _build_db2_connection_string(config, connection_string), connect_kwargs
+
+    if connection_string is not None:
         options: dict[str, tuple[str, str]] = {}
         for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
             canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
@@ -315,6 +348,47 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
         raise ImproperConfigurationError(msg)
 
     return ";".join(parts) + ";", connect_kwargs
+
+
+def _build_db2_connection_string(config: "dict[str, Any]", connection_string: Any) -> str:
+    """Render an IBM Db2 CLI connection string from a base string and discrete fields.
+
+    Args:
+        config: Discrete connection fields, which override matching options.
+        connection_string: Optional base connection string.
+
+    Returns:
+        The connection string with CLI keywords in canonical order, followed by
+        any other options in the order they were given.
+
+    Raises:
+        ImproperConfigurationError: If a SQL Server-only option is configured, or
+            no connection option is present.
+    """
+    for key, value in config.items():
+        if value is not None and key.lower() in _SQL_SERVER_ONLY_OPTIONS:
+            msg = f"{key!r} is a SQL Server option and is not supported for Db2."
+            raise ImproperConfigurationError(msg)
+
+    options: dict[str, tuple[str, str]] = {}
+    if connection_string is not None:
+        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
+            name = _DB2_CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
+            options[name.lower()] = (name, raw_value)
+    for key, value in config.items():
+        if value is None:
+            continue
+        name = _DB2_CANONICAL_KEY_LOOKUP.get(key.lower(), key)
+        options[name.lower()] = (name, _format_connection_value(name, value))
+    if "hostname" in options and "protocol" not in options:
+        options["protocol"] = ("Protocol", "TCPIP")
+    if not options:
+        msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
+        raise ImproperConfigurationError(msg)
+
+    ordered = [options[key] for key in _DB2_KEYWORD_ORDER if key in options]
+    ordered.extend(option for key, option in options.items() if key not in _DB2_KEYWORD_ORDER)
+    return ";".join(f"{name}={value}" for name, value in ordered) + ";"
 
 
 def build_profile() -> "DriverParameterProfile":
