@@ -9,6 +9,7 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
+from sqlspec.adapters.spanner.core import _unwrap_spanner_json_object
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -268,22 +269,30 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         return {"key": SPANNER_PARAM_TYPES.STRING, "value": SPANNER_PARAM_TYPES.STRING}
 
     def _decode_state(self, raw: Any) -> Any:
+        if raw is None:
+            return None
         if isinstance(raw, str):
-            return from_json(raw)
-        return raw
+            try:
+                return from_json(raw)
+            except Exception:
+                return raw
+        return _unwrap_spanner_json_object(raw)
 
     def _decode_json(self, raw: Any) -> Any:
         if raw is None:
             return None
         if isinstance(raw, str):
-            return from_json(raw)
-        return raw
+            try:
+                return from_json(raw)
+            except Exception:
+                return raw
+        return _unwrap_spanner_json_object(raw)
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
-        state_json = to_json(state)
-        params: dict[str, Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json}
+        state_payload = _to_spanner_json_payload(state)
+        params: dict[str, Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_payload}
         columns = "id, app_name, user_id, state, create_time, update_time"
         values = "@id, @app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP()"
         if self._owner_id_column_name:
@@ -365,7 +374,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         return record
 
     def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": to_json(state)}
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": _to_spanner_json_payload(state)}
         json_type = _json_param_type()
         sql = f"""
             UPDATE {self._session_table}
@@ -491,7 +500,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
             "timestamp": event_record["timestamp"],
-            "event_data": to_json(event_record["event_data"]),
+            "event_data": _to_spanner_json_payload(event_record["event_data"]),
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -503,7 +512,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "app_name": app_name,
             "user_id": user_id,
             "id": session_id,
-            "state": to_json(state),
+            "state": _to_spanner_json_payload(state),
         }
         update_sql = f"""
             UPDATE {self._session_table}
@@ -532,7 +541,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
                 INSERT OR UPDATE {self._app_state_table} (app_name, state, update_time)
                 VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
                 """,
-                {"app_name": app_name, "state": to_json(app_state)},
+                {"app_name": app_name, "state": _to_spanner_json_payload(app_state)},
                 self._app_state_param_types(),
             ))
         if user_state is not None:
@@ -541,7 +550,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
                 INSERT OR UPDATE {self._user_state_table} (app_name, user_id, state, update_time)
                 VALUES (@app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP())
                 """,
-                {"app_name": app_name, "user_id": user_id, "state": to_json(user_state)},
+                {"app_name": app_name, "user_id": user_id, "state": _to_spanner_json_payload(user_state)},
                 self._user_state_param_types(),
             ))
 
@@ -561,7 +570,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
             "timestamp": event_record["timestamp"],
-            "event_data": to_json(event_record["event_data"]),
+            "event_data": _to_spanner_json_payload(event_record["event_data"]),
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -628,7 +637,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
         result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
-        return int(getattr(result, "rowcount", 0))
+        return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < @updated_before"
@@ -637,7 +646,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
         result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
-        return int(getattr(result, "rowcount", 0))
+        return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
     def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._user_state_table} WHERE update_time < @updated_before"
@@ -646,7 +655,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
         result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
-        return int(getattr(result, "rowcount", 0))
+        return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = @app_name LIMIT 1"
@@ -676,7 +685,9 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             INSERT OR UPDATE {self._app_state_table} (app_name, state, update_time)
             VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
         """
-        self._run_write([(sql, {"app_name": app_name, "state": to_json(state)}, self._app_state_param_types())])
+        self._run_write([
+            (sql, {"app_name": app_name, "state": _to_spanner_json_payload(state)}, self._app_state_param_types())
+        ])
 
     def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         sql = f"""
@@ -684,7 +695,11 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             VALUES (@app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP())
         """
         self._run_write([
-            (sql, {"app_name": app_name, "user_id": user_id, "state": to_json(state)}, self._user_state_param_types())
+            (
+                sql,
+                {"app_name": app_name, "user_id": user_id, "state": _to_spanner_json_payload(state)},
+                self._user_state_param_types(),
+            )
         ])
 
     def _get_metadata(self, key: str) -> "str | None":
@@ -1149,6 +1164,18 @@ CREATE TABLE {self._memory_table} (
             }
             for row in rows
         ]
+
+
+def _to_spanner_json_payload(value: Any) -> Any:
+    """Prepare a value for Spanner JSON column parameter binding."""
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes)):
+        try:
+            return from_json(value)
+        except Exception:
+            return value
+    return value
 
 
 def _json_param_type() -> Any:
