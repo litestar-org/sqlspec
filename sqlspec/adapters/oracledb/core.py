@@ -3,10 +3,11 @@
 import contextlib
 import re
 from collections.abc import Iterable, Sized
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from sqlspec.adapters.oracledb._json_handlers import is_json_payload
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
+from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report, _validate_oracle_identifier
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
 from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
@@ -57,8 +58,12 @@ if TYPE_CHECKING:
 
 __all__ = (
     "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
+    "ORACLE_RETRIABLE_ERROR_CODES",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
     "OracleAsyncStreamSource",
+    "OracleBlob",
+    "OracleClob",
+    "OracleJson",
     "OracleSyncStreamSource",
     "apply_driver_features",
     "build_arrow_fetch_kwargs",
@@ -69,24 +74,33 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "build_truncate_statement",
+    "client_is_thick_mode",
+    "client_is_thin_mode",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
     "coerce_many_parameters_sync",
     "collect_async_rows",
     "collect_sync_rows",
+    "connection_is_thick",
     "connection_is_thin",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "is_oracle_retriable_error",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
+    "oracle_table_feature_report",
     "resolve_row_metadata",
     "resolve_rowcount",
     "supports_df_batches",
     "supports_direct_path_load",
+    "validate_oracle_identifier",
 )
+
+oracle_table_feature_report = _oracle_table_feature_report
+validate_oracle_identifier = _validate_oracle_identifier
 
 
 IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
@@ -97,7 +111,6 @@ _SCALAR_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, byt
 _BIND_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, type(None))
 ROW_CACHE_MAX_SIZE: int = 256
 
-# Oracle ORA error code ranges for category detection
 ORA_CHECK_CONSTRAINT = 2290
 ORA_INTEGRITY_RANGE_START = 2200
 ORA_INTEGRITY_RANGE_END = 2300
@@ -105,38 +118,59 @@ ORA_PARSING_RANGE_START = 900
 ORA_PARSING_RANGE_END = 1000
 ORA_TABLESPACE_FULL = 1652
 
-# Oracle error codes for specific exception mappings
 _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
-    # Integrity constraint violations
     1: (UniqueViolationError, "unique constraint violation"),
+    54: (OperationalError, "resource busy and acquire with NOWAIT specified or timeout expired"),
+    60: (DeadlockError, "deadlock detected"),
+    942: (PermissionDeniedError, "table or view does not exist"),
+    1013: (OperationCancelledError, "user requested cancel"),
+    1017: (PermissionDeniedError, "invalid username/password"),
+    1031: (PermissionDeniedError, "insufficient privileges"),
+    1400: (NotNullViolationError, "not-null constraint violation"),
+    1407: (NotNullViolationError, "not-null constraint violation"),
+    1652: (OperationalError, "tablespace full"),
+    1722: (DataError, "invalid number"),
+    1840: (DataError, "data conversion error"),
+    1858: (DataError, "invalid character"),
     2291: (ForeignKeyViolationError, "foreign key constraint violation"),
     2292: (ForeignKeyViolationError, "foreign key constraint violation"),
     ORA_CHECK_CONSTRAINT: (CheckViolationError, "check constraint violation"),
-    1400: (NotNullViolationError, "not-null constraint violation"),
-    1407: (NotNullViolationError, "not-null constraint violation"),
-    # Permission/access errors
-    1017: (PermissionDeniedError, "invalid username/password"),
-    1031: (PermissionDeniedError, "insufficient privileges"),
-    942: (PermissionDeniedError, "table or view does not exist"),
-    # Connection errors
+    8176: (TransactionError, "consistent read failure"),
+    8177: (TransactionError, "cannot serialize access"),
     12154: (DatabaseConnectionError, "TNS resolution failed"),
+    12170: (ConnectionTimeoutError, "connect timeout"),
+    12505: (DatabaseConnectionError, "listener rejected"),
+    12514: (DatabaseConnectionError, "service not known"),
     12541: (ConnectionTimeoutError, "no listener"),
     12545: (ConnectionTimeoutError, "connect failed"),
-    12514: (DatabaseConnectionError, "service not known"),
-    12505: (DatabaseConnectionError, "listener rejected"),
-    12170: (ConnectionTimeoutError, "connect timeout"),
-    # Transaction errors
-    60: (DeadlockError, "deadlock detected"),
-    8176: (TransactionError, "consistent read failure"),
-    # Query timeout/cancellation
-    1013: (OperationCancelledError, "user requested cancel"),
-    # Data errors
-    1722: (DataError, "invalid number"),
-    1858: (DataError, "invalid character"),
-    1840: (DataError, "data conversion error"),
-    # Operational errors
-    ORA_TABLESPACE_FULL: (OperationalError, "tablespace full"),
 }
+
+ORACLE_RETRIABLE_ERROR_CODES: Final[frozenset[int]] = frozenset({54, 60, 8177})
+
+
+def is_oracle_retriable_error(exc: BaseException) -> bool:
+    """Return whether an exception corresponds to a retriable Oracle concurrency error.
+
+    Matches ORA-00060 (deadlock), ORA-08177 (can't serialize access),
+    and ORA-00054 (resource busy NOWAIT).
+    """
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, (DeadlockError, TransactionError)):
+            return True
+        args = getattr(current, "args", ())
+        if args:
+            first_arg = args[0]
+            code = getattr(first_arg, "code", None)
+            if isinstance(code, int) and code in ORACLE_RETRIABLE_ERROR_CODES:
+                return True
+            if isinstance(first_arg, int) and first_arg in ORACLE_RETRIABLE_ERROR_CODES:
+                return True
+        err_num = getattr(current, "error_number", None)
+        if isinstance(err_num, int) and err_num in ORACLE_RETRIABLE_ERROR_CODES:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
@@ -148,7 +182,6 @@ def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
 
 ORACLEDB_VERSION: "tuple[int, int, int]" = _parse_version_tuple(oracledb_module.__version__)
 SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
-# Retained public capability flag; the supported SDK floor guarantees SparseVector.
 ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
 
@@ -158,6 +191,24 @@ def connection_is_thin(connection: object) -> bool:
     if thin is None:
         return True
     return bool(thin)
+
+
+def connection_is_thick(connection: object) -> bool:
+    """Return whether an Oracle connection is in Thick mode."""
+    return not connection_is_thin(connection)
+
+
+def client_is_thin_mode() -> bool:
+    """Return whether python-oracledb is currently in Thin mode."""
+    is_thin = getattr(oracledb_module, "is_thin_mode", None)
+    if callable(is_thin):
+        return bool(is_thin())
+    return True
+
+
+def client_is_thick_mode() -> bool:
+    """Return whether python-oracledb is currently in Thick mode."""
+    return not client_is_thin_mode()
 
 
 def supports_direct_path_load(connection: object) -> bool:
@@ -570,14 +621,14 @@ def apply_driver_features(
 
 
 def resolve_row_metadata(
-    description: "list[Any] | None", driver_features: "dict[str, Any]", cache: "dict[int, tuple[Any, list[str], bool]]"
+    description: "list[Any] | None", driver_features: "dict[str, Any]", cache: "dict[Any, tuple[Any, list[str], bool]]"
 ) -> "tuple[list[str], bool]":
     """Resolve and cache Oracle row metadata for hot row materialization paths.
 
     Args:
         description: Cursor description metadata.
         driver_features: Driver feature configuration.
-        cache: Driver-local metadata cache keyed by ``id(description)``.
+        cache: Driver-local metadata cache.
 
     Returns:
         Tuple of (normalized column names, requires_lob_coercion).
@@ -866,10 +917,7 @@ def collect_sync_rows(
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
     if not requires_lob_coercion:
-        first_row = fetched_data[0]
-        first_row_tuple = first_row if isinstance(first_row, tuple) else tuple(first_row)
-        if not _row_requires_lob_coercion(first_row_tuple):
-            return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
+        return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
 
     data: list[tuple[Any, ...]] = []
     for row in fetched_data:
@@ -917,10 +965,7 @@ async def collect_async_rows(
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
     if not requires_lob_coercion:
-        first_row = fetched_data[0]
-        first_row_tuple = first_row if isinstance(first_row, tuple) else tuple(first_row)
-        if not _row_requires_lob_coercion(first_row_tuple):
-            return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
+        return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
 
     data: list[tuple[Any, ...]] = []
     for row in fetched_data:
@@ -1306,14 +1351,12 @@ async def _coerce_value_async(
 
 def _description_requires_lob_coercion(description: "list[Any]") -> bool:
     """Return True when cursor metadata indicates LOB-compatible columns."""
-    # Keep in sync with resolve_row_metadata's inlined cache-miss LOB detection.
     for column in description:
         try:
             type_code = column[1]
         except (TypeError, IndexError, KeyError):
             type_code = getattr(column, "type_code", None)
             if type_code is None:
-                # Unknown metadata shape: keep conservative behavior.
                 return True
 
         type_name = getattr(type_code, "name", None)

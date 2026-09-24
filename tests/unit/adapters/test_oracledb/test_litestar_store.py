@@ -4,6 +4,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from sqlspec.adapters.oracledb._param_types import OracleBlob
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.litestar import OracleSyncStore
 
@@ -115,3 +116,23 @@ def test_oracle_litestar_store_interval_partition_on_expires_at() -> None:
     assert "TABLESPACE session_data" in sql
     assert "PARTITION BY RANGE (expires_at)" in sql
     assert "NUMTOYMINTERVAL(1, ''MONTH'')" in sql
+
+
+def test_oracle_sync_store_set_large_blob_single_statement() -> None:
+    """set with >32KB payload should execute a single MERGE with OracleBlob."""
+    cursor = _FakeCursor()
+    connection = _FakeConnection(cursor)
+    store = OracleSyncStore(cast("Any", _FakeOracleConfig(connection)))
+
+    large_payload = b"x" * 65536
+    store._set("session-large", large_payload, expires_in=timedelta(seconds=60))
+
+    assert len(cursor.executed) == 1
+    sql, parameters = cursor.executed[0]
+    assert "MERGE INTO oracle_sessions t" in sql
+    assert parameters is not None
+    assert parameters["session_id"] == "session-large"
+    assert isinstance(parameters["data"], OracleBlob)
+    assert parameters["data"].value == large_payload
+    assert parameters["expires_in_seconds"] == 60
+    assert connection.commits == 1

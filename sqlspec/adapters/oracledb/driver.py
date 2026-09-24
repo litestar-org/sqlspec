@@ -1,5 +1,3 @@
-"""Oracle Driver"""
-
 import logging
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, overload
 
@@ -31,6 +29,7 @@ from sqlspec.adapters.oracledb.core import (
     coerce_many_parameters_sync,
     collect_async_rows,
     collect_sync_rows,
+    connection_is_thick,
     connection_is_thin,
     create_mapped_exception,
     default_statement_config,
@@ -124,11 +123,6 @@ class OraclePipelineDriver(Protocol):
     ) -> "SQL": ...
 
     def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
-
-
-# Oracle SQL-context byte thresholds (4000 / 2000) live in driver_features so users
-# on MAX_STRING_SIZE=EXTENDED databases can override them; defaults are wired in
-# core.apply_driver_features and read at the dispatch_execute call sites below.
 
 
 PIPELINE_MIN_DRIVER_VERSION: "tuple[int, int, int]" = (2, 4, 0)
@@ -527,6 +521,16 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         finally:
             self._transaction_active = False
 
+    @property
+    def is_thin_mode(self) -> bool:
+        """Return whether the connection is operating in Thin mode."""
+        return connection_is_thin(self.connection)
+
+    @property
+    def is_thick_mode(self) -> bool:
+        """Return whether the connection is operating in Thick mode."""
+        return connection_is_thick(self.connection)
+
     def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
         validate_savepoint_name(name)
@@ -671,6 +675,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
 
+        prepared_parameters = coerce_large_parameters_sync(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
+
         try:
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
                 import pyarrow as pa
@@ -768,8 +783,12 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         if overwrite:
             statement = build_truncate_statement(table)
             exc_handler = self.handle_database_exceptions()
-            with self.with_cursor(self.connection) as cursor, exc_handler:
-                cursor.execute(statement)
+            with exc_handler:
+                cursor = self.connection.cursor()
+                try:
+                    cursor.execute(statement)
+                finally:
+                    cursor.close()
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         use_direct_path = (
@@ -791,11 +810,13 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
             else:
-                columns, records = self._arrow_table_to_rows(arrow_table)
+                columns = list(arrow_table.column_names)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
                 with self.with_cursor(self.connection) as cursor, exc_handler:
-                    cursor.executemany(statement, records)
+                    for batch in arrow_table.to_batches(max_chunksize=5000):
+                        batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
+                        cursor.executemany(statement, batch_rows)
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -1225,6 +1246,16 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         finally:
             self._transaction_active = False
 
+    @property
+    def is_thin_mode(self) -> bool:
+        """Return whether the connection is operating in Thin mode."""
+        return connection_is_thin(self.connection)
+
+    @property
+    def is_thick_mode(self) -> bool:
+        """Return whether the connection is operating in Thick mode."""
+        return connection_is_thick(self.connection)
+
     async def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
         validate_savepoint_name(name)
@@ -1372,6 +1403,17 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
 
+        prepared_parameters = await coerce_large_parameters_async(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
+
         try:
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
                 import pyarrow as pa
@@ -1494,11 +1536,13 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
             else:
-                columns, records = self._arrow_table_to_rows(arrow_table)
+                columns = list(arrow_table.column_names)
                 statement = build_insert_statement(table, columns)
                 exc_handler = self.handle_database_exceptions()
                 async with self.with_cursor(self.connection) as cursor, exc_handler:
-                    await cursor.executemany(statement, records)
+                    for batch in arrow_table.to_batches(max_chunksize=5000):
+                        batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
+                        await cursor.executemany(statement, batch_rows)
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
         telemetry_payload = self._ingest_telemetry(arrow_table)

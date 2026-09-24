@@ -6,14 +6,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
-from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report, _validate_oracle_identifier
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
-from sqlspec.adapters.oracledb.data_dictionary import (
-    JSONStorageType,
-    OracleVersionInfo,
-    _storage_type_from_version,
-    storage_type_from_version,
-)
+from sqlspec.adapters.oracledb.core import oracle_table_feature_report as _oracle_table_feature_report
+from sqlspec.adapters.oracledb.core import validate_oracle_identifier as _validate_oracle_identifier
+from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -993,7 +989,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - Oracle 12c+: BLOB with IS JSON constraint
         - Oracle 11g and earlier: plain BLOB
         """
-        return _storage_type_from_version(await self._get_version_info())
+        return storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
@@ -1997,7 +1993,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - Oracle 12c+: BLOB with IS JSON constraint
         - Oracle 11g and earlier: plain BLOB
         """
-        return _storage_type_from_version(self._get_version_info())
+        return storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""

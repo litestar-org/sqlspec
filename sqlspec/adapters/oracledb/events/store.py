@@ -10,10 +10,10 @@ BLOB over CLOB for JSON data as BLOB performs significantly better.
 
 Configuration (optional override):
     extension_config={
-    "events": {
-    "json_storage": "blob_json", # Override auto-detection
-    "in_memory": False # Enable INMEMORY PRIORITY HIGH
-    }
+        "events": {
+            "json_storage": "blob_json",
+            "in_memory": False,
+        }
     }
 """
 
@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report
-from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, _storage_type_from_version
+from sqlspec.adapters.oracledb.core import oracle_table_feature_report as _oracle_table_feature_report
+from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType
+from sqlspec.adapters.oracledb.data_dictionary import storage_type_from_version as _storage_type_from_version
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context

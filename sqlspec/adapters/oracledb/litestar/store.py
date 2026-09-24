@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report
+from sqlspec.adapters.oracledb.core import OracleBlob
+from sqlspec.adapters.oracledb.core import oracle_table_feature_report as _oracle_table_feature_report
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -180,78 +181,39 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
         data = self._value_to_bytes(value)
         expires_in_seconds = _oracle_expiry_seconds(expires_in)
+        bind_data = OracleBlob(data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
+
+        sql = f"""
+        MERGE INTO {self._table_name} t
+        USING (SELECT :session_id AS session_id FROM DUAL) s
+        ON (t.session_id = s.session_id)
+        WHEN MATCHED THEN
+            UPDATE SET
+                data = :data,
+                expires_at = CASE
+                    WHEN :expires_in_seconds IS NULL THEN NULL
+                    ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                END,
+                updated_at = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (session_id, data, expires_at, created_at, updated_at)
+            VALUES (
+                :session_id,
+                :data,
+                CASE
+                    WHEN :expires_in_seconds IS NULL THEN NULL
+                    ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                END,
+                SYSTIMESTAMP,
+                SYSTIMESTAMP
+            )
+        """
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             cursor = conn.cursor()
-
-            if len(data) > ORACLE_SMALL_BLOB_LIMIT:
-                merge_sql = f"""
-                MERGE INTO {self._table_name} t
-                USING (SELECT :session_id AS session_id FROM DUAL) s
-                ON (t.session_id = s.session_id)
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        data = EMPTY_BLOB(),
-                        expires_at = CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        updated_at = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN
-                    INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (
-                        :session_id,
-                        EMPTY_BLOB(),
-                        CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        SYSTIMESTAMP,
-                        SYSTIMESTAMP
-                    )
-                """
-                await cursor.execute(merge_sql, {"session_id": key, "expires_in_seconds": expires_in_seconds})
-
-                select_sql = f"""
-                SELECT data FROM {self._table_name}
-                WHERE session_id = :session_id FOR UPDATE
-                """
-                await cursor.execute(select_sql, {"session_id": key})
-                row = await cursor.fetchone()
-                if row:
-                    blob = row[0]
-                    await blob.write(data)
-
-                await conn.commit()
-            else:
-                sql = f"""
-                MERGE INTO {self._table_name} t
-                USING (SELECT :session_id AS session_id FROM DUAL) s
-                ON (t.session_id = s.session_id)
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        data = :data,
-                        expires_at = CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        updated_at = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN
-                    INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (
-                        :session_id,
-                        :data,
-                        CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        SYSTIMESTAMP,
-                        SYSTIMESTAMP
-                    )
-                """
-                await cursor.execute(sql, {"session_id": key, "data": data, "expires_in_seconds": expires_in_seconds})
-                await conn.commit()
+            await cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
+            await conn.commit()
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -637,77 +599,38 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
         expires_in_seconds = _oracle_expiry_seconds(expires_in)
+        bind_data = OracleBlob(data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
+
+        sql = f"""
+        MERGE INTO {self._table_name} t
+        USING (SELECT :session_id AS session_id FROM DUAL) s
+        ON (t.session_id = s.session_id)
+        WHEN MATCHED THEN
+            UPDATE SET
+                data = :data,
+                expires_at = CASE
+                    WHEN :expires_in_seconds IS NULL THEN NULL
+                    ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                END,
+                updated_at = SYSTIMESTAMP
+        WHEN NOT MATCHED THEN
+            INSERT (session_id, data, expires_at, created_at, updated_at)
+            VALUES (
+                :session_id,
+                :data,
+                CASE
+                    WHEN :expires_in_seconds IS NULL THEN NULL
+                    ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                END,
+                SYSTIMESTAMP,
+                SYSTIMESTAMP
+            )
+        """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
-
-            if len(data) > ORACLE_SMALL_BLOB_LIMIT:
-                merge_sql = f"""
-                MERGE INTO {self._table_name} t
-                USING (SELECT :session_id AS session_id FROM DUAL) s
-                ON (t.session_id = s.session_id)
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        data = EMPTY_BLOB(),
-                        expires_at = CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        updated_at = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN
-                    INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (
-                        :session_id,
-                        EMPTY_BLOB(),
-                        CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        SYSTIMESTAMP,
-                        SYSTIMESTAMP
-                    )
-                """
-                cursor.execute(merge_sql, {"session_id": key, "expires_in_seconds": expires_in_seconds})
-
-                select_sql = f"""
-                SELECT data FROM {self._table_name}
-                WHERE session_id = :session_id FOR UPDATE
-                """
-                cursor.execute(select_sql, {"session_id": key})
-                row = cursor.fetchone()
-                if row:
-                    blob = row[0]
-                    blob.write(data)
-
-                conn.commit()
-            else:
-                sql = f"""
-                MERGE INTO {self._table_name} t
-                USING (SELECT :session_id AS session_id FROM DUAL) s
-                ON (t.session_id = s.session_id)
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        data = :data,
-                        expires_at = CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        updated_at = SYSTIMESTAMP
-                WHEN NOT MATCHED THEN
-                    INSERT (session_id, data, expires_at, created_at, updated_at)
-                    VALUES (
-                        :session_id,
-                        :data,
-                        CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        SYSTIMESTAMP,
-                        SYSTIMESTAMP
-                    )
-                """
-                cursor.execute(sql, {"session_id": key, "data": data, "expires_in_seconds": expires_in_seconds})
-                conn.commit()
+            cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
+            conn.commit()
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
