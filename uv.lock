@@ -6717,7 +6717,7 @@ requires-dist = [
     { name = "google-cloud-bigquery-storage", marker = "extra == 'bigquery'" },
     { name = "google-cloud-spanner", marker = "extra == 'spanner'" },
     { name = "google-cloud-storage", marker = "extra == 'bigquery'" },
-    { name = "ibm-db", marker = "extra == 'db2'", specifier = ">=3.2.5" },
+    { name = "ibm-db", marker = "extra == 'db2'", specifier = ">=3.3.0" },
     { name = "librt", marker = "extra == 'performance'", specifier = ">=0.10.0" },
     { name = "litestar", marker = "extra == 'litestar'", specifier = ">=2.23.0" },
     { name = "msgspec", marker = "extra == 'msgspec'" },
