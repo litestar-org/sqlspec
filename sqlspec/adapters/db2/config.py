@@ -5,15 +5,15 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.db2._typing import Db2Connection, Db2Cursor, Db2RawCursor, Db2SessionContext
+from sqlspec.adapters.db2._typing import Db2RawCursor, Db2SyncConnection, Db2SyncCursor, Db2SyncSessionContext
 from sqlspec.adapters.db2.core import (
     apply_driver_features,
     build_connection_config,
     build_dsn_string,
     default_statement_config,
 )
-from sqlspec.adapters.db2.driver import Db2Driver, Db2ExceptionHandler
-from sqlspec.adapters.db2.pool import Db2ConnectionPool
+from sqlspec.adapters.db2.driver import Db2SyncDriver, Db2SyncExceptionHandler
+from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
@@ -28,11 +28,11 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 __all__ = (
-    "Db2Config",
-    "Db2ConnectionContext",
     "Db2ConnectionParams",
     "Db2DriverFeatures",
     "Db2PoolParams",
+    "Db2SyncConfig",
+    "Db2SyncConnectionContext",
     "build_connection_config",
 )
 
@@ -83,29 +83,29 @@ class Db2DriverFeatures(TypedDict):
 
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
-    on_connection_create: "NotRequired[Callable[[Db2Connection], None]]"
-    connection_factory: "NotRequired[Callable[[], Db2Connection]]"
+    on_connection_create: "NotRequired[Callable[[Db2SyncConnection], None]]"
+    connection_factory: "NotRequired[Callable[[], Db2SyncConnection]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["poll_queue"]]
     enable_lowercase_column_names: NotRequired[bool]
 
 
-class Db2ConnectionContext(SyncPoolConnectionContext):
+class Db2SyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for IBM Db2 connections."""
 
     __slots__ = ()
 
 
-class _Db2SessionConnectionHandler(SyncPoolSessionFactory):
+class _Db2SyncSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ()
 
 
 @mypyc_attr(native_class=False)
-class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver]):
+class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool, Db2SyncDriver]):
     """Configuration for IBM Db2 synchronous connections."""
 
-    driver_type: "ClassVar[type[Db2Driver]]" = Db2Driver
-    connection_type: "ClassVar[type[Db2Connection]]" = cast("type[Db2Connection]", Db2Connection)
+    driver_type: "ClassVar[type[Db2SyncDriver]]" = Db2SyncDriver
+    connection_type: "ClassVar[type[Db2SyncConnection]]" = cast("type[Db2SyncConnection]", Db2SyncConnection)
     migration_tracker_type: "ClassVar[type[SyncMigrationTracker]]" = SyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
@@ -117,9 +117,9 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
     )
-    _connection_context_class: "ClassVar[type[Db2ConnectionContext]]" = Db2ConnectionContext
-    _session_factory_class: "ClassVar[type[_Db2SessionConnectionHandler]]" = _Db2SessionConnectionHandler
-    _session_context_class: "ClassVar[type[Db2SessionContext]]" = Db2SessionContext
+    _connection_context_class: "ClassVar[type[Db2SyncConnectionContext]]" = Db2SyncConnectionContext
+    _session_factory_class: "ClassVar[type[_Db2SyncSessionConnectionHandler]]" = _Db2SyncSessionConnectionHandler
+    _session_context_class: "ClassVar[type[Db2SyncSessionContext]]" = Db2SyncSessionContext
     _default_statement_config = default_statement_config
 
     __slots__ = ("_connection_factory", "_user_connection_hook")
@@ -128,7 +128,7 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
         self,
         *,
         connection_config: "Db2PoolParams | dict[str, Any] | None" = None,
-        connection_instance: "Db2ConnectionPool | None" = None,
+        connection_instance: "Db2SyncConnectionPool | None" = None,
         migration_config: "dict[str, Any] | None" = None,
         statement_config: "StatementConfig | None" = None,
         driver_features: "Db2DriverFeatures | dict[str, Any] | None" = None,
@@ -145,10 +145,10 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        self._user_connection_hook: Callable[[Db2Connection], None] | None = features_dict.pop(
+        self._user_connection_hook: Callable[[Db2SyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
-        self._connection_factory: Callable[[], Db2Connection] | None = features_dict.pop("connection_factory", None)
+        self._connection_factory: Callable[[], Db2SyncConnection] | None = features_dict.pop("connection_factory", None)
 
         super().__init__(
             connection_config=normalized_connection_config,
@@ -162,12 +162,12 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
             **kwargs,
         )
 
-    def _create_pool(self) -> "Db2ConnectionPool":
+    def _create_pool(self) -> "Db2SyncConnectionPool":
         """Create a new thread-local connection pool."""
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
-        return Db2ConnectionPool(
+        return Db2SyncConnectionPool(
             config,
             recycle_seconds=pool_recycle,
             health_check_interval=health_check,
@@ -181,11 +181,11 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
             self.connection_instance.close()
             self.connection_instance = None
 
-    def create_connection(self) -> "Db2Connection":
+    def create_connection(self) -> "Db2SyncConnection":
         """Open a standalone connection owned by the caller.
 
         Returns:
-            Db2Connection: A newly opened physical connection.
+            Db2SyncConnection: A newly opened physical connection.
         """
         return self.provide_pool().new_connection()
 
@@ -197,18 +197,18 @@ class Db2Config(SyncDatabaseConfig[Db2Connection, Db2ConnectionPool, Db2Driver])
         """Get namespace for dependency injection resolution."""
         namespace = super().get_signature_namespace()
         namespace.update({
-            "Db2Config": Db2Config,
-            "Db2Connection": Db2Connection,
-            "Db2ConnectionContext": Db2ConnectionContext,
+            "Db2SyncConfig": Db2SyncConfig,
+            "Db2SyncConnection": Db2SyncConnection,
+            "Db2SyncConnectionContext": Db2SyncConnectionContext,
             "Db2ConnectionParams": Db2ConnectionParams,
-            "Db2ConnectionPool": Db2ConnectionPool,
-            "Db2Cursor": Db2Cursor,
-            "Db2Driver": Db2Driver,
+            "Db2SyncConnectionPool": Db2SyncConnectionPool,
+            "Db2SyncCursor": Db2SyncCursor,
+            "Db2SyncDriver": Db2SyncDriver,
             "Db2DriverFeatures": Db2DriverFeatures,
-            "Db2ExceptionHandler": Db2ExceptionHandler,
+            "Db2SyncExceptionHandler": Db2SyncExceptionHandler,
             "Db2PoolParams": Db2PoolParams,
             "Db2RawCursor": Db2RawCursor,
-            "Db2SessionContext": Db2SessionContext,
+            "Db2SyncSessionContext": Db2SyncSessionContext,
         })
         return namespace
 

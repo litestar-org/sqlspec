@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from sqlspec.adapters.db2.events import Db2EventQueueStore, Db2EventsConfig
+from sqlspec.adapters.db2.events import Db2EventsConfig, Db2SyncEventQueueStore
 
 
 def test_db2_events_config() -> None:
@@ -12,10 +12,10 @@ def test_db2_events_config() -> None:
 
 
 def test_db2_event_queue_store_primitives() -> None:
-    """Test Db2EventQueueStore column types and timestamp default."""
+    """Test Db2SyncEventQueueStore column types and timestamp default."""
     config = MagicMock()
     config.extension_config = {}
-    store = Db2EventQueueStore(config)
+    store = Db2SyncEventQueueStore(config)
     assert store._column_types() == ("CLOB", "CLOB", "TIMESTAMP")
     assert store._timestamp_default() == "CURRENT TIMESTAMP"
     assert store._string_type(255) == "VARCHAR(255)"

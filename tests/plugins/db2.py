@@ -10,10 +10,10 @@ from pytest_databases._service import DockerService
 from pytest_databases.helpers import get_xdist_worker_num
 from pytest_databases.types import ServiceContainer
 
-from sqlspec.adapters.db2.config import Db2Config
+from sqlspec.adapters.db2.config import Db2SyncConfig
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.db2.driver import Db2Driver
+    from sqlspec.adapters.db2.driver import Db2SyncDriver
 
 
 def db2_responsive(host: str, port: int, database: str, user: str, password: str) -> bool:
@@ -163,15 +163,15 @@ def db2_connection_config(db2_service: Db2Service) -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=False, scope="session")
-def db2_sync_config(db2_connection_config: dict[str, Any]) -> Generator[Db2Config, None, None]:
-    """Session-scoped Db2Config initialized with container connection parameters."""
-    config = Db2Config(connection_config=db2_connection_config)
+def db2_sync_config(db2_connection_config: dict[str, Any]) -> Generator[Db2SyncConfig, None, None]:
+    """Session-scoped Db2SyncConfig initialized with container connection parameters."""
+    config = Db2SyncConfig(connection_config=db2_connection_config)
     yield config
     config.close_pool()
 
 
 @pytest.fixture(autouse=False, scope="function")
-def db2_session(db2_sync_config: Db2Config) -> "Generator[Db2Driver, None, None]":
-    """Function-scoped Db2Driver session providing driver access."""
+def db2_session(db2_sync_config: Db2SyncConfig) -> "Generator[Db2SyncDriver, None, None]":
+    """Function-scoped Db2SyncDriver session providing driver access."""
     with db2_sync_config.provide_session() as driver:
         yield driver

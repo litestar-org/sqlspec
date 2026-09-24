@@ -108,7 +108,7 @@ BRIDGE_CURSOR_CLOSE_METHODS = (
     ("sqlspec/adapters/aiomysql/_typing.py", "AiomysqlCursor", "__aexit__"),
     ("sqlspec/adapters/aiosqlite/_typing.py", "AiosqliteCursor", "__aexit__"),
     ("sqlspec/adapters/asyncmy/_typing.py", "AsyncmyCursor", "__aexit__"),
-    ("sqlspec/adapters/db2/_typing.py", "Db2Cursor", "__exit__"),
+    ("sqlspec/adapters/db2/_typing.py", "Db2SyncCursor", "__exit__"),
     ("sqlspec/adapters/mssql_python/_typing.py", "MssqlPythonCursor", "__exit__"),
     ("sqlspec/adapters/mysqlconnector/_typing.py", "MysqlConnectorSyncCursor", "__exit__"),
     ("sqlspec/adapters/mysqlconnector/_typing.py", "MysqlConnectorAsyncCursor", "__aexit__"),

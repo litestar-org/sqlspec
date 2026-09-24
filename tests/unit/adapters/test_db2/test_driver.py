@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.db2.core import default_statement_config
-from sqlspec.adapters.db2.driver import Db2Driver, Db2ExceptionHandler
+from sqlspec.adapters.db2.driver import Db2SyncDriver, Db2SyncExceptionHandler
 from sqlspec.core import SQL
 from sqlspec.exceptions import TransactionError, UniqueViolationError
 from tests.unit.adapters.test_db2._fakes import (
@@ -41,7 +41,7 @@ def test_execute_maps_db2_row_formats(
 ) -> None:
     """Driver formats both dictionary and tuple rows into standardized dictionaries."""
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor))
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor))
 
     result = driver.execute("SELECT id, name FROM users")
 
@@ -53,7 +53,7 @@ def test_execute_maps_db2_row_formats(
 @pytest.mark.parametrize("bad_name", UNSAFE_SAVEPOINT_NAMES)
 def test_db2_savepoint_overrides_reject_unsafe_names(bad_name: str) -> None:
     """Savepoint operations must reject unsafe identifiers."""
-    driver = Db2Driver(FakeDb2Connection())
+    driver = Db2SyncDriver(FakeDb2Connection())
 
     with pytest.raises(TransactionError):
         driver.create_savepoint(bad_name)
@@ -67,7 +67,7 @@ def test_db2_savepoint_overrides_accept_valid_name() -> None:
     """Valid savepoint names format proper Db2 savepoint statements."""
     cursor = FakeDb2Cursor()
     connection = FakeDb2Connection(lambda: cursor)
-    driver = Db2Driver(connection)
+    driver = Db2SyncDriver(connection)
 
     driver.create_savepoint("sp1")
     driver.release_savepoint("sp1")
@@ -82,7 +82,7 @@ def test_db2_savepoint_overrides_accept_valid_name() -> None:
 def test_dispatch_execute_select_compiles_and_collects_rows() -> None:
     """SELECT statement execution compiles with qmark positional style and populates SQLResult."""
     cursor = FakeDb2Cursor(rows=[(1, "Ada")], description=[("id",), ("name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
     statement = SQL("SELECT id, name FROM users WHERE id = ?", 1, statement_config=default_statement_config)
 
     result = driver.dispatch_execute(cursor, statement)
@@ -98,7 +98,7 @@ def test_dispatch_execute_select_compiles_and_collects_rows() -> None:
 def test_dispatch_execute_many_uses_executemany_and_rowcount() -> None:
     """execute_many delegates batch parameter sequences to cursor.executemany."""
     cursor = FakeDb2Cursor(rowcount=2)
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
     statement = SQL(
         "INSERT INTO users (id) VALUES (?)", [(1,), (2,)], statement_config=default_statement_config, is_many=True
     )
@@ -114,7 +114,7 @@ def test_dispatch_execute_many_uses_executemany_and_rowcount() -> None:
 def test_dispatch_execute_script() -> None:
     """dispatch_execute_script splits and executes multi-statement scripts."""
     cursor = FakeDb2Cursor()
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
     statement = SQL(
         "CREATE TABLE t1 (id INT); CREATE TABLE t2 (id INT);", statement_config=default_statement_config, is_script=True
     )
@@ -131,7 +131,7 @@ def test_dispatch_execute_script() -> None:
 def test_begin_commit_rollback_lifecycle() -> None:
     """Driver properly manages transaction states and connection commit/rollback."""
     conn: Any = FakeDb2Connection(autocommit=True)
-    driver = Db2Driver(conn)
+    driver = Db2SyncDriver(conn)
 
     assert driver._connection_in_transaction() is False
 
@@ -156,7 +156,7 @@ def test_dispatch_select_stream() -> None:
     """dispatch_select_stream provides a row stream iterating rows through fetchmany."""
     rows = [(1, "Ada"), (2, "Grace"), (3, "Margaret")]
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
     statement = SQL("SELECT id, name FROM users", statement_config=default_statement_config)
 
     stream = driver.dispatch_select_stream(statement, chunk_size=2)
@@ -170,8 +170,8 @@ def test_dispatch_select_stream() -> None:
 
 
 def test_exception_handler_maps_db2_error() -> None:
-    """Db2ExceptionHandler translates Db2 driver errors into mapped SQLSpecError."""
-    handler = Db2ExceptionHandler()
+    """Db2SyncExceptionHandler translates Db2 driver errors into mapped SQLSpecError."""
+    handler = Db2SyncExceptionHandler()
     fake_err = db2_error(-803, "23505", DUPLICATE_KEY_TEXT, cls=FakeDb2IntegrityError)
 
     with handler:
@@ -183,7 +183,7 @@ def test_exception_handler_maps_db2_error() -> None:
 def test_driver_execute_raises_mapped_exception() -> None:
     """driver.execute translates database errors into mapped SQLSpecError."""
     cursor = FakeDb2Cursor(error=db2_error(-803, "23505", DUPLICATE_KEY_TEXT, cls=FakeDb2IntegrityError))
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor))
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor))
 
     with pytest.raises(UniqueViolationError):
         driver.execute("INSERT INTO users VALUES (1)")
@@ -194,7 +194,7 @@ def test_select_to_arrow_conversion() -> None:
     pytest.importorskip("pyarrow")
     rows = [(1, "Ada"), (2, "Grace")]
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     arrow_result = driver.select_to_arrow("SELECT id, name FROM users")
 
@@ -206,7 +206,7 @@ def test_select_to_arrow_conversion() -> None:
 def test_select_lowercases_implicit_uppercase_columns() -> None:
     """Names Db2 folded to uppercase surface as lowercase keys; quoted mixed case is kept."""
     cursor = FakeDb2Cursor(rows=[("S", 1, 2)], description=db2_description("schema_name", '"MixedCase"', "col_1"))
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor))
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor))
 
     result = driver.execute('SELECT schema_name, "MixedCase", col_1 FROM t')
 
@@ -217,7 +217,7 @@ def test_select_lowercases_implicit_uppercase_columns() -> None:
 def test_lowercase_column_names_can_be_disabled() -> None:
     """Disabling the feature keeps the names exactly as Db2 reports them."""
     cursor = FakeDb2Cursor(rows=[("S",)], description=db2_description("schema_name"))
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), driver_features={"enable_lowercase_column_names": False})
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), driver_features={"enable_lowercase_column_names": False})
 
     assert driver.select("SELECT schema_name FROM t") == [{"SCHEMA_NAME": "S"}]
 
@@ -225,7 +225,7 @@ def test_lowercase_column_names_can_be_disabled() -> None:
 def test_select_stream_lowercases_implicit_uppercase_columns() -> None:
     """Streamed rows use the same lowercase keys as eager results."""
     cursor = FakeDb2Cursor(rows=[(1, "Ada"), (2, "Grace")], description=db2_description("id", "name"))
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor))
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor))
 
     with driver.select_stream("SELECT id, name FROM users", chunk_size=1) as stream:
         rows = list(stream)
@@ -235,7 +235,7 @@ def test_select_stream_lowercases_implicit_uppercase_columns() -> None:
 
 def test_repeated_select_keeps_lowercase_columns() -> None:
     """Re-executing a cached query returns the same lowercase keys as the first execution."""
-    driver = Db2Driver(
+    driver = Db2SyncDriver(
         FakeDb2Connection(lambda: FakeDb2Cursor(rows=[(1,)], description=db2_description("schema_name")))
     )
 

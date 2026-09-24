@@ -3,19 +3,19 @@
 from sqlspec.adapters.db2._typing import (
     IBM_DB_DBI_INSTALLED,
     IBM_DB_INSTALLED,
-    Db2Connection,
-    Db2Cursor,
     Db2Error,
     Db2QueryParams,
     Db2RawCursor,
-    Db2SessionContext,
+    Db2SyncConnection,
+    Db2SyncCursor,
+    Db2SyncSessionContext,
 )
 from sqlspec.adapters.db2.config import (
-    Db2Config,
-    Db2ConnectionContext,
     Db2ConnectionParams,
     Db2DriverFeatures,
     Db2PoolParams,
+    Db2SyncConfig,
+    Db2SyncConnectionContext,
 )
 from sqlspec.adapters.db2.core import (
     apply_driver_features,
@@ -37,27 +37,27 @@ from sqlspec.adapters.db2.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.db2.data_dictionary import Db2SyncDataDictionary, Db2VersionInfo
-from sqlspec.adapters.db2.driver import Db2Driver, Db2ExceptionHandler
-from sqlspec.adapters.db2.pool import Db2ConnectionPool
+from sqlspec.adapters.db2.driver import Db2SyncDriver, Db2SyncExceptionHandler
+from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
 
 __all__ = (
     "IBM_DB_DBI_INSTALLED",
     "IBM_DB_INSTALLED",
-    "Db2Config",
-    "Db2Connection",
-    "Db2ConnectionContext",
     "Db2ConnectionParams",
-    "Db2ConnectionPool",
-    "Db2Cursor",
-    "Db2Driver",
     "Db2DriverFeatures",
     "Db2Error",
-    "Db2ExceptionHandler",
     "Db2PoolParams",
     "Db2QueryParams",
     "Db2RawCursor",
-    "Db2SessionContext",
+    "Db2SyncConfig",
+    "Db2SyncConnection",
+    "Db2SyncConnectionContext",
+    "Db2SyncConnectionPool",
+    "Db2SyncCursor",
     "Db2SyncDataDictionary",
+    "Db2SyncDriver",
+    "Db2SyncExceptionHandler",
+    "Db2SyncSessionContext",
     "Db2VersionInfo",
     "apply_driver_features",
     "build_connection_config",

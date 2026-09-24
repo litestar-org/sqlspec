@@ -4,15 +4,15 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from sqlspec.adapters.db2.config import (
-    Db2Config,
-    Db2ConnectionContext,
     Db2ConnectionParams,
     Db2DriverFeatures,
     Db2PoolParams,
+    Db2SyncConfig,
+    Db2SyncConnectionContext,
 )
 from sqlspec.adapters.db2.core import parse_db2_dsn
-from sqlspec.adapters.db2.driver import Db2Driver
-from sqlspec.adapters.db2.pool import Db2ConnectionPool
+from sqlspec.adapters.db2.driver import Db2SyncDriver
+from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
 
 
 def test_parse_db2_dsn_cli_format() -> None:
@@ -41,9 +41,9 @@ def test_parse_db2_dsn_url_format() -> None:
 
 def test_db2_config_defaults() -> None:
     """Validate default configuration properties and capabilities."""
-    config = Db2Config()
+    config = Db2SyncConfig()
     assert config.connection_config["database"] == "SAMPLE"
-    assert config.driver_type is Db2Driver
+    assert config.driver_type is Db2SyncDriver
     assert config.supports_transactional_ddl is True
     assert config.supports_native_row_streaming is True
     assert config.supports_native_arrow_export is False
@@ -52,9 +52,9 @@ def test_db2_config_defaults() -> None:
 
 
 def test_db2_config_with_dsn_string() -> None:
-    """Validate Db2Config connection_config populated from DSN."""
+    """Validate Db2SyncConfig connection_config populated from DSN."""
     dsn = "DATABASE=appdb;HOSTNAME=dbhost;PORT=50001;UID=user1;PWD=pass1;"
-    config = Db2Config(connection_config={"dsn": dsn})
+    config = Db2SyncConfig(connection_config={"dsn": dsn})
     assert config.connection_config["database"] == "appdb"
     assert config.connection_config["hostname"] == "dbhost"
     assert config.connection_config["port"] == 50001
@@ -63,9 +63,9 @@ def test_db2_config_with_dsn_string() -> None:
 
 
 def test_db2_config_with_url_string() -> None:
-    """Validate Db2Config connection_config populated from URL."""
+    """Validate Db2SyncConfig connection_config populated from URL."""
     url = "db2://user2:pass2@remotehost:50002/customdb"
-    config = Db2Config(connection_config={"url": url})
+    config = Db2SyncConfig(connection_config={"url": url})
     assert config.connection_config["database"] == "customdb"
     assert config.connection_config["hostname"] == "remotehost"
     assert config.connection_config["port"] == 50002
@@ -75,7 +75,7 @@ def test_db2_config_with_url_string() -> None:
 
 def test_db2_config_get_connection_string() -> None:
     """Generate CLI DSN connection string matching normalized configuration."""
-    config = Db2Config(
+    config = Db2SyncConfig(
         connection_config={
             "database": "SAMPLE",
             "hostname": "localhost",
@@ -103,13 +103,13 @@ def test_db2_config_provide_pool_and_create_connection() -> None:
     def hook(conn: Any) -> None:
         hook_calls.append(conn)
 
-    config = Db2Config(
+    config = Db2SyncConfig(
         connection_config={"database": "TESTDB"},
         driver_features={"connection_factory": mock_factory, "on_connection_create": hook},
     )
 
     pool = config.provide_pool()
-    assert isinstance(pool, Db2ConnectionPool)
+    assert isinstance(pool, Db2SyncConnectionPool)
     assert pool._connection_parameters["database"] == "TESTDB"
 
     conn = config.create_connection()
@@ -123,20 +123,20 @@ def test_db2_config_provide_pool_and_create_connection() -> None:
 
 def test_db2_config_signature_namespace() -> None:
     """Verify exported symbols in signature namespace for dependency injection."""
-    config = Db2Config()
+    config = Db2SyncConfig()
     namespace = config.get_signature_namespace()
-    assert namespace["Db2Config"] is Db2Config
-    assert namespace["Db2ConnectionContext"] is Db2ConnectionContext
+    assert namespace["Db2SyncConfig"] is Db2SyncConfig
+    assert namespace["Db2SyncConnectionContext"] is Db2SyncConnectionContext
     assert namespace["Db2ConnectionParams"] is Db2ConnectionParams
-    assert namespace["Db2ConnectionPool"] is Db2ConnectionPool
-    assert namespace["Db2Driver"] is Db2Driver
+    assert namespace["Db2SyncConnectionPool"] is Db2SyncConnectionPool
+    assert namespace["Db2SyncDriver"] is Db2SyncDriver
     assert namespace["Db2DriverFeatures"] is Db2DriverFeatures
     assert namespace["Db2PoolParams"] is Db2PoolParams
 
 
 def test_db2_config_event_runtime_hints() -> None:
     """Verify default runtime hints for event subscription channels."""
-    config = Db2Config()
+    config = Db2SyncConfig()
     hints = config.get_event_runtime_hints()
     assert hints.poll_interval == 0.25
     assert hints.lease_seconds == 5

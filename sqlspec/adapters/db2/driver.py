@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-from sqlspec.adapters.db2._typing import Db2Cursor, Db2SessionContext
+from sqlspec.adapters.db2._typing import Db2SyncCursor, Db2SyncSessionContext
 from sqlspec.adapters.db2.core import (
     collect_rows,
     create_mapped_exception,
@@ -33,12 +33,12 @@ from sqlspec.driver import (
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 
-__all__ = ("Db2Cursor", "Db2Driver", "Db2ExceptionHandler", "Db2SessionContext")
+__all__ = ("Db2SyncCursor", "Db2SyncDriver", "Db2SyncExceptionHandler", "Db2SyncSessionContext")
 
 logger = get_logger("sqlspec.adapters.db2")
 
 
-class Db2ExceptionHandler(BaseSyncExceptionHandler):
+class Db2SyncExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling IBM Db2 exceptions."""
 
     __slots__ = ()
@@ -52,17 +52,17 @@ class Db2ExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
-class Db2StreamSource:
+class Db2SyncStreamSource:
     """Native Db2 chunk source backed by cursor.fetchmany()."""
 
     __slots__ = ("_chunk_size", "_column_names", "_cursor_manager", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: "Db2Driver", sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(self, driver: "Db2SyncDriver", sql: str, parameters: Any, chunk_size: int) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._cursor_manager: Db2Cursor | None = None
+        self._cursor_manager: Db2SyncCursor | None = None
         self._column_names: list[str] | None = None
 
     def start(self) -> None:
@@ -107,7 +107,7 @@ class Db2StreamSource:
                 cursor_manager.__exit__(None, None, None)
 
 
-class Db2Driver(SyncDriverAdapterBase):
+class Db2SyncDriver(SyncDriverAdapterBase):
     """IBM Db2 database driver."""
 
     __slots__ = (
@@ -224,18 +224,18 @@ class Db2Driver(SyncDriverAdapterBase):
             msg = f"Failed to rollback Db2 transaction: {exc}"
             raise SQLSpecError(msg) from exc
 
-    def with_cursor(self, connection: Any) -> "Db2Cursor":
-        return Db2Cursor(connection)
+    def with_cursor(self, connection: Any) -> "Db2SyncCursor":
+        return Db2SyncCursor(connection)
 
-    def handle_database_exceptions(self) -> "Db2ExceptionHandler":
-        return Db2ExceptionHandler()
+    def handle_database_exceptions(self) -> "Db2SyncExceptionHandler":
+        return Db2SyncExceptionHandler()
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         """Return a native Db2 row stream backed by cursor.fetchmany()."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return SyncRowStream(Db2StreamSource(self, sql, prepared_parameters, chunk_size))
+        return SyncRowStream(Db2SyncStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def select_to_arrow(
         self,

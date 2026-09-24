@@ -19,12 +19,12 @@ IBM_DB_INSTALLED = ibm_db is not None
 IBM_DB_DBI_INSTALLED = ibm_db_dbi is not None
 
 if TYPE_CHECKING:
-    Db2Connection: TypeAlias = Any
+    Db2SyncConnection: TypeAlias = Any
     Db2RawCursor: TypeAlias = Any
     Db2QueryParams: TypeAlias = Any
     Db2Error: TypeAlias = type[Exception]
 else:
-    Db2Connection = Any
+    Db2SyncConnection = Any
     Db2RawCursor = Any
     Db2QueryParams = Any
     Db2Error = getattr(ibm_db_dbi, "Error", Exception) if ibm_db_dbi is not None else Exception
@@ -32,18 +32,18 @@ else:
 __all__ = (
     "IBM_DB_DBI_INSTALLED",
     "IBM_DB_INSTALLED",
-    "Db2Connection",
-    "Db2Cursor",
     "Db2Error",
     "Db2QueryParams",
     "Db2RawCursor",
-    "Db2SessionContext",
+    "Db2SyncConnection",
+    "Db2SyncCursor",
+    "Db2SyncSessionContext",
     "ibm_db",
     "ibm_db_dbi",
 )
 
 
-class Db2Cursor:
+class Db2SyncCursor:
     """Context manager for Db2 cursor operations."""
 
     __slots__ = ("connection", "cursor")
@@ -73,7 +73,7 @@ class Db2Cursor:
                 self.cursor.close()
 
 
-class Db2SessionContext:
+class Db2SyncSessionContext:
     """Synchronous context manager for Db2 sessions."""
 
     __slots__ = (
@@ -120,7 +120,7 @@ class Db2SessionContext:
         import importlib
 
         driver_module = importlib.import_module("sqlspec.adapters.db2.driver")
-        driver_cls = driver_module.Db2Driver
+        driver_cls = driver_module.Db2SyncDriver
 
         self._connection = self._acquire_connection()
         self._driver = driver_cls(

@@ -33,7 +33,7 @@ Platform Requirements
 Configuration
 =============
 
-.. autoclass:: sqlspec.adapters.db2.Db2Config
+.. autoclass:: sqlspec.adapters.db2.Db2SyncConfig
    :members:
    :show-inheritance:
 
@@ -61,14 +61,14 @@ Driver Features
 Driver
 ======
 
-.. autoclass:: sqlspec.adapters.db2.Db2Driver
+.. autoclass:: sqlspec.adapters.db2.Db2SyncDriver
    :members:
    :show-inheritance:
 
 Connection Pool
 ===============
 
-.. autoclass:: sqlspec.adapters.db2.Db2ConnectionPool
+.. autoclass:: sqlspec.adapters.db2.Db2SyncConnectionPool
    :members:
    :show-inheritance:
 

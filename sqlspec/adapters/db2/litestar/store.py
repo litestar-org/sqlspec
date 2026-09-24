@@ -7,9 +7,9 @@ from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.db2.config import Db2Config
+    from sqlspec.adapters.db2.config import Db2SyncConfig
 
-__all__ = ("Db2Store",)
+__all__ = ("Db2SyncStore",)
 
 
 def _row_value(row: Any, key: str, index: int) -> Any:
@@ -41,12 +41,12 @@ def _normalize_utc(dt: Any) -> datetime | None:
     return None
 
 
-class Db2Store(BaseSQLSpecStore["Db2Config"]):
+class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
     """IBM Db2-backed session store using synchronous Db2 sessions."""
 
     __slots__ = ()
 
-    def __init__(self, config: "Db2Config") -> None:
+    def __init__(self, config: "Db2SyncConfig") -> None:
         """Initialize Db2 session store."""
         super().__init__(config)
 

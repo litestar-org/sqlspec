@@ -16,13 +16,13 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-__all__ = ("Db2ConnectionPool",)
+__all__ = ("Db2SyncConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "db2"
 
 
-class Db2ConnectionPool:
+class Db2SyncConnectionPool:
     """Thread-local connection manager for IBM Db2."""
 
     __slots__ = (

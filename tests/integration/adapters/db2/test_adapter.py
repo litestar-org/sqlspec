@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("ibm_db")
 pytest.importorskip("ibm_db_dbi")
 
-from sqlspec.adapters.db2.driver import Db2Driver
+from sqlspec.adapters.db2.driver import Db2SyncDriver
 
 DB2_INTEGRATION_ENABLED = bool(
     os.environ.get("DB2_HOST") or os.environ.get("SQLSPEC_ENABLE_DB2_INTEGRATION_TESTS") == "1"
@@ -26,7 +26,7 @@ pytestmark = [
 
 
 @pytest.fixture
-def clean_users_table(db2_session: Db2Driver) -> Generator[None, None, None]:
+def clean_users_table(db2_session: Db2SyncDriver) -> Generator[None, None, None]:
     """Ensure test table is created fresh and dropped after test completion."""
     try:
         tables = db2_session.data_dictionary.get_tables(db2_session)
@@ -51,13 +51,13 @@ def clean_users_table(db2_session: Db2Driver) -> Generator[None, None, None]:
         pass
 
 
-def test_db2_integration_connection_ping(db2_session: Db2Driver) -> None:
+def test_db2_integration_connection_ping(db2_session: Db2SyncDriver) -> None:
     """Verify live Db2 connection lifecycle and dummy table ping execution."""
     result = db2_session.select_value("SELECT 1 FROM SYSIBM.SYSDUMMY1")
     assert result == 1
 
 
-def test_db2_integration_crud_and_parameters(db2_session: Db2Driver, clean_users_table: None) -> None:
+def test_db2_integration_crud_and_parameters(db2_session: Db2SyncDriver, clean_users_table: None) -> None:
     """Verify CRUD execution and positional parameter binding against live Db2."""
     db2_session.execute(
         "INSERT INTO TEST_INTEGRATION_USERS (id, name, balance) VALUES (?, ?, ?)", (1, "Alice", Decimal("100.50"))
@@ -83,7 +83,7 @@ def test_db2_integration_crud_and_parameters(db2_session: Db2Driver, clean_users
     assert count == 0
 
 
-def test_db2_integration_transactions(db2_session: Db2Driver, clean_users_table: None) -> None:
+def test_db2_integration_transactions(db2_session: Db2SyncDriver, clean_users_table: None) -> None:
     """Verify transaction commit and rollback boundaries."""
     db2_session.begin()
     db2_session.execute(
@@ -109,7 +109,7 @@ def test_db2_integration_transactions(db2_session: Db2Driver, clean_users_table:
     assert count_after_abort == 0
 
 
-def test_db2_integration_savepoints(db2_session: Db2Driver, clean_users_table: None) -> None:
+def test_db2_integration_savepoints(db2_session: Db2SyncDriver, clean_users_table: None) -> None:
     """Verify nested savepoint creation and partial transaction rollback."""
     db2_session.begin()
     try:
@@ -134,7 +134,7 @@ def test_db2_integration_savepoints(db2_session: Db2Driver, clean_users_table: N
     assert discarded == 0
 
 
-def test_db2_integration_data_dictionary(db2_session: Db2Driver, clean_users_table: None) -> None:
+def test_db2_integration_data_dictionary(db2_session: Db2SyncDriver, clean_users_table: None) -> None:
     """Verify schema catalog reflection on live database."""
     tables = db2_session.data_dictionary.get_tables(db2_session)
     table_names = [t["table_name"].upper() for t in tables]
@@ -149,7 +149,7 @@ def test_db2_integration_data_dictionary(db2_session: Db2Driver, clean_users_tab
     assert pk_cols[0]["column_name"].upper() == "ID"
 
 
-def test_db2_integration_arrow_conversion(db2_session: Db2Driver, clean_users_table: None) -> None:
+def test_db2_integration_arrow_conversion(db2_session: Db2SyncDriver, clean_users_table: None) -> None:
     """Verify Apache Arrow export from query results against live Db2."""
     pa = pytest.importorskip("pyarrow")
 

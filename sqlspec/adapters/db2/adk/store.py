@@ -17,11 +17,11 @@ from sqlspec.extensions.adk.memory import BaseSyncADKMemoryStore, StoredMemory
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.db2.config import Db2Config
+    from sqlspec.adapters.db2.config import Db2SyncConfig
 else:
-    Db2Config = Any
+    Db2SyncConfig = Any
 
-__all__ = ("Db2ADKConfig", "Db2ADKMemoryStore", "Db2ADKStore")
+__all__ = ("Db2ADKConfig", "Db2SyncADKMemoryStore", "Db2SyncADKStore")
 
 JSON_COLUMN_TYPE: Final[str] = "CLOB(1M)"
 
@@ -30,7 +30,7 @@ class Db2ADKConfig(ADKConfig):
     """IBM Db2 ADK extension settings."""
 
 
-class Db2ADKStore(BaseSyncADKStore["Db2Config"]):
+class Db2SyncADKStore(BaseSyncADKStore["Db2SyncConfig"]):
     """Synchronous IBM Db2 ADK session/event store."""
 
     connector_name: ClassVar[str] = "db2"
@@ -413,7 +413,7 @@ class Db2ADKStore(BaseSyncADKStore["Db2Config"]):
         return int(value or 0)
 
 
-class Db2ADKMemoryStore(BaseSyncADKMemoryStore["Db2Config"]):
+class Db2SyncADKMemoryStore(BaseSyncADKMemoryStore["Db2SyncConfig"]):
     """IBM Db2 ADK memory store."""
 
     __slots__ = ()

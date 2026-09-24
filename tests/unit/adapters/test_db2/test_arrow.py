@@ -1,4 +1,4 @@
-"""Unit tests for Db2Driver Apache Arrow result conversion."""
+"""Unit tests for Db2SyncDriver Apache Arrow result conversion."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.db2.core import default_statement_config
-from sqlspec.adapters.db2.driver import Db2Driver
+from sqlspec.adapters.db2.driver import Db2SyncDriver
 from sqlspec.exceptions import ImproperConfigurationError
 from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor
 
@@ -18,7 +18,7 @@ def test_select_to_arrow_table_default() -> None:
     """Verify select_to_arrow returns Arrow Table by default with matching column data."""
     rows = [(1, "Ada"), (2, "Grace")]
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT id, name FROM users")
     table = result.get_data()
@@ -34,7 +34,7 @@ def test_select_to_arrow_batch_format() -> None:
     """Verify select_to_arrow supports return_format='batch' producing single RecordBatch."""
     rows = [(10, "Admin"), (20, "User")]
     cursor = FakeDb2Cursor(rows=rows, description=[("role_id",), ("role_name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT role_id, role_name FROM roles", return_format="batch")
     batch = result.get_data()
@@ -48,7 +48,7 @@ def test_select_to_arrow_batches_format() -> None:
     """Verify select_to_arrow supports return_format='batches' with chunk sizing."""
     rows = [(i, f"item_{i}") for i in range(5)]
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("item",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT id, item FROM inventory", return_format="batches", batch_size=2)
     batches = result.get_data()
@@ -64,7 +64,7 @@ def test_select_to_arrow_reader_format() -> None:
     """Verify select_to_arrow supports return_format='reader' returning RecordBatchReader."""
     rows = [(1, "a"), (2, "b")]
     cursor = FakeDb2Cursor(rows=rows, description=[("k",), ("v",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT k, v FROM kv", return_format="reader", batch_size=1)
     reader = result.get_data()
@@ -99,7 +99,7 @@ def test_select_to_arrow_db2_data_types() -> None:
         ("bool_val",),
     ]
     cursor = FakeDb2Cursor(rows=rows, description=description)
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT * FROM complex_table")
     table = result.get_data()
@@ -121,7 +121,7 @@ def test_select_to_arrow_null_values() -> None:
     rows = [(1, None, None), (2, "some_str", Decimal("10.5"))]
     description = [("id",), ("nullable_str",), ("nullable_dec",)]
     cursor = FakeDb2Cursor(rows=rows, description=description)
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT id, nullable_str, nullable_dec FROM nullable_table")
     table = result.get_data()
@@ -137,7 +137,7 @@ def test_select_to_arrow_empty_result() -> None:
     rows: list[Any] = []
     description = [("col_a",), ("col_b",)]
     cursor = FakeDb2Cursor(rows=rows, description=description)
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT col_a, col_b FROM empty_table")
     table = result.get_data()
@@ -158,7 +158,7 @@ def test_select_to_arrow_empty_result() -> None:
 def test_select_to_arrow_native_only_raises() -> None:
     """Verify select_to_arrow with native_only=True raises ImproperConfigurationError."""
     cursor = FakeDb2Cursor(rows=[(1,)], description=[("id",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     with pytest.raises(ImproperConfigurationError, match="does not support native Arrow"):
         driver.select_to_arrow("SELECT id FROM users", native_only=True)
@@ -168,7 +168,7 @@ def test_select_to_arrow_with_parameters() -> None:
     """Verify select_to_arrow passes bound parameters to underlying execution."""
     rows = [(42, "Found")]
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT id, name FROM users WHERE id = ?", 42)
     table = result.get_data()
@@ -183,7 +183,7 @@ def test_select_to_arrow_result_methods_and_conversions() -> None:
     """Verify ArrowResult metadata properties and downstream conversion methods."""
     rows = [(1, "Alice"), (2, "Bob")]
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
-    driver = Db2Driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
 
     result = driver.select_to_arrow("SELECT id, name FROM users")
 

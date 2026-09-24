@@ -28,7 +28,7 @@ from sqlspec.utils.logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.adapters.db2.driver import Db2Driver
+    from sqlspec.adapters.db2.driver import Db2SyncDriver
 
 __all__ = ("DB2_CONFIG", "Db2SyncDataDictionary", "Db2VersionInfo")
 
@@ -46,13 +46,13 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         super().__init__()
 
     def get_metadata_capabilities(
-        self, driver: "Db2Driver", domains: "Sequence[str] | None" = None
+        self, driver: "Db2SyncDriver", domains: "Sequence[str] | None" = None
     ) -> MetadataCapabilityProfile:
         """Get Db2 data-dictionary capability profile."""
         _ = driver
         return build_db2_metadata_capability_profile(type(self).__name__, domains)
 
-    def get_version(self, driver: "Db2Driver") -> Db2VersionInfo | None:
+    def get_version(self, driver: "Db2SyncDriver") -> Db2VersionInfo | None:
         """Get Db2 database version information."""
         driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
@@ -78,12 +78,12 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         self.cache_version(driver_id, version_info)
         return version_info
 
-    def get_feature_flag(self, driver: "Db2Driver", feature: str) -> bool:
+    def get_feature_flag(self, driver: "Db2SyncDriver", feature: str) -> bool:
         """Check whether Db2 supports a feature."""
         version_info = self.get_version(driver)
         return resolve_db2_feature_flag(feature, version_info)
 
-    def get_optimal_type(self, driver: "Db2Driver", type_category: str) -> str:
+    def get_optimal_type(self, driver: "Db2SyncDriver", type_category: str) -> str:
         """Get optimal Db2 type for a category."""
         _ = driver
         return DB2_CONFIG.get_optimal_type(type_category)
@@ -92,7 +92,7 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         """List available feature flags for this dialect."""
         return list_db2_available_features()
 
-    def get_tables(self, driver: "Db2Driver", schema: str | None = None) -> list[TableMetadata]:
+    def get_tables(self, driver: "Db2SyncDriver", schema: str | None = None) -> list[TableMetadata]:
         """Get tables sorted by dependency order with catalog fallback."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -118,7 +118,7 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         return merge_db2_table_lists(ordered_rows, all_rows)
 
     def get_columns(
-        self, driver: "Db2Driver", table: str | None = None, schema: str | None = None
+        self, driver: "Db2SyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         """Get columns for a table or schema from SYSCAT.COLUMNS."""
         schema_name = self.resolve_schema(schema)
@@ -153,7 +153,7 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         return columns
 
     def get_indexes(
-        self, driver: "Db2Driver", table: str | None = None, schema: str | None = None
+        self, driver: "Db2SyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[IndexMetadata]:
         """Get indexes for a table or schema from SYSCAT.INDEXES and SYSCAT.INDEXCOLUSE."""
         schema_name = self.resolve_schema(schema)
@@ -194,7 +194,7 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         ]
 
     def get_foreign_keys(
-        self, driver: "Db2Driver", table: str | None = None, schema: str | None = None
+        self, driver: "Db2SyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign keys from SYSCAT.REFERENCES and SYSCAT.KEYCOLUSE."""
         schema_name = self.resolve_schema(schema)
@@ -222,7 +222,7 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         ]
 
     def get_constraints(
-        self, driver: "Db2Driver", table: str | None = None, schema: str | None = None
+        self, driver: "Db2SyncDriver", table: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get Db2 constraint metadata."""
         schema_name = self.resolve_schema(schema)
@@ -231,14 +231,14 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         rows = driver.select(query, schema_name=schema_name, table_name=table_name)
         return MetadataResult("constraints", items=tuple(rows))
 
-    def get_views(self, driver: "Db2Driver", schema: str | None = None) -> MetadataResult:
+    def get_views(self, driver: "Db2SyncDriver", schema: str | None = None) -> MetadataResult:
         """Get Db2 view metadata."""
         schema_name = self.resolve_schema(schema)
         query = self.get_query("views", "by_schema")
         rows = driver.select(query, schema_name=schema_name, view_name=None)
         return MetadataResult("views", items=tuple(rows))
 
-    def get_schemas(self, driver: "Db2Driver") -> MetadataResult:
+    def get_schemas(self, driver: "Db2SyncDriver") -> MetadataResult:
         """Get Db2 schema metadata."""
         query = self.get_query("schemas", "by_schema")
         rows = driver.select(query, schema_name=None)

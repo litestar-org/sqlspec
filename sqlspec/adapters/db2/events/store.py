@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, Any
 from sqlspec.extensions.events import BaseEventQueueStore
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.db2.config import Db2Config
+    from sqlspec.adapters.db2.config import Db2SyncConfig
 else:
-    Db2Config = Any
+    Db2SyncConfig = Any
 
-__all__ = ("Db2EventQueueStore",)
+__all__ = ("Db2SyncEventQueueStore",)
 
 
-class Db2EventQueueStore(BaseEventQueueStore[Db2Config]):
+class Db2SyncEventQueueStore(BaseEventQueueStore[Db2SyncConfig]):
     """IBM Db2 event queue store.
 
     Uses CLOB for JSON payloads and TIMESTAMP with microsecond precision

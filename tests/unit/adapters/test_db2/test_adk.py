@@ -3,7 +3,7 @@
 from typing import Any
 from unittest.mock import MagicMock
 
-from sqlspec.adapters.db2.adk import Db2ADKConfig, Db2ADKMemoryStore, Db2ADKStore
+from sqlspec.adapters.db2.adk import Db2ADKConfig, Db2SyncADKMemoryStore, Db2SyncADKStore
 
 
 def _mock_config(adk_config: dict[str, Any] | None = None) -> MagicMock:
@@ -12,16 +12,16 @@ def _mock_config(adk_config: dict[str, Any] | None = None) -> MagicMock:
     return config
 
 
-def _store_with_driver() -> tuple[Db2ADKStore, MagicMock, MagicMock]:
+def _store_with_driver() -> tuple[Db2SyncADKStore, MagicMock, MagicMock]:
     config = _mock_config()
-    store = Db2ADKStore(config)
+    store = Db2SyncADKStore(config)
     driver = MagicMock()
     config.provide_session.return_value.__enter__.return_value = driver
     config.provide_session.return_value.__exit__.return_value = False
     return store, driver, config
 
 
-def _all_tables(store: Db2ADKStore) -> list[dict[str, Any]]:
+def _all_tables(store: Db2SyncADKStore) -> list[dict[str, Any]]:
     names = [
         store._session_table,
         store._events_table,
@@ -32,7 +32,7 @@ def _all_tables(store: Db2ADKStore) -> list[dict[str, Any]]:
     return [{"table_name": name} for name in names]
 
 
-def _all_indexes(store: Db2ADKStore) -> list[dict[str, Any]]:
+def _all_indexes(store: Db2SyncADKStore) -> list[dict[str, Any]]:
     session_indexes = [f"idx_{store._session_table}_app_user", f"idx_{store._session_table}_update_time"]
     event_indexes = [
         f"idx_{store._events_table}_scope",
@@ -75,9 +75,9 @@ def test_db2_adk_creates_missing_tables() -> None:
 
 
 def test_db2_adk_memory_store_search_query() -> None:
-    """Test Db2ADKMemoryStore searches memory with POSSTR case-insensitive match."""
+    """Test Db2SyncADKMemoryStore searches memory with POSSTR case-insensitive match."""
     config = _mock_config()
-    store = Db2ADKMemoryStore(config)
+    store = Db2SyncADKMemoryStore(config)
     driver = MagicMock()
     config.provide_session.return_value.__enter__.return_value = driver
     config.provide_session.return_value.__exit__.return_value = False

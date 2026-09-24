@@ -4,7 +4,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from sqlspec.adapters.db2.data_dictionary import DB2_CONFIG, Db2SyncDataDictionary, Db2VersionInfo
-from sqlspec.adapters.db2.driver import Db2Driver
+from sqlspec.adapters.db2.driver import Db2SyncDriver
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, db2_description
 
@@ -21,11 +21,11 @@ def test_db2_dialect_config_registered() -> None:
 
 def _driver_with_results(
     *results: "tuple[tuple[str, ...], list[tuple[Any, ...]]]",
-) -> "tuple[Db2Driver, FakeDb2Connection]":
+) -> "tuple[Db2SyncDriver, FakeDb2Connection]":
     """Build a real driver whose cursors return rows with Db2-folded column descriptions."""
     cursors = [FakeDb2Cursor(rows=rows, description=db2_description(*names)) for names, rows in results]
     connection = FakeDb2Connection(cursors)
-    return Db2Driver(connection), connection
+    return Db2SyncDriver(connection), connection
 
 
 def test_db2_get_tables() -> None:
