@@ -38,7 +38,6 @@ __all__ = (
 DB2_VERSION_PATTERN = re.compile(r"(?:v|V)?(\d+)\.(\d+)(?:\.(\d+))?")
 
 DB2_FEATURE_VERSIONS: FeatureVersions = {
-    "supports_skip_locked": VersionInfo(11, 1, 0),
     "supports_cte": VersionInfo(8, 1, 0),
     "supports_window_functions": VersionInfo(8, 1, 0),
     "supports_generated_columns": VersionInfo(8, 1, 0),
@@ -67,7 +66,7 @@ DB2_TYPE_MAPPINGS: dict[str, str] = {
     "integer": "INTEGER",
     "bigint": "BIGINT",
     "float": "DOUBLE",
-    "decimal": "DECFLOAT",
+    "decimal": "DECIMAL(31, 10)",
     "varchar": "VARCHAR(255)",
 }
 

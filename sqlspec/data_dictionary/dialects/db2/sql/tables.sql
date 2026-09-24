@@ -11,8 +11,8 @@ WITH dependency_tree (schema_name, table_name, level, path) AS (
       AND t.TABSCHEMA NOT LIKE 'SYS%'
       AND t.TABSCHEMA NOT LIKE 'NULLID%'
       AND t.TABSCHEMA NOT LIKE 'SQLJ%'
-      AND (:schema_name IS NULL OR t.TABSCHEMA = :schema_name)
-      AND (:table_name IS NULL OR t.TABNAME = :table_name)
+      AND t.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
+      AND (CAST(:table_name AS VARCHAR(128)) IS NULL OR t.TABNAME = :table_name)
       AND NOT EXISTS (
           SELECT 1
           FROM SYSCAT.REFERENCES r
@@ -34,8 +34,8 @@ WITH dependency_tree (schema_name, table_name, level, path) AS (
       AND child.TABSCHEMA NOT LIKE 'SYS%'
       AND child.TABSCHEMA NOT LIKE 'NULLID%'
       AND child.TABSCHEMA NOT LIKE 'SQLJ%'
-      AND (:schema_name IS NULL OR child.TABSCHEMA = :schema_name)
-      AND (:table_name IS NULL OR child.TABNAME = :table_name)
+      AND child.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
+      AND (CAST(:table_name AS VARCHAR(128)) IS NULL OR child.TABNAME = :table_name)
       AND LOCATE('/' || RTRIM(child.TABSCHEMA) || '.' || RTRIM(child.TABNAME) || '/', dt.path) = 0
 )
 SELECT
@@ -68,8 +68,8 @@ FROM SYSCAT.TABLES t
 WHERE t.TABSCHEMA NOT LIKE 'SYS%'
   AND t.TABSCHEMA NOT LIKE 'NULLID%'
   AND t.TABSCHEMA NOT LIKE 'SQLJ%'
-  AND (:schema_name IS NULL OR t.TABSCHEMA = :schema_name)
-  AND (:table_name IS NULL OR t.TABNAME = :table_name)
+  AND t.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
+  AND (CAST(:table_name AS VARCHAR(128)) IS NULL OR t.TABNAME = :table_name)
 ORDER BY t.TABSCHEMA, t.TABNAME;
 
 -- name: names_by_schema
@@ -81,5 +81,5 @@ WHERE t.TYPE = 'T'
   AND t.TABSCHEMA NOT LIKE 'SYS%'
   AND t.TABSCHEMA NOT LIKE 'NULLID%'
   AND t.TABSCHEMA NOT LIKE 'SQLJ%'
-  AND (:schema_name IS NULL OR t.TABSCHEMA = :schema_name)
+  AND t.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
 ORDER BY t.TABNAME;

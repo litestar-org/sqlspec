@@ -3,10 +3,22 @@
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from sqlspec.adapters.db2.data_dictionary import DB2_CONFIG, Db2SyncDataDictionary, Db2VersionInfo
 from sqlspec.adapters.db2.driver import Db2SyncDriver
-from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
-from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, db2_description
+from sqlspec.data_dictionary import (
+    ColumnMetadata,
+    ForeignKeyMetadata,
+    IndexMetadata,
+    MetadataResult,
+    MetadataSupport,
+    TableMetadata,
+)
+from sqlspec.exceptions import SQLSpecError
+from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, db2_description, db2_error
+
+VERSION_COLUMNS = ("service_level", "bld_level", "fixpack_num", "inst_name")
 
 
 def test_db2_dialect_config_registered() -> None:
@@ -16,7 +28,7 @@ def test_db2_dialect_config_registered() -> None:
     assert DB2_CONFIG.get_feature_flag("supports_on_conflict") is False
     assert DB2_CONFIG.get_optimal_type("uuid") == "VARCHAR(36)"
     assert DB2_CONFIG.get_optimal_type("boolean") == "BOOLEAN"
-    assert DB2_CONFIG.get_optimal_type("decimal") == "DECFLOAT"
+    assert DB2_CONFIG.get_optimal_type("decimal") == "DECIMAL(31, 10)"
 
 
 def _driver_with_results(
@@ -58,12 +70,13 @@ def test_db2_get_columns() -> None:
         "max_length",
         "numeric_scale",
         "is_primary",
+        "is_unique",
         "identity_generation",
         "is_generated",
     )
     rows = [
-        ("MYSCHEMA", "USERS", "ID", "BIGINT", 0, None, 1, 8, 0, 1, "A", "A"),
-        ("MYSCHEMA", "USERS", "NAME", "VARCHAR", 1, "'anonymous'", 2, 255, 0, 0, None, None),
+        ("MYSCHEMA", "USERS", "ID", "BIGINT", 0, None, 1, 8, 0, 1, 1, "A", "A"),
+        ("MYSCHEMA", "USERS", "NAME", "VARCHAR", 1, "'anonymous'", 2, 255, 0, 0, 0, None, None),
     ]
     driver, connection = _driver_with_results((names, rows))
 
@@ -196,7 +209,8 @@ def test_db2_feature_flags_and_optimal_types() -> None:
 
     assert dd.get_optimal_type(mock_driver, "uuid") == "VARCHAR(36)"
     assert dd.get_optimal_type(mock_driver, "boolean") == "BOOLEAN"
-    assert dd.get_optimal_type(mock_driver, "decimal") == "DECFLOAT"
+    assert dd.get_optimal_type(mock_driver, "decimal") == "DECIMAL(31, 10)"
+    assert dd.get_feature_flag(mock_driver, "supports_skip_locked") is True
 
 
 def test_db2_get_tables_empty_and_no_schema() -> None:
@@ -243,6 +257,7 @@ def test_db2_get_columns_primary_key_variations() -> None:
             "max_length": 4,
             "numeric_scale": 0,
             "is_primary": "1",
+            "is_unique": 1,
             "identity_generation": None,
             "is_generated": None,
         },
@@ -257,6 +272,7 @@ def test_db2_get_columns_primary_key_variations() -> None:
             "max_length": 50,
             "numeric_scale": 0,
             "is_primary": 0,
+            "is_unique": 0,
             "identity_generation": None,
             "is_generated": None,
         },
@@ -302,21 +318,6 @@ def test_db2_get_foreign_keys_empty_and_no_schema() -> None:
     assert kwargs.get("table_name") is None
 
 
-def test_db2_version_detection_fallback_on_error() -> None:
-    """Verify get_version falls back to default version when driver query fails."""
-    mock_driver = MagicMock()
-    mock_driver.select_one_or_none.side_effect = RuntimeError("Db2 communication failure")
-
-    dd = Db2SyncDataDictionary()
-    version = dd.get_version(mock_driver)
-
-    assert isinstance(version, Db2VersionInfo)
-    assert version.major == 11
-    assert version.minor == 5
-    assert version.patch == 0
-    assert version.service_level is None
-
-
 def test_db2_get_constraints_views_schemas() -> None:
     """Verify get_constraints, get_views, and get_schemas execute appropriate queries."""
     mock_driver = MagicMock()
@@ -333,10 +334,113 @@ def test_db2_get_constraints_views_schemas() -> None:
     assert len(schemas.items) == 1
 
 
-def test_db2_metadata_capabilities() -> None:
-    """Verify get_metadata_capabilities returns valid profile."""
-    mock_driver = MagicMock()
-    dd = Db2SyncDataDictionary()
-    profile = dd.get_metadata_capabilities(mock_driver)
+def test_db2_metadata_capabilities_are_exact() -> None:
+    """Every claimed metadata domain is reported as supported."""
+    profile = Db2SyncDataDictionary().get_metadata_capabilities(MagicMock())
+
     assert profile.dialect == "db2"
-    assert len(profile.capabilities) > 0
+    assert tuple(capability.domain for capability in profile.capabilities) == (
+        "schemas",
+        "objects",
+        "tables",
+        "columns",
+        "constraints",
+        "indexes",
+        "foreign_keys",
+        "views",
+        "version",
+    )
+    assert {capability.support for capability in profile.capabilities} == {MetadataSupport.SUPPORTED}
+
+
+def test_unqualified_lookup_binds_null_schema_and_sql_uses_current_schema() -> None:
+    """Unqualified lookups bind a NULL schema that the SQL resolves to CURRENT SCHEMA."""
+    names = ("schema_name", "table_name", "table_type")
+    driver, connection = _driver_with_results((names, []), (names, []))
+
+    Db2SyncDataDictionary().get_tables(driver)
+
+    for cursor in connection.cursors:
+        sql, parameters = cursor.executed[0]
+        assert "COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA)" in sql
+        assert "? IS NULL OR" not in sql
+        assert set(parameters) == {None}
+
+
+@pytest.mark.parametrize(("service_level", "expected"), [("DB2 v11.5.9.0", (11, 5, 9)), ("DB2 v12.1", (12, 1, 0))])
+def test_get_version_parses_service_level(service_level: str, expected: "tuple[int, int, int]") -> None:
+    """The service level reported by the instance is parsed into a version."""
+    driver, _ = _driver_with_results((VERSION_COLUMNS, [(service_level, "s1", 0, "db2inst1")]))
+
+    version = Db2SyncDataDictionary().get_version(driver)
+
+    assert isinstance(version, Db2VersionInfo)
+    assert (version.major, version.minor, version.patch) == expected
+    assert version.service_level == service_level
+
+
+@pytest.mark.parametrize("rows", [[("unknown", "s1", 0, "db2inst1")], []])
+def test_get_version_returns_none_for_unparsable_row(rows: "list[tuple[Any, ...]]") -> None:
+    """A missing or unparsable service level yields and caches None."""
+    driver, connection = _driver_with_results((VERSION_COLUMNS, rows))
+    dd = Db2SyncDataDictionary()
+
+    assert dd.get_version(driver) is None
+    assert dd.get_version(driver) is None
+    assert len(connection.cursors) == 1
+
+
+def test_get_version_propagates_query_errors() -> None:
+    """A failing version query raises the mapped driver error instead of inventing a version."""
+    error = db2_error(-440, "42884", 'No authorized routine named "ENV_GET_INST_INFO" of type "FUNCTION".')
+    connection = FakeDb2Connection([FakeDb2Cursor(error=error)])
+
+    with pytest.raises(SQLSpecError):
+        Db2SyncDataDictionary().get_version(Db2SyncDriver(connection))
+
+
+def test_get_objects_returns_catalog_objects() -> None:
+    """Catalog objects are returned in an objects-domain result for the current schema."""
+    names = ("schema_name", "object_name", "object_type", "created", "remarks")
+    rows = [("APP", "ORDERS", "TABLE", None, None), ("APP", "ORDER_SEQ", "SEQUENCE", None, "ids")]
+    driver, connection = _driver_with_results((names, rows))
+
+    result = Db2SyncDataDictionary().get_objects(driver)
+
+    assert isinstance(result, MetadataResult)
+    assert result.domain == "objects"
+    assert result.items == (
+        {"schema_name": "APP", "object_name": "ORDERS", "object_type": "TABLE", "created": None, "remarks": None},
+        {
+            "schema_name": "APP",
+            "object_name": "ORDER_SEQ",
+            "object_type": "SEQUENCE",
+            "created": None,
+            "remarks": "ids",
+        },
+    )
+    sql, parameters = connection.cursors[0].executed[0]
+    assert "SYSCAT.SEQUENCES" in sql
+    assert "SYSCAT.ROUTINES" in sql
+    assert set(parameters) == {None}
+
+
+def test_get_objects_binds_folded_schema() -> None:
+    """An explicit schema is folded to its catalog form before binding."""
+    names = ("schema_name", "object_name", "object_type", "created", "remarks")
+    driver, connection = _driver_with_results((names, []))
+
+    Db2SyncDataDictionary().get_objects(driver, schema="app")
+
+    assert "APP" in connection.cursors[0].executed[0][1]
+
+
+def test_get_columns_reports_unique_separately_from_primary() -> None:
+    """A column covered by a single-column unique index is unique without being a primary key."""
+    names = ("schema_name", "table_name", "column_name", "data_type", "is_primary", "is_unique")
+    driver, _ = _driver_with_results((names, [("APP", "USERS", "EMAIL", "VARCHAR", 0, 1)]))
+
+    columns = Db2SyncDataDictionary().get_columns(driver, table="users", schema="app")
+
+    assert columns[0]["is_primary"] is False
+    assert columns[0]["is_unique"] is True

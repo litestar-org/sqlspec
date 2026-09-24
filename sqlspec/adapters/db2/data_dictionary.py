@@ -1,5 +1,6 @@
 """IBM Db2 database data dictionary implementation."""
 
+import logging
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
@@ -23,7 +24,7 @@ from sqlspec.data_dictionary.dialects.db2 import (
     resolve_db2_feature_flag,
 )
 from sqlspec.driver import SyncDataDictionaryBase
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -53,27 +54,36 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         return build_db2_metadata_capability_profile(type(self).__name__, domains)
 
     def get_version(self, driver: "Db2SyncDriver") -> Db2VersionInfo | None:
-        """Get Db2 database version information."""
+        """Get Db2 database version information.
+
+        The instance service level is parsed once per driver and cached. Query errors propagate
+        as mapped driver errors.
+
+        Args:
+            driver: Db2 driver.
+
+        Returns:
+            The parsed version, or ``None`` when the service level cannot be parsed.
+        """
         driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
             return cast("Db2VersionInfo | None", self._version_cache.get(driver_id))
 
+        row = driver.select_one_or_none(self.get_query("version", "current"))
+        service_level = extract_db2_version_value(row)
+        match = DB2_VERSION_PATTERN.search(service_level) if service_level else None
         version_info: Db2VersionInfo | None = None
-        try:
-            row = driver.select_one_or_none(self.get_query("version", "current"))
-            lvl = extract_db2_version_value(row)
-            if lvl:
-                match = DB2_VERSION_PATTERN.search(lvl)
-                if match:
-                    major = int(match.group(1))
-                    minor = int(match.group(2)) if match.group(2) else 0
-                    patch = int(match.group(3)) if match.group(3) else 0
-                    version_info = Db2VersionInfo(major, minor, patch, service_level=lvl)
-        except Exception:
-            version_info = Db2VersionInfo(11, 5, 0)
-
-        if version_info is None:
-            version_info = Db2VersionInfo(11, 5, 0)
+        if match is None:
+            log_with_context(
+                logger, logging.DEBUG, "data_dictionary.version.unparsed", dialect="db2", value=service_level
+            )
+        else:
+            version_info = Db2VersionInfo(
+                int(match.group(1)),
+                int(match.group(2)) if match.group(2) else 0,
+                int(match.group(3)) if match.group(3) else 0,
+                service_level=service_level,
+            )
 
         self.cache_version(driver_id, version_info)
         return version_info
@@ -130,26 +140,24 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
             self._log_table_describe(driver, schema_name=schema_name, table_name=table_name, operation="columns")
             rows = driver.select(self.get_query("columns", "by_table"), schema_name=schema_name, table_name=table_name)
 
-        columns: list[ColumnMetadata] = []
-        for r in rows:
-            is_pk = bool(r.get("is_primary"))
-            columns.append(
-                ColumnMetadata(
-                    schema_name=str(r.get("schema_name", "")),
-                    table_name=str(r.get("table_name", "")),
-                    column_name=str(r.get("column_name", "")),
-                    data_type=str(r.get("data_type", "")),
-                    is_nullable=bool(r.get("is_nullable", True)),
-                    column_default=str(r["column_default"]) if r.get("column_default") is not None else None,
-                    ordinal_position=int(r.get("ordinal_position", 1)),
-                    max_length=int(r.get("max_length", 0)) if r.get("max_length") is not None else 0,
-                    numeric_scale=int(r.get("numeric_scale", 0)) if r.get("numeric_scale") is not None else 0,
-                    is_primary=is_pk,
-                    is_unique=is_pk,
-                    identity_generation=str(r["identity_generation"]) if r.get("identity_generation") else None,
-                    is_generated=bool(r.get("is_generated")),
-                )
+        columns: list[ColumnMetadata] = [
+            ColumnMetadata(
+                schema_name=str(r.get("schema_name", "")),
+                table_name=str(r.get("table_name", "")),
+                column_name=str(r.get("column_name", "")),
+                data_type=str(r.get("data_type", "")),
+                is_nullable=bool(r.get("is_nullable", True)),
+                column_default=str(r["column_default"]) if r.get("column_default") is not None else None,
+                ordinal_position=int(r.get("ordinal_position", 1)),
+                max_length=int(r.get("max_length", 0)) if r.get("max_length") is not None else 0,
+                numeric_scale=int(r.get("numeric_scale", 0)) if r.get("numeric_scale") is not None else 0,
+                is_primary=bool(r.get("is_primary")),
+                is_unique=bool(r.get("is_unique")),
+                identity_generation=str(r["identity_generation"]) if r.get("identity_generation") else None,
+                is_generated=bool(r.get("is_generated")),
             )
+            for r in rows
+        ]
         return columns
 
     def get_indexes(
@@ -237,6 +245,21 @@ class Db2SyncDataDictionary(SyncDataDictionaryBase):
         query = self.get_query("views", "by_schema")
         rows = driver.select(query, schema_name=schema_name, view_name=None)
         return MetadataResult("views", items=tuple(rows))
+
+    def get_objects(self, driver: "Db2SyncDriver", schema: "str | None" = None) -> MetadataResult:
+        """Get tables, views, aliases, sequences and routines from the Db2 catalog.
+
+        Args:
+            driver: Db2 driver.
+            schema: Schema to list; defaults to the session's ``CURRENT SCHEMA``.
+
+        Returns:
+            Objects-domain metadata result.
+        """
+        rows = driver.select(
+            self.get_query("objects", "by_schema"), schema_name=self.resolve_schema(schema), object_name=None
+        )
+        return MetadataResult("objects", items=tuple(rows))
 
     def get_schemas(self, driver: "Db2SyncDriver") -> MetadataResult:
         """Get Db2 schema metadata."""

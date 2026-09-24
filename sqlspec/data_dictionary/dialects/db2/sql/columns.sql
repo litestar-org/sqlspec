@@ -11,7 +11,15 @@ SELECT
     c.LENGTH AS max_length,
     c.SCALE AS numeric_scale,
     CASE WHEN c.KEYSEQ IS NOT NULL AND c.KEYSEQ > 0 THEN 1 ELSE 0 END AS is_primary,
-    CASE WHEN c.KEYSEQ IS NOT NULL AND c.KEYSEQ > 0 THEN 1 ELSE 0 END AS is_unique,
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM SYSCAT.INDEXES i
+        WHERE i.TABSCHEMA = c.TABSCHEMA
+          AND i.TABNAME = c.TABNAME
+          AND i.UNIQUERULE IN ('U', 'P')
+          AND i.COLCOUNT = 1
+          AND SUBSTR(i.COLNAMES, 2) = c.COLNAME
+    ) THEN 1 ELSE 0 END AS is_unique,
     c.IDENTITY AS identity_generation,
     CASE WHEN c.GENERATED IN ('A', 'D') THEN 1 ELSE 0 END AS is_generated,
     c.REMARKS AS column_comment
@@ -20,8 +28,8 @@ JOIN SYSCAT.TABLES t ON c.TABSCHEMA = t.TABSCHEMA AND c.TABNAME = t.TABNAME
 WHERE c.TABSCHEMA NOT LIKE 'SYS%'
   AND c.TABSCHEMA NOT LIKE 'NULLID%'
   AND c.TABSCHEMA NOT LIKE 'SQLJ%'
-  AND (:schema_name IS NULL OR c.TABSCHEMA = :schema_name)
-  AND (:table_name IS NULL OR c.TABNAME = :table_name)
+  AND c.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
+  AND (CAST(:table_name AS VARCHAR(128)) IS NULL OR c.TABNAME = :table_name)
 ORDER BY c.TABSCHEMA, c.TABNAME, c.COLNO;
 
 -- name: by_table
@@ -37,7 +45,15 @@ SELECT
     c.LENGTH AS max_length,
     c.SCALE AS numeric_scale,
     CASE WHEN c.KEYSEQ IS NOT NULL AND c.KEYSEQ > 0 THEN 1 ELSE 0 END AS is_primary,
-    CASE WHEN c.KEYSEQ IS NOT NULL AND c.KEYSEQ > 0 THEN 1 ELSE 0 END AS is_unique,
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM SYSCAT.INDEXES i
+        WHERE i.TABSCHEMA = c.TABSCHEMA
+          AND i.TABNAME = c.TABNAME
+          AND i.UNIQUERULE IN ('U', 'P')
+          AND i.COLCOUNT = 1
+          AND SUBSTR(i.COLNAMES, 2) = c.COLNAME
+    ) THEN 1 ELSE 0 END AS is_unique,
     c.IDENTITY AS identity_generation,
     CASE WHEN c.GENERATED IN ('A', 'D') THEN 1 ELSE 0 END AS is_generated,
     c.REMARKS AS column_comment
@@ -46,5 +62,5 @@ WHERE c.TABSCHEMA NOT LIKE 'SYS%'
   AND c.TABSCHEMA NOT LIKE 'NULLID%'
   AND c.TABSCHEMA NOT LIKE 'SQLJ%'
   AND c.TABNAME = :table_name
-  AND (:schema_name IS NULL OR c.TABSCHEMA = :schema_name)
+  AND c.TABSCHEMA = COALESCE(CAST(:schema_name AS VARCHAR(128)), CURRENT SCHEMA)
 ORDER BY c.COLNO;
