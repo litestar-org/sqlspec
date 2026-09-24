@@ -499,7 +499,7 @@ def test_adk_store_uses_query_and_wait() -> None:
         driver_features={"_connection_factory": lambda: mock_client},
     )
     store = BigQueryADKStore(config)
-    store._config = SimpleNamespace(create_connection=lambda: mock_client)
+    store._config = cast(Any, SimpleNamespace(create_connection=lambda: mock_client))
 
     result = store._run_query("SELECT id FROM test_table")
     assert len(mock_client.query_and_wait_calls) == 1
