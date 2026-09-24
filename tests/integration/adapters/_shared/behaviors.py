@@ -2154,7 +2154,7 @@ def _pc_table(case: DriverCase, suffix: str) -> str:
 
 
 def _merge_dialect(case: DriverCase) -> str:
-    return "oracle" if case.dialect == "oracle" else "postgres"
+    return case.dialect if case.dialect in {"db2", "oracle"} else "postgres"
 
 
 def _merge_table_sql(case: DriverCase, table: str) -> str:
@@ -2166,6 +2166,16 @@ def _merge_table_sql(case: DriverCase, table: str) -> str:
             "price NUMBER(10, 2), "
             "stock NUMBER DEFAULT 0, "
             "category VARCHAR2(50)"
+            ")"
+        )
+    if case.dialect == "db2":
+        return (
+            f"CREATE TABLE {table} ("
+            "id INTEGER NOT NULL PRIMARY KEY, "
+            "name VARCHAR(100) NOT NULL, "
+            "price DECIMAL(10, 2), "
+            "stock INTEGER DEFAULT 0, "
+            "category VARCHAR(50)"
             ")"
         )
     return (
@@ -2182,6 +2192,9 @@ def _merge_table_sql(case: DriverCase, table: str) -> str:
 def _drop_merge_table_sync(driver: "SyncContractDriver", case: DriverCase, table: str) -> None:
     if case.dialect == "oracle":
         driver.execute_script(_oracle_drop_sql("TABLE", table))
+    elif case.dialect == "db2":
+        _drop_db2_table_sync(driver, table)
+        driver.commit()
     else:
         driver.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         driver.commit()
@@ -2190,6 +2203,9 @@ def _drop_merge_table_sync(driver: "SyncContractDriver", case: DriverCase, table
 async def _drop_merge_table_async(driver: "AsyncContractDriver", case: DriverCase, table: str) -> None:
     if case.dialect == "oracle":
         await driver.execute_script(_oracle_drop_sql("TABLE", table))
+    elif case.dialect == "db2":
+        await _drop_db2_table_async(driver, table)
+        await driver.commit()
     else:
         await driver.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await driver.commit()
@@ -4257,6 +4273,21 @@ def _oracle_drop_sql(kind: str, name: str) -> str:
     )
 
 
+_DB2_TABLE_EXISTS_SQL = "SELECT COUNT(*) FROM SYSCAT.TABLES WHERE TABSCHEMA = CURRENT SCHEMA AND TABNAME = ?"
+
+
+def _drop_db2_table_sync(driver: Any, table: str) -> None:
+    """Drop an unquoted Db2 table in the current schema when the catalog lists it."""
+    if driver.select_value(_DB2_TABLE_EXISTS_SQL, (table.upper(),)):
+        driver.execute_script(f"DROP TABLE {table}")
+
+
+async def _drop_db2_table_async(driver: Any, table: str) -> None:
+    """Async mirror of _drop_db2_table_sync."""
+    if await driver.select_value(_DB2_TABLE_EXISTS_SQL, (table.upper(),)):
+        await driver.execute_script(f"DROP TABLE {table}")
+
+
 def _oracle_sequence(driver: object, case: DriverCase) -> None:
     """Fold Oracle sequences: insert via seq.NEXTVAL, read seq.CURRVAL FROM dual, verify the row round-trips."""
     sync_driver = cast("SyncContractDriver", driver)
@@ -5034,7 +5065,11 @@ def _pool_contract_table(case: DriverCase) -> str:
 
 def _connection_probe_sql(case: DriverCase) -> str:
     """Trivial query used to force a connection to be drawn so the create-hook fires."""
-    return "SELECT 1 FROM DUAL" if case.dialect == "oracle" else "SELECT 1"
+    if case.dialect == "oracle":
+        return "SELECT 1 FROM DUAL"
+    if case.dialect == "db2":
+        return "SELECT 1 FROM SYSIBM.SYSDUMMY1"
+    return "SELECT 1"
 
 
 def assert_sync_connection_hook_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
@@ -5170,7 +5205,7 @@ async def assert_async_connection_instance_contract(make_config: AsyncConfigFact
 
 
 class _ColumnCaseRow(msgspec.Struct):
-    """Lowercase-field struct used to probe Oracle implicit column-name casing."""
+    """Lowercase-field struct used to probe implicit uppercase column-name casing."""
 
     id: int
     name: str
@@ -5180,17 +5215,44 @@ def _column_case_table(case: DriverCase) -> str:
     return f"colcase_{case.adapter}_{case.mode}"
 
 
+def _column_case_sql(case: DriverCase, table: str) -> "tuple[str, str]":
+    """Return the dialect's CREATE TABLE and parameterized INSERT for the column-casing table."""
+    if case.dialect == "db2":
+        return (
+            f"CREATE TABLE {table} (id INTEGER NOT NULL PRIMARY KEY, name VARCHAR(50))",
+            f"INSERT INTO {table} (id, name) VALUES (?, ?)",
+        )
+    return (
+        f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))",
+        f"INSERT INTO {table} (id, name) VALUES (:1, :2)",
+    )
+
+
+def _drop_column_case_table_sync(session: Any, case: DriverCase, table: str) -> None:
+    if case.dialect == "db2":
+        _drop_db2_table_sync(session, table)
+    else:
+        session.execute_script(_oracle_drop_sql("TABLE", table))
+
+
+async def _drop_column_case_table_async(session: Any, case: DriverCase, table: str) -> None:
+    if case.dialect == "db2":
+        await _drop_db2_table_async(session, table)
+    else:
+        await session.execute_script(_oracle_drop_sql("TABLE", table))
+
+
 def assert_sync_lowercase_columns_contract(make_config: SyncConfigFactory, case: DriverCase) -> None:
-    """Assert Oracle hydrates implicit columns lowercase by default and uppercase when the feature is disabled."""
+    """Assert implicit uppercase columns hydrate lowercase by default and uppercase when the feature is disabled."""
     table = _column_case_table(case)
-    create = f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
+    create, insert = _column_case_sql(case, table)
 
     default_config = make_config()
     try:
         with default_config.provide_session() as session:
-            session.execute_script(_oracle_drop_sql("TABLE", table))
+            _drop_column_case_table_sync(session, case, table)
             session.execute_script(create)
-            session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            session.execute(insert, (1, "widget"))
             result = session.execute(f"SELECT id, name FROM {table}")
             row = result.get_first()
             assert row is not None
@@ -5199,23 +5261,23 @@ def assert_sync_lowercase_columns_contract(make_config: SyncConfigFactory, case:
             assert hydrated is not None
             assert hydrated.id == 1
             assert hydrated.name == "widget"
-            session.execute_script(_oracle_drop_sql("TABLE", table))
+            _drop_column_case_table_sync(session, case, table)
     finally:
         default_config.close_pool()
 
     disabled_config = make_config(driver_features={"enable_lowercase_column_names": False})
     try:
         with disabled_config.provide_session() as session:
-            session.execute_script(_oracle_drop_sql("TABLE", table))
+            _drop_column_case_table_sync(session, case, table)
             session.execute_script(create)
-            session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            session.execute(insert, (1, "widget"))
             result = session.execute(f"SELECT id, name FROM {table}")
             row = result.get_first()
             assert row is not None
             assert "ID" in row and "id" not in row
             with pytest.raises(msgspec.ValidationError):
                 result.get_first(schema_type=_ColumnCaseRow)
-            session.execute_script(_oracle_drop_sql("TABLE", table))
+            _drop_column_case_table_sync(session, case, table)
     finally:
         disabled_config.close_pool()
 
@@ -5223,14 +5285,14 @@ def assert_sync_lowercase_columns_contract(make_config: SyncConfigFactory, case:
 async def assert_async_lowercase_columns_contract(make_config: AsyncConfigFactory, case: DriverCase) -> None:
     """Async mirror of assert_sync_lowercase_columns_contract."""
     table = _column_case_table(case)
-    create = f"CREATE TABLE {table} (id NUMBER PRIMARY KEY, name VARCHAR2(50))"
+    create, insert = _column_case_sql(case, table)
 
     default_config = make_config()
     try:
         async with default_config.provide_session() as session:
-            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await _drop_column_case_table_async(session, case, table)
             await session.execute_script(create)
-            await session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            await session.execute(insert, (1, "widget"))
             result = await session.execute(f"SELECT id, name FROM {table}")
             row = result.get_first()
             assert row is not None
@@ -5239,23 +5301,23 @@ async def assert_async_lowercase_columns_contract(make_config: AsyncConfigFactor
             assert hydrated is not None
             assert hydrated.id == 1
             assert hydrated.name == "widget"
-            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await _drop_column_case_table_async(session, case, table)
     finally:
         await default_config.close_pool()
 
     disabled_config = make_config(driver_features={"enable_lowercase_column_names": False})
     try:
         async with disabled_config.provide_session() as session:
-            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await _drop_column_case_table_async(session, case, table)
             await session.execute_script(create)
-            await session.execute(f"INSERT INTO {table} (id, name) VALUES (:1, :2)", (1, "widget"))
+            await session.execute(insert, (1, "widget"))
             result = await session.execute(f"SELECT id, name FROM {table}")
             row = result.get_first()
             assert row is not None
             assert "ID" in row and "id" not in row
             with pytest.raises(msgspec.ValidationError):
                 result.get_first(schema_type=_ColumnCaseRow)
-            await session.execute_script(_oracle_drop_sql("TABLE", table))
+            await _drop_column_case_table_async(session, case, table)
     finally:
         await disabled_config.close_pool()
 
@@ -5600,16 +5662,24 @@ def _assert_row_format_matches_data(result: SQLResult, expected_rows: list[dict[
     assert row_format == "tuple"
 
 
-def _reset_contract_table_sync(driver: SyncContractDriver, table: ContractTable) -> None:
-    with contextlib.suppress(Exception):
-        driver.execute_script(f"DROP TABLE IF EXISTS {table.name}")
+def _reset_contract_table_sync(driver: SyncContractDriver, case: DriverCase) -> None:
+    table = case.table
+    if case.dialect == "db2":
+        _drop_db2_table_sync(driver, table.name)
+    else:
+        with contextlib.suppress(Exception):
+            driver.execute_script(f"DROP TABLE IF EXISTS {table.name}")
     driver.execute_script(table.create_sql)
     driver.commit()
 
 
-async def _reset_contract_table_async(driver: AsyncContractDriver, table: ContractTable) -> None:
-    with contextlib.suppress(Exception):
-        await driver.execute_script(f"DROP TABLE IF EXISTS {table.name}")
+async def _reset_contract_table_async(driver: AsyncContractDriver, case: DriverCase) -> None:
+    table = case.table
+    if case.dialect == "db2":
+        await _drop_db2_table_async(driver, table.name)
+    else:
+        with contextlib.suppress(Exception):
+            await driver.execute_script(f"DROP TABLE IF EXISTS {table.name}")
     await driver.execute_script(table.create_sql)
     await driver.commit()
 
@@ -5686,7 +5756,7 @@ def assert_sync_driver_feature_row_format_contract(make_config: SyncConfigFactor
     try:
         with config.provide_session() as session:
             sync_driver = session
-            _reset_contract_table_sync(sync_driver, case.table)
+            _reset_contract_table_sync(sync_driver, case)
             _seed_sync(sync_driver, _DRIVER_FEATURE_PARITY_ROWS, case.table, case)
             result = assert_sql_result(sync_driver.execute(case.table.select_ordered_sql))
             _assert_row_format_matches_data(result, _expected_feature_rows())
@@ -5704,7 +5774,7 @@ async def assert_async_driver_feature_row_format_contract(
     try:
         async with config.provide_session() as session:
             async_driver = session
-            await _reset_contract_table_async(async_driver, case.table)
+            await _reset_contract_table_async(async_driver, case)
             await _seed_async(async_driver, _DRIVER_FEATURE_PARITY_ROWS, case.table, case)
             result = assert_sql_result(await async_driver.execute(case.table.select_ordered_sql))
             _assert_row_format_matches_data(result, _expected_feature_rows())
@@ -7009,11 +7079,32 @@ async def assert_async_storage_bridge_rustfs_contract(
         storage_registry.clear()
 
 
-def assert_sync_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:
+def _drop_violation_tables_sync(
+    driver: SyncContractDriver, case: DriverCase, violation: ExceptionViolationCase
+) -> None:
+    if case.dialect == "db2":
+        for table in violation.drop_tables:
+            _drop_db2_table_sync(driver, table)
+    else:
+        driver.execute_script(violation.teardown_script)
+
+
+async def _drop_violation_tables_async(
+    driver: AsyncContractDriver, case: DriverCase, violation: ExceptionViolationCase
+) -> None:
+    if case.dialect == "db2":
+        for table in violation.drop_tables:
+            await _drop_db2_table_async(driver, table)
+    else:
+        await driver.execute_script(violation.teardown_script)
+
+
+def assert_sync_exception_contract(driver: object, case: DriverCase, violation: ExceptionViolationCase) -> None:
     """Assert sync drivers normalize one constraint violation to its sqlspec exception type."""
     sync_driver = cast("SyncContractDriver", driver)
 
-    sync_driver.execute_script(violation.setup_script)
+    _drop_violation_tables_sync(sync_driver, case, violation)
+    sync_driver.execute_script(violation.create_script)
     sync_driver.commit()
     if violation.seed_statement is not None:
         sync_driver.execute(violation.seed_statement, violation.seed_parameters)
@@ -7026,15 +7117,16 @@ def assert_sync_exception_contract(driver: object, violation: ExceptionViolation
         with contextlib.suppress(Exception):
             sync_driver.rollback()
         with contextlib.suppress(Exception):
-            sync_driver.execute_script(violation.teardown_script)
+            _drop_violation_tables_sync(sync_driver, case, violation)
             sync_driver.commit()
 
 
-async def assert_async_exception_contract(driver: object, violation: ExceptionViolationCase) -> None:
+async def assert_async_exception_contract(driver: object, case: DriverCase, violation: ExceptionViolationCase) -> None:
     """Assert async drivers normalize one constraint violation to its sqlspec exception type."""
     async_driver = cast("AsyncContractDriver", driver)
 
-    await async_driver.execute_script(violation.setup_script)
+    await _drop_violation_tables_async(async_driver, case, violation)
+    await async_driver.execute_script(violation.create_script)
     await async_driver.commit()
     if violation.seed_statement is not None:
         await async_driver.execute(violation.seed_statement, violation.seed_parameters)
@@ -7047,7 +7139,7 @@ async def assert_async_exception_contract(driver: object, violation: ExceptionVi
         with contextlib.suppress(Exception):
             await async_driver.rollback()
         with contextlib.suppress(Exception):
-            await async_driver.execute_script(violation.teardown_script)
+            await _drop_violation_tables_async(async_driver, case, violation)
             await async_driver.commit()
 
 

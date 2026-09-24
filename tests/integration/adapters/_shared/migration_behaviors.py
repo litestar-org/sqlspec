@@ -20,6 +20,9 @@ def _migration_paths(case: MigrationCase, behavior: str, tmp_path: Path) -> "tup
         version_table = f"dm_{token}".upper()
         table = f"mu_{token}".upper()
         return token, script_location, version_table, table
+    if case.uses_db2_ddl:
+        token = f"db2_{case.mode[0]}_{behavior[:5]}_{uuid4().hex[:4]}"
+        return token, str(tmp_path / f"mig_{token}"), f"dm_{token}", f"mu_{token}"
     token = f"{case.id}_{behavior}".replace("-", "_")
     script_location = str(tmp_path / f"mig_{token}")
     version_table = f"ddl_mig_{token}"
@@ -33,7 +36,7 @@ def _create_table_migration(case: MigrationCase, table: str) -> str:
         drop_sql = f"DROP TABLE {table}"
     else:
         create_sql = f"CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"
-        drop_sql = f"DROP TABLE IF EXISTS {table}"
+        drop_sql = f"DROP TABLE {table}" if case.uses_db2_ddl else f"DROP TABLE IF EXISTS {table}"
     return f'''"""Create {table}."""
 
 
@@ -54,7 +57,7 @@ def _seeded_table_migration(case: MigrationCase, table: str) -> str:
         drop_sql = f"DROP TABLE {table}"
     else:
         create_sql = f"CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"
-        drop_sql = f"DROP TABLE IF EXISTS {table}"
+        drop_sql = f"DROP TABLE {table}" if case.uses_db2_ddl else f"DROP TABLE IF EXISTS {table}"
     return f'''"""Create {table} with seed rows."""
 
 

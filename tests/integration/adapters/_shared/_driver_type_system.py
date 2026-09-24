@@ -125,6 +125,8 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_driver_pooling",
         "connection_string",
         "dbms_name",
+        "connection_autocommit",
+        "enable_lowercase_column_names",
         "json_serializer",
         "json_deserializer",
         "enable_events",
