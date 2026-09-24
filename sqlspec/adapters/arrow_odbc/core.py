@@ -1,7 +1,10 @@
 """arrow-odbc adapter core helpers."""
 
 import re
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
+
+from sqlglot import exp
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -31,15 +34,26 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
 __all__ = (
+    "DB2_INDEX_EXISTS_SQL",
+    "DB2_TABLE_EXISTS_SQL",
     "apply_driver_features",
     "build_connection_config",
     "build_profile",
     "build_statement_config",
     "create_mapped_exception",
+    "db2_timestamp_text",
     "default_statement_config",
     "driver_profile",
     "normalize_column_names",
     "resolve_dialect_from_dbms_name",
+    "split_db2_name",
+)
+
+DB2_TABLE_EXISTS_SQL: Final[str] = (
+    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
+)
+DB2_INDEX_EXISTS_SQL: Final[str] = (
+    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
 )
 
 
@@ -476,6 +490,45 @@ def normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[
     if not lowercase:
         return column_names
     return [name.lower() if name and _IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name) else name for name in column_names]
+
+
+def split_db2_name(name: str) -> "tuple[str | None, str]":
+    """Split a possibly schema-qualified Db2 object name into its catalog names.
+
+    Unquoted parts are upper-folded the way Db2 stores unquoted identifiers;
+    quoted parts keep their case.
+
+    Args:
+        name: Object name, optionally qualified as ``schema.name``.
+
+    Returns:
+        The schema, or ``None`` for ``CURRENT SCHEMA``, and the object name.
+    """
+    parts = [
+        part.name if isinstance(part, exp.Identifier) and part.quoted else part.name.upper()
+        for part in exp.to_table(name, dialect="db2").parts
+    ]
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[-2], parts[-1]
+
+
+def db2_timestamp_text(value: "datetime | None") -> "str | None":
+    """Render a datetime as naive-UTC Db2 timestamp text.
+
+    Aware values are converted to UTC; naive values are taken as UTC.
+
+    Args:
+        value: The datetime to render.
+
+    Returns:
+        ``YYYY-MM-DD HH:MM:SS.ffffff`` text, or ``None`` for ``None``.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.isoformat(sep=" ", timespec="microseconds")
 
 
 def _identity(value: Any) -> Any:

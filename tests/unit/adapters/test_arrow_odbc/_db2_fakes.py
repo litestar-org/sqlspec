@@ -6,6 +6,7 @@ batch reader exposing ``schema`` and ``into_pyarrow_record_batch_reader()``,
 and the connection has no ``dbms_name`` or autocommit accessor.
 """
 
+import re
 from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
@@ -16,15 +17,23 @@ if TYPE_CHECKING:
 
 __all__ = (
     "DB2_CONNECTION_STRING",
+    "DB2_TIMESTAMP",
+    "EMPTY_RESULT",
+    "ISO_TIMESTAMP",
+    "MSSQL_CONNECTION_STRING",
     "FakeArrowOdbcConnection",
     "FakeOdbcError",
     "FakeReader",
     "Responder",
+    "ScriptedResponder",
     "as_connection",
     "db2_error_message",
+    "normalized_calls",
 )
 
 DB2_CONNECTION_STRING = "Driver={IBM DB2 ODBC DRIVER};Database=SAMPLE;"
+MSSQL_CONNECTION_STRING = "Driver={ODBC Driver 18 for SQL Server};Server=h;Database=d;"
+EMPTY_RESULT = pa.table({})
 
 Responder = Callable[[str, "list[str | None] | None"], "pa.Table | None"]
 
@@ -117,6 +126,51 @@ class FakeArrowOdbcConnection:
 
     def close(self) -> None:
         self.closed = True
+
+
+class ScriptedResponder:
+    """Answer queries whose whitespace-normalized text contains a registered fragment.
+
+    Args:
+        rules: ``(fragment, table)`` pairs checked in order; the first fragment
+            found in the query selects the table.
+    """
+
+    def __init__(self, *rules: "tuple[str, pa.Table]") -> None:
+        self.rules = list(rules)
+
+    def __call__(self, query: str, parameters: "list[str | None] | None") -> "pa.Table | None":
+        normalized = " ".join(query.split())
+        for fragment, table in self.rules:
+            if fragment in normalized:
+                return table
+        return None
+
+
+class _TimestampText:
+    """Equality matcher for naive timestamp text with microseconds and a given date/time separator."""
+
+    def __init__(self, separator: str, label: str) -> None:
+        self._pattern = re.compile(rf"^\d{{4}}-\d{{2}}-\d{{2}}{separator}\d{{2}}:\d{{2}}:\d{{2}}\.\d{{6}}$")
+        self._label = label
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, str) and self._pattern.match(other) is not None
+
+    def __hash__(self) -> int:
+        return 0
+
+    def __repr__(self) -> str:
+        return self._label
+
+
+ISO_TIMESTAMP: Any = _TimestampText("T", "ISO_TIMESTAMP")
+DB2_TIMESTAMP: Any = _TimestampText(" ", "DB2_TIMESTAMP")
+
+
+def normalized_calls(connection: FakeArrowOdbcConnection) -> "list[tuple[str, list[str | None] | None]]":
+    """Return the connection's statements with whitespace collapsed, paired with their parameters."""
+    return [(" ".join(sql.split()), parameters) for sql, parameters in connection.calls]
 
 
 def as_connection(connection: FakeArrowOdbcConnection) -> "ArrowOdbcConnection":
