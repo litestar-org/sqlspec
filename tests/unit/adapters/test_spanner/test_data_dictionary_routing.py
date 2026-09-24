@@ -19,11 +19,17 @@ class MockSpannerDriver:
         self.last_params = params
         schema_type = params.get("schema_type")
         if schema_type is TableMetadata:
-            return [TableMetadata(name="users", schema="public", table_type="BASE TABLE")]
+            return [TableMetadata(table_name="users", schema_name="public", table_type="BASE TABLE")]
         if schema_type is ColumnMetadata:
-            return [ColumnMetadata(name="id", table="users", schema="public", data_type="INT64", ordinal_position=1)]
+            return [
+                ColumnMetadata(
+                    column_name="id", table_name="users", schema_name="public", data_type="INT64", ordinal_position=1
+                )
+            ]
         if schema_type is IndexMetadata:
-            return [IndexMetadata(name="users_by_name", table="users", schema="public", columns=["name"])]
+            return [
+                IndexMetadata(index_name="users_by_name", table_name="users", schema_name="public", columns=["name"])
+            ]
         if schema_type is ForeignKeyMetadata:
             return [
                 ForeignKeyMetadata(

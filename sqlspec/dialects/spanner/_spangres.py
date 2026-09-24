@@ -7,7 +7,7 @@ POLICY`` form is accepted on parse and normalized to the canonical policy
 node so generation always emits the valid PostgreSQL-dialect ``TTL`` form.
 """
 
-from typing import Any
+from typing import Any, cast
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
@@ -37,7 +37,9 @@ class Spangres(Postgres):
             if interleave_property is not None:
                 reparsed = Postgres.parse(self, repaired_sql, **opts)
                 if len(reparsed) == 1 and isinstance(reparsed[0], exp.Create):
-                    expressions = [attach_create_property(reparsed[0], interleave_property)]
+                    expressions = cast(
+                        "list[exp.Expr | None]", [attach_create_property(reparsed[0], interleave_property)]
+                    )
 
         for expression in expressions:
             if expression is not None:

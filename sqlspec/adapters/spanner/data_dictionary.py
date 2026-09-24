@@ -13,6 +13,7 @@ from sqlspec.data_dictionary import (
     MetadataCapability,
     MetadataCapabilityProfile,
     MetadataFidelity,
+    MetadataResult,
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
@@ -84,7 +85,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         resolved_mode = self.mode if mode is None else _normalize_spanner_metadata_mode(mode)
         return super().get_query(domain, operation, mode=resolved_mode)
 
-    def get_version(self, driver: "SpannerSyncDriver") -> VersionInfo | None:
+    def get_version(self, driver: "SpannerSyncDriver | None" = None) -> VersionInfo | None:
         """Get Spanner version information.
 
         Args:
@@ -96,7 +97,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         _ = driver
         return None
 
-    def get_feature_flag(self, driver: "SpannerSyncDriver", feature: str) -> bool:
+    def get_feature_flag(self, driver: "SpannerSyncDriver | None" = None, feature: str = "") -> bool:
         """Check if Spanner supports a specific feature.
 
         Args:
@@ -109,7 +110,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         _ = driver
         return self.resolve_feature_flag(feature, None)
 
-    def get_optimal_type(self, driver: "SpannerSyncDriver", type_category: str) -> str:
+    def get_optimal_type(self, driver: "SpannerSyncDriver | None" = None, type_category: str = "") -> str:
         """Get optimal Spanner type for a category.
 
         Args:
@@ -192,44 +193,53 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
+    def _build_domain_result(self, domain: str, rows: list[Any]) -> MetadataResult:
+        """Wrap domain query rows into a standard MetadataResult envelope."""
+        capability = _spanner_capability_for_domain(domain, mode=self.mode)
+        return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
+
     def get_constraints(
         self, driver: "SpannerSyncDriver", table: str | None = None, schema: str | None = None
-    ) -> list[Any]:
+    ) -> MetadataResult:
         """Get constraint metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="constraints")
-            return driver.select(
+            rows = driver.select(
                 self.get_query("constraints", "by_schema", mode=self.mode), schema_name=schema_name, table_name=None
             )
-        self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="constraints")
-        return driver.select(
-            self.get_query("constraints", "by_table", mode=self.mode), table_name=table, schema_name=schema_name
-        )
+        else:
+            self._log_table_describe(driver, schema_name=schema_name, table_name=table, operation="constraints")
+            rows = driver.select(
+                self.get_query("constraints", "by_table", mode=self.mode), table_name=table, schema_name=schema_name
+            )
+        return self._build_domain_result("constraints", rows)
 
     def get_sequences(
         self, driver: "SpannerSyncDriver", schema: str | None = None, sequence_name: str | None = None
-    ) -> list[Any]:
+    ) -> MetadataResult:
         """Get sequence metadata."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="sequences")
-        return driver.select(
+        rows = driver.select(
             self.get_query("sequences", "by_schema", mode=self.mode),
             schema_name=schema_name,
             sequence_name=sequence_name,
         )
+        return self._build_domain_result("sequences", rows)
 
     def get_change_streams(
         self, driver: "SpannerSyncDriver", schema: str | None = None, stream_name: str | None = None
-    ) -> list[Any]:
+    ) -> MetadataResult:
         """Get change stream metadata."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="change_streams")
-        return driver.select(
+        rows = driver.select(
             self.get_query("change_streams", "list", mode=self.mode),
             schema_name=schema_name,
             change_stream_name=stream_name,
         )
+        return self._build_domain_result("change_streams", rows)
 
     def get_system_metadata(
         self, driver: "SpannerSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any

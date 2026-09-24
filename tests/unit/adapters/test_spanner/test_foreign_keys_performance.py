@@ -9,6 +9,7 @@ def test_foreign_keys_googlesql_predicate_pushdown() -> None:
     query = loader.get_domain_query("spanner", "foreign_keys", "by_table", mode="googlesql")
 
     assert query.is_supported is True
+    assert query.sql is not None
     sql_text = query.sql.raw_sql
 
     assert "fk_columns AS (" in sql_text
@@ -27,6 +28,7 @@ def test_foreign_keys_postgresql_predicate_pushdown() -> None:
     query = loader.get_domain_query("spanner", "foreign_keys", "by_table", mode="postgresql")
 
     assert query.is_supported is True
+    assert query.sql is not None
     sql_text = query.sql.raw_sql
 
     assert "fk_columns AS (" in sql_text
