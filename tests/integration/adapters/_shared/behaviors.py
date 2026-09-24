@@ -4912,7 +4912,7 @@ def _bigquery_job_controls(driver: object, case: DriverCase) -> None:
     assert getattr(driver, "_job_retry_deadline") == 0.0
     assert getattr(driver, "_job_retry") is None
     assert getattr(driver, "_request_timeout") == 15.0
-    assert getattr(driver, "_use_query_and_wait") is False
+    assert getattr(driver, "_use_query_and_wait") is True
 
 
 register_sync_extra_assertion("driver_features:bigquery_job_controls", DRIVER_FEATURES_SCOPE, _bigquery_job_controls)
