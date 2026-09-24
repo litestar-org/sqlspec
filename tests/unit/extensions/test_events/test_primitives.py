@@ -119,7 +119,7 @@ assert "primitives" in dir(events)
         ("postgres", True, " FOR UPDATE SKIP LOCKED"),
         ("db2_custom", True, " FOR UPDATE SKIP LOCKED"),
     ],
-    ids=["db2-skip", "db2", "postgres", "db2-substring"],
+    ids=["db2-skip", "db2", "postgres", "db2_custom"],
 )
 def test_lock_clause_db2_isolation_form(dialect: str, skip_locked: bool, expected: str) -> None:
     """Db2 locks with the read-only-cursor isolation clause, matched by exact dialect name only."""
