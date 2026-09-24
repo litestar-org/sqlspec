@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.builder import SQL
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -30,7 +31,6 @@ from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
-    from sqlspec.builder import SQL
 
 __all__ = ("SpannerDataDictionary",)
 
@@ -80,10 +80,13 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         super().__init__()
         self.mode = _normalize_spanner_metadata_mode(mode)
 
-    def get_query(self, domain: str, operation: str, *, mode: str | None = None) -> "SQL":
+    def get_query(self, domain: str, operation: str, *, mode: str | None = None) -> SQL:
         """Return an exact domain query for this dialect."""
         resolved_mode = self.mode if mode is None else _normalize_spanner_metadata_mode(mode)
-        return super().get_query(domain, operation, mode=resolved_mode)
+        query = super().get_query(domain, operation, mode=resolved_mode)
+        if not isinstance(query, SQL):
+            query = cast("SQL", query)
+        return query
 
     def get_version(self, driver: "SpannerSyncDriver | None" = None) -> VersionInfo | None:
         """Get Spanner version information.
