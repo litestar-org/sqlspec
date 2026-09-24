@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE
-from sqlspec.adapters.mssql_python.core import build_connection_config, create_mapped_exception
+from sqlspec.adapters.mssql_python.core import build_connection_config, create_mapped_exception, extract_error_number
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -255,3 +255,24 @@ def test_parse_odbc_connection_string_edge_cases() -> None:
     assert parse_odbc_connection_string("Incomplete={no_close") == [("Incomplete", "{no_close")]
     assert parse_odbc_connection_string("Server=host;  ") == [("Server", "host")]
     assert parse_odbc_connection_string("DanglingToken") == []
+
+
+def test_extract_error_number_from_attribute() -> None:
+    """extract_error_number retrieves native integer attribute 'number'."""
+
+    class CustomError(Exception):
+        number = 2627
+
+    assert extract_error_number(CustomError("duplicate key")) == 2627
+
+
+def test_extract_error_number_from_args_tuple() -> None:
+    """extract_error_number extracts integer from exception args."""
+    assert extract_error_number(Exception(1205, "Deadlock found")) == 1205
+
+
+def test_extract_error_number_from_string_regex() -> None:
+    """extract_error_number parses error numbers formatted as (1205) or error 1205."""
+    assert extract_error_number(Exception("Transaction was deadlocked on lock resources (1205)")) == 1205
+    assert extract_error_number(Exception("Msg 4712, Level 16, State 1")) == 4712
+    assert extract_error_number(Exception("No numbers here")) is None

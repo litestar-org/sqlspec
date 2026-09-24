@@ -1,6 +1,8 @@
 """mssql-python database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
+from collections.abc import Callable
+from types import TracebackType
+from typing import Any, ClassVar, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -10,17 +12,11 @@ from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.core import TypeCoercionCapabilities
+from sqlspec.core import StatementConfig, TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from types import TracebackType
-
-    from sqlspec.core import StatementConfig
-    from sqlspec.observability import ObservabilityConfig
 
 __all__ = (
     "MssqlPythonConfig",
@@ -96,9 +92,9 @@ class MssqlPythonDriverFeatures(TypedDict):
     """mssql-python driver feature flags."""
 
     use_pool: NotRequired[bool]
-    json_serializer: "NotRequired[Callable[[Any], str]]"
-    json_deserializer: "NotRequired[Callable[[str], Any]]"
-    on_connection_create: "NotRequired[Callable[[MssqlPythonConnection], None]]"
+    json_serializer: NotRequired[Callable[[Any], str]]
+    json_deserializer: NotRequired[Callable[[str], Any]]
+    on_connection_create: NotRequired[Callable[[MssqlPythonConnection], None]]
     enable_events: NotRequired[bool]
 
 
@@ -111,15 +107,15 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
         super().__init__(config)
         self._conn: MssqlPythonConnection | None = None
 
-    def __enter__(self) -> "MssqlPythonConnection":
+    def __enter__(self) -> MssqlPythonConnection:
         pool = self._config.provide_pool()
         conn = pool.acquire()
         self._conn = conn
         return cast("MssqlPythonConnection", conn)
 
     def __exit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> "bool | None":
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> bool | None:
         if self._conn is not None:
             self._config.provide_pool().release(self._conn)
             self._conn = None
@@ -133,13 +129,13 @@ class _MssqlPythonSyncSessionConnectionHandler(SyncPoolSessionFactory):
         super().__init__(config)
         self._conn: MssqlPythonConnection | None = None
 
-    def acquire_connection(self) -> "MssqlPythonConnection":
+    def acquire_connection(self) -> MssqlPythonConnection:
         pool = self._config.provide_pool()
         conn = pool.acquire()
         self._conn = conn
         return cast("MssqlPythonConnection", conn)
 
-    def release_connection(self, _conn: "MssqlPythonConnection", **kwargs: Any) -> None:
+    def release_connection(self, _conn: MssqlPythonConnection, **kwargs: Any) -> None:
         if self._conn is None:
             return
         self._config.provide_pool().release(self._conn)
@@ -151,38 +147,38 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
 
     __slots__ = ("_user_connection_hook",)
 
-    driver_type: "ClassVar[type[MssqlPythonDriver]]" = MssqlPythonDriver
-    connection_type: "ClassVar[type[MssqlPythonConnection]]" = MssqlPythonConnection
-    migration_tracker_type: "ClassVar[type[MssqlPythonSyncMigrationTracker]]" = MssqlPythonSyncMigrationTracker
-    supports_transactional_ddl: "ClassVar[bool]" = True
-    supports_migration_schemas: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = True
-    supports_native_arrow_import: "ClassVar[bool]" = True
-    supports_arrow_streaming: "ClassVar[bool]" = True
-    supports_native_row_streaming: "ClassVar[bool]" = True
-    supports_native_parquet_export: "ClassVar[bool]" = False
-    supports_native_parquet_import: "ClassVar[bool]" = False
-    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+    driver_type: ClassVar[type[MssqlPythonDriver]] = MssqlPythonDriver
+    connection_type: ClassVar[type[MssqlPythonConnection]] = MssqlPythonConnection
+    migration_tracker_type: ClassVar[type[MssqlPythonSyncMigrationTracker]] = MssqlPythonSyncMigrationTracker
+    supports_transactional_ddl: ClassVar[bool] = True
+    supports_migration_schemas: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = True
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_arrow_streaming: ClassVar[bool] = True
+    supports_native_row_streaming: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = False
+    supports_native_parquet_import: ClassVar[bool] = False
+    type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="native"
     )
-    _connection_context_class: "ClassVar[type[MssqlPythonConnectionContext]]" = MssqlPythonConnectionContext
-    _session_factory_class: "ClassVar[type[_MssqlPythonSyncSessionConnectionHandler]]" = (
+    _connection_context_class: ClassVar[type[MssqlPythonConnectionContext]] = MssqlPythonConnectionContext
+    _session_factory_class: ClassVar[type[_MssqlPythonSyncSessionConnectionHandler]] = (
         _MssqlPythonSyncSessionConnectionHandler
     )
-    _session_context_class: "ClassVar[type[MssqlPythonSessionContext]]" = MssqlPythonSessionContext
+    _session_context_class: ClassVar[type[MssqlPythonSessionContext]] = MssqlPythonSessionContext
     _default_statement_config = default_statement_config
 
     def __init__(
         self,
         *,
-        connection_config: "MssqlPythonPoolParams | dict[str, Any] | None" = None,
-        connection_instance: "MssqlPythonConnectionPool | None" = None,
-        migration_config: "dict[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        driver_features: "MssqlPythonDriverFeatures | dict[str, Any] | None" = None,
-        bind_key: "str | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
+        connection_config: MssqlPythonPoolParams | dict[str, Any] | None = None,
+        connection_instance: MssqlPythonConnectionPool | None = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: StatementConfig | None = None,
+        driver_features: MssqlPythonDriverFeatures | dict[str, Any] | None = None,
+        bind_key: str | None = None,
+        extension_config: ExtensionConfigs | None = None,
+        observability_config: ObservabilityConfig | None = None,
         **kwargs: Any,
     ) -> None:
         normalized, features_dict, user_connection_hook = _normalize_mssql_python_init(
@@ -202,11 +198,11 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
             **kwargs,
         )
 
-    def create_connection(self) -> "MssqlPythonConnection":
+    def create_connection(self) -> MssqlPythonConnection:
         pool = self.provide_pool()
         return pool.acquire()
 
-    def get_signature_namespace(self) -> "dict[str, Any]":
+    def get_signature_namespace(self) -> dict[str, Any]:
         namespace = super().get_signature_namespace()
         namespace.update({
             "MssqlPythonConfig": MssqlPythonConfig,
@@ -221,7 +217,7 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         })
         return namespace
 
-    def _create_pool(self) -> "MssqlPythonConnectionPool":
+    def _create_pool(self) -> MssqlPythonConnectionPool:
         return _create_mssql_python_pool(dict(self.connection_config), self.driver_features, self._user_connection_hook)
 
     def _close_pool(self) -> None:
@@ -244,10 +240,10 @@ def _apply_json_serializer_override(statement_config: Any, features_dict: dict[s
 
 
 def _create_mssql_python_pool(
-    connection_config: "dict[str, Any]",
-    driver_features: "dict[str, Any]",
-    on_connection_create: "Callable[[MssqlPythonConnection], None] | None" = None,
-) -> "MssqlPythonConnectionPool":
+    connection_config: dict[str, Any],
+    driver_features: dict[str, Any],
+    on_connection_create: Callable[[MssqlPythonConnection], None] | None = None,
+) -> MssqlPythonConnectionPool:
     pool_size = int(connection_config.get("pool_size", 100))
     pool_idle_timeout = int(connection_config.get("pool_idle_timeout", 600))
     pool_enabled = bool(connection_config.get("pool_enabled", driver_features.get("use_pool", True)))
@@ -263,9 +259,9 @@ def _create_mssql_python_pool(
 
 
 def _normalize_mssql_python_init(
-    connection_config: "MssqlPythonPoolParams | dict[str, Any] | None",
-    driver_features: "MssqlPythonDriverFeatures | dict[str, Any] | None",
-) -> "tuple[dict[str, Any], dict[str, Any], Callable[[MssqlPythonConnection], None] | None]":
+    connection_config: MssqlPythonPoolParams | dict[str, Any] | None,
+    driver_features: MssqlPythonDriverFeatures | dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], Callable[[MssqlPythonConnection], None] | None]:
     normalized = normalize_connection_config(connection_config)
     _, features_dict = apply_driver_features(default_statement_config, driver_features)
     hook = cast("Callable[[MssqlPythonConnection], None] | None", features_dict.pop("on_connection_create", None))

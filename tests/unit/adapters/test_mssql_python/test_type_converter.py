@@ -64,3 +64,9 @@ def test_tsql_time_maps_to_arrow_time64() -> None:
 def test_tsql_timestamp_remains_the_rowversion_binary_type() -> None:
     """TIMESTAMP is a T-SQL rowversion alias and must stay binary."""
     assert mssql_type_to_arrow("timestamp") == pa.binary()
+
+
+def test_mssql_type_to_arrow_maps_json_and_vector() -> None:
+    """JSON and VECTOR types should map to expected Arrow types."""
+    assert mssql_type_to_arrow("json") == pa.string()
+    assert mssql_type_to_arrow("vector") == pa.list_(pa.float32())

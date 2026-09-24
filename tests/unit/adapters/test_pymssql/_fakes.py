@@ -61,6 +61,7 @@ class FakeConnection:
         self.rollbacks = 0
         self.autocommit_values: list[bool] = []
         self.autocommit_state = True
+        self.bulk_copy_calls: list[dict[str, Any]] = []
 
     def cursor(self, *args: Any, **kwargs: Any) -> FakeCursor:
         self.cursor_args = args
@@ -81,6 +82,26 @@ class FakeConnection:
     def autocommit(self, value: bool) -> None:
         self.autocommit_values.append(value)
         self.autocommit_state = value
+
+    def bulk_copy(
+        self,
+        table_name: str,
+        elements: Any,
+        column_ids: Any = None,
+        batch_size: int = 1000,
+        tablock: bool = False,
+        check_constraints: bool = False,
+        fire_triggers: bool = False,
+    ) -> None:
+        self.bulk_copy_calls.append({
+            "table_name": table_name,
+            "elements": list(elements),
+            "column_ids": column_ids,
+            "batch_size": batch_size,
+            "tablock": tablock,
+            "check_constraints": check_constraints,
+            "fire_triggers": fire_triggers,
+        })
 
 
 class FakePymssqlModule:

@@ -129,3 +129,28 @@ def test_sync_data_dictionary_explicit_schema_skips_connection_lookup() -> None:
     data_dictionary.get_tables(cast(Any, driver), schema="custom")
     assert driver.select_calls[0][1]["schema_name"] == "custom"
     assert len(driver.executed) == 0
+
+
+def test_mssql_version_info_supports_vector() -> None:
+    """Version 17+ or Azure SQL engine editions support vectors."""
+    v16 = MssqlVersionInfo(16, 0, 0, engine_edition=3)
+    v17 = MssqlVersionInfo(17, 0, 0, engine_edition=3)
+    azure = MssqlVersionInfo(16, 0, 0, engine_edition=5)
+
+    assert v16.supports_vector() is False
+    assert v17.supports_vector() is True
+    assert azure.supports_vector() is True
+
+
+def test_data_dictionary_vector_feature_flag_and_optimal_type() -> None:
+    """Sync data dictionary resolves supports_vector and optimal type for vector."""
+
+    class VectorDriver:
+        def select_one_or_none(self, _statement: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {"product_version": "17.0.1000.1", "edition": "Enterprise Edition", "engine_edition": 3}
+
+    data_dictionary = PymssqlSyncDataDictionary()
+    driver = VectorDriver()
+
+    assert data_dictionary.get_feature_flag(cast(Any, driver), "supports_vector") is True
+    assert data_dictionary.get_optimal_type(cast(Any, driver), "vector") == "VECTOR"

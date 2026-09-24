@@ -1,6 +1,6 @@
 """pymssql driver tests."""
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from pymssql import IntegrityError as PymssqlIntegrityError
@@ -278,3 +278,125 @@ def test_execute_stack_preserves_caller_transaction(fails: bool, monkeypatch: py
     assert sum(sql == "BEGIN TRANSACTION" for sql, _ in connection.cursor_obj.calls) == 1
     driver.rollback()
     assert connection.cursor_obj.calls[-1] == ("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", None)
+
+
+def test_driver_bulk_copy_forwards_options() -> None:
+    """bulk_copy forwards batch options to underlying connection."""
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    connection = FakeConnection()
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+
+    result = driver.bulk_copy(
+        "dbo.users",
+        [(1, "Ada"), (2, "Grace")],
+        column_ids=[1, 2],
+        batch_size=500,
+        tablock=True,
+        check_constraints=True,
+        fire_triggers=True,
+    )
+
+    assert result == 2
+    assert len(connection.bulk_copy_calls) == 1
+    call = connection.bulk_copy_calls[0]
+    assert call["table_name"] == "[dbo].[users]"
+    assert call["elements"] == [(1, "Ada"), (2, "Grace")]
+    assert call["column_ids"] == [1, 2]
+    assert call["batch_size"] == 500
+    assert call["tablock"] is True
+    assert call["check_constraints"] is True
+    assert call["fire_triggers"] is True
+
+
+def test_load_from_arrow_bulk_copies_batches() -> None:
+    """load_from_arrow processes Arrow table in batches via bulk_copy."""
+    import pyarrow as pa
+
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    connection = FakeConnection()
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+    table = pa.table({"id": [1, 2], "name": ["Ada", "Grace"]})
+
+    job = driver.load_from_arrow("dbo.users", table, batch_size=500)
+
+    assert job.telemetry["rows_processed"] == 2
+    assert len(connection.bulk_copy_calls) == 1
+
+
+def test_load_from_arrow_overwrite_truncates_first() -> None:
+    """load_from_arrow with overwrite=True executes TRUNCATE TABLE."""
+    import pyarrow as pa
+
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+    table = pa.table({"id": [1], "name": ["Ada"]})
+
+    driver.load_from_arrow("dbo.users", table, overwrite=True)
+
+    executed_sqls = [call[0] for call in cursor.calls]
+    assert "TRUNCATE TABLE [dbo].[users]" in executed_sqls
+
+
+def test_load_from_arrow_overwrite_falls_back_on_fk_error() -> None:
+    """load_from_arrow falls back to DELETE FROM when error 4712 is encountered."""
+    import pyarrow as pa
+
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    class FkError(Exception):
+        number = 4712
+
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+
+    def execute_with_fk(sql: str, *args: Any) -> None:
+        cursor.calls.append((sql, args))
+        if sql.startswith("TRUNCATE"):
+            raise FkError("Cannot truncate table referenced by foreign key")
+
+    cursor.execute = cast("Any", execute_with_fk)
+    table = pa.table({"id": [1], "name": ["Ada"]})
+
+    driver.load_from_arrow("dbo.users", table, overwrite=True)
+
+    executed_sqls = [call[0] for call in cursor.calls]
+    assert "TRUNCATE TABLE [dbo].[users]" in executed_sqls
+    assert "DELETE FROM [dbo].[users]" in executed_sqls
+
+
+def test_execute_many_plain_values_chunks_into_multi_row_insert() -> None:
+    """execute_many with plain VALUES uses multi-row INSERT."""
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor(rowcount=3)
+    connection = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+
+    params = [(1, "Ada"), (2, "Grace"), (3, "Linus")]
+    result = driver.execute_many("INSERT INTO dbo.users (id, name) VALUES (?, ?)", params)
+
+    assert result.rows_affected == 3
+    executed_sqls = [call[0] for call in cursor.calls]
+    assert len(executed_sqls) == 1
+    assert "VALUES (%s, %s), (%s, %s), (%s, %s)" in executed_sqls[0]
+
+
+def test_execute_many_non_plain_values_uses_standard_executemany() -> None:
+    """execute_many with non-plain SQL uses cursor.executemany."""
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor(rowcount=2)
+    connection = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+
+    params = [("Ada", 1), ("Grace", 2)]
+    result = driver.execute_many("UPDATE dbo.users SET name = ? WHERE id = ?", params)
+
+    assert result.rows_affected == 2
+    assert len(cursor.many_calls) == 1
