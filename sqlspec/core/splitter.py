@@ -527,6 +527,14 @@ class BigQueryDialectConfig(_EagerDialectConfig):
     _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
 
 
+@final
+class Db2DialectConfig(_EagerDialectConfig):
+    """Configuration for IBM Db2 LUW scripts."""
+
+    _DIALECT_NAME = "db2"
+    _BLOCK_STARTERS = frozenset({"BEGIN", "CASE"})
+
+
 _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
     "generic": GenericDialectConfig,
     "oracle": OracleDialectConfig,
@@ -543,6 +551,7 @@ _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
     "sqlite": SQLiteDialectConfig,
     "duckdb": DuckDBDialectConfig,
     "bigquery": BigQueryDialectConfig,
+    "db2": Db2DialectConfig,
 }
 
 

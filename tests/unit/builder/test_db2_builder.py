@@ -1,9 +1,13 @@
 """Query builder output for the Db2 dialect."""
 
+from datetime import date, datetime, time
+from decimal import Decimal
+from uuid import UUID
+
 import pytest
 
 from sqlspec import sql
-from sqlspec.builder import QueryBuilder
+from sqlspec.builder import Merge, QueryBuilder
 from sqlspec.core import StatementConfig
 from sqlspec.exceptions import SQLBuilderError
 
@@ -62,3 +66,71 @@ def test_db2_insert_update_delete_unquoted(query: "QueryBuilder", expected_prefi
     built = query.build(dialect="db2")
     assert '"' not in built.sql
     assert built.sql.startswith(expected_prefix)
+
+
+def test_upsert_returns_merge_for_db2() -> None:
+    assert isinstance(sql.upsert("t", dialect="db2"), Merge)
+
+
+def test_db2_merge_dict_source_casts_parameters() -> None:
+    row = {"id": 1, "name": "x", "active": True, "amount": Decimal("1.5"), "at": datetime(2026, 1, 1)}
+    built = (
+        sql
+        .merge(dialect="db2")
+        .into("t")
+        .using(row, alias="src")
+        .on("t.id = src.id")
+        .when_not_matched_then_insert(columns=["id", "name"], values=["src.id", "src.name"])
+        .build(dialect="db2")
+    )
+    flat = " ".join(built.sql.split())
+    assert "CAST(:id AS BIGINT) AS id" in flat
+    assert "CAST(:name AS VARCHAR(32672)) AS name" in flat
+    assert "CAST(:active AS BOOLEAN) AS active" in flat
+    assert "CAST(:amount AS DECFLOAT(34)) AS amount" in flat
+    assert "CAST(:at AS TIMESTAMP) AS at" in flat
+    assert "FROM SYSIBM.SYSDUMMY1" in flat
+    assert "SELECT :" not in flat
+    assert built.parameters["active"] is True
+
+
+def test_db2_merge_list_source_unions_rows() -> None:
+    rows = [{"id": 1, "payload": None}, {"id": 2, "payload": {"k": "v"}}]
+    built = (
+        sql
+        .merge(dialect="db2")
+        .into("t")
+        .using(rows, alias="src")
+        .on("t.id = src.id")
+        .when_not_matched_then_insert(columns=["id", "payload"], values=["src.id", "src.payload"])
+        .build(dialect="db2")
+    )
+    flat = " ".join(built.sql.split())
+    assert flat.count("UNION ALL") == 1
+    assert flat.count("FROM SYSIBM.SYSDUMMY1") == 2
+    assert flat.count("AS CLOB)") == 2
+    assert flat.count("AS BIGINT)") == 2
+    assert "SELECT :" not in flat
+    assert '{"k":"v"}' in [value for value in built.parameters.values() if isinstance(value, str)]
+
+
+def test_db2_merge_unaliased_source_casts_remaining_types() -> None:
+    row = {
+        "id": UUID("12345678-1234-5678-1234-567812345678"),
+        "body": "x" * 32673,
+        "day": date(2026, 1, 1),
+        "at_time": time(12, 0),
+        "raw": b"\x00",
+        "ratio": 0.5,
+    }
+    built = (
+        sql.merge(dialect="db2").into("t").using(row).on("t.id = id").when_matched_then_delete().build(dialect="db2")
+    )
+    flat = " ".join(built.sql.split())
+    assert "CAST(:id AS VARCHAR(36)) AS id" in flat
+    assert "CAST(:body AS CLOB) AS body" in flat
+    assert "CAST(:day AS DATE) AS day" in flat
+    assert "CAST(:at_time AS TIME) AS at_time" in flat
+    assert "CAST(:raw AS VARBINARY(32672)) AS raw" in flat
+    assert "CAST(:ratio AS DOUBLE) AS ratio" in flat
+    assert "USING ( SELECT" in flat

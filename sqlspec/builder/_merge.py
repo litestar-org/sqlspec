@@ -6,10 +6,11 @@ parameter binding and validation.
 
 import contextlib
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from itertools import starmap
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
+from uuid import UUID
 
 from mypy_extensions import trait
 from sqlglot import exp
@@ -52,6 +53,21 @@ _ORACLE_TYPE_DISPATCHER.register(Decimal, "NUMBER")
 _ORACLE_TYPE_DISPATCHER.register(dict, "JSON")
 _ORACLE_TYPE_DISPATCHER.register(list, "JSON")
 _ORACLE_TYPE_DISPATCHER.register(datetime, "TIMESTAMP")
+
+_DB2_VARCHAR_MAX_LENGTH: Final[int] = 32672
+_DB2_DEFAULT_TYPE: Final[str] = f"VARCHAR({_DB2_VARCHAR_MAX_LENGTH})"
+_DB2_TYPE_DISPATCHER = TypeDispatcher[str]()
+_DB2_TYPE_DISPATCHER.register(bool, "BOOLEAN")
+_DB2_TYPE_DISPATCHER.register(int, "BIGINT")
+_DB2_TYPE_DISPATCHER.register(float, "DOUBLE")
+_DB2_TYPE_DISPATCHER.register(Decimal, "DECFLOAT(34)")
+_DB2_TYPE_DISPATCHER.register(datetime, "TIMESTAMP")
+_DB2_TYPE_DISPATCHER.register(date, "DATE")
+_DB2_TYPE_DISPATCHER.register(time, "TIME")
+_DB2_TYPE_DISPATCHER.register(bytes, f"VARBINARY({_DB2_VARCHAR_MAX_LENGTH})")
+_DB2_TYPE_DISPATCHER.register(dict, "CLOB")
+_DB2_TYPE_DISPATCHER.register(list, "CLOB")
+_DB2_TYPE_DISPATCHER.register(UUID, "VARCHAR(36)")
 
 
 @trait
@@ -175,6 +191,7 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         Uses JSON-based approach for type-safe bulk operations:
             - PostgreSQL: json_populate_recordset(NULL::table_name, $1::jsonb)
             - Oracle: JSON_TABLE(:payload, '$[*]' COLUMNS (...))
+            - Db2: SELECT of CAST parameter markers per row, joined with UNION ALL
             - Others: Fall back to SELECT with parameterized values
 
         Args:
@@ -205,6 +222,8 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
             return self._create_postgres_json_source(data, columns, is_list, alias)
         if dialect == "oracle":
             return self._create_oracle_json_source(data, columns, alias)
+        if dialect == "db2":
+            return self._create_db2_select_source(data, columns, is_list, alias)
 
         return self._create_select_union_source(data, columns, is_list, alias)
 
@@ -326,6 +345,81 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
         if value is not None and len(str(value)) > varchar2_max:
             return "CLOB"
         return f"VARCHAR2({varchar2_max})"
+
+    def _infer_db2_type(self, value: "Any") -> str:
+        """Infer the Db2 type used to CAST a USING-source parameter marker.
+
+        Args:
+            value: Sample value for the column.
+
+        Returns:
+            Db2 data type name.
+        """
+        resolved_type = _DB2_TYPE_DISPATCHER.get(value)
+        if resolved_type is not None:
+            return resolved_type
+        if isinstance(value, str) and len(value) > _DB2_VARCHAR_MAX_LENGTH:
+            return "CLOB"
+        return _DB2_DEFAULT_TYPE
+
+    def _create_db2_select_source(
+        self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
+    ) -> "exp.Expr":
+        """Create a Db2 USING source whose parameter markers are CAST to value-derived types.
+
+        Each row becomes a SELECT of ``CAST(:param AS <type>) AS column``; rows are joined with
+        UNION ALL. Column types come from the first non-None value of each column across all
+        rows. ``dict`` and ``list`` values are bound as JSON text.
+
+        Args:
+            data: Source rows.
+            columns: Column names taken from the first row.
+            is_list: Whether the source was supplied as a list of rows.
+            alias: Optional alias for the source.
+
+        Returns:
+            Subquery aliased with its column list when ``alias`` is given, otherwise a
+            parenthesized query.
+        """
+        builder = cast("QueryBuilder", self)
+        rows = data if is_list else data[:1]
+        sample_values: dict[str, Any] = {}
+        for record in rows:
+            for column, value in record.items():
+                if value is not None and column not in sample_values:
+                    sample_values[column] = value
+        column_types = {
+            column: exp.DataType.build(self._infer_db2_type(sample_values.get(column)), dialect="db2")
+            for column in columns
+        }
+
+        source_expr: exp.Expr | None = None
+        for row in rows:
+            select_items: list[exp.Expr] = []
+            for column in columns:
+                value = row.get(column)
+                if isinstance(value, (dict, list)):
+                    value = to_json(value)
+                column_name = str(column).split(".")[-1]
+                placeholder, _ = builder.create_placeholder(value, column_name)
+                cast_expr = exp.Cast(this=placeholder, to=column_types[column].copy())
+                select_items.append(exp.alias_(cast_expr, column))
+            select_expr = exp.Select(expressions=select_items)
+            source_expr = (
+                select_expr
+                if source_expr is None
+                else exp.Union(this=source_expr, expression=select_expr, distinct=False)
+            )
+
+        query = cast("exp.Expr", source_expr)
+        if alias:
+            return exp.Subquery(
+                this=query,
+                alias=exp.TableAlias(
+                    this=exp.to_identifier(alias), columns=[exp.to_identifier(column) for column in columns]
+                ),
+            )
+        return exp.paren(query)
 
     def _create_select_union_source(
         self, data: "list[dict[str, Any]]", columns: "list[str]", is_list: bool, alias: "str | None"
