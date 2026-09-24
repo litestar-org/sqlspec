@@ -179,6 +179,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return False
         if not hasattr(self.connection, "query_and_wait"):
             return False
+        if _uses_local_bigquery_endpoint(self.connection):
+            return False
         config = job_config or self._default_query_job_config
         if config is not None:
             if getattr(config, "destination", None) is not None:

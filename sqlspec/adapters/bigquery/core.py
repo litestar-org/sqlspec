@@ -269,7 +269,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | 
             if _is_query_parameter(value):
                 bq_parameters.append(cast("BigQueryParam", value))
                 continue
-            declared_type: type[Any] | None = None
+            declared_type: type[Any] | str | None = None
             if type(value) is TypedParameter:
                 declared_type = value.original_type
                 actual_value = value.value
@@ -1100,7 +1100,9 @@ def _load_bigquery_module() -> Any:
     return _BIGQUERY_MODULE
 
 
-def _query_parameter_type(value: Any, declared_type: "type[Any] | None" = None) -> "tuple[str | None, str | None]":
+def _query_parameter_type(
+    value: Any, declared_type: "type[Any] | str | None" = None
+) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
     Args:
@@ -1237,14 +1239,10 @@ def _run_query_and_wait(
                 final_job_config.connection_properties = existing
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
-    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
-    if retry is not None:
-        query_kwargs["retry"] = retry
-    if wait_timeout is not None:
-        query_kwargs["api_timeout"] = wait_timeout
-        query_kwargs["wait_timeout"] = wait_timeout
-    if job_retry is not None:
-        query_kwargs["job_retry"] = job_retry
+    query_kwargs: dict[str, Any] = {"job_config": final_job_config, "retry": retry, "job_retry": job_retry}
+    effective_timeout = wait_timeout if wait_timeout is not None else 30.0
+    query_kwargs["api_timeout"] = effective_timeout
+    query_kwargs["wait_timeout"] = effective_timeout
     if page_size is not None:
         query_kwargs["page_size"] = page_size
     if max_results is not None:
