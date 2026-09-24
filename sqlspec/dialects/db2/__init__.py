@@ -7,13 +7,16 @@ parser, and restores the tails and Db2-only function spellings on the
 resulting AST, so shared sqlglot classes are never modified.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlglot import TokenType, exp, generator, tokens
 from sqlglot.dialects.dialect import Dialect, NormalizationStrategy
 
 from sqlspec.dialects.db2._generators import db2_dispatch
-from sqlspec.dialects.db2._parsers import apply_statement_tails, split_statement_tails
+from sqlspec.dialects.db2._parsers import apply_statement_tails, normalize_db2_tokens, split_statement_tails
+
+if TYPE_CHECKING:
+    from sqlglot.tokenizer_core import Token
 
 __all__ = ("DB2", "DB2Tokenizer")
 
@@ -30,7 +33,23 @@ class DB2Tokenizer(tokens.Tokenizer):
         "DBCLOB": TokenType.TEXT,
         "VARCHAR_FORMAT": TokenType.VAR,
         "POSSTR": TokenType.VAR,
+        "CURRENT TIMESTAMP": TokenType.CURRENT_TIMESTAMP,
+        "CURRENT DATE": TokenType.CURRENT_DATE,
+        "CURRENT TIME": TokenType.CURRENT_TIME,
+        "CURRENT USER": TokenType.CURRENT_USER,
+        "CURRENT SCHEMA": TokenType.CURRENT_SCHEMA,
     }
+
+    def tokenize(self, sql: str) -> "list[Token]":
+        """Tokenize Db2 SQL and normalise Db2-only token sequences.
+
+        Args:
+            sql: Db2 SQL text.
+
+        Returns:
+            Tokens ready for sqlglot's parser.
+        """
+        return normalize_db2_tokens(super().tokenize(sql))
 
 
 class DB2(Dialect):

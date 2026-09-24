@@ -11,12 +11,13 @@ from typing import Any, Final, cast
 
 from sqlglot import exp, generator
 
-from sqlspec.dialects.db2._parsers import DB2_TAIL_ARG_KEYS
+from sqlspec.dialects.db2._parsers import DB2_SPECIAL_REGISTERS, DB2_TAIL_ARG_KEYS
 from sqlspec.dialects.db2._transforms import (
     add_sysibm_dual,
     render_anonymous,
     render_concat,
     render_date_add,
+    render_duration_amount,
     render_ilike,
     render_mod,
     render_posstr,
@@ -27,7 +28,13 @@ __all__ = (
     "DB2_TRANSFORMS",
     "DB2_TYPE_MAPPING",
     "anonymous_sql",
+    "column_sql",
     "concat_sql",
+    "current_date_sql",
+    "current_schema_sql",
+    "current_time_sql",
+    "current_timestamp_sql",
+    "current_user_sql",
     "datatype_sql",
     "date_add_sql",
     "db2_dispatch",
@@ -181,12 +188,48 @@ def datatype_sql(generator: "generator.Generator", expression: exp.DataType) -> 
 
 def interval_sql(generator: "generator.Generator", expression: exp.Interval) -> str:
     """Render an interval as a Db2 labeled duration."""
-    unit = generator.sql(expression, "unit")
-    this = generator.sql(expression, "this")
-    if isinstance(expression.this, exp.Literal) and expression.this.is_string:
-        this = expression.this.name
-    unit_str = f" {unit.upper()}" if unit else ""
-    return f"{this}{unit_str}"
+    amount, embedded_unit = render_duration_amount(generator, expression.this)
+    unit = generator.sql(expression, "unit") or embedded_unit
+    return f"{amount} {unit.upper()}" if unit else amount
+
+
+def current_timestamp_sql(generator: "generator.Generator", expression: exp.CurrentTimestamp) -> str:
+    """Render the CURRENT TIMESTAMP special register."""
+    precision = generator.sql(expression, "this")
+    return f"CURRENT TIMESTAMP({precision})" if precision else "CURRENT TIMESTAMP"
+
+
+def current_date_sql(generator: "generator.Generator", expression: exp.CurrentDate) -> str:
+    """Render the CURRENT DATE special register."""
+    return "CURRENT DATE"
+
+
+def current_time_sql(generator: "generator.Generator", expression: exp.CurrentTime) -> str:
+    """Render the CURRENT TIME special register."""
+    return "CURRENT TIME"
+
+
+def current_user_sql(generator: "generator.Generator", expression: exp.CurrentUser) -> str:
+    """Render the CURRENT USER special register."""
+    return "CURRENT USER"
+
+
+def current_schema_sql(generator: "generator.Generator", expression: exp.CurrentSchema) -> str:
+    """Render the CURRENT SCHEMA special register."""
+    return "CURRENT SCHEMA"
+
+
+def column_sql(generator: "generator.Generator", expression: exp.Column) -> str:
+    """Render a column, emitting Db2 special registers verbatim."""
+    identifier = expression.this
+    if (
+        not expression.table
+        and isinstance(identifier, exp.Identifier)
+        and not identifier.quoted
+        and identifier.name.upper() in DB2_SPECIAL_REGISTERS
+    ):
+        return identifier.name.upper()
+    return generator.column_sql(expression)
 
 
 def date_add_sql(
@@ -251,6 +294,12 @@ DB2_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
     exp.Concat: concat_sql,
     exp.Mod: mod_sql,
     exp.ILike: ilike_sql,
+    exp.CurrentTimestamp: current_timestamp_sql,
+    exp.CurrentDate: current_date_sql,
+    exp.CurrentTime: current_time_sql,
+    exp.CurrentUser: current_user_sql,
+    exp.CurrentSchema: current_schema_sql,
+    exp.Column: column_sql,
 }
 
 _overlay_cache: "tuple[dict[type[exp.Expr], Callable[..., str]], dict[type[exp.Expr], Callable[..., str]]] | None" = (
