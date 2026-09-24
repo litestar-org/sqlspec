@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.db2.core import build_connection_config, build_dsn_string
+from sqlspec.adapters.db2.core import build_dsn_string
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.module_loader import import_optional
@@ -44,9 +44,9 @@ class Db2SyncConnectionPool:
     """Thread-local connection manager for IBM Db2."""
 
     __slots__ = (
-        "_connection_factory",
         "_connection_parameters",
         "_connection_registry",
+        "_dsn",
         "_generation",
         "_health_check_interval",
         "_on_connection_create",
@@ -62,19 +62,18 @@ class Db2SyncConnectionPool:
         recycle_seconds: int = 86400,
         health_check_interval: float = 30.0,
         on_connection_create: "Callable[[Any], None] | None" = None,
-        connection_factory: "Callable[[], Any] | None" = None,
     ) -> None:
         """Initialize the thread-local connection manager.
 
         Args:
-            connection_parameters: Db2 connection parameters dictionary.
+            connection_parameters: Normalized Db2 connection parameters. The CLI connection
+                string is rendered from them once, here.
             recycle_seconds: Connection recycle time in seconds (default 24h).
             health_check_interval: Seconds of idle time before running health check.
             on_connection_create: Callback executed when connection is created.
-            connection_factory: Optional factory callable for custom connection instantiation.
         """
         self._connection_parameters = connection_parameters
-        self._connection_factory = connection_factory
+        self._dsn = build_dsn_string(connection_parameters)
         self._thread_local = threading.local()
         self._connection_registry: set[Any] = set()
         self._generation = 0
@@ -87,7 +86,7 @@ class Db2SyncConnectionPool:
     @property
     def _database_name(self) -> str:
         """Get sanitized database name for logging."""
-        return str(self._connection_parameters.get("database", self._connection_parameters.get("db", "unknown")))
+        return str(self._connection_parameters.get("database", "unknown"))
 
     def _create_connection(self) -> Any:
         """Open a new connection and register it in the shutdown registry."""
@@ -108,18 +107,9 @@ class Db2SyncConnectionPool:
             Any: A newly opened, fully configured Db2 connection.
 
         Raises:
-            MissingDependencyError: When ibm_db_dbi is not installed and no factory is supplied.
+            MissingDependencyError: When ibm_db is not installed.
         """
-        if self._connection_factory is not None:
-            connection = self._connection_factory()
-        else:
-            ibm_db_dbi = _require_ibm_db_dbi()
-            if "dsn" in self._connection_parameters:
-                connection = ibm_db_dbi.connect(self._connection_parameters["dsn"], "", "")
-            else:
-                config = build_connection_config(self._connection_parameters)
-                dsn_str = build_dsn_string(config)
-                connection = ibm_db_dbi.connect(dsn_str, "", "")
+        connection = _require_ibm_db_dbi().connect(self._dsn, "", "", "", "", None)
 
         if self._on_connection_create is not None:
             self._on_connection_create(connection)

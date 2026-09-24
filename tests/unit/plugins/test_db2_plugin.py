@@ -41,7 +41,7 @@ def test_db2_connection_config_helper() -> None:
         "database": "proddb",
         "hostname": "localhost",
         "port": 50001,
-        "username": "customuser",
+        "user": "customuser",
         "password": "custompassword",
     }
 

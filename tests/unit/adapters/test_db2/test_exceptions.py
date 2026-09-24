@@ -3,8 +3,6 @@
 import pytest
 
 from sqlspec.adapters.db2.core import (
-    build_connection_config,
-    build_dsn_string,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
@@ -177,33 +175,6 @@ def test_resolve_rowcount() -> None:
         rowcount = -1
 
     assert resolve_many_rowcount(NoRowcountCursor(), [(1,), (2,)], fallback_count=2) == 2
-
-
-def test_build_connection_config_and_dsn() -> None:
-    """Verify normalization of connection parameters and DSN generation."""
-    config = build_connection_config({
-        "db": "TESTDB",
-        "host": "db2.internal",
-        "port": 50001,
-        "user": "db2inst1",
-        "password": "secretpassword",
-        "extra": {"SECURITY": "SSL"},
-    })
-    assert config["database"] == "TESTDB"
-    assert config["hostname"] == "db2.internal"
-    assert config["port"] == 50001
-    assert config["protocol"] == "TCPIP"
-    assert config["username"] == "db2inst1"
-    assert config["password"] == "secretpassword"
-
-    dsn = build_dsn_string(config)
-    assert "DATABASE=TESTDB;" in dsn
-    assert "HOSTNAME=db2.internal;" in dsn
-    assert "PORT=50001;" in dsn
-    assert "PROTOCOL=TCPIP;" in dsn
-    assert "UID=db2inst1;" in dsn
-    assert "PWD=secretpassword;" in dsn
-    assert "SECURITY=SSL;" in dsn
 
 
 def test_collect_rows_reads_description_from_cursor() -> None:

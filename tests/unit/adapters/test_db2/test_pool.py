@@ -41,41 +41,31 @@ def test_pool_connects_with_config_and_runs_hook(fake_ibm_db: FakeModules) -> No
     assert pool.checked_out() == 0
 
 
-def test_pool_connects_with_factory() -> None:
-    """Custom connection factory takes precedence over driver module."""
-    connection = FakeDb2Connection()
-    factory_calls = 0
-
-    def custom_factory() -> FakeDb2Connection:
-        nonlocal factory_calls
-        factory_calls += 1
-        return connection
-
-    pool = Db2SyncConnectionPool({"database": "TESTDB"}, connection_factory=custom_factory)
-
-    acquired = pool.acquire()
-
-    assert cast(object, acquired) is connection
-    assert factory_calls == 1
-
-
-def test_pool_connects_with_explicit_dsn(fake_ibm_db: FakeModules) -> None:
-    """Pool passes explicit DSN directly to driver connect."""
+def test_pool_renders_dsn_and_passes_empty_connect_arguments(fake_ibm_db: FakeModules) -> None:
+    """The pool renders the whole CLI string and never passes credentials as separate arguments."""
     _, fake_module = fake_ibm_db
-    connection = FakeDb2Connection()
-    fake_module.pending_connections.append(connection)
+    pool = Db2SyncConnectionPool({
+        "database": "CUSTOM",
+        "hostname": "custom.host",
+        "port": 50000,
+        "protocol": "TCPIP",
+        "user": "u",
+        "password": "p",
+    })
 
-    explicit_dsn = "DATABASE=CUSTOM;HOSTNAME=custom.host;PORT=50000;PROTOCOL=TCPIP;"
-    pool = Db2SyncConnectionPool({"dsn": explicit_dsn})
+    pool.new_connection()
 
-    acquired = pool.acquire()
-
-    assert cast(object, acquired) is connection
-    assert fake_module.connect_calls[0][0] == explicit_dsn
+    assert fake_module.connect_calls[0][:5] == (
+        "DATABASE=CUSTOM;HOSTNAME=custom.host;PORT=50000;PROTOCOL=TCPIP;UID=u;PWD=p;",
+        "",
+        "",
+        "",
+        "",
+    )
 
 
 def test_pool_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MissingDependencyError is raised when ibm_db_dbi is not available and no factory is set."""
+    """MissingDependencyError is raised when ibm_db_dbi is not available."""
     monkeypatch.setattr(pool_module, "_IBM_DB_DBI", None)
     monkeypatch.setattr(pool_module, "import_optional", lambda _name: None)
 

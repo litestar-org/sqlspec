@@ -3,6 +3,7 @@
 import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -11,6 +12,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
@@ -20,6 +22,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
+from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -49,6 +52,35 @@ __all__ = (
     "resolve_rowcount",
 )
 
+_CLI_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
+    ("database", "DATABASE"),
+    ("hostname", "HOSTNAME"),
+    ("port", "PORT"),
+    ("protocol", "PROTOCOL"),
+    ("user", "UID"),
+    ("password", "PWD"),
+    ("current_schema", "CURRENTSCHEMA"),
+    ("security", "SECURITY"),
+    ("ssl_server_certificate", "SSLSERVERCERTIFICATE"),
+    ("authentication", "AUTHENTICATION"),
+    ("connect_timeout", "CONNECTTIMEOUT"),
+)
+_CLI_KEYWORD_TO_KEY: Final[dict[str, str]] = {keyword: key for key, keyword in _CLI_KEYWORDS}
+_SUPPORTED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
+    *(key for key, _ in _CLI_KEYWORDS),
+    "autocommit",
+    "dsn",
+    "extra",
+    "health_check_interval",
+    "pool_recycle_seconds",
+})
+_INTEGER_KEYS: Final[tuple[str, ...]] = ("port", "connect_timeout")
+_TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
+_CLI_KEYWORD_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+_BRACED_MIN_LENGTH: Final[int] = 2
+_DEFAULT_PORT: Final[int] = 50000
+_DEFAULT_PROTOCOL: Final[str] = "TCPIP"
 IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:SQLSTATE[=:\s]+|state[:=\s]+)([0-9A-Z]{5})\b", re.IGNORECASE
@@ -358,20 +390,101 @@ def apply_driver_features(
     return statement_config, features
 
 
-def parse_db2_dsn(dsn: str) -> dict[str, Any]:
-    """Parse a Db2 connection DSN or URL into keyword arguments.
+def _parse_bool(key: str, value: str) -> bool:
+    """Parse a boolean connection value.
 
-    Supports:
-        - URL format: db2://user:password@host:port/database
-        - DSN format: DATABASE=name;HOSTNAME=host;PORT=port;PROTOCOL=TCPIP;UID=user;PWD=password;
+    Args:
+        key: Connection keyword the value belongs to.
+        value: Raw text value.
+
+    Returns:
+        bool: The parsed boolean.
+
+    Raises:
+        ImproperConfigurationError: When the text is not a recognized boolean.
+    """
+    lowered = value.strip().lower()
+    if lowered in _TRUE_VALUES:
+        return True
+    if lowered in _FALSE_VALUES:
+        return False
+    msg = f"Db2 connection parameter {key!r} must be a boolean"
+    raise ImproperConfigurationError(msg)
+
+
+def _parse_int(key: str, value: Any) -> int:
+    """Parse an integer connection value.
+
+    Args:
+        key: Canonical connection key the value belongs to.
+        value: Raw value.
+
+    Returns:
+        int: The parsed integer.
+
+    Raises:
+        ImproperConfigurationError: When the value is not an integer.
+    """
+    if isinstance(value, bool):
+        msg = f"Db2 connection parameter {key!r} must be an integer"
+        raise ImproperConfigurationError(msg)
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text.isdigit():
+        msg = f"Db2 connection parameter {key!r} must be an integer"
+        raise ImproperConfigurationError(msg)
+    return int(text)
+
+
+def _assign_dsn_value(params: dict[str, Any], extra: dict[str, Any], keyword: str, value: str) -> None:
+    """Store one DSN keyword under its canonical key, or in ``extra`` when it is not modeled.
+
+    Args:
+        params: Canonical parameters collected so far.
+        extra: Additional CLI keywords collected so far, keyed by original spelling.
+        keyword: Keyword as written in the DSN.
+        value: Unquoted keyword value.
+    """
+    upper = keyword.upper()
+    if upper == "AUTOCOMMIT":
+        params["autocommit"] = _parse_bool("autocommit", value)
+        return
+    key = _CLI_KEYWORD_TO_KEY.get(upper)
+    if key is None:
+        extra[keyword] = value
+    elif key in _INTEGER_KEYS:
+        params[key] = _parse_int(key, value)
+    else:
+        params[key] = value
+
+
+def parse_db2_dsn(dsn: str) -> dict[str, Any]:
+    """Parse a Db2 CLI connection string or ``db2://`` URL into canonical connection keys.
+
+    Supported forms:
+        - ``KEY=VALUE;...`` CLI keywords. Values wrapped in ``{...}`` may contain ``;``.
+        - ``db2://user:password@host:port/database?Keyword=Value``.
+
+    Known CLI keywords (``DATABASE``, ``HOSTNAME``, ``PORT``, ``PROTOCOL``, ``UID``, ``PWD``,
+    ``CURRENTSCHEMA``, ``SECURITY``, ``SSLSERVERCERTIFICATE``, ``AUTHENTICATION``,
+    ``CONNECTTIMEOUT``) map to their canonical keys case-insensitively and ``AUTOCOMMIT`` maps to
+    the ``autocommit`` flag. Every other keyword is returned under ``extra`` with its original
+    spelling.
+
+    Args:
+        dsn: Connection string or URL.
+
+    Returns:
+        dict[str, Any]: Canonical connection parameters, with ``extra`` present only when
+        unmodeled keywords were found.
     """
     params: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
     if "://" in dsn:
-        from urllib.parse import parse_qs, unquote, urlsplit
-
         parsed = urlsplit(dsn)
         if parsed.username is not None:
-            params["username"] = unquote(parsed.username)
+            params["user"] = unquote(parsed.username)
         if parsed.password is not None:
             params["password"] = unquote(parsed.password)
         if parsed.hostname is not None:
@@ -381,107 +494,153 @@ def parse_db2_dsn(dsn: str) -> dict[str, Any]:
         path = parsed.path.lstrip("/")
         if path:
             params["database"] = unquote(path)
-        if parsed.query:
-            query = parse_qs(parsed.query)
-            for q_key, q_vals in query.items():
-                if q_vals:
-                    val_str = q_vals[-1]
-                    if val_str.lower() == "true":
-                        params[q_key] = True
-                    elif val_str.lower() == "false":
-                        params[q_key] = False
-                    elif val_str.isdigit():
-                        params[q_key] = int(val_str)
-                    else:
-                        params[q_key] = val_str
-        return params
-
-    for item in dsn.split(";"):
-        if "=" in item:
-            key_part, val_part = item.split("=", 1)
-            key = key_part.strip().upper()
-            val = val_part.strip()
-            if key in ("DATABASE", "DB"):
-                params["database"] = val
-            elif key in ("HOSTNAME", "HOST", "SERVER"):
-                params["hostname"] = val
-            elif key == "PORT":
-                params["port"] = int(val) if val.isdigit() else val
-            elif key == "PROTOCOL":
-                params["protocol"] = val
-            elif key in ("UID", "USER", "USERNAME"):
-                params["username"] = val
-            elif key in ("PWD", "PASSWORD"):
-                params["password"] = val
-            else:
-                params[key_part.strip()] = val
+        for keyword, value in parse_qsl(parsed.query, keep_blank_values=True):
+            _assign_dsn_value(params, extra, keyword, value)
+    else:
+        for keyword, raw_value in parse_odbc_connection_string(dsn):
+            value = raw_value
+            if len(value) >= _BRACED_MIN_LENGTH and value[0] == "{" and value[-1] == "}":
+                value = value[1:-1].replace("}}", "}")
+            _assign_dsn_value(params, extra, keyword, value)
+    if extra:
+        params["extra"] = extra
     return params
 
 
-def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize raw connection configuration mapping for Db2.
+def _merge_extra(dsn_extra: Mapping[str, Any], explicit_extra: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge additional CLI keywords case-insensitively, letting explicit entries win.
 
     Args:
-        connection_config: Raw connection parameters mapping.
+        dsn_extra: Keywords parsed from a DSN.
+        explicit_extra: Keywords configured directly.
 
     Returns:
-        dict[str, Any]: Normalized configuration dictionary.
+        dict[str, Any]: Merged keywords keyed by the winning spelling.
+
+    Raises:
+        ImproperConfigurationError: When a keyword has a dedicated connection parameter.
     """
-    config = dict(connection_config)
-    dsn = config.pop("dsn", None) or config.pop("url", None) or config.pop("connection_string", None)
-    if dsn is not None and isinstance(dsn, str):
+    merged: dict[str, tuple[str, Any]] = {}
+    for source in (dsn_extra, explicit_extra):
+        for keyword, value in source.items():
+            upper = str(keyword).upper()
+            if upper in _CLI_KEYWORD_TO_KEY or upper == "AUTOCOMMIT":
+                canonical = _CLI_KEYWORD_TO_KEY.get(upper, "autocommit")
+                msg = f"Db2 connection keyword {keyword!r} must be configured with the {canonical!r} parameter"
+                raise ImproperConfigurationError(msg)
+            merged[upper] = (str(keyword), value)
+    return dict(merged.values())
+
+
+def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize a Db2 connection configuration.
+
+    A ``dsn`` is parsed and merged underneath the explicit keys (explicit keys and explicit
+    ``extra`` entries win). ``port`` defaults to ``50000`` and ``protocol`` to ``TCPIP`` only when
+    ``hostname`` is set; without a hostname the database name is treated as a cataloged alias.
+
+    Args:
+        connection_config: Connection parameters using the canonical keys of
+            ``Db2PoolParams``.
+
+    Returns:
+        dict[str, Any]: Normalized parameters without ``dsn``.
+
+    Raises:
+        ImproperConfigurationError: When an unsupported key is present, ``database`` is missing,
+            or a keyword or value cannot be rendered into a CLI connection string.
+    """
+    config = {key: value for key, value in connection_config.items() if value is not None}
+    unsupported = sorted(key for key in config if key not in _SUPPORTED_CONNECTION_KEYS)
+    if unsupported:
+        msg = f"Unsupported Db2 connection parameter(s): {', '.join(unsupported)}"
+        raise ImproperConfigurationError(msg)
+
+    explicit_extra = config.pop("extra", None) or {}
+    if not isinstance(explicit_extra, Mapping):
+        msg = "Db2 connection parameter 'extra' must be a mapping of CLI keywords to values"
+        raise ImproperConfigurationError(msg)
+    dsn_extra: dict[str, Any] = {}
+    dsn = config.pop("dsn", None)
+    if dsn is not None:
+        if not isinstance(dsn, str):
+            msg = "Db2 connection parameter 'dsn' must be a string"
+            raise ImproperConfigurationError(msg)
         dsn_params = parse_db2_dsn(dsn)
+        dsn_extra = dsn_params.pop("extra", {})
         for key, value in dsn_params.items():
             config.setdefault(key, value)
 
-    database = config.pop("db", None) or config.pop("database", "SAMPLE")
-    config["database"] = database
+    if not config.get("database"):
+        msg = "Db2 connection requires a 'database' name"
+        raise ImproperConfigurationError(msg)
+    if config.get("hostname"):
+        config.setdefault("port", _DEFAULT_PORT)
+        config.setdefault("protocol", _DEFAULT_PROTOCOL)
+    for key in _INTEGER_KEYS:
+        if key in config:
+            config[key] = _parse_int(key, config[key])
 
-    hostname = config.pop("host", None) or config.pop("server", None) or config.pop("hostname", "localhost")
-    config["hostname"] = hostname
-
-    port = config.pop("port", 50000)
-    config["port"] = int(port)
-
-    protocol = config.pop("protocol", "TCPIP")
-    config["protocol"] = protocol
-
-    username = config.pop("user", None) or config.pop("uid", None) or config.pop("username", None)
-    if username is not None:
-        config["username"] = username
-
-    password = config.pop("pwd", None) or config.pop("password", None)
-    if password is not None:
-        config["password"] = password
-
+    extra = _merge_extra(dsn_extra, explicit_extra)
+    if extra:
+        config["extra"] = extra
+    build_dsn_string(config)
     return config
 
 
-def build_dsn_string(config: Mapping[str, Any]) -> str:
-    """Build a standard IBM CLI connection string (DSN) from configuration parameters.
+def _format_cli_value(keyword: str, value: Any) -> str:
+    """Render one ``KEYWORD=value`` pair for a Db2 CLI connection string.
+
+    Values containing ``;`` or ``{`` or leading/trailing whitespace are wrapped in braces; booleans
+    render as ``1``/``0``.
 
     Args:
-        config: Connection configuration dictionary.
+        keyword: CLI keyword.
+        value: Value to render.
 
     Returns:
-        str: Formatted DSN string (e.g. DATABASE=sample;HOSTNAME=localhost;PORT=50000;PROTOCOL=TCPIP;).
+        str: The rendered pair without a trailing ``;``.
+
+    Raises:
+        ImproperConfigurationError: When the keyword is not a plain CLI keyword or the value
+            contains ``}``, which CLI connection strings cannot represent.
     """
-    parts = [
-        f"DATABASE={config.get('database', 'SAMPLE')}",
-        f"HOSTNAME={config.get('hostname', 'localhost')}",
-        f"PORT={config.get('port', 50000)}",
-        f"PROTOCOL={config.get('protocol', 'TCPIP')}",
-    ]
-    if config.get("username"):
-        parts.append(f"UID={config['username']}")
-    if config.get("password"):
-        parts.append(f"PWD={config['password']}")
+    if _CLI_KEYWORD_PATTERN.fullmatch(keyword) is None:
+        msg = f"Invalid Db2 connection keyword: {keyword!r}"
+        raise ImproperConfigurationError(msg)
+    if isinstance(value, bool):
+        return f"{keyword}={'1' if value else '0'}"
+    text = str(value)
+    if "}" in text:
+        msg = f"Db2 connection value for {keyword} cannot contain '}}'"
+        raise ImproperConfigurationError(msg)
+    if ";" in text or "{" in text or text != text.strip():
+        return f"{keyword}={{{text}}}"
+    return f"{keyword}={text}"
 
-    extra = config.get("extra", {})
-    for key, value in extra.items():
-        parts.append(f"{key}={value}")
 
-    return ";".join(parts) + ";"
+def build_dsn_string(config: Mapping[str, Any]) -> str:
+    """Render a normalized Db2 configuration as an IBM CLI connection string.
+
+    Modeled parameters render first in a fixed keyword order, followed by ``extra`` keywords in
+    insertion order. ``autocommit`` and pool settings are never rendered.
+
+    Args:
+        config: Normalized connection configuration.
+
+    Returns:
+        str: Connection string such as ``DATABASE=sample;HOSTNAME=db;PORT=50000;PROTOCOL=TCPIP;``.
+    """
+    parts: list[str] = []
+    for key, keyword in _CLI_KEYWORDS:
+        value = config.get(key)
+        if value is not None:
+            parts.append(_format_cli_value(keyword, value))
+    extra = config.get("extra") or {}
+    for extra_keyword, extra_value in extra.items():
+        if extra_value is not None:
+            parts.append(_format_cli_value(str(extra_keyword), extra_value))
+    return "".join(f"{part};" for part in parts)
 
 
 driver_profile = build_profile()

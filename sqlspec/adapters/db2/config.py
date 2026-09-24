@@ -19,7 +19,6 @@ from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.migrations.tracker import SyncMigrationTracker
-from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,30 +37,53 @@ __all__ = (
 
 
 class Db2ConnectionParams(TypedDict):
-    """IBM Db2 connection parameters."""
+    """IBM Db2 connection parameters.
+
+    Each modeled parameter renders under one CLI keyword:
+
+    database: ``DATABASE``. Required, either directly or through ``dsn``.
+    hostname: ``HOSTNAME``. Omit it to connect to a cataloged database alias.
+    port: ``PORT``. Defaults to 50000 when ``hostname`` is set.
+    protocol: ``PROTOCOL``. Defaults to ``TCPIP`` when ``hostname`` is set.
+    user: ``UID``.
+    password: ``PWD``.
+    current_schema: ``CURRENTSCHEMA``.
+    security: ``SECURITY``, for example ``"SSL"``.
+    ssl_server_certificate: ``SSLSERVERCERTIFICATE``.
+    authentication: ``AUTHENTICATION``.
+    connect_timeout: ``CONNECTTIMEOUT`` in seconds.
+    autocommit: Autocommit mode new connections start in. Never rendered into the DSN.
+    dsn: ``KEY=VALUE;...`` connection string or ``db2://user:password@host:port/database?Key=Value``
+     URL. Explicit parameters override values parsed from it.
+    extra: Additional CLI keywords rendered verbatim after the modeled parameters.
+    """
 
     database: NotRequired[str]
-    db: NotRequired[str]
     hostname: NotRequired[str]
-    host: NotRequired[str]
-    server: NotRequired[str]
-    port: NotRequired[int | str]
+    port: NotRequired[int]
     protocol: NotRequired[str]
-    username: NotRequired[str]
     user: NotRequired[str]
-    uid: NotRequired[str]
     password: NotRequired[str]
-    pwd: NotRequired[str]
+    current_schema: NotRequired[str]
+    security: NotRequired[str]
+    ssl_server_certificate: NotRequired[str]
+    authentication: NotRequired[str]
+    connect_timeout: NotRequired[int]
+    autocommit: NotRequired[bool]
     dsn: NotRequired[str]
-    url: NotRequired[str]
-    connection_string: NotRequired[str]
-    pool_recycle_seconds: NotRequired[int]
-    health_check_interval: NotRequired[float]
-    extra: NotRequired["dict[str, Any]"]
+    extra: NotRequired["dict[str, str | int | bool]"]
 
 
 class Db2PoolParams(Db2ConnectionParams):
-    """IBM Db2 pool parameters."""
+    """IBM Db2 pool parameters.
+
+    pool_recycle_seconds: Seconds after which a pooled connection is replaced. Defaults to 86400.
+    health_check_interval: Idle seconds after which a pooled connection is pinged before reuse.
+     Defaults to 30.0.
+    """
+
+    pool_recycle_seconds: NotRequired[int]
+    health_check_interval: NotRequired[float]
 
 
 class Db2DriverFeatures(TypedDict):
@@ -74,7 +96,6 @@ class Db2DriverFeatures(TypedDict):
     on_connection_create: Callback executed when a connection is created.
      Receives the raw Db2 connection for low-level driver configuration.
      Runs after connection creation.
-    connection_factory: Optional factory callable for custom connection instantiation.
     enable_events: Enable database event channel support.
     events_backend: Event channel backend selection.
     enable_lowercase_column_names: Normalize implicit uppercase column names to lowercase.
@@ -84,7 +105,6 @@ class Db2DriverFeatures(TypedDict):
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[Db2SyncConnection], None]]"
-    connection_factory: "NotRequired[Callable[[], Db2SyncConnection]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["poll_queue"]]
     enable_lowercase_column_names: NotRequired[bool]
@@ -122,7 +142,7 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
     _session_context_class: "ClassVar[type[Db2SyncSessionContext]]" = Db2SyncSessionContext
     _default_statement_config = default_statement_config
 
-    __slots__ = ("_connection_factory", "_user_connection_hook")
+    __slots__ = ("_user_connection_hook",)
 
     def __init__(
         self,
@@ -138,8 +158,7 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
         **kwargs: Any,
     ) -> None:
         """Initialize Db2 configuration."""
-        raw_config = normalize_connection_config(connection_config)
-        normalized_connection_config = build_connection_config(raw_config)
+        normalized_connection_config = build_connection_config(connection_config or {})
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -148,7 +167,6 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
         self._user_connection_hook: Callable[[Db2SyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
         )
-        self._connection_factory: Callable[[], Db2SyncConnection] | None = features_dict.pop("connection_factory", None)
 
         super().__init__(
             connection_config=normalized_connection_config,
@@ -172,7 +190,6 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
             recycle_seconds=pool_recycle,
             health_check_interval=health_check,
             on_connection_create=self._user_connection_hook,
-            connection_factory=self._connection_factory,
         )
 
     def _close_pool(self) -> None:

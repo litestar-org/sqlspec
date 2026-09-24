@@ -157,7 +157,7 @@ def db2_connection_config(db2_service: Db2Service) -> dict[str, Any]:
         "database": db2_service.database,
         "hostname": db2_service.host,
         "port": db2_service.port,
-        "username": db2_service.user,
+        "user": db2_service.user,
         "password": db2_service.password,
     }
 
