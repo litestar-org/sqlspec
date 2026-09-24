@@ -28,15 +28,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-
-
-class SyntheticDb2Error(Exception):
-    """Synthetic exception simulating an ibm_db driver error."""
-
-    def __init__(self, message: str, sqlstate: str | None = None, error_code: str | int | None = None) -> None:
-        super().__init__(message)
-        self.sqlstate = sqlstate
-        self.error_code = error_code
+from tests.unit.adapters.test_db2._fakes import DiagnosticAttributeError
 
 
 @pytest.mark.parametrize(
@@ -60,7 +52,7 @@ class SyntheticDb2Error(Exception):
 )
 def test_sqlstate_attribute_mapping(sqlstate: str, expected_type: type[SQLSpecError]) -> None:
     """Verify SQLSTATE attribute on exception maps to appropriate SQLSpec error."""
-    exc = SyntheticDb2Error("Simulated error", sqlstate=sqlstate)
+    exc = DiagnosticAttributeError("Simulated error", sqlstate=sqlstate)
     mapped = create_mapped_exception(exc)
     assert isinstance(mapped, expected_type)
     assert sqlstate in str(mapped)
@@ -98,7 +90,7 @@ def test_sqlstate_embedded_in_message(sqlstate_str: str, expected_type: type[SQL
 )
 def test_sqlcode_attribute_mapping(sqlcode: str, expected_type: type[SQLSpecError]) -> None:
     """Verify SQLCODE attribute or string token maps to appropriate error."""
-    exc = SyntheticDb2Error("Simulated failure", error_code=sqlcode)
+    exc = DiagnosticAttributeError("Simulated failure", error_code=sqlcode)
     mapped = create_mapped_exception(exc)
     assert isinstance(mapped, expected_type)
     assert sqlcode in str(mapped)
