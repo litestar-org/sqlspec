@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
-from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKStore
+from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
@@ -411,3 +411,100 @@ def test_tsql_adk_missing_table_reads_empty(monkeypatch: pytest.MonkeyPatch) -> 
     store = ArrowOdbcADKStore(_tsql_adk_config(FakeArrowOdbcConnection(error=error)))
 
     assert store.get_app_state("app") is None
+
+
+_TSQL_ADK_MEMORY_CALLS = [
+    ("SELECT TOP 1 id FROM [dbo].[adk_memory] WHERE event_id = ?", ["e1"]),
+    (
+        "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at, [tenant_id] ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            "m1",
+            "s1",
+            "app",
+            "u",
+            "user",
+            "e1",
+            "a",
+            "2026-01-02T03:04:05.678901",
+            '{"t":1}',
+            "hello",
+            None,
+            "2026-01-02T03:04:05.678901",
+            "7",
+        ],
+    ),
+    (
+        "SELECT id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at FROM [dbo].[adk_memory] WHERE app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app') AND content_text LIKE ? ORDER BY timestamp DESC OFFSET 0 ROWS FETCH NEXT 3 ROWS ONLY",
+        ["app", "u", "%hello%"],
+    ),
+    (
+        "SELECT id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, metadata_json, inserted_at FROM [dbo].[adk_memory] WHERE app_name = ? AND scope = 'app' AND content_text LIKE ? ORDER BY timestamp DESC OFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY",
+        ["app", "%hello%"],
+    ),
+    ("SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
+    ("DELETE FROM [dbo].[adk_memory] WHERE session_id = ?", ["s1"]),
+    (
+        "SELECT COUNT(*) AS row_count FROM [dbo].[adk_memory] WHERE inserted_at < ? AND app_name = ? AND scope = ?",
+        [ISO_TIMESTAMP, "app", "user"],
+    ),
+    (
+        "DELETE FROM [dbo].[adk_memory] WHERE inserted_at < ? AND app_name = ? AND scope = ?",
+        [ISO_TIMESTAMP, "app", "user"],
+    ),
+]
+_TSQL_ADK_MEMORY_DDL = "CREATE TABLE [dbo].[adk_memory] ( id NVARCHAR(128) NOT NULL, session_id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, scope NVARCHAR(16) NOT NULL DEFAULT 'user', event_id NVARCHAR(128) NOT NULL, author NVARCHAR(256) NULL, timestamp DATETIME2(6) NOT NULL, content_json NVARCHAR(MAX) NOT NULL, content_text NVARCHAR(MAX) NOT NULL, metadata_json NVARCHAR(MAX) NULL, inserted_at DATETIME2(6) NOT NULL, tenant_id INTEGER, CONSTRAINT [pk_adk_memory_id] PRIMARY KEY (id), CONSTRAINT [uq_adk_memory_event_id] UNIQUE (event_id) )"
+_TSQL_ADK_MEMORY_DROPS = ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
+
+_ADK_MEMORY_ENTRY: "Any" = {
+    "id": "m1",
+    "session_id": "s1",
+    "app_name": "app",
+    "user_id": "u",
+    "scope": "user",
+    "event_id": "e1",
+    "author": "a",
+    "timestamp": _ADK_TIME,
+    "content_json": {"t": 1},
+    "content_text": "hello",
+    "metadata_json": None,
+    "inserted_at": _ADK_TIME,
+    "embedding": None,
+}
+
+
+def test_tsql_adk_memory_store_statements() -> None:
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=_ADK_RESPONDER)
+    store = ArrowOdbcADKMemoryStore(_tsql_adk_config(connection))
+
+    store.insert_memory_entries([_ADK_MEMORY_ENTRY], owner_id=7)
+    store.search_entries("hello", "app", "u", limit=3)
+    store.search_entries("hello", "app", "u", scope_filter="app")
+    store.delete_entries_by_session("s1")
+    store.delete_entries_older_than(30, app_name="app", scope="user")
+
+    assert normalized_calls(connection) == _TSQL_ADK_MEMORY_CALLS
+    assert " ".join(store._memory_table_ddl().split()) == _TSQL_ADK_MEMORY_DDL  # pyright: ignore[reportPrivateUsage]
+    assert store._drop_memory_table_sql() == _TSQL_ADK_MEMORY_DROPS  # pyright: ignore[reportPrivateUsage]
+
+
+def test_tsql_adk_memory_create_tables_and_insert_without_owner() -> None:
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT)
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING}, connection_instance=as_connection(connection)
+    )
+    store = ArrowOdbcADKMemoryStore(config)
+
+    store.create_tables()
+    store.insert_memory_entries([_ADK_MEMORY_ENTRY])
+
+    statements = [sql for sql, _ in normalized_calls(connection)]
+    assert [sql.split(" (", 1)[0] for sql in statements if sql.startswith("CREATE")] == [
+        "CREATE TABLE [dbo].[adk_memory]",
+        "CREATE INDEX [idx_adk_memory_app_scope_user_time] ON [dbo].[adk_memory]",
+        "CREATE INDEX [idx_adk_memory_scope] ON [dbo].[adk_memory]",
+        "CREATE INDEX [idx_adk_memory_session] ON [dbo].[adk_memory]",
+    ]
+    assert statements[-1] == (
+        "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, "
+        "content_json, content_text, metadata_json, inserted_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )

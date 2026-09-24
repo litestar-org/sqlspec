@@ -435,12 +435,20 @@ class ArrowOdbcADKStore(BaseSyncADKStore["ArrowOdbcConfig"]):
 
 
 class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
-    """SQL Server ADK memory store using arrow-odbc."""
+    """ADK memory store using arrow-odbc.
 
-    __slots__ = ()
+    SQL Server statements are used by default; a config whose dialect resolves
+    to ``db2`` uses Db2 statements with bound UTC times and catalog-probed DDL.
+    """
+
+    __slots__ = ("_sql",)
+
+    def __init__(self, config: "ArrowOdbcConfig") -> None:
+        super().__init__(config)
+        self._sql = _adk_sql_for(config)
 
     def create_tables(self) -> None:
-        """Create the memory table and indexes the data dictionary reports as missing."""
+        """Create the memory table and indexes the catalog reports as missing."""
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
@@ -448,14 +456,9 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         if not self._enabled:
             return
         with self._config.provide_session() as driver:
-            dd = driver.data_dictionary
-            existing_tables = _casefold_names(dd.get_tables(driver, schema=MSSQL_SCHEMA), "table_name")
-            existing_indexes = _casefold_names(dd.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name")
-            if _bare_name(self._memory_table) not in existing_tables:
-                driver.execute(self._memory_table_ddl())
-            for index_name, index_table, columns in self._memory_index_specs():
-                if _bare_name(index_name) not in existing_indexes:
-                    driver.execute(_create_index_sql(index_table, index_name, columns))
+            self._sql.create_missing_objects(
+                driver, ((self._memory_table, self._memory_table_ddl()),), self._memory_index_specs()
+            )
             driver.commit()
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
@@ -467,25 +470,28 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             return 0
 
         inserted_count = 0
+        sql_dialect = self._sql
         with self._config.provide_session() as driver:
             for entry in entries:
                 exists = driver.select_one_or_none(
-                    f"SELECT TOP 1 id FROM {_table_ref(self._memory_table)} WHERE event_id = ?", (entry["event_id"],)
+                    sql_dialect.memory_duplicate_sql(self._memory_table), (entry["event_id"],)
                 )
                 if exists is not None:
                     continue
                 owner_column = (
-                    f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
+                    f", {sql_dialect.quote_identifier(self._owner_id_column_name)}"
+                    if self._owner_id_column_name
+                    else ""
                 )
                 owner_param = ", ?" if self._owner_id_column_name else ""
                 params: tuple[Any, ...]
                 if self._owner_id_column_name:
-                    params = (*_memory_insert_params(entry), owner_id)
+                    params = (*_memory_insert_params(entry, sql_dialect.format_datetime), owner_id)
                 else:
-                    params = _memory_insert_params(entry)
+                    params = _memory_insert_params(entry, sql_dialect.format_datetime)
                 driver.execute(
                     f"""
-                    INSERT INTO {_table_ref(self._memory_table)} (
+                    INSERT INTO {sql_dialect.table_ref(self._memory_table)} (
                         id, session_id, app_name, user_id, scope, event_id, author,
                         timestamp, content_json, content_text, metadata_json, inserted_at{owner_column}
                     )
@@ -515,25 +521,15 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             return []
         where_scope, scope_params = _build_arrow_odbc_scope_where(app_name, user_id, scope_filter)
         rows = self._execute_fetchall(
-            f"""
-            SELECT id, session_id, app_name, user_id, scope, event_id, author,
-                   timestamp, content_json, content_text, metadata_json, inserted_at
-            FROM {_table_ref(self._memory_table)}
-            WHERE {where_scope}
-              AND content_text LIKE ?
-            ORDER BY timestamp DESC
-            OFFSET 0 ROWS FETCH NEXT {effective_limit} ROWS ONLY
-            """,
-            (*scope_params, f"%{query}%"),
+            self._sql.memory_search_sql(self._memory_table, where_scope, effective_limit), (*scope_params, f"%{query}%")
         )
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
-        count = self._select_count(
-            f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,)
-        )
-        self._execute(f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True)
+        table_ref = self._sql.table_ref(self._memory_table)
+        count = self._select_count(f"SELECT COUNT(*) AS row_count FROM {table_ref} WHERE session_id = ?", (session_id,))
+        self._execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (session_id,), commit=True)
         return count
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
@@ -541,7 +537,7 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         cutoff = datetime.now(timezone.utc).timestamp() - (days * 86_400)
         cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
         clauses = ["inserted_at < ?"]
-        params: list[Any] = [_format_datetime(cutoff_dt)]
+        params: list[Any] = [self._sql.format_datetime(cutoff_dt)]
         if app_name is not None:
             clauses.append("app_name = ?")
             params.append(app_name)
@@ -549,47 +545,20 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
             clauses.append("scope = ?")
             params.append(scope)
         where_sql = " AND ".join(clauses)
-        count = self._select_count(
-            f"SELECT COUNT(*) AS row_count FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params)
-        )
-        self._execute(f"DELETE FROM {_table_ref(self._memory_table)} WHERE {where_sql}", tuple(params), commit=True)
+        table_ref = self._sql.table_ref(self._memory_table)
+        count = self._select_count(f"SELECT COUNT(*) AS row_count FROM {table_ref} WHERE {where_sql}", tuple(params))
+        self._execute(f"DELETE FROM {table_ref} WHERE {where_sql}", tuple(params), commit=True)
         return count
 
     def _memory_table_ddl(self) -> str:
-        owner_line = f",\n        {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
-        return f"""
-CREATE TABLE {_table_ref(self._memory_table)} (
-    id NVARCHAR(128) NOT NULL,
-    session_id NVARCHAR(128) NOT NULL,
-    app_name NVARCHAR(128) NOT NULL,
-    user_id NVARCHAR(128) NOT NULL,
-    scope NVARCHAR(16) NOT NULL DEFAULT 'user',
-    event_id NVARCHAR(128) NOT NULL,
-    author NVARCHAR(256) NULL,
-    timestamp DATETIME2(6) NOT NULL,
-    content_json NVARCHAR(MAX) NOT NULL,
-    content_text NVARCHAR(MAX) NOT NULL,
-    metadata_json NVARCHAR(MAX) NULL,
-    inserted_at DATETIME2(6) NOT NULL{owner_line},
-    CONSTRAINT {_constraint_ref("pk", self._memory_table, "id")} PRIMARY KEY (id),
-    CONSTRAINT {_constraint_ref("uq", self._memory_table, "event_id")} UNIQUE (event_id)
-)
-"""
+        return self._sql.memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
 
     def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
-        return [
-            (
-                f"idx_{self._memory_table}_app_scope_user_time",
-                self._memory_table,
-                "app_name, scope, user_id, timestamp DESC",
-            ),
-            (f"idx_{self._memory_table}_scope", self._memory_table, "app_name, scope"),
-            (f"idx_{self._memory_table}_session", self._memory_table, "session_id"),
-        ]
+        return self._sql.memory_index_specs(self._memory_table)
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
+        return [self._sql.drop_table_sql(self._memory_table)]
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[dict[str, Any]]":
         with self._config.provide_session() as driver:
@@ -606,6 +575,36 @@ CREATE TABLE {_table_ref(self._memory_table)} (
         with self._config.provide_session() as driver:
             value = driver.select_value(sql, params)
         return int(value or 0)
+
+
+def _tsql_memory_table_ddl(table: str, owner_id_column_ddl: "str | None") -> str:
+    owner_line = f",\n        {owner_id_column_ddl}" if owner_id_column_ddl else ""
+    return f"""
+CREATE TABLE {_table_ref(table)} (
+    id NVARCHAR(128) NOT NULL,
+    session_id NVARCHAR(128) NOT NULL,
+    app_name NVARCHAR(128) NOT NULL,
+    user_id NVARCHAR(128) NOT NULL,
+    scope NVARCHAR(16) NOT NULL DEFAULT 'user',
+    event_id NVARCHAR(128) NOT NULL,
+    author NVARCHAR(256) NULL,
+    timestamp DATETIME2(6) NOT NULL,
+    content_json NVARCHAR(MAX) NOT NULL,
+    content_text NVARCHAR(MAX) NOT NULL,
+    metadata_json NVARCHAR(MAX) NULL,
+    inserted_at DATETIME2(6) NOT NULL{owner_line},
+    CONSTRAINT {_constraint_ref("pk", table, "id")} PRIMARY KEY (id),
+    CONSTRAINT {_constraint_ref("uq", table, "event_id")} UNIQUE (event_id)
+)
+"""
+
+
+def _tsql_memory_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    return [
+        (f"idx_{table}_app_scope_user_time", table, "app_name, scope, user_id, timestamp DESC"),
+        (f"idx_{table}_scope", table, "app_name, scope"),
+        (f"idx_{table}_session", table, "session_id"),
+    ]
 
 
 def _session_select_sql(table: str) -> str:
@@ -815,7 +814,9 @@ def _event_record_from_row(row: Any) -> StoredEvent:
     )
 
 
-def _memory_insert_params(entry: StoredMemory) -> "tuple[Any, ...]":
+def _memory_insert_params(
+    entry: StoredMemory, format_datetime: "Callable[[datetime | None], str | None]"
+) -> "tuple[Any, ...]":
     return (
         entry["id"],
         entry["session_id"],
@@ -824,11 +825,11 @@ def _memory_insert_params(entry: StoredMemory) -> "tuple[Any, ...]":
         entry.get("scope", "user"),
         entry["event_id"],
         entry["author"],
-        _format_datetime(entry["timestamp"]),
+        format_datetime(entry["timestamp"]),
         to_json(entry["content_json"]),
         entry["content_text"],
         to_json(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
-        _format_datetime(entry["inserted_at"]),
+        format_datetime(entry["inserted_at"]),
     )
 
 
@@ -1061,6 +1062,26 @@ class _TsqlAdkSql:
     def drop_table_sql(self, table: str) -> str:
         return f"DROP TABLE IF EXISTS {_table_ref(table)}"
 
+    def memory_table_ddl(self, table: str, owner_id_column_ddl: "str | None") -> str:
+        return _tsql_memory_table_ddl(table, owner_id_column_ddl)
+
+    def memory_index_specs(self, table: str) -> "list[tuple[str, str, str]]":
+        return _tsql_memory_index_specs(table)
+
+    def memory_duplicate_sql(self, table: str) -> str:
+        return f"SELECT TOP 1 id FROM {_table_ref(table)} WHERE event_id = ?"
+
+    def memory_search_sql(self, table: str, where_scope: str, limit: int) -> str:
+        return f"""
+            SELECT id, session_id, app_name, user_id, scope, event_id, author,
+                   timestamp, content_json, content_text, metadata_json, inserted_at
+            FROM {_table_ref(table)}
+            WHERE {where_scope}
+              AND content_text LIKE ?
+            ORDER BY timestamp DESC
+            OFFSET 0 ROWS FETCH NEXT {limit} ROWS ONLY
+            """
+
 
 class _Db2AdkSql:
     """Db2 statements for the ADK stores.
@@ -1213,6 +1234,35 @@ class _Db2AdkSql:
 
     def drop_table_sql(self, table: str) -> str:
         return f"DROP TABLE {table}"
+
+    def memory_table_ddl(self, table: str, owner_id_column_ddl: "str | None") -> str:
+        owner_line = f", {owner_id_column_ddl}" if owner_id_column_ddl else ""
+        return (
+            f"CREATE TABLE {table} (id VARCHAR(128) NOT NULL, session_id VARCHAR(128) NOT NULL, "
+            "app_name VARCHAR(128) NOT NULL, user_id VARCHAR(128) NOT NULL, "
+            "scope VARCHAR(16) NOT NULL DEFAULT 'user', event_id VARCHAR(128) NOT NULL, author VARCHAR(256), "
+            f"timestamp TIMESTAMP NOT NULL, content_json {DB2_JSON_COLUMN_TYPE} NOT NULL, "
+            f"content_text {DB2_JSON_COLUMN_TYPE} NOT NULL, metadata_json {DB2_JSON_COLUMN_TYPE}, "
+            f"inserted_at TIMESTAMP NOT NULL{owner_line}, CONSTRAINT pk_{table}_id PRIMARY KEY (id), "
+            f"CONSTRAINT uq_{table}_event UNIQUE (event_id))"
+        )
+
+    def memory_index_specs(self, table: str) -> "list[tuple[str, str, str]]":
+        return [
+            (f"idx_{table}_scope", table, "app_name, user_id, scope, timestamp"),
+            (f"idx_{table}_session", table, "session_id, timestamp"),
+            (f"idx_{table}_inserted", table, "inserted_at"),
+        ]
+
+    def memory_duplicate_sql(self, table: str) -> str:
+        return f"SELECT id FROM {table} WHERE event_id = ? FETCH FIRST 1 ROWS ONLY"
+
+    def memory_search_sql(self, table: str, where_scope: str, limit: int) -> str:
+        return (
+            "SELECT id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, "
+            f"content_text, metadata_json, inserted_at FROM {table} WHERE {where_scope} AND content_text LIKE ? "
+            f"ORDER BY timestamp DESC FETCH FIRST {int(limit)} ROWS ONLY"
+        )
 
 
 def _adk_sql_for(config: "ArrowOdbcConfig") -> "_TsqlAdkSql | _Db2AdkSql":

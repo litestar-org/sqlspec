@@ -1,6 +1,6 @@
 """Unit tests for the Db2 variants of the arrow-odbc extension stores."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pyarrow as pa
@@ -10,7 +10,7 @@ import sqlglot
 pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
-from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKStore
+from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore
 from sqlspec.adapters.arrow_odbc.core import split_db2_name
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
@@ -479,3 +479,190 @@ def test_db2_adk_ddl_parses_with_db2_dialect() -> None:
         "DROP TABLE adk_event",
         "DROP TABLE adk_session",
     ]
+
+
+_DB2_MEMORY_ROW = pa.table({
+    "ID": ["m1"],
+    "SESSION_ID": ["s1"],
+    "APP_NAME": ["app"],
+    "USER_ID": ["u"],
+    "SCOPE": ["user"],
+    "EVENT_ID": ["e1"],
+    "AUTHOR": ["a"],
+    "TIMESTAMP": [_EVENT_TIME.replace(tzinfo=None)],
+    "CONTENT_JSON": ['{"t": 1}'],
+    "CONTENT_TEXT": ["hello"],
+    "METADATA_JSON": pa.array([None], pa.string()),
+    "INSERTED_AT": [_EVENT_TIME.replace(tzinfo=None)],
+})
+
+
+def _memory_store(connection: FakeArrowOdbcConnection, **adk_settings: Any) -> ArrowOdbcADKMemoryStore:
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": DB2_CONNECTION_STRING},
+        connection_instance=as_connection(connection),
+        extension_config={"adk": adk_settings},
+    )
+    return ArrowOdbcADKMemoryStore(config)
+
+
+def _memory_entry(entry_id: str, event_id: str) -> "Any":
+    return {
+        "id": entry_id,
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u",
+        "scope": "user",
+        "event_id": event_id,
+        "author": "a",
+        "timestamp": _EVENT_TIME,
+        "content_json": {"t": 1},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": _EVENT_TIME,
+        "embedding": None,
+    }
+
+
+def test_db2_adk_memory_create_tables_probes_catalog() -> None:
+    """The memory table and its indexes are probed in SYSCAT and only missing objects are created."""
+
+    def responder(sql: str, parameters: "list[str | None] | None") -> "pa.Table | None":
+        if "SYSCAT.INDEXES" in sql and parameters == [None, "IDX_ADK_MEMORY_SESSION"]:
+            return _ONE_ROW
+        return None
+
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=responder)
+
+    _memory_store(connection).create_tables()
+
+    calls = normalized_calls(connection)
+    assert [parameters for sql, parameters in calls if "SYSCAT." in sql] == [
+        [None, "ADK_MEMORY"],
+        [None, "IDX_ADK_MEMORY_SCOPE"],
+        [None, "IDX_ADK_MEMORY_SESSION"],
+        [None, "IDX_ADK_MEMORY_INSERTED"],
+    ]
+    assert [sql.split(" (", 1)[0] for sql, _ in calls if sql.startswith("CREATE")] == [
+        "CREATE TABLE adk_memory",
+        "CREATE INDEX idx_adk_memory_scope ON adk_memory",
+        "CREATE INDEX idx_adk_memory_inserted ON adk_memory",
+    ]
+    assert connection.commit_calls == 1
+
+
+def test_db2_adk_memory_insert_skips_duplicates_with_fetch_first() -> None:
+    """Entries whose event id already exists are skipped; the check reads one row with FETCH FIRST."""
+
+    def responder(sql: str, parameters: "list[str | None] | None") -> "pa.Table | None":
+        if "WHERE event_id = ?" in sql and parameters == ["e1"]:
+            return pa.table({"ID": ["m0"]})
+        return None
+
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=responder)
+
+    inserted = _memory_store(connection, owner_id_column="tenant_id INTEGER").insert_memory_entries(
+        [_memory_entry("m1", "e1"), _memory_entry("m2", "e2")], owner_id=7
+    )
+
+    calls = normalized_calls(connection)
+    assert inserted == 1
+    assert [sql for sql, _ in calls] == [
+        "SELECT id FROM adk_memory WHERE event_id = ? FETCH FIRST 1 ROWS ONLY",
+        "SELECT id FROM adk_memory WHERE event_id = ? FETCH FIRST 1 ROWS ONLY",
+        (
+            "INSERT INTO adk_memory ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, "
+            "content_text, metadata_json, inserted_at, tenant_id ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
+    ]
+    assert calls[2][1] == [
+        "m2",
+        "s1",
+        "app",
+        "u",
+        "user",
+        "e2",
+        "a",
+        "2026-01-02 03:04:05.678901",
+        '{"t":1}',
+        "hello",
+        None,
+        "2026-01-02 03:04:05.678901",
+        "7",
+    ]
+
+
+def test_db2_adk_memory_search_and_delete() -> None:
+    """Search reads uppercase Db2 result keys into memory records; deletes count then remove by session."""
+    connection = FakeArrowOdbcConnection(
+        result=EMPTY_RESULT,
+        responder=ScriptedResponder(
+            ("row_count", pa.table({"ROW_COUNT": [1]})), ("content_text LIKE ?", _DB2_MEMORY_ROW)
+        ),
+    )
+    store = _memory_store(connection)
+
+    found = store.search_entries("hello", "app", "u", limit=3)
+    deleted = store.delete_entries_by_session("s1")
+
+    assert [(entry["id"], entry["content_json"], entry["timestamp"]) for entry in found] == [
+        ("m1", {"t": 1}, _EVENT_TIME)
+    ]
+    assert deleted == 1
+    calls = normalized_calls(connection)
+    assert calls[0] == (
+        (
+            "SELECT id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_json, content_text, "
+            "metadata_json, inserted_at FROM adk_memory WHERE app_name = ? AND ((scope = 'user' AND user_id = ?) "
+            "OR scope = 'app') AND content_text LIKE ? ORDER BY timestamp DESC FETCH FIRST 3 ROWS ONLY"
+        ),
+        ["app", "u", "%hello%"],
+    )
+    assert calls[1:] == [
+        ("SELECT COUNT(*) AS row_count FROM adk_memory WHERE session_id = ?", ["s1"]),
+        ("DELETE FROM adk_memory WHERE session_id = ?", ["s1"]),
+    ]
+
+
+def test_db2_adk_memory_cutoff_is_utc() -> None:
+    """The retention cutoff is bound as naive-UTC Db2 timestamp text."""
+    connection = FakeArrowOdbcConnection(
+        result=EMPTY_RESULT, responder=ScriptedResponder(("row_count", pa.table({"ROW_COUNT": [0]})))
+    )
+
+    _memory_store(connection).delete_entries_older_than(30, app_name="app")
+
+    calls = normalized_calls(connection)
+    cutoff = calls[0][1][0] if calls[0][1] else None
+    expected = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+    assert calls[0][0] == "SELECT COUNT(*) AS row_count FROM adk_memory WHERE inserted_at < ? AND app_name = ?"
+    assert cutoff == DB2_TIMESTAMP
+    assert abs(datetime.fromisoformat(str(cutoff)) - expected) < timedelta(minutes=1)
+    assert calls[1] == ("DELETE FROM adk_memory WHERE inserted_at < ? AND app_name = ?", [cutoff, "app"])
+
+
+def test_db2_adk_memory_ddl_parses_with_db2_dialect() -> None:
+    """The Db2 memory table DDL parses with the db2 dialect and has no SQL Server types."""
+    store = _memory_store(FakeArrowOdbcConnection(), owner_id_column="tenant_id INTEGER")
+    ddl = store._memory_table_ddl()  # pyright: ignore[reportPrivateUsage]
+
+    target = SchemaTarget.from_ddl("adk_memory", ddl, dialect="db2")
+
+    assert sqlglot.parse_one(ddl, read="db2").key == "create"
+    assert [column.name for column in target.create_table.columns] == [
+        "id",
+        "session_id",
+        "app_name",
+        "user_id",
+        "scope",
+        "event_id",
+        "author",
+        "timestamp",
+        "content_json",
+        "content_text",
+        "metadata_json",
+        "inserted_at",
+        "tenant_id",
+    ]
+    assert "NVARCHAR" not in ddl and "DATETIME2" not in ddl
+    assert store._drop_memory_table_sql() == ["DROP TABLE adk_memory"]  # pyright: ignore[reportPrivateUsage]
