@@ -1,6 +1,5 @@
 """Integration tests for IBM Db2 behavior outside the shared adapter contracts."""
 
-import os
 from collections.abc import Generator
 from decimal import Decimal
 from typing import Any
@@ -12,18 +11,7 @@ pytest.importorskip("ibm_db_dbi")
 
 from sqlspec.adapters.db2.driver import Db2SyncDriver
 
-DB2_INTEGRATION_ENABLED = bool(
-    os.environ.get("DB2_HOST") or os.environ.get("SQLSPEC_ENABLE_DB2_INTEGRATION_TESTS") == "1"
-)
-
-pytestmark = [
-    pytest.mark.db2,
-    pytest.mark.xdist_group("db2"),
-    pytest.mark.skipif(
-        not DB2_INTEGRATION_ENABLED,
-        reason="Db2 integration tests require a live database; set DB2_HOST or SQLSPEC_ENABLE_DB2_INTEGRATION_TESTS=1",
-    ),
-]
+pytestmark = [pytest.mark.db2, pytest.mark.xdist_group("db2")]
 
 
 _USERS_TABLE_EXISTS_SQL = (

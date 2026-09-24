@@ -1,14 +1,13 @@
 """Pytest Docker service extension for IBM Db2."""
 
 import contextlib
-import os
 import socket
 import tempfile
 import time
 from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import filelock
 import ibm_db_dbi
@@ -23,6 +22,7 @@ from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 if TYPE_CHECKING:
     from docker import DockerClient
     from docker.models.containers import Container
+    from pytest_databases._service import DockerService
 
     from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 
@@ -246,21 +246,13 @@ def db2_password() -> str:
 
 @pytest.fixture(autouse=False, scope="session")
 def db2_service(
-    request: pytest.FixtureRequest, db2_image: str, db2_database: str, db2_user: str, db2_password: str
+    docker_service: "DockerService", db2_image: str, db2_database: str, db2_user: str, db2_password: str
 ) -> "Generator[Db2Service, None, None]":
-    """Session-scoped Db2 service: ``DB2_HOST`` when set, otherwise a local container."""
-    if host := os.environ.get("DB2_HOST"):
-        yield Db2Service(
-            container=cast("Any", None),
-            host=host,
-            port=int(os.environ.get("DB2_PORT", str(DB2_CONTAINER_PORT))),
-            user=os.environ.get("DB2_USER", db2_user),
-            password=os.environ.get("DB2_PASSWORD", db2_password),
-            database=os.environ.get("DB2_DATABASE", db2_database),
-        )
-        return
+    """Session-scoped Db2 service running in a privileged local container.
 
-    request.getfixturevalue("docker_service")
+    Depends on ``docker_service`` so pytest-databases initializes Docker before the Db2 container
+    starts.
+    """
     with _provide_db2_service(
         image=db2_image, name="db2_test", database=db2_database, user=db2_user, password=db2_password
     ) as service:

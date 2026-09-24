@@ -254,7 +254,7 @@ jobs:
       fail-fast: true
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -364,6 +364,7 @@ jobs:
             mcr.microsoft.com/mssql/server:2022-latest
             gvenzl/oracle-xe:18-slim-faststart
             gvenzl/oracle-free:23-slim-faststart
+            icr.io/db2_community/db2:11.5.9.0
             ghcr.io/goccy/bigquery-emulator:latest
             gcr.io/cloud-spanner-emulator/emulator:latest
             rustfs/rustfs:latest
@@ -378,7 +379,7 @@ jobs:
         env:
           PYTHONFAULTHANDLER: "1"
           PYTEST_ADDOPTS: "--max-worker-restart=0"
-        # At 22min, signal the pytest process group with SIGABRT so faulthandler
+        # At 35min, signal the pytest process group with SIGABRT so faulthandler
         # dumps thread stacks to stderr, with bounded escalation to SIGTERM and SIGKILL.
         # Background watchdog is trapped and reaped reliably on any exit.
         run: |
@@ -415,9 +416,9 @@ jobs:
           pytest_pgid=$pytest_pid
 
           (
-            sleep 1320
+            sleep 2100
             if kill -0 -"$pytest_pgid" 2>/dev/null; then
-              echo "::group::Hang detected after 22 minutes - SIGABRT to pytest process group $pytest_pgid"
+              echo "::group::Hang detected after 35 minutes - SIGABRT to pytest process group $pytest_pgid"
               kill -ABRT -"$pytest_pgid" 2>/dev/null || true
               sleep 15
               if kill -0 -"$pytest_pgid" 2>/dev/null; then

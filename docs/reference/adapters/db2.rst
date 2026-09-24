@@ -14,6 +14,10 @@ Supported Databases
 * **Db2 for z/OS and Db2 for IBM i are not supported.** They expose different
   catalogs and SQL, and SQLSpec does not test against them.
 
+SQLSpec's integration suite runs the Db2 adapter against Db2 Community Edition
+11.5.9 alongside the other databases; the test container is started
+automatically and needs a Docker daemon that allows privileged containers.
+
 Installation
 ============
 
