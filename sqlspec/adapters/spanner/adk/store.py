@@ -10,7 +10,6 @@ from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import OperationalError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
@@ -20,7 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.spanner._typing import SpannerDatabase as Database
-    from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
+    from sqlspec.adapters.spanner.driver import SpannerSyncDriver
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
@@ -225,7 +224,11 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._database().run_in_transaction(_SpannerWriteJob(statements))  # type: ignore[no-untyped-call]
+        def _job(driver: "SpannerSyncDriver") -> None:
+            for sql, params, _ in statements:
+                driver.execute(sql, params)
+
+        self._config.run_in_transaction(_job)
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
@@ -616,32 +619,29 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < @before"
         params: dict[str, Any] = {"before": before}
-        types: dict[str, Any] = {"before": SPANNER_PARAM_TYPES.TIMESTAMP}
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-            types["app_name"] = SPANNER_PARAM_TYPES.STRING
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
+        return int(getattr(result, "rowcount", 0))
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < @updated_before"
         params: dict[str, Any] = {"updated_before": updated_before}
-        types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-            types["app_name"] = SPANNER_PARAM_TYPES.STRING
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
+        return int(getattr(result, "rowcount", 0))
 
     def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._user_state_table} WHERE update_time < @updated_before"
         params: dict[str, Any] = {"updated_before": updated_before}
-        types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-            types["app_name"] = SPANNER_PARAM_TYPES.STRING
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
+        return int(getattr(result, "rowcount", 0))
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = @app_name LIMIT 1"
@@ -879,10 +879,15 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._database().run_in_transaction(_SpannerMemoryWriteJob(statements))  # type: ignore[no-untyped-call]
+        def _job(driver: "SpannerSyncDriver") -> None:
+            for sql, params, _ in statements:
+                driver.execute(sql, params)
+
+        self._config.run_in_transaction(_job)
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        return int(self._database().run_in_transaction(_SpannerMemoryUpdateJob(sql, params, types)))  # type: ignore[no-untyped-call]
+        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
+        return int(getattr(result, "rowcount", 0))
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {
@@ -1207,64 +1212,6 @@ def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -
         if index_name.startswith(f"idx_{table_name}_"):
             return table_name
     return None
-
-
-class _SpannerWriteJob:
-    __slots__ = ("_statements",)
-
-    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._statements = statements
-
-    def __call__(self, transaction: "Transaction") -> None:
-        if len(self._statements) > 1:
-            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
-            if status.code != 0:
-                msg = f"Spanner batch update failed (code {status.code}): {status.message}"
-                raise OperationalError(msg)
-            return
-        for sql, params, types in self._statements:
-            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-
-class _SpannerMemoryWriteJob:
-    __slots__ = ("_statements",)
-
-    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._statements = statements
-
-    def __call__(self, transaction: "Transaction") -> None:
-        if len(self._statements) > 1:
-            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
-            if status.code != 0:
-                msg = f"Spanner batch update failed (code {status.code}): {status.message}"
-                raise OperationalError(msg)
-            return
-        for sql, params, types in self._statements:
-            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
-
-
-class _SpannerUpdateJob:
-    __slots__ = ("_params", "_sql", "_types")
-
-    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._sql = sql
-        self._params = params
-        self._types = types
-
-    def __call__(self, transaction: "Transaction") -> int:
-        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
-
-
-class _SpannerMemoryUpdateJob:
-    __slots__ = ("_params", "_sql", "_types")
-
-    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._sql = sql
-        self._params = params
-        self._types = types
-
-    def __call__(self, transaction: "Transaction") -> int:
-        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
 
 
 class _SpannerReadProtocol(Protocol):

@@ -12,59 +12,47 @@ def _mock_database() -> MagicMock:
 
 
 def test_set_uses_run_in_transaction() -> None:
-    """Verify _set uses database.run_in_transaction for write operations."""
-    mock_db = _mock_database()
-
+    """Verify _set uses config.run_in_transaction for write operations."""
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
     store._set("s1", b"data", None)  # pyright: ignore
 
-    mock_db.run_in_transaction.assert_called_once()
+    config.run_in_transaction.assert_called_once()
 
 
 def test_delete_uses_run_in_transaction() -> None:
-    """Verify _delete uses database.run_in_transaction for write operations."""
-    mock_db = _mock_database()
-
+    """Verify _delete uses config.run_in_transaction for write operations."""
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
     store._delete("s1")  # pyright: ignore
 
-    mock_db.run_in_transaction.assert_called_once()
+    config.run_in_transaction.assert_called_once()
 
 
 def test_delete_all_uses_run_in_transaction() -> None:
-    """Verify _delete_all uses database.run_in_transaction for write operations."""
-    mock_db = _mock_database()
-
+    """Verify _delete_all uses config.run_in_transaction for write operations."""
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
     store._delete_all()  # pyright: ignore
 
-    mock_db.run_in_transaction.assert_called_once()
+    config.run_in_transaction.assert_called_once()
 
 
 def test_delete_expired_uses_run_in_transaction() -> None:
-    """Verify _delete_expired uses database.run_in_transaction for write operations."""
-    mock_db = _mock_database()
-
+    """Verify _delete_expired uses config.run_in_transaction for write operations."""
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
     store._delete_expired()  # pyright: ignore
 
-    mock_db.run_in_transaction.assert_called_once()
+    config.run_in_transaction.assert_called_once()
 
 
 def _context_manager_yielding(value: Any) -> Any:
