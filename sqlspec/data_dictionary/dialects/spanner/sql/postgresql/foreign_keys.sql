@@ -5,7 +5,7 @@ WITH fk_constraints AS (
         constraint_name,
         unique_constraint_name
     FROM information_schema.referential_constraints
-    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
+    WHERE (:schema_name::text IS NULL OR constraint_schema = :schema_name)
 ),
 fk_columns AS (
     SELECT
@@ -15,8 +15,8 @@ fk_columns AS (
         ordinal_position,
         table_schema
     FROM information_schema.key_column_usage
-    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
-      AND (CAST(:table_name AS STRING) IS NULL OR table_name = :table_name)
+    WHERE (:schema_name::text IS NULL OR constraint_schema = :schema_name)
+      AND (:table_name::text IS NULL OR table_name = :table_name)
 ),
 pk_columns AS (
     SELECT
@@ -26,7 +26,7 @@ pk_columns AS (
         ordinal_position,
         table_schema
     FROM information_schema.key_column_usage
-    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
+    WHERE (:schema_name::text IS NULL OR constraint_schema = :schema_name)
 )
 SELECT
     fk.table_name,
@@ -42,7 +42,7 @@ JOIN fk_constraints rc
 JOIN pk_columns pk
   ON pk.constraint_name = rc.unique_constraint_name
   AND pk.ordinal_position = fk.ordinal_position
-WHERE (CAST(:table_name AS STRING) IS NULL OR fk.table_name = :table_name)
+WHERE (:table_name::text IS NULL OR fk.table_name = :table_name)
 ORDER BY fk.table_name, fk.ordinal_position;
 
 -- name: by_schema
@@ -52,7 +52,7 @@ WITH fk_constraints AS (
         constraint_name,
         unique_constraint_name
     FROM information_schema.referential_constraints
-    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
+    WHERE (:schema_name::text IS NULL OR constraint_schema = :schema_name)
 ),
 fk_columns AS (
     SELECT
@@ -62,7 +62,7 @@ fk_columns AS (
         ordinal_position,
         table_schema
     FROM information_schema.key_column_usage
-    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
+    WHERE (:schema_name::text IS NULL OR constraint_schema = :schema_name)
 ),
 pk_columns AS (
     SELECT
@@ -72,7 +72,7 @@ pk_columns AS (
         ordinal_position,
         table_schema
     FROM information_schema.key_column_usage
-    WHERE (CAST(:schema_name AS STRING) IS NULL OR constraint_schema = :schema_name)
+    WHERE (:schema_name::text IS NULL OR constraint_schema = :schema_name)
 )
 SELECT
     fk.table_name,

@@ -13,20 +13,15 @@ from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
 
 from sqlspec.dialects.spanner._generators import SpangresGenerator
-from sqlspec.dialects.spanner._parsers import (
-    attach_create_property,
-    extract_interleave_property,
-    register_spanner_property_parsers,
-)
+from sqlspec.dialects.spanner._parsers import SpangresParser, attach_create_property, extract_interleave_property
 
 __all__ = ("Spangres",)
-
-register_spanner_property_parsers()
 
 
 class Spangres(Postgres):
     """Spanner PostgreSQL-compatible dialect."""
 
+    Parser = SpangresParser
     Generator = SpangresGenerator
 
     def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
