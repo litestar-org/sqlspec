@@ -13,12 +13,12 @@ from sqlspec.adapters.db2.core import (
     default_statement_config,
 )
 from sqlspec.adapters.db2.driver import Db2SyncDriver, Db2SyncExceptionHandler
+from sqlspec.adapters.db2.migrations import Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.migrations.tracker import SyncMigrationTracker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -126,7 +126,7 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
 
     driver_type: "ClassVar[type[Db2SyncDriver]]" = Db2SyncDriver
     connection_type: "ClassVar[type[Db2SyncConnection]]" = cast("type[Db2SyncConnection]", Db2SyncConnection)
-    migration_tracker_type: "ClassVar[type[SyncMigrationTracker]]" = SyncMigrationTracker
+    migration_tracker_type: "ClassVar[type[Db2SyncMigrationTracker]]" = Db2SyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
     supports_native_arrow_export: "ClassVar[bool]" = False

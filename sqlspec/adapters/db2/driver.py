@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 from sqlspec.adapters.db2._typing import Db2Error, Db2SyncCursor, Db2SyncSessionContext, connection_autocommit_enabled
 from sqlspec.adapters.db2.core import (
+    build_set_schema_sql,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -34,6 +35,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 __all__ = ("Db2SyncCursor", "Db2SyncDriver", "Db2SyncExceptionHandler", "Db2SyncSessionContext")
 
@@ -119,6 +121,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         "_column_name_cache",
         "_data_dictionary",
         "_lowercase_columns",
+        "_migration_schema_restore",
         "_restore_autocommit",
         "_transaction_active",
     )
@@ -141,6 +144,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
         self._transaction_active = False
         self._restore_autocommit = False
+        self._migration_schema_restore: str | None = None
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -318,6 +322,41 @@ class Db2SyncDriver(SyncDriverAdapterBase):
     def rollback_to_savepoint(self, name: str) -> None:
         """Rollback to a named transaction savepoint."""
         self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
+
+    def set_migration_session_schema(self, schema: str) -> None:
+        """Switch the session's current schema, remembering the schema in effect on the first switch.
+
+        Args:
+            schema: Schema to make current. Unquoted all-lowercase names fold to uppercase.
+        """
+        with self.with_cursor(self.connection) as cursor:
+            if self._migration_schema_restore is None:
+                cursor.execute("VALUES CURRENT SCHEMA")
+                row = cursor.fetchone()
+                self._migration_schema_restore = str(row[0])
+            cursor.execute(build_set_schema_sql(schema))
+
+    def reset_migration_session_schema(self) -> None:
+        """Restore the current schema captured by ``set_migration_session_schema``."""
+        previous_schema = self._migration_schema_restore
+        if previous_schema is None:
+            return
+        self._migration_schema_restore = None
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(build_set_schema_sql(quote_identifier(previous_schema)))
+
+    def has_schema(self, schema: str) -> bool:
+        """Return whether the schema exists in the catalog.
+
+        Args:
+            schema: Schema name. Unquoted all-lowercase names fold to uppercase.
+
+        Returns:
+            True when ``SYSCAT.SCHEMATA`` lists the schema.
+        """
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute("SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?", (normalize_identifier(schema, "db2"),))
+            return cursor.fetchone() is not None
 
     @property
     def data_dictionary(self) -> "Db2SyncDataDictionary":

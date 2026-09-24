@@ -22,7 +22,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import quote_identifier, split_qualified_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount
 
@@ -30,11 +30,14 @@ if TYPE_CHECKING:
     from logging import Logger
 
 __all__ = (
+    "INDEX_EXISTS_SQL",
+    "TABLE_EXISTS_SQL",
     "apply_driver_features",
     "build_connection_config",
     "build_dsn_string",
     "build_insert_statement",
     "build_profile",
+    "build_set_schema_sql",
     "build_statement_config",
     "collect_rows",
     "create_mapped_exception",
@@ -49,6 +52,14 @@ __all__ = (
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
+    "split_db2_table_name",
+)
+
+TABLE_EXISTS_SQL: Final[str] = (
+    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
+)
+INDEX_EXISTS_SQL: Final[str] = (
+    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
 )
 
 _CLI_KEYWORDS: Final[tuple[tuple[str, str], ...]] = (
@@ -265,6 +276,48 @@ def build_insert_statement(table: str, columns: list[str]) -> str:
     column_clause = ", ".join(quote_identifier(column) for column in columns)
     placeholders = ", ".join("?" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def split_db2_table_name(name: str) -> "tuple[str | None, str]":
+    """Split a possibly schema-qualified table name into catalog-folded parts.
+
+    Each part is folded with ``normalize_identifier(..., "db2")``: all-lowercase parts become
+    uppercase and any other part keeps its case.
+
+    Args:
+        name: Table name, optionally qualified as ``schema.table``.
+
+    Returns:
+        The schema, or ``None`` when unqualified, and the table name.
+    """
+    parts = [normalize_identifier(part, "db2") for part in split_qualified_identifier(name, quote_chars='"')]
+    if not parts:
+        return None, name
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[-2], parts[-1]
+
+
+def build_set_schema_sql(schema: str) -> str:
+    """Build a ``SET SCHEMA`` statement for a schema name.
+
+    The name is folded like an unquoted Db2 identifier unless it is wrapped in double quotes, and
+    it is always emitted as a delimited identifier.
+
+    Args:
+        schema: Schema name.
+
+    Returns:
+        The ``SET SCHEMA`` statement.
+
+    Raises:
+        ImproperConfigurationError: When the schema name is empty.
+    """
+    name = normalize_identifier(schema, "db2")
+    if not name.strip():
+        msg = "Db2 schema name must not be empty"
+        raise ImproperConfigurationError(msg)
+    return f"SET SCHEMA {quote_identifier(name)}"
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:

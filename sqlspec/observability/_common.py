@@ -21,6 +21,7 @@ _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
     ("spanner", "spanner"),
     ("oracle", "oracle"),
     ("oracledb", "oracle"),
+    ("db2", "db2"),
     ("adbc", "adbc"),
 )
 
