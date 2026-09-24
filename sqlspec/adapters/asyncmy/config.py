@@ -1,5 +1,7 @@
 """Asyncmy database configuration."""
 
+import asyncio
+import contextlib
 import inspect
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from weakref import WeakSet
@@ -180,6 +182,7 @@ def build_connection_config(
     config.setdefault("host", "localhost")
     config.setdefault("port", 3306)
     config.setdefault("charset", "utf8mb4")
+    config.setdefault("stmt_cache_size", 128)
     return config
 
 
@@ -220,11 +223,11 @@ class AsyncmyDriverFeatures(TypedDict):
 
 
 class _AsyncmySessionFactory(AsyncPoolSessionFactory):
-    __slots__ = ("_ctx",)
+    __slots__ = ("_contexts",)
 
     def __init__(self, config: "AsyncmyConfig") -> None:
         super().__init__(config)
-        self._ctx: Any | None = None
+        self._contexts: dict[int, Any] = {}
 
     async def acquire_connection(self) -> "AsyncmyConnection":
         pool = self._config.connection_instance
@@ -232,15 +235,22 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
         ctx = pool.acquire()
-        self._ctx = ctx
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+        self._contexts[id(connection)] = ctx
+        try:
+            ensure_conn = self._config._ensure_connection
+            await ensure_conn(connection)
+        except Exception:
+            self._contexts.pop(id(connection), None)
+            with contextlib.suppress(Exception):
+                await ctx.__aexit__(None, None, None)
+            raise
         return connection
 
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
-        if self._ctx is not None:
-            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
-            self._ctx = None
+        ctx = self._contexts.pop(id(_conn), None)
+        if ctx is not None:
+            await ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
 class AsyncmyConnectionContext(AsyncPoolConnectionContext):
@@ -260,19 +270,31 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+        self._connection = connection
+        try:
+            ensure_conn = self._config._ensure_connection
+            await ensure_conn(connection)
+        except Exception:
+            self._connection = None
+            self._ctx = None
+            with contextlib.suppress(Exception):
+                await ctx.__aexit__(None, None, None)
+            raise
         return connection
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
+        self._connection = None
         if self._ctx:
-            return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
+            ctx = self._ctx
+            self._ctx = None
+            return cast("bool | None", await ctx.__aexit__(exc_type, exc_val, exc_tb))
         return None
 
 
 @mypyc_attr(native_class=False)
-class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):  # pyright: ignore
+class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):
     """Configuration for Asyncmy database connections."""
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
@@ -325,7 +347,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         self._user_connection_hook: Callable[[AsyncmyConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
-        # Track initialized connections to ensure callback runs exactly once per physical connection
         self._initialized_connections: WeakSet[Any] = WeakSet()
 
         features_dict.setdefault("enable_local_infile_bulk_load", connection_config["local_infile"])
@@ -371,7 +392,12 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Close the actual async connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
-            await self.connection_instance.wait_closed()
+            with contextlib.suppress(Exception):
+                try:
+                    await asyncio.wait_for(self.connection_instance.wait_closed(), timeout=5.0)
+                except (TimeoutError, asyncio.TimeoutError):
+                    if hasattr(self.connection_instance, "terminate"):
+                        self.connection_instance.terminate()
             self.connection_instance = None
 
     async def create_connection(self) -> AsyncmyConnection:

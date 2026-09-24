@@ -4,10 +4,13 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
+import os
 import tempfile
-from collections.abc import Sized
+from collections.abc import Callable, Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
+
+import anyio
 
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncCursor,
@@ -50,12 +53,10 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorAsyncConnection, MysqlConnectorSyncConnection
     from sqlspec.core import SQL, StatementConfig
     from sqlspec.driver import ExecutionResult
@@ -116,7 +117,7 @@ class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
 class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector sync library."""
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_json_deserializer", "_json_serializer")
     dialect = "mysql"
 
     def __init__(
@@ -132,6 +133,12 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MysqlConnectorSyncDataDictionary | None = None
+        self._json_deserializer: Callable[[Any], Any] = cast(
+            "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
+        )
+        self._json_serializer: Callable[[Any], str] = cast(
+            "Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)
+        )
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -141,7 +148,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             fetched_data = cursor.fetchall()
             description = cursor.description or None
             row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
-            deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+            deserializer = self._json_deserializer
             rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
             column_types = _resolve_column_types(description)
 
@@ -271,10 +278,10 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
             if use_infile:
                 payload = encode_records_for_local_infile(records)
-                with tempfile.NamedTemporaryFile(mode="wb", suffix=".tsv", delete=False) as tmp:
-                    tmp.write(payload)
-                    tmp_name = tmp.name
+                fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
                 try:
+                    with os.fdopen(fd, "wb") as tmp:
+                        tmp.write(payload)
                     load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     with exc_handler, self.with_cursor(self.connection) as cursor:
@@ -323,7 +330,7 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         """Collect mysql-connector sync rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
-        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+        deserializer = self._json_deserializer
         rows, column_names, _row_format = collect_rows(fetched, row_plan, deserializer, logger=logger)
         return rows, column_names, len(rows)
 
@@ -356,7 +363,7 @@ class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
 class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector async library."""
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_json_deserializer", "_json_serializer")
     dialect = "mysql"
 
     def __init__(
@@ -372,6 +379,12 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: MysqlConnectorAsyncDataDictionary | None = None
+        self._json_deserializer: Callable[[Any], Any] = cast(
+            "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
+        )
+        self._json_serializer: Callable[[Any], str] = cast(
+            "Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)
+        )
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -381,7 +394,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             fetched_data = await cursor.fetchall()
             description = cursor.description or None
             row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
-            deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+            deserializer = self._json_deserializer
             rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
             column_types = _resolve_column_types(description)
 
@@ -511,10 +524,10 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
             if use_infile:
                 payload = encode_records_for_local_infile(records)
-                with tempfile.NamedTemporaryFile(mode="wb", suffix=".tsv", delete=False) as tmp:
-                    tmp.write(payload)
-                    tmp_name = tmp.name
+                fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
                 try:
+                    with os.fdopen(fd, "wb") as tmp:
+                        tmp.write(payload)
                     load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     async with exc_handler, self.with_cursor(self.connection) as cursor:
@@ -522,7 +535,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:
-                    Path(tmp_name).unlink(missing_ok=True)  # noqa: ASYNC240
+                    await anyio.Path(tmp_name).unlink(missing_ok=True)
             else:
                 insert_sql = build_insert_statement(table, columns)
                 prepared_records = (
@@ -565,7 +578,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         """Collect mysql-connector async rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, MYSQLCONNECTOR_JSON_TYPE_CODES)
-        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
+        deserializer = self._json_deserializer
         rows, column_names, _row_format = collect_rows(fetched, row_plan, deserializer, logger=logger)
         return rows, column_names, len(rows)
 

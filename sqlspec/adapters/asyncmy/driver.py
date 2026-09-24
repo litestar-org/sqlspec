@@ -4,10 +4,13 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
+import os
 import tempfile
 from collections.abc import Sized
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, cast
+
+import anyio
 
 from sqlspec.adapters.asyncmy._typing import (
     ASYNCMY_INSERT_VALUES_PATTERN,
@@ -41,7 +44,7 @@ from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
@@ -113,7 +116,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_json_deserializer", "_json_serializer")
     dialect = "mysql"
 
     def __init__(
@@ -129,10 +132,13 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AsyncmyDataDictionary | None = None
-
-    # ─────────────────────────────────────────────────────────────────────────────
-    # CORE DISPATCH METHODS - The Execution Engine
-    # ─────────────────────────────────────────────────────────────────────────────
+        features = driver_features or {}
+        self._json_deserializer: Callable[[Any], Any] = cast(
+            "Callable[[Any], Any]", features.get("json_deserializer", from_json)
+        )
+        self._json_serializer: Callable[[Any], str] = cast(
+            "Callable[[Any], str]", features.get("json_serializer", to_json)
+        )
 
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
@@ -171,8 +177,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             fetched_data = await cursor.fetchall()
             description = cursor.description or None
             row_plan = resolve_row_plan(description, ASYNCMY_JSON_TYPE_CODES)
-            deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
+            rows, column_names, row_format = collect_rows(
+                fetched_data, row_plan, self._json_deserializer, logger=logger
+            )
             column_types = _resolve_column_types(description)
 
             return self.create_execution_result(
@@ -389,10 +396,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     async def _load_from_arrow_via_local_infile(
         self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"
     ) -> None:
-        with tempfile.TemporaryDirectory(prefix="sqlspec-asyncmy-") as directory:
-            with tempfile.NamedTemporaryFile(dir=directory, suffix=".tsv", delete=False) as payload:
+        fd, filename = tempfile.mkstemp(prefix="sqlspec-asyncmy-", suffix=".tsv")
+        try:
+            with os.fdopen(fd, "wb") as payload:
                 payload.write(encode_records_for_local_infile(records))
-                filename = payload.name
             statement = build_load_data_statement(table, columns)
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:
@@ -400,6 +407,8 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                     await cursor.execute(statement, {"sqlspec_infile_path": filename})
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from exc_handler.pending_exception.__cause__
+        finally:
+            await anyio.Path(filename).unlink(missing_ok=True)
 
     async def load_from_storage(
         self,
@@ -432,8 +441,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         """Collect asyncmy rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, ASYNCMY_JSON_TYPE_CODES)
-        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-        rows, column_names, _row_format = collect_rows(fetched, row_plan, deserializer, logger=logger)
+        rows, column_names, _row_format = collect_rows(fetched, row_plan, self._json_deserializer, logger=logger)
         return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: Any) -> int:

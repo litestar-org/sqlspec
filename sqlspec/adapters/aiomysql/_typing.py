@@ -7,17 +7,17 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import aiomysql as _aiomysql  # pyright: ignore
-from aiomysql import Connection  # pyright: ignore
-from aiomysql import Error as _AiomysqlError  # pyright: ignore
-from aiomysql import MySQLError as _AiomysqlMySQLError  # pyright: ignore
-from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
-from aiomysql import ProgrammingError as AiomysqlProgrammingError  # pyright: ignore
+import aiomysql as _aiomysql
+from aiomysql import Connection
+from aiomysql import Error as _AiomysqlError
+from aiomysql import MySQLError as _AiomysqlMySQLError
+from aiomysql import Pool as _AiomysqlPool
+from aiomysql import ProgrammingError as AiomysqlProgrammingError
 from aiomysql import SSCursor as AiomysqlSSCursor
 from aiomysql.cursors import RE_INSERT_VALUES as AIOMYSQL_INSERT_VALUES_PATTERN
-from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
-from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
-from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE  # pyright: ignore
+from aiomysql.cursors import Cursor as _AiomysqlCursor
+from aiomysql.cursors import DictCursor as _AiomysqlDictCursor
+from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -38,6 +38,8 @@ if TYPE_CHECKING:
         async def rollback(self) -> object: ...
 
         def close(self) -> object: ...
+
+        def get_transaction_status(self) -> bool: ...
 
     class AiomysqlModuleProtocol(Protocol):
         async def create_pool(self, **kwargs: Any) -> "AiomysqlPool": ...
