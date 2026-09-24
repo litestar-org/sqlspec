@@ -31,6 +31,7 @@ def test_connection_params_cover_common_pymssql_keywords() -> None:
         "tds_version",
         "pool_recycle_seconds",
         "health_check_interval",
+        "encryption",
     }
 
     assert expected_keys <= set(annotations)
@@ -45,6 +46,7 @@ def test_config_defaults_server_port_and_features() -> None:
     assert config.driver_type is PymssqlDriver
     assert config.supports_transactional_ddl is True
     assert config.supports_native_arrow_export is False
+    assert config.supports_native_arrow_import is True
     assert config.driver_features["enable_events"] is True
 
 

@@ -78,13 +78,13 @@ def test_sync_load_from_arrow_skips_an_empty_table() -> None:
     assert conn._cursor.bulkcopy_calls == []
 
 
-def test_sync_load_from_arrow_overwrite_deletes_first() -> None:
+def test_sync_load_from_arrow_overwrite_truncates_first() -> None:
     conn = _FakeConnection()
     driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
 
     driver.load_from_arrow("dbo.orders", pa.table({"id": [1]}), overwrite=True)
 
-    assert conn._cursor.execute_calls == ["DELETE FROM [dbo].[orders]"]
+    assert conn._cursor.execute_calls == ["TRUNCATE TABLE [dbo].[orders]"]
     assert conn._cursor.arrow_calls
 
 
@@ -94,5 +94,44 @@ def test_sync_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
 
     driver.load_from_arrow('"dbo.schema"."orders.table"', pa.table({"id": [1]}), overwrite=True)
 
-    assert conn._cursor.execute_calls == ["DELETE FROM [dbo.schema].[orders.table]"]
+    assert conn._cursor.execute_calls == ["TRUNCATE TABLE [dbo.schema].[orders.table]"]
     assert conn._cursor.arrow_calls
+
+
+def test_sync_load_from_arrow_overwrite_falls_back_to_delete_on_fk_reference() -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+
+    class FkError(Exception):
+        number = 4712
+
+    original_execute = conn._cursor.execute
+
+    def execute_with_fk(sql: str, *args: Any) -> None:
+        original_execute(sql, *args)
+        if sql.startswith("TRUNCATE"):
+            raise FkError("Cannot truncate table referenced by foreign key")
+
+    conn._cursor.execute = cast("Any", execute_with_fk)
+    driver.load_from_arrow("dbo.orders", pa.table({"id": [1]}), overwrite=True)
+
+    assert conn._cursor.execute_calls == ["TRUNCATE TABLE [dbo].[orders]", "DELETE FROM [dbo].[orders]"]
+    assert conn._cursor.arrow_calls
+
+
+def test_sync_load_from_arrow_forwards_bulk_copy_options() -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    table = pa.table({"id": [1, 2], "name": ["a", "b"]})
+
+    job = driver.load_from_arrow(
+        "orders", table, batch_size=500, check_constraints=True, fire_triggers=True, keep_nulls=True, table_lock=True
+    )
+
+    assert job.telemetry["rows_processed"] == 2
+    _, _, kwargs = conn._cursor.arrow_calls[0]
+    assert kwargs["batch_size"] == 500
+    assert kwargs["check_constraints"] is True
+    assert kwargs["fire_triggers"] is True
+    assert kwargs["keep_nulls"] is True
+    assert kwargs["table_lock"] is True

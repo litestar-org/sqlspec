@@ -1,14 +1,19 @@
 """pymssql data dictionary."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from collections.abc import Sequence
+from typing import Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.pymssql.driver import PymssqlDriver
+from sqlspec.core import SQL
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
+    DialectConfig,
     ForeignKeyMetadata,
     IndexMetadata,
+    MetadataCapabilityProfile,
     MetadataSupport,
     SystemMetadataCapability,
     SystemMetadataRequest,
@@ -39,16 +44,11 @@ from sqlspec.data_dictionary.dialects.mssql import (
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.utils.logging import get_logger
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-    from sqlspec.core import SQL
-    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile
-
 __all__ = ("MssqlVersionInfo", "PymssqlSyncDataDictionary")
 
 logger = get_logger("sqlspec.adapters.pymssql.data_dictionary")
+
+MSSQL_VECTOR_MIN_MAJOR: Final[int] = 17
 
 
 class MssqlVersionInfo(VersionInfo):
@@ -74,8 +74,12 @@ class MssqlVersionInfo(VersionInfo):
         """Return whether this server supports the native JSON type."""
         return mssql_supports_native_json(self.major, is_azure_sql=self.is_azure_sql)
 
+    def supports_vector(self) -> bool:
+        """Return whether this server supports native VECTOR data types and functions."""
+        return self.is_azure_sql or self.major >= MSSQL_VECTOR_MIN_MAJOR
+
     @property
-    def version_tuple(self) -> "tuple[int, int, int]":
+    def version_tuple(self) -> tuple[int, int, int]:
         """Get version tuple using the MSSQL build number as the third component."""
         return (self.major, self.minor, self.build)
 
@@ -94,7 +98,7 @@ class _MssqlDataDictionaryMixin:
 
     dialect: ClassVar[str] = "mssql"
 
-    def get_dialect_config(self) -> "DialectConfig":
+    def get_dialect_config(self) -> DialectConfig:
         """Return the dialect configuration for this data dictionary."""
         return get_dialect_config(type(self).dialect)
 
@@ -109,7 +113,7 @@ class _MssqlDataDictionaryMixin:
         """List available feature flags for this dialect."""
         return list_mssql_available_features(self.get_dialect_config())
 
-    def get_domain_query(self, domain: str, name: str) -> "SQL":
+    def get_domain_query(self, domain: str, name: str) -> SQL:
         """Return a SQL Server domain query."""
         query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, name)
         return cast("SQL", query.sql)
@@ -132,6 +136,8 @@ class _MssqlDataDictionaryMixin:
     def _get_optimal_type_from_version(self, version_info: MssqlVersionInfo | None, type_category: str) -> str:
         if type_category in {"json", "jsonb"} and version_info is not None and version_info.supports_native_json():
             return "JSON"
+        if type_category == "vector" and version_info is not None and version_info.supports_vector():
+            return "VECTOR"
         return self.get_dialect_config().get_optimal_type(type_category)
 
 
@@ -145,20 +151,20 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         super().__init__()
 
     def get_metadata_capabilities(
-        self, driver: "PymssqlDriver", domains: "Sequence[str] | None" = None
-    ) -> "MetadataCapabilityProfile":
+        self, driver: PymssqlDriver, domains: Sequence[str] | None = None
+    ) -> MetadataCapabilityProfile:
         """Get SQL Server data-dictionary capability profile."""
         return build_mssql_metadata_capability_profile(type(self).__name__, domains)
 
     def get_system_metadata_capabilities(
-        self, driver: "PymssqlDriver", domains: "Sequence[str] | None" = None
+        self, driver: PymssqlDriver, domains: Sequence[str] | None = None
     ) -> tuple[SystemMetadataCapability, ...]:
         """Get SQL Server opt-in system metadata capability disclosures."""
         _ = driver
         requested_domains = ("dmv_exec_requests", "query_store_runtime") if domains is None else tuple(domains)
         return tuple(build_mssql_system_metadata_capability(domain) for domain in requested_domains)
 
-    def get_version(self, driver: "PymssqlDriver") -> MssqlVersionInfo | None:
+    def get_version(self, driver: PymssqlDriver) -> MssqlVersionInfo | None:
         """Get SQL Server version information."""
         driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
@@ -185,9 +191,11 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         self.cache_version(driver_id, version_info)
         return version_info
 
-    def get_feature_flag(self, driver: "PymssqlDriver", feature: str) -> bool:
+    def get_feature_flag(self, driver: PymssqlDriver, feature: str) -> bool:
         """Check whether SQL Server supports a feature."""
         version_info = self.get_version(driver)
+        if feature == "supports_vector":
+            return bool(version_info and version_info.supports_vector())
         return resolve_mssql_feature_flag(
             feature,
             major=version_info.major if version_info is not None else 0,
@@ -196,11 +204,11 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
             version_info=version_info,
         )
 
-    def get_optimal_type(self, driver: "PymssqlDriver", type_category: str) -> str:
+    def get_optimal_type(self, driver: PymssqlDriver, type_category: str) -> str:
         """Get optimal SQL Server type for a category."""
         return self._get_optimal_type_from_version(self.get_version(driver), type_category)
 
-    def get_tables(self, driver: "PymssqlDriver", schema: str | None = None) -> list[TableMetadata]:
+    def get_tables(self, driver: PymssqlDriver, schema: str | None = None) -> list[TableMetadata]:
         """Get tables sorted by dependency order with catalog fallback."""
         schema_name = self.resolve_connection_schema(driver, schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -219,7 +227,7 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         return merge_mssql_table_lists(ordered, all_rows)
 
     def get_columns(
-        self, driver: "PymssqlDriver", table: str | None = None, schema: str | None = None
+        self, driver: PymssqlDriver, table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         """Get column information for a table or schema."""
         schema_name = self.resolve_connection_schema(driver, schema)
@@ -243,7 +251,7 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         )
 
     def get_indexes(
-        self, driver: "PymssqlDriver", table: str | None = None, schema: str | None = None
+        self, driver: PymssqlDriver, table: str | None = None, schema: str | None = None
     ) -> list[IndexMetadata]:
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_connection_schema(driver, schema)
@@ -267,7 +275,7 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         )
 
     def get_foreign_keys(
-        self, driver: "PymssqlDriver", table: str | None = None, schema: str | None = None
+        self, driver: PymssqlDriver, table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign key metadata."""
         schema_name = self.resolve_connection_schema(driver, schema)
@@ -294,7 +302,7 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
 
     def get_ddl(
         self,
-        driver: "PymssqlDriver",
+        driver: PymssqlDriver,
         object_name: str,
         schema: str | None = None,
         *,
@@ -315,7 +323,7 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
         return build_mssql_table_ddl_result(schema_name, object_name, columns, indexes, object_type=object_type)
 
     def get_system_metadata(
-        self, driver: "PymssqlDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+        self, driver: PymssqlDriver, request: SystemMetadataRequest | str | None = None, **kwargs: Any
     ) -> SystemMetadataResult:
         """Get opt-in SQL Server system metadata with sensitive columns redacted by default."""
         metadata_request = ensure_system_metadata_request(request, **kwargs)

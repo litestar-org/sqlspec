@@ -346,3 +346,29 @@ def test_failed_session_rolls_back_before_release() -> None:
         raise RuntimeError
 
     assert calls == ["rollback", "release"]
+
+
+def test_pool_close_calls_ddbc_close_pooling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Connection pool close should call ddbc_bindings.close_pooling when requested."""
+    closed_pooling: list[bool] = []
+
+    class FakeBindings:
+        @staticmethod
+        def close_pooling() -> None:
+            closed_pooling.append(True)
+
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.ddbc_bindings", FakeBindings)
+    pool = MssqlPythonConnectionPool(connection_string="Server=localhost;")
+    pool.close(close_driver_pooling=True)
+    assert closed_pooling == [True]
+
+
+def test_pool_suppresses_warning_when_params_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pool reconfiguration should not warn if params are identical to previous."""
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", (10, 60, True))
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: None)
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        MssqlPythonConnectionPool(connection_string="Server=localhost;", max_size=10, idle_timeout=60, enabled=True)
+    assert not any("Pooling configuration was already set" in str(w.message) for w in recorded)

@@ -1,8 +1,9 @@
 """pymssql adapter compiled helpers."""
 
 import re
-from collections.abc import Callable, Sized
-from typing import TYPE_CHECKING, Any, Final, Literal
+from collections.abc import Callable, Mapping, Sequence, Sized
+from logging import Logger
+from typing import Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
@@ -24,23 +25,22 @@ from sqlspec.utils.text import split_qualified_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-    from logging import Logger
-
 __all__ = (
     "apply_driver_features",
     "build_connection_config",
     "build_insert_statement",
+    "build_multi_row_insert",
     "build_profile",
     "build_statement_config",
     "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "extract_error_number",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
+    "quote_tsql_identifier",
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
@@ -63,6 +63,14 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 }
 
 
+def quote_tsql_identifier(identifier: str) -> str:
+    """Quote a T-SQL identifier with square brackets."""
+    cleaned = identifier.strip()
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1].replace("]]", "]")
+    return f"[{cleaned.replace(']', ']]')}]"
+
+
 def format_identifier(identifier: str) -> str:
     """Format a T-SQL identifier with bracket quoting."""
     cleaned = identifier.strip()
@@ -70,20 +78,39 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
-    return ".".join(_quote_bracket_identifier(part) for part in parts)
+    return ".".join(quote_tsql_identifier(part) for part in parts)
 
 
-def build_insert_statement(table: str, columns: "list[str]") -> str:
+def build_insert_statement(table: str, columns: list[str]) -> str:
     """Build a pymssql-compatible INSERT statement."""
-    column_clause = ", ".join(_quote_bracket_identifier(column) for column in columns)
+    column_clause = ", ".join(quote_tsql_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def build_multi_row_insert(table: str, columns: list[str], num_rows: int) -> str:
+    """Build a multi-row VALUES (...), (...) batch INSERT statement.
+
+    Args:
+        table: Target table name.
+        columns: Column names to insert.
+        num_rows: Number of row tuples in the VALUES clause (up to 1,000).
+
+    Returns:
+        Parameterized T-SQL INSERT statement.
+    """
+    column_clause = ", ".join(quote_tsql_identifier(column) for column in columns)
+    single_row = f"({', '.join('%s' for _ in columns)})"
+    values_clause = ", ".join(single_row for _ in range(num_rows))
+    return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES {values_clause}"
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:
     """Normalize parameters for pymssql execute calls."""
     if parameters is None:
         return None
+    if isinstance(parameters, tuple):
+        return parameters
     if isinstance(parameters, list):
         return tuple(parameters)
     return parameters
@@ -94,7 +121,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def build_profile() -> "DriverParameterProfile":
+def build_profile() -> DriverParameterProfile:
     """Create the pymssql driver parameter profile."""
     return DriverParameterProfile(
         name="pymssql",
@@ -114,8 +141,8 @@ def build_profile() -> "DriverParameterProfile":
 
 
 def build_statement_config(
-    *, json_serializer: "Callable[[Any], str] | None" = None, json_deserializer: "Callable[[str], Any] | None" = None
-) -> "StatementConfig":
+    *, json_serializer: Callable[[Any], str] | None = None, json_deserializer: Callable[[str], Any] | None = None
+) -> StatementConfig:
     """Construct the pymssql statement configuration."""
     return build_statement_config_from_profile(
         driver_profile,
@@ -126,8 +153,8 @@ def build_statement_config(
 
 
 def apply_driver_features(
-    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
-) -> "tuple[StatementConfig, dict[str, Any]]":
+    statement_config: StatementConfig, driver_features: Mapping[str, Any] | None
+) -> tuple[StatementConfig, dict[str, Any]]:
     """Apply pymssql driver feature defaults to statement config."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     json_serializer = features.setdefault("json_serializer", to_json)
@@ -142,9 +169,9 @@ def apply_driver_features(
     return statement_config, features
 
 
-def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
+def create_mapped_exception(error: Exception, *, logger: Logger | None = None) -> SQLSpecError:
     """Map a pymssql exception to SQLSpec's exception hierarchy."""
-    error_number = _extract_error_number(error)
+    error_number = extract_error_number(error)
     if error_number == _MSSQL_CONSTRAINT_547:
         message = str(error)
         if "check constraint" in message.lower():
@@ -175,8 +202,8 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
 
 
 def resolve_column_names(
-    description: "Sequence[Any] | None", column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None
-) -> "list[str]":
+    description: Sequence[Any] | None, column_name_cache: dict[int, tuple[Any, list[str]]] | None = None
+) -> list[str]:
     """Resolve ordered column names from cursor metadata."""
     if not description:
         return []
@@ -194,17 +221,18 @@ def resolve_column_names(
 
 
 def collect_rows(
-    fetched_data: "Sequence[Any] | None",
-    description: "Sequence[Any] | None",
-    column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None,
-) -> "tuple[list[Any], list[str], Literal['dict', 'tuple', 'record']]":
+    fetched_data: Sequence[Any] | None,
+    description: Sequence[Any] | None,
+    column_name_cache: dict[int, tuple[Any, list[str]]] | None = None,
+) -> tuple[list[Any], list[str], Literal["dict", "tuple", "record"]]:
     """Collect pymssql rows, preserving dictionary or tuple row shape."""
     column_names = resolve_column_names(description, column_name_cache)
     if not fetched_data:
         return [], column_names, "tuple"
-    if isinstance(fetched_data[0], dict):
-        return list(fetched_data), column_names, "dict"
-    return list(fetched_data), column_names, "tuple"
+    rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
+    if isinstance(rows[0], dict):
+        return rows, column_names, "dict"
+    return rows, column_names, "tuple"
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -217,7 +245,7 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
-def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:
+def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: int | None = None) -> int:
     """Resolve executemany rowcount using cursor metadata with payload fallback."""
     rowcount = resolve_rowcount(cursor)
     if rowcount > 0:
@@ -233,7 +261,7 @@ def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _constraint_exception_from_message(error: Exception) -> "SQLSpecError | None":
+def _constraint_exception_from_message(error: Exception) -> SQLSpecError | None:
     """Classify SQL Server constraint messages when a driver omits the native error number."""
     message = str(error)
     normalized = message.lower()
@@ -255,28 +283,39 @@ def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
     return coercions
 
 
-def _quote_bracket_identifier(identifier: str) -> str:
-    cleaned = identifier.strip()
-    if cleaned.startswith("[") and cleaned.endswith("]"):
-        cleaned = cleaned[1:-1].replace("]]", "]")
-    return f"[{cleaned.replace(']', ']]')}]"
+def extract_error_number(exc: BaseException | None) -> int | None:
+    """Extract integer SQL Server error code from an exception if present.
 
-
-def _extract_error_number(exc: Exception) -> "int | None":
+    Checks native integer attributes (number, error_code, errno) or args[0] before regex.
+    """
+    if exc is None:
+        return None
+    for attr in ("number", "error_code", "errno"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and val != 0:
+            return val
+    if hasattr(exc, "args") and exc.args:
+        first = exc.args[0]
+        if isinstance(first, int):
+            return first
     matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
-    if not matches:
-        return None
-    try:
-        return int(matches[-1])
-    except ValueError:
-        return None
+    if matches:
+        try:
+            return int(matches[-1])
+        except ValueError:
+            pass
+    return None
+
+
+_extract_error_number = extract_error_number
+_quote_bracket_identifier = quote_tsql_identifier
 
 
 driver_profile = build_profile()
 default_statement_config = build_statement_config()
 
 
-def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
     """Build a normalized connection configuration dictionary.
 
     Args:

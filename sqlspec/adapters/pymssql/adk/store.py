@@ -1,26 +1,27 @@
 """pymssql ADK stores for Google Agent Development Kit session storage."""
 
-import re
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
+from collections.abc import Sequence
+from datetime import datetime, timedelta
+from typing import Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.pymssql._typing import PymssqlCursor, PymssqlError
+from sqlspec.adapters.pymssql._typing import PymssqlError
+from sqlspec.adapters.pymssql.config import PymssqlConfig
+from sqlspec.adapters.pymssql.core import extract_error_number, quote_tsql_identifier
 from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo
+from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
-from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
+from sqlspec.extensions.adk import (
+    BaseSyncADKMemoryStore,
+    BaseSyncADKStore,
+    SessionOrderBy,
+    StoredEvent,
+    StoredMemory,
+    StoredSession,
+    normalize_session_list_options,
+)
 from sqlspec.utils.serializers import from_json, to_json
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from datetime import timedelta
-
-    from sqlspec.adapters.pymssql.config import PymssqlConfig
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-    from sqlspec.extensions.adk import SessionOrderBy
-    from sqlspec.extensions.adk.memory._types import StoredMemory
 
 __all__ = ("PymssqlADKConfig", "PymssqlADKMemoryStore", "PymssqlADKStore")
 
@@ -28,7 +29,6 @@ MSSQL_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 MSSQL_DUPLICATE_OBJECT_ERROR: Final[int] = 2714
 MSSQL_DUPLICATE_INDEX_ERROR: Final[int] = 1913
 MSSQL_SCHEMA: Final[str] = "dbo"
-MSSQL_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
 JSON_FALLBACK_COLUMN_TYPE: Final[str] = "NVARCHAR(MAX)"
 JSON_NATIVE_COLUMN_TYPE: Final[str] = "JSON"
 
@@ -46,7 +46,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
     connector_name: ClassVar[str] = "pymssql"
     __slots__ = ("_json_column_type", "_native_json")
 
-    def __init__(self, config: "PymssqlConfig") -> None:
+    def __init__(self, config: PymssqlConfig) -> None:
         super().__init__(config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
@@ -74,7 +74,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             driver.commit()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
+        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
     ) -> StoredSession:
         """Create a new ADK session."""
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
@@ -98,8 +98,8 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         return _session_record_from_row(row)
 
     def get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
-    ) -> "StoredSession | None":
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
+    ) -> StoredSession | None:
         """Return a scoped session or ``None`` if absent."""
         try:
             if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -126,7 +126,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             raise
         return _session_record_from_row(row) if row is not None else None
 
-    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
         """Replace a session's durable state."""
         self._execute(
             f"""
@@ -141,13 +141,13 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
     def list_sessions(
         self,
         app_name: str,
-        user_id: "str | None" = None,
+        user_id: str | None = None,
         *,
-        order_by: "SessionOrderBy" = "update_time",
+        order_by: SessionOrderBy = "update_time",
         descending: bool = True,
-        limit: "int | None" = None,
-        offset: "int | None" = None,
-    ) -> "list[StoredSession]":
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[StoredSession]:
         """List ADK sessions for an application, optionally scoped to a user."""
         column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
@@ -182,10 +182,10 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         app_name: str,
         user_id: str,
         session_id: str,
-        state: "dict[str, Any]",
+        state: dict[str, Any],
         *,
-        app_state: "dict[str, Any] | None" = None,
-        user_state: "dict[str, Any] | None" = None,
+        app_state: dict[str, Any] | None = None,
+        user_state: dict[str, Any] | None = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
         update_sql = f"""
@@ -194,21 +194,20 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         OUTPUT inserted.id, inserted.app_name, inserted.user_id, inserted.state, inserted.create_time, inserted.update_time
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_session() as driver:
             try:
-                cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
-                row = cursor.fetchone()
+                row = driver.select_one_or_none(update_sql, (to_json(state), app_name, user_id, session_id))
                 if row is None:
                     _raise_session_not_found(session_id)
-                cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
                 if app_state is not None:
-                    cursor.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state)))
+                    driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state)))
                 if user_state is not None:
-                    cursor.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
+                    driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
             except Exception:
-                conn.rollback()
+                driver.rollback()
                 raise
-            conn.commit()
+            driver.commit()
         return _session_record_from_row(row)
 
     def get_events(
@@ -216,9 +215,9 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         app_name: str,
         user_id: str,
         session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "list[StoredEvent]":
+        after_timestamp: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[StoredEvent]:
         """Return events for a scoped session ordered by event timestamp."""
         if limit == 0:
             return []
@@ -231,7 +230,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             raise
         return [_event_record_from_row(row) for row in rows]
 
-    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
+    def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
         """Delete events older than ``before``."""
         sql = f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < %s"
         params: list[Any] = [before]
@@ -245,7 +244,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
                 return 0
             raise
 
-    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+    def delete_idle_sessions(self, updated_before: datetime, app_name: str | None = None) -> int:
         """Delete sessions whose update_time is older than ``updated_before``."""
         sql = f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < %s"
         params: list[Any] = [updated_before]
@@ -259,7 +258,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
                 return 0
             raise
 
-    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+    def delete_idle_user_states(self, updated_before: datetime, app_name: str | None = None) -> int:
         """Delete user state rows whose update_time is older than ``updated_before``."""
         sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < %s"
         params: list[Any] = [updated_before]
@@ -273,7 +272,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
                 return 0
             raise
 
-    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
+    def get_app_state(self, app_name: str) -> dict[str, Any] | None:
         """Return app-scoped state."""
         try:
             row = self._execute_fetchone(
@@ -285,7 +284,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             raise
         return _json_dict(row[0]) if row is not None else None
 
-    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
+    def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
         """Return user-scoped state."""
         try:
             row = self._execute_fetchone(
@@ -302,15 +301,15 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             raise
         return _json_dict(row[0]) if row is not None else None
 
-    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
+    def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
         """Insert or replace app-scoped state."""
         self._execute(self._upsert_app_state_sql(), (app_name, to_json(state)), commit=True)
 
-    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
+    def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, Any]) -> None:
         """Insert or replace user-scoped state."""
         self._execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(state)), commit=True)
 
-    def get_metadata(self, key: str) -> "str | None":
+    def get_metadata(self, key: str) -> str | None:
         """Return an ADK metadata value."""
         try:
             row = self._execute_fetchone(
@@ -326,7 +325,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         """Set an ADK metadata value."""
         self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
-    def _index_specs(self) -> "list[tuple[str, str, str]]":
+    def _index_specs(self) -> list[tuple[str, str, str]]:
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
         return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
 
@@ -359,7 +358,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
     def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {_table_ref(self._metadata_table)}"
 
-    def _drop_tables_sql(self) -> "list[str]":
+    def _drop_tables_sql(self) -> list[str]:
         return [
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
@@ -379,9 +378,9 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         app_name: str,
         user_id: str,
         session_id: str,
-        after_timestamp: "datetime | None" = None,
-        limit: "int | None" = None,
-    ) -> "tuple[str, tuple[Any, ...]]":
+        after_timestamp: datetime | None = None,
+        limit: int | None = None,
+    ) -> tuple[str, tuple[Any, ...]]:
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
     def _json_column_type_sync(self) -> str:
@@ -395,25 +394,23 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             self._json_column_type = _json_column_type_from_sync_driver(driver)
         return self._json_column_type
 
-    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
-            cursor.execute(sql, params)
-            row = cursor.fetchone()
+    def _execute_fetchone(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> Any | None:
+        with self._config.provide_session() as driver:
+            row = driver.select_one_or_none(sql, params)
             if commit:
-                conn.commit()
+                driver.commit()
             return row
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
-            cursor.execute(sql, params)
-            return list(cursor.fetchall())
+    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
+        with self._config.provide_session() as driver:
+            return driver.select(sql, params)
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
-            cursor.execute(sql, params)
-            rowcount = _cursor_rowcount(cursor)
+    def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
+        with self._config.provide_session() as driver:
+            res = driver.execute(sql, params)
+            rowcount = res.rows_affected
             if commit:
-                conn.commit()
+                driver.commit()
             return rowcount
 
 
@@ -422,7 +419,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "PymssqlConfig") -> None:
+    def __init__(self, config: PymssqlConfig) -> None:
         super().__init__(config)
 
     def create_tables(self) -> None:
@@ -443,7 +440,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
 
-    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
+    def insert_memory_entries(self, entries: list[StoredMemory], owner_id: object | None = None) -> int:
         """Bulk insert memory entries with event-id deduplication."""
         if not self._enabled:
             msg = "ADK memory store is disabled"
@@ -453,7 +450,6 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
 
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", %s" if self._owner_id_column_name else ""
-        # Keep the key-range lock and insertion in one statement, including autocommit.
         sql = f"""
         INSERT INTO {_table_ref(self._memory_table)} (
             id, session_id, app_name, user_id, scope, event_id, author, timestamp,
@@ -466,7 +462,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         );
         """
         inserted = 0
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_session() as driver:
             for entry in entries:
                 params: tuple[Any, ...] = (
                     entry["id"],
@@ -483,9 +479,9 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
                 )
                 if self._owner_id_column_name:
                     params = (*params, owner_id)
-                cursor.execute(sql, (*params, entry["event_id"]))
-                inserted += _cursor_rowcount(cursor)
-            conn.commit()
+                res = driver.execute(sql, (*params, entry["event_id"]))
+                inserted += res.rows_affected
+            driver.commit()
         return inserted
 
     def search_entries(
@@ -493,10 +489,10 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         query: str,
         app_name: str,
         user_id: str,
-        limit: "int | None" = None,
+        limit: int | None = None,
         scope_filter: Literal["all", "user", "app"] = "all",
-        embedding: "Sequence[float] | None" = None,
-    ) -> "list[StoredMemory]":
+        embedding: Sequence[float] | None = None,
+    ) -> list[StoredMemory]:
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "ADK memory store is disabled"
@@ -520,7 +516,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
             f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = %s", (session_id,), commit=True
         )
 
-    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
+    def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
         """Delete memory entries older than the retention window."""
         clauses = ["inserted_at < DATEADD(day, -%s, SYSUTCDATETIME())"]
         params: list[Any] = [days]
@@ -561,7 +557,7 @@ BEGIN
 END;
 """
 
-    def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
+    def _memory_index_specs(self) -> list[tuple[str, str, str]]:
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
         return [
             (
@@ -574,20 +570,19 @@ END;
             (f"idx_{self._memory_table}_timestamp", self._memory_table, "timestamp DESC"),
         ]
 
-    def _drop_memory_table_sql(self) -> "list[str]":
+    def _drop_memory_table_sql(self) -> list[str]:
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
 
-    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
-            cursor.execute(sql, params)
-            return list(cursor.fetchall())
+    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
+        with self._config.provide_session() as driver:
+            return driver.select(sql, params)
 
-    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
-            cursor.execute(sql, params)
-            rowcount = _cursor_rowcount(cursor)
+    def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
+        with self._config.provide_session() as driver:
+            res = driver.execute(sql, params)
+            rowcount = res.rows_affected
             if commit:
-                conn.commit()
+                driver.commit()
             return rowcount
 
 
@@ -601,20 +596,20 @@ def _adk_config(config: Any) -> PymssqlADKConfig:
     return cast("PymssqlADKConfig", adk_config)
 
 
-def _configured_json_column_type(native_json: "bool | None") -> "str | None":
+def _configured_json_column_type(native_json: bool | None) -> str | None:
     if native_json is True:
         return JSON_NATIVE_COLUMN_TYPE
     return JSON_FALLBACK_COLUMN_TYPE
 
 
-def _json_column_type_from_sync_driver(driver: "PymssqlDriver") -> str:
+def _json_column_type_from_sync_driver(driver: PymssqlDriver) -> str:
     version_info = driver.data_dictionary.get_version(driver)
     if isinstance(version_info, MssqlVersionInfo) and version_info.supports_native_json():
         return JSON_NATIVE_COLUMN_TYPE
     return JSON_FALLBACK_COLUMN_TYPE
 
 
-def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
+def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: str | None) -> str:
     owner_line = f",\n        {owner_id_column_ddl}" if owner_id_column_ddl else ""
     return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
@@ -634,7 +629,7 @@ END;
 """
 
 
-def _sessions_index_specs(table: str) -> "list[tuple[str, str, str]]":
+def _sessions_index_specs(table: str) -> list[tuple[str, str, str]]:
     return [
         (f"idx_{table}_app_user", table, "app_name, user_id"),
         (f"idx_{table}_update_time", table, "update_time DESC"),
@@ -663,7 +658,7 @@ END;
 """
 
 
-def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
+def _events_index_specs(table: str) -> list[tuple[str, str, str]]:
     return [
         (f"idx_{table}_scope", table, "app_name, user_id, session_id, timestamp ASC"),
         (f"idx_{table}_session", table, "session_id, timestamp ASC"),
@@ -719,7 +714,7 @@ def _create_index_sql(table: str, index_name: str, columns: str) -> str:
     return f"CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns})"
 
 
-def _casefold_names(rows: "list[Any]", key: str) -> "set[str]":
+def _casefold_names(rows: list[Any], key: str) -> set[str]:
     """Collapse data-dictionary rows into a case-folded, schema-stripped name set."""
     return {str(row.get(key, "")).rsplit(".", 1)[-1].casefold() for row in rows}
 
@@ -738,7 +733,7 @@ def _insert_event_sql(table: str) -> str:
     """
 
 
-def _upsert_state_sql(table: str, key_columns: "tuple[str, ...]", key_params: "tuple[str, ...]") -> str:
+def _upsert_state_sql(table: str, key_columns: tuple[str, ...], key_params: tuple[str, ...]) -> str:
     source_columns = ", ".join(
         f"{param} AS {_quote_identifier(column)}" for column, param in zip(key_columns, key_params, strict=False)
     )
@@ -774,8 +769,8 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _events_query(
-    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
-) -> "tuple[str, tuple[Any, ...]]":
+    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: datetime | None, limit: int | None
+) -> tuple[str, tuple[Any, ...]]:
     top_clause = "TOP (%s) " if limit is not None else ""
     params: list[Any] = [limit] if limit is not None else []
     params.extend([app_name, user_id, session_id])
@@ -792,7 +787,7 @@ def _events_query(
     return sql, tuple(params)
 
 
-def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent) -> tuple[Any, ...]:
     return (
         event_record["id"],
         event_record["app_name"],
@@ -822,7 +817,7 @@ def _event_record_from_row(row: Any) -> StoredEvent:
     )
 
 
-def _memory_record_from_row(row: Any) -> "StoredMemory":
+def _memory_record_from_row(row: Any) -> StoredMemory:
     return cast(
         "StoredMemory",
         {
@@ -843,7 +838,7 @@ def _memory_record_from_row(row: Any) -> "StoredMemory":
     )
 
 
-def _json_dict(value: Any) -> "dict[str, Any]":
+def _json_dict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
     if isinstance(value, dict):
@@ -855,28 +850,13 @@ def _json_dict(value: Any) -> "dict[str, Any]":
     return cast("dict[str, Any]", from_json(str(value)))
 
 
-def _cursor_rowcount(cursor: Any) -> int:
-    rowcount = getattr(cursor, "rowcount", 0)
-    return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
-
-
 def _is_mssql_table_missing(exc: BaseException) -> bool:
     text = str(exc).lower()
-    return "invalid object name" in text or _mssql_error_number(exc) == MSSQL_TABLE_NOT_FOUND_ERROR
-
-
-def _mssql_error_number(exc: BaseException) -> "int | None":
-    matches = MSSQL_ERROR_NUMBER_PATTERN.findall(str(exc))
-    if not matches:
-        return None
-    try:
-        return int(matches[-1])
-    except ValueError:
-        return None
+    return "invalid object name" in text or extract_error_number(exc) == MSSQL_TABLE_NOT_FOUND_ERROR
 
 
 def _quote_identifier(identifier: str) -> str:
-    return f"[{identifier.replace(']', ']]')}]"
+    return quote_tsql_identifier(identifier)
 
 
 def _table_ref(table: str) -> str:
@@ -907,14 +887,8 @@ def _build_mssql_scope_where(
 
 
 def _session_list_query(
-    session_table: str,
-    app_name: str,
-    user_id: "str | None",
-    column: str,
-    direction: str,
-    limit: "int | None",
-    offset: int,
-) -> "tuple[str, tuple[Any, ...]]":
+    session_table: str, app_name: str, user_id: str | None, column: str, direction: str, limit: int | None, offset: int
+) -> tuple[str, tuple[Any, ...]]:
     """Return the bounded session-list query and its bound values."""
     params: list[Any] = [app_name]
     where_clause = "app_name = %s"
