@@ -3,11 +3,9 @@
 import pytest
 
 from sqlspec.adapters.db2.core import (
-    build_insert_statement,
     collect_rows,
     create_mapped_exception,
     extract_sqlstate,
-    format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     resolve_column_names,
@@ -28,13 +26,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from tests.unit.adapters.test_db2._fakes import (
-    DiagnosticAttributeError,
-    FakeDb2Connection,
-    FakeDb2Cursor,
-    db2_description,
-    db2_error,
-)
+from tests.unit.adapters.test_db2._fakes import DiagnosticAttributeError, FakeDb2Connection, db2_description, db2_error
 
 
 @pytest.mark.parametrize(
@@ -196,22 +188,6 @@ def test_extract_sqlstate_reads_mapped_exception() -> None:
     assert extract_sqlstate(RuntimeError("no diagnostics")) is None
 
 
-def test_format_identifier() -> None:
-    """Verify identifier quoting for Db2."""
-    assert format_identifier("tbl") == '"tbl"'
-    assert format_identifier("schema.tbl") == '"schema"."tbl"'
-    assert format_identifier('"already_quoted"') == '"already_quoted"'
-
-    with pytest.raises(SQLSpecError, match="must not be empty"):
-        format_identifier("")
-
-
-def test_build_insert_statement() -> None:
-    """Verify generation of parameterized insert statement."""
-    stmt = build_insert_statement("users", ["id", "name", "email"])
-    assert stmt == 'INSERT INTO "users" ("id", "name", "email") VALUES (?, ?, ?)'
-
-
 def test_normalize_parameters() -> None:
     """Verify parameter normalization."""
     assert normalize_execute_parameters(None) is None
@@ -247,15 +223,15 @@ def test_resolve_rowcount() -> None:
     class NoRowcountCursor:
         rowcount = -1
 
-    assert resolve_many_rowcount(NoRowcountCursor(), [(1,), (2,)], fallback_count=2) == 2
+    assert resolve_many_rowcount(NoRowcountCursor(), [(1,), (2,)]) == 2
+    assert resolve_many_rowcount(NoRowcountCursor(), None) == 0
 
 
-def test_collect_rows_reads_description_from_cursor() -> None:
-    """Rows fetched from a cursor use its description, lowercasing implicit-uppercase names."""
-    cursor = FakeDb2Cursor(rows=[(1, "a")], description=db2_description("id", '"Label"'))
-
-    rows, column_names, row_format = collect_rows(cursor, lowercase=True)
+def test_collect_rows_returns_tuple_rows_with_lowercased_names() -> None:
+    """Fetched tuple rows keep their shape and names Db2 folded to uppercase are lowercased."""
+    rows, column_names, row_format = collect_rows([(1, "a")], db2_description("id", '"Label"'), lowercase=True)
 
     assert rows == [(1, "a")]
     assert column_names == ["id", "Label"]
     assert row_format == "tuple"
+    assert collect_rows(None, None, lowercase=True) == ([], [], "tuple")

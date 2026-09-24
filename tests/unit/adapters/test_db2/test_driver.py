@@ -5,6 +5,7 @@ import pytest
 from sqlspec.adapters.db2.core import default_statement_config
 from sqlspec.adapters.db2.driver import Db2SyncDriver, Db2SyncExceptionHandler
 from sqlspec.core import SQL
+from sqlspec.driver import SyncRowStream
 from sqlspec.exceptions import TransactionError, UniqueViolationError
 from tests.unit.adapters.test_db2._fakes import (
     FakeDb2Connection,
@@ -24,20 +25,11 @@ DUPLICATE_KEY_TEXT = (
 
 @pytest.mark.parametrize(
     ("rows", "expected"),
-    [
-        (
-            [{"name": "Ada", "id": 1}, {"name": "Grace", "id": 2}],
-            [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}],
-        ),
-        ([(1, "Ada"), (2, "Grace")], [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]),
-        ([], []),
-    ],
-    ids=["dict", "tuple", "empty"],
+    [([(1, "Ada"), (2, "Grace")], [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]), ([], [])],
+    ids=["rows", "empty"],
 )
-def test_execute_maps_db2_row_formats(
-    rows: list[tuple[int, str] | dict[str, int | str]], expected: list[dict[str, int | str]]
-) -> None:
-    """Driver formats both dictionary and tuple rows into standardized dictionaries."""
+def test_execute_maps_db2_row_formats(rows: list[tuple[int, str]], expected: list[dict[str, int | str]]) -> None:
+    """Driver maps ibm_db_dbi tuple rows to dictionaries keyed by column name."""
     cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
     driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor))
 
@@ -133,7 +125,7 @@ def test_dispatch_select_stream() -> None:
     statement = SQL("SELECT id, name FROM users", statement_config=default_statement_config)
 
     stream = driver.dispatch_select_stream(statement, chunk_size=2)
-    assert stream is not None
+    assert isinstance(stream, SyncRowStream)
 
     with stream:
         result_rows = list(stream)
@@ -160,20 +152,6 @@ def test_driver_execute_raises_mapped_exception() -> None:
 
     with pytest.raises(UniqueViolationError):
         driver.execute("INSERT INTO users VALUES (1)")
-
-
-def test_select_to_arrow_conversion() -> None:
-    """select_to_arrow returns Arrow Table via in-memory conversion."""
-    pytest.importorskip("pyarrow")
-    rows = [(1, "Ada"), (2, "Grace")]
-    cursor = FakeDb2Cursor(rows=rows, description=[("id",), ("name",)])
-    driver = Db2SyncDriver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
-
-    arrow_result = driver.select_to_arrow("SELECT id, name FROM users")
-
-    table = arrow_result.get_data()
-    assert table.num_rows == 2
-    assert table.column_names == ["id", "name"]
 
 
 def test_select_lowercases_implicit_uppercase_columns() -> None:

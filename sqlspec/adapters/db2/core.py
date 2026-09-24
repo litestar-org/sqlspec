@@ -35,7 +35,6 @@ __all__ = (
     "apply_driver_features",
     "build_connection_config",
     "build_dsn_string",
-    "build_insert_statement",
     "build_profile",
     "build_set_schema_sql",
     "build_statement_config",
@@ -44,7 +43,6 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "extract_sqlstate",
-    "format_identifier",
     "normalize_column_names",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -261,23 +259,6 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
     return SQLSpecError(f"Db2 database error. Original error: {error}")
 
 
-def format_identifier(identifier: str) -> str:
-    """Format a Db2 SQL identifier with standard double quotes."""
-    cleaned = identifier.strip()
-    if not cleaned:
-        msg = "Identifier name must not be empty"
-        raise SQLSpecError(msg)
-    parts = split_qualified_identifier(cleaned, quote_chars='"')
-    return ".".join(quote_identifier(part) for part in parts)
-
-
-def build_insert_statement(table: str, columns: list[str]) -> str:
-    """Build a parameterized INSERT statement for Db2."""
-    column_clause = ", ".join(quote_identifier(column) for column in columns)
-    placeholders = ", ".join("?" for _ in columns)
-    return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
-
-
 def split_db2_table_name(name: str) -> "tuple[str | None, str]":
     """Split a possibly schema-qualified table name into catalog-folded parts.
 
@@ -393,51 +374,44 @@ def resolve_rowcount(cursor: Any) -> int:
     return -1
 
 
-def resolve_many_rowcount(cursor: Any, parameters: Any, fallback_count: int = 0) -> int:
-    """Resolve rowcount for batch operations with fallback to parameter count."""
+def resolve_many_rowcount(cursor: Any, parameters: Any) -> int:
+    """Resolve the affected rowcount of a batch, falling back to the number of parameter sets.
+
+    Args:
+        cursor: Cursor that executed the batch.
+        parameters: Parameter sets passed to ``executemany``.
+
+    Returns:
+        The driver-reported rowcount, else the number of parameter sets, else 0.
+    """
     count = resolve_rowcount(cursor)
     if count >= 0:
         return count
     if parameters is not None and hasattr(parameters, "__len__"):
         return len(parameters)
-    return fallback_count
+    return 0
 
 
 def collect_rows(
-    fetched_data: Any,
-    description: Sequence[Any] | None = None,
-    column_name_cache: dict[int, tuple[Any, list[str]]] | None = None,
+    fetched_data: "Sequence[Any] | None",
+    description: "Sequence[Any] | None" = None,
+    column_name_cache: "dict[int, tuple[Any, list[str]]] | None" = None,
     *,
     lowercase: bool,
-) -> tuple[list[Any], list[str], Literal["dict", "tuple", "record"]]:
-    """Collect Db2 rows, preserving dictionary or tuple row shape.
+) -> "tuple[list[Any], list[str], Literal['tuple']]":
+    """Collect fetched Db2 rows with their column names.
 
     Args:
-        fetched_data: Fetched rows, or a cursor to fetch them from.
-        description: DB-API cursor description used when ``fetched_data`` holds rows.
+        fetched_data: Rows returned by ``fetchall()``.
+        description: DB-API cursor description.
         column_name_cache: Optional cache of resolved column names.
         lowercase: Whether to lowercase names Db2 folded to uppercase.
 
     Returns:
-        Rows, column names, and the row format.
+        Rows, column names, and the ``"tuple"`` row format.
     """
-    if hasattr(fetched_data, "fetchall") and not isinstance(fetched_data, (list, tuple)):
-        cursor = fetched_data
-        fetched = cursor.fetchall() or []
-        desc = getattr(cursor, "description", None)
-        column_names = resolve_column_names(desc, column_name_cache, lowercase=lowercase)
-        if not fetched:
-            return [], column_names, "tuple"
-        if isinstance(fetched[0], dict):
-            return list(fetched), column_names, "dict"
-        return list(fetched), column_names, "tuple"
-
     column_names = resolve_column_names(description, column_name_cache, lowercase=lowercase)
-    if not fetched_data:
-        return [], column_names, "tuple"
-    if isinstance(fetched_data[0], dict):
-        return list(fetched_data), column_names, "dict"
-    return list(fetched_data), column_names, "tuple"
+    return list(fetched_data or []), column_names, "tuple"
 
 
 def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:

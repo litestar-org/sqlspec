@@ -2,13 +2,7 @@
 
 import contextlib
 import logging
-from collections.abc import Sequence, Sized
 from typing import TYPE_CHECKING, Any, cast
-
-if TYPE_CHECKING:
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementFilter
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
 from sqlspec.adapters.db2._typing import Db2Error, Db2SyncCursor, Db2SyncSessionContext, connection_autocommit_enabled
 from sqlspec.adapters.db2.core import (
@@ -36,6 +30,9 @@ from sqlspec.driver import (
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 __all__ = ("Db2SyncCursor", "Db2SyncDriver", "Db2SyncExceptionHandler", "Db2SyncSessionContext")
 
@@ -171,10 +168,9 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
-        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else 0
         cursor.executemany(sql, cast("Sequence[Any]", prepared_parameters))
 
-        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
@@ -283,33 +279,6 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(Db2SyncStreamSource(self, sql, prepared_parameters, chunk_size))
-
-    def select_to_arrow(
-        self,
-        statement: "Statement | QueryBuilder",
-        /,
-        *parameters: "StatementParameters | StatementFilter",
-        statement_config: "StatementConfig | None" = None,
-        return_format: "ArrowReturnFormat" = "table",
-        native_only: bool = False,
-        batch_size: int | None = None,
-        arrow_schema: Any = None,
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        """Execute query and return results converted to Apache Arrow format.
-
-        Db2 driver utilizes in-memory conversion since ibm_db lacks native Arrow C export.
-        """
-        return super().select_to_arrow(
-            statement,
-            *parameters,
-            statement_config=statement_config,
-            return_format=return_format,
-            native_only=native_only,
-            batch_size=batch_size,
-            arrow_schema=arrow_schema,
-            **kwargs,
-        )
 
     def create_savepoint(self, name: str) -> None:
         """Create a transaction savepoint retaining open cursors."""
