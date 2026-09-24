@@ -86,17 +86,15 @@ def test_spanner_property_parser_registration_is_idempotent() -> None:
     from sqlglot.parsers.bigquery import BigQueryParser
     from sqlglot.parsers.postgres import PostgresParser
 
-    from sqlspec.dialects.spanner._parsers import SpangresParser, SpannerParser, register_spanner_property_parsers
+    from sqlspec.dialects.spanner._parsers import register_spanner_property_parsers
 
     register_spanner_property_parsers()
     before = (BigQueryParser.PROPERTY_PARSERS, PostgresParser.PROPERTY_PARSERS)
     register_spanner_property_parsers()
     assert BigQueryParser.PROPERTY_PARSERS is before[0]
     assert PostgresParser.PROPERTY_PARSERS is before[1]
-    assert "INTERLEAVE" in SpannerParser.PROPERTY_PARSERS
-    assert "INTERLEAVE" in SpangresParser.PROPERTY_PARSERS
-    assert "INTERLEAVE" not in BigQueryParser.PROPERTY_PARSERS
-    assert "INTERLEAVE" not in PostgresParser.PROPERTY_PARSERS
+    assert "INTERLEAVE" in before[0]
+    assert "INTERLEAVE" in before[1]
 
 
 def test_concurrent_first_use_registers_all_dialects() -> None:

@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
-from sqlglot.tokens import TokenType
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.dialects.spanner._generators import SpannerGenerator
 from sqlspec.dialects.spanner._parsers import SpannerParser, attach_create_property, extract_interleave_property

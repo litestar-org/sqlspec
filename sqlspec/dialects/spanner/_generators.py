@@ -244,6 +244,20 @@ def _spangres_properties_sql(self: Any, expression: exp.Properties) -> str:
 _original_bq_property_transform = BigQueryGenerator.TRANSFORMS.get(exp.Property)
 _original_bq_properties_transform = BigQueryGenerator.TRANSFORMS.get(exp.Properties)
 _original_bq_create_transform = BigQueryGenerator.TRANSFORMS.get(exp.Create)
+_original_bq_index_transform = BigQueryGenerator.TRANSFORMS.get(exp.Index)
+_original_bq_alter_transform = BigQueryGenerator.TRANSFORMS.get(exp.Alter)
+_original_bq_drop_transform = BigQueryGenerator.TRANSFORMS.get(exp.Drop)
+_original_bq_computed_column_transform = BigQueryGenerator.TRANSFORMS.get(exp.ComputedColumnConstraint)
+_original_bq_datatype_transform = BigQueryGenerator.TRANSFORMS.get(exp.DataType)
+_original_bq_hint_transform = BigQueryGenerator.TRANSFORMS.get(exp.Hint)
+_original_bq_select_transform = BigQueryGenerator.TRANSFORMS.get(exp.Select)
+_original_bq_table_transform = BigQueryGenerator.TRANSFORMS.get(exp.Table)
+
+_original_pg_property_transform = PostgresGenerator.TRANSFORMS.get(exp.Property)
+_original_pg_properties_transform = PostgresGenerator.TRANSFORMS.get(exp.Properties)
+_original_pg_hint_transform = PostgresGenerator.TRANSFORMS.get(exp.Hint)
+_original_pg_select_transform = PostgresGenerator.TRANSFORMS.get(exp.Select)
+_original_pg_table_transform = PostgresGenerator.TRANSFORMS.get(exp.Table)
 
 
 def _bq_property_transform(self: Any, expression: exp.Property) -> str:
@@ -264,25 +278,6 @@ def _bq_properties_transform(self: Any, expression: exp.Properties) -> str:
     if _original_bq_properties_transform is not None:
         return str(_original_bq_properties_transform(self, expression))
     return str(_original_bq_properties_sql(self, expression))
-
-
-def _bq_create_transform(self: Any, expression: exp.Create) -> str:
-    """Transform CREATE TABLE for Spanner to order post-schema properties correctly."""
-    dialect_name = _get_dialect_name(self)
-    if (
-        (dialect_name == "Spanner" or isinstance(self, SpannerGenerator))
-        and expression.this
-        and expression.kind == "TABLE"
-    ):
-        properties = expression.args.get("properties")
-        if properties:
-            spanner_props = [p for p in properties.expressions if _is_post_schema_spanner_property(p)]
-            other_props = [p for p in properties.expressions if not _is_post_schema_spanner_property(p)]
-            properties.set("expressions", other_props + spanner_props)
-
-    if _original_bq_create_transform is not None:
-        return str(_original_bq_create_transform(self, expression))
-    return str(self.create_sql(expression))
 
 
 def _render_approx_cosine_distance(generator: Any, expression: ApproxCosineDistance) -> str:
@@ -347,6 +342,8 @@ def _spanner_index_sql(generator: Any, expression: exp.Index) -> str:
             opts_str = ", ".join(opts_list)
             parts.append(f"OPTIONS ({opts_str})")
         return " ".join(parts)
+    if _original_bq_index_transform is not None:
+        return str(_original_bq_index_transform(generator, expression))
     return str(generator.index_sql(expression))
 
 
@@ -376,7 +373,25 @@ def _spanner_create_transform(generator: Any, expression: exp.Create) -> str:
             opts_str = ", ".join(opts_list)
             parts.append(f"OPTIONS ({opts_str})")
         return " ".join(parts)
-    return _bq_create_transform(generator, expression)
+    if expression.this and expression.kind == "TABLE":
+        properties = expression.args.get("properties")
+        if properties:
+            spanner_props = [p for p in properties.expressions if _is_post_schema_spanner_property(p)]
+            other_props = [p for p in properties.expressions if not _is_post_schema_spanner_property(p)]
+            properties.set("expressions", other_props + spanner_props)
+    if _original_bq_create_transform is not None:
+        return str(_original_bq_create_transform(generator, expression))
+    return str(generator.create_sql(expression))
+
+
+def _bq_create_transform(self: Any, expression: exp.Create) -> str:
+    """Transform CREATE statements for Spanner or delegate to original BigQuery transform."""
+    dialect_name = _get_dialect_name(self)
+    if dialect_name == "Spanner":
+        return _spanner_create_transform(self, expression)
+    if _original_bq_create_transform is not None:
+        return str(_original_bq_create_transform(self, expression))
+    return str(self.create_sql(expression))
 
 
 def _spanner_alter_sql(generator: Any, expression: exp.Alter) -> str:
@@ -398,6 +413,8 @@ def _spanner_alter_sql(generator: Any, expression: exp.Alter) -> str:
             opts_str = ", ".join(opts_list)
             return f"ALTER CHANGE STREAM {name} SET OPTIONS ({opts_str})"
         return f"ALTER CHANGE STREAM {name}"
+    if _original_bq_alter_transform is not None:
+        return str(_original_bq_alter_transform(generator, expression))
     return str(generator.alter_sql(expression))
 
 
@@ -407,6 +424,8 @@ def _spanner_drop_sql(generator: Any, expression: exp.Drop) -> str:
     if kind == "CHANGE STREAM":
         name = generator.sql(expression, "this")
         return f"DROP CHANGE STREAM {name}"
+    if _original_bq_drop_transform is not None:
+        return str(_original_bq_drop_transform(generator, expression))
     return str(generator.drop_sql(expression))
 
 
@@ -441,8 +460,14 @@ def _spanner_select_sql(generator: Any, expression: exp.Select) -> str:
         expr_copy = expression.copy()
         expr_copy.set("hint", None)
         hint_sql = generator.sql(hint)
-        body_sql = BigQueryGenerator.select_sql(generator, expr_copy)
+        body_sql = (
+            _original_bq_select_transform(generator, expr_copy)
+            if _original_bq_select_transform is not None
+            else BigQueryGenerator.select_sql(generator, expr_copy)
+        )
         return f"{hint_sql} {body_sql}"
+    if _original_bq_select_transform is not None:
+        return str(_original_bq_select_transform(generator, expression))
     return BigQueryGenerator.select_sql(generator, expression)
 
 
@@ -453,71 +478,131 @@ def _spangres_select_sql(generator: Any, expression: exp.Select) -> str:
         expr_copy = expression.copy()
         expr_copy.set("hint", None)
         hint_sql = generator.sql(hint)
-        body_sql = PostgresGenerator.select_sql(generator, expr_copy)
+        body_sql = (
+            _original_pg_select_transform(generator, expr_copy)
+            if _original_pg_select_transform is not None
+            else PostgresGenerator.select_sql(generator, expr_copy)
+        )
         return f"{hint_sql} {body_sql}"
+    if _original_pg_select_transform is not None:
+        return str(_original_pg_select_transform(generator, expression))
     return PostgresGenerator.select_sql(generator, expression)
 
 
 def _spanner_table_sql(generator: Any, expression: exp.Table) -> str:
     """Render table reference followed by @{...} table hint if present."""
-    table_sql = BigQueryGenerator.table_sql(generator, expression)
     hints = expression.args.get("hints")
     if hints:
+        expr_copy = expression.copy()
+        expr_copy.set("hints", None)
+        base_sql = (
+            _original_bq_table_transform(generator, expr_copy)
+            if _original_bq_table_transform is not None
+            else BigQueryGenerator.table_sql(generator, expr_copy)
+        )
         hint_strs = [generator.sql(h) for h in hints]
         joined_hints = " ".join(hint_strs)
-        return f"{table_sql} {joined_hints}"
-    return table_sql
+        return f"{base_sql} {joined_hints}"
+    if _original_bq_table_transform is not None:
+        return str(_original_bq_table_transform(generator, expression))
+    return BigQueryGenerator.table_sql(generator, expression)
 
 
 def _spangres_table_sql(generator: Any, expression: exp.Table) -> str:
     """Render table reference followed by /*@ ... */ table hint if present."""
-    table_sql = PostgresGenerator.table_sql(generator, expression)
     hints = expression.args.get("hints")
     if hints:
+        expr_copy = expression.copy()
+        expr_copy.set("hints", None)
+        base_sql = (
+            _original_pg_table_transform(generator, expr_copy)
+            if _original_pg_table_transform is not None
+            else PostgresGenerator.table_sql(generator, expr_copy)
+        )
         hint_strs = [generator.sql(h) for h in hints]
         joined_hints = " ".join(hint_strs)
-        return f"{table_sql} {joined_hints}"
-    return table_sql
+        return f"{base_sql} {joined_hints}"
+    if _original_pg_table_transform is not None:
+        return str(_original_pg_table_transform(generator, expression))
+    return PostgresGenerator.table_sql(generator, expression)
 
 
-class SpannerGenerator(BigQueryGenerator):
-    """Generator for Cloud Spanner GoogleSQL dialect."""
-
-    TYPE_MAPPING = {
-        **BigQueryGenerator.TYPE_MAPPING,
-        exp.DataType.Type.FLOAT: "FLOAT32",
-        exp.DataType.Type.USERDEFINED: "TOKENLIST",
-        exp.DataType.Type.DOUBLE: "FLOAT64",
-    }
-
-    TRANSFORMS = {
-        **BigQueryGenerator.TRANSFORMS,
-        exp.Property: _spanner_property_sql,
-        exp.Properties: _spanner_properties_sql,
-        exp.Create: _spanner_create_transform,
-        exp.Index: _spanner_index_sql,
-        exp.Alter: _spanner_alter_sql,
-        exp.Drop: _spanner_drop_sql,
-        exp.ComputedColumnConstraint: lambda s, e: f"AS {s.sql(e, 'this')} STORED",
-        CosineDistance: lambda s, e: f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        EuclideanDistance: lambda s, e: f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        DotProduct: lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        ApproxCosineDistance: _render_approx_cosine_distance,
-        Search: lambda s, e: f"SEARCH({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        SearchSubstring: lambda s, e: f"SEARCH_SUBSTRING({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        Score: lambda s, e: f"SCORE({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        TokenizeFulltext: _render_tokenize_fulltext,
-        TokenizeSubstring: lambda s, e: f"TOKENIZE_SUBSTRING({s.sql(e, 'this')})",
-        TokenizeNgrams: lambda s, e: f"TOKENIZE_NGRAMS({s.sql(e, 'this')})",
-        GetNextSequenceValue: lambda s, e: f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {s.sql(e, 'this')})",
-        exp.Hint: _render_spanner_hint,
-        exp.Select: _spanner_select_sql,
-        exp.Table: _spanner_table_sql,
-    }
+def _bq_index_transform(generator: Any, expression: exp.Index) -> str:
+    """Transform INDEX statements for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        return _spanner_index_sql(generator, expression)
+    if _original_bq_index_transform is not None:
+        return str(_original_bq_index_transform(generator, expression))
+    return str(generator.index_sql(expression))
 
 
-_original_pg_property_transform = PostgresGenerator.TRANSFORMS.get(exp.Property)
-_original_pg_properties_transform = PostgresGenerator.TRANSFORMS.get(exp.Properties)
+def _bq_alter_transform(generator: Any, expression: exp.Alter) -> str:
+    """Transform ALTER statements for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        return _spanner_alter_sql(generator, expression)
+    if _original_bq_alter_transform is not None:
+        return str(_original_bq_alter_transform(generator, expression))
+    return str(generator.alter_sql(expression))
+
+
+def _bq_drop_transform(generator: Any, expression: exp.Drop) -> str:
+    """Transform DROP statements for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        return _spanner_drop_sql(generator, expression)
+    if _original_bq_drop_transform is not None:
+        return str(_original_bq_drop_transform(generator, expression))
+    return str(generator.drop_sql(expression))
+
+
+def _bq_computed_column_transform(generator: Any, expression: exp.ComputedColumnConstraint) -> str:
+    """Transform COMPUTED COLUMN statements for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        return f"AS {generator.sql(expression, 'this')} STORED"
+    if _original_bq_computed_column_transform is not None:
+        return str(_original_bq_computed_column_transform(generator, expression))
+    return str(generator.computedcolumnconstraint_sql(expression))
+
+
+def _bq_datatype_transform(generator: Any, expression: exp.DataType) -> str:
+    """Transform data types for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        type_value = expression.this
+        if type_value == exp.DataType.Type.FLOAT:
+            return "FLOAT32"
+        if type_value == exp.DataType.Type.DOUBLE:
+            return "FLOAT64"
+        if type_value == exp.DataType.Type.USERDEFINED and not expression.args.get("kind"):
+            return "TOKENLIST"
+    if _original_bq_datatype_transform is not None:
+        return str(_original_bq_datatype_transform(generator, expression))
+    return str(BigQueryGenerator.datatype_sql(generator, expression))
+
+
+def _bq_hint_transform(generator: Any, expression: exp.Hint) -> str:
+    """Transform hints for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        return _render_spanner_hint(generator, expression)
+    if _original_bq_hint_transform is not None:
+        return str(_original_bq_hint_transform(generator, expression))
+    return str(generator.hint_sql(expression))
+
+
+def _bq_select_transform(generator: Any, expression: exp.Select) -> str:
+    """Transform SELECT statements for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        return _spanner_select_sql(generator, expression)
+    if _original_bq_select_transform is not None:
+        return str(_original_bq_select_transform(generator, expression))
+    return str(BigQueryGenerator.select_sql(generator, expression))
+
+
+def _bq_table_transform(generator: Any, expression: exp.Table) -> str:
+    """Transform table references for Spanner or delegate to original BigQuery transform."""
+    if _get_dialect_name(generator) == "Spanner":
+        return _spanner_table_sql(generator, expression)
+    if _original_bq_table_transform is not None:
+        return str(_original_bq_table_transform(generator, expression))
+    return str(BigQueryGenerator.table_sql(generator, expression))
 
 
 def _pg_property_transform(self: Any, expression: exp.Property) -> str:
@@ -540,22 +625,82 @@ def _pg_properties_transform(self: Any, expression: exp.Properties) -> str:
     return str(_original_pg_properties_sql(self, expression))
 
 
-class SpangresGenerator(PostgresGenerator):
-    """Generator for Cloud Spanner PostgreSQL-compatible dialect."""
-
-    TRANSFORMS = {
-        **PostgresGenerator.TRANSFORMS,
-        exp.Property: _spangres_property_sql,
-        exp.Properties: _spangres_properties_sql,
-        CosineDistance: lambda s, e: f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        EuclideanDistance: lambda s, e: f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        DotProduct: lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})",
-        ApproxCosineDistance: _render_approx_cosine_distance,
-        GetNextSequenceValue: lambda s, e: f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {s.sql(e, 'this')})",
-        exp.Hint: _render_spangres_hint,
-        exp.Select: _spangres_select_sql,
-        exp.Table: _spangres_table_sql,
-    }
+def _pg_hint_transform(generator: Any, expression: exp.Hint) -> str:
+    """Transform hints for Spangres or delegate to original Postgres transform."""
+    if _get_dialect_name(generator) == "Spangres":
+        return _render_spangres_hint(generator, expression)
+    if _original_pg_hint_transform is not None:
+        return str(_original_pg_hint_transform(generator, expression))
+    return str(generator.hint_sql(expression))
 
 
-invalidate_generator_dispatch(SpannerGenerator, SpangresGenerator)
+def _pg_select_transform(generator: Any, expression: exp.Select) -> str:
+    """Transform SELECT statements for Spangres or delegate to original Postgres transform."""
+    if _get_dialect_name(generator) == "Spangres":
+        return _spangres_select_sql(generator, expression)
+    if _original_pg_select_transform is not None:
+        return str(_original_pg_select_transform(generator, expression))
+    return str(PostgresGenerator.select_sql(generator, expression))
+
+
+def _pg_table_transform(generator: Any, expression: exp.Table) -> str:
+    """Transform table references for Spangres or delegate to original Postgres transform."""
+    if _get_dialect_name(generator) == "Spangres":
+        return _spangres_table_sql(generator, expression)
+    if _original_pg_table_transform is not None:
+        return str(_original_pg_table_transform(generator, expression))
+    return str(PostgresGenerator.table_sql(generator, expression))
+
+
+BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
+BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
+BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
+BigQueryGenerator.TRANSFORMS[exp.Index] = _bq_index_transform
+BigQueryGenerator.TRANSFORMS[exp.Alter] = _bq_alter_transform
+BigQueryGenerator.TRANSFORMS[exp.Drop] = _bq_drop_transform
+BigQueryGenerator.TRANSFORMS[exp.ComputedColumnConstraint] = _bq_computed_column_transform
+BigQueryGenerator.TRANSFORMS[exp.DataType] = _bq_datatype_transform
+BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
+BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
+BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
+BigQueryGenerator.TRANSFORMS[CosineDistance] = lambda s, e: (
+    f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+)
+BigQueryGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: (
+    f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+)
+BigQueryGenerator.TRANSFORMS[DotProduct] = lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+BigQueryGenerator.TRANSFORMS[ApproxCosineDistance] = _render_approx_cosine_distance
+BigQueryGenerator.TRANSFORMS[Search] = lambda s, e: f"SEARCH({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+BigQueryGenerator.TRANSFORMS[SearchSubstring] = lambda s, e: (
+    f"SEARCH_SUBSTRING({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+)
+BigQueryGenerator.TRANSFORMS[Score] = lambda s, e: f"SCORE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+BigQueryGenerator.TRANSFORMS[TokenizeFulltext] = _render_tokenize_fulltext
+BigQueryGenerator.TRANSFORMS[TokenizeSubstring] = lambda s, e: f"TOKENIZE_SUBSTRING({s.sql(e, 'this')})"
+BigQueryGenerator.TRANSFORMS[TokenizeNgrams] = lambda s, e: f"TOKENIZE_NGRAMS({s.sql(e, 'this')})"
+BigQueryGenerator.TRANSFORMS[GetNextSequenceValue] = lambda s, e: (
+    f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {s.sql(e, 'this')})"
+)
+
+PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
+PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
+PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
+PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
+PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
+PostgresGenerator.TRANSFORMS[CosineDistance] = lambda s, e: (
+    f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+)
+PostgresGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: (
+    f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+)
+PostgresGenerator.TRANSFORMS[DotProduct] = lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+PostgresGenerator.TRANSFORMS[ApproxCosineDistance] = _render_approx_cosine_distance
+PostgresGenerator.TRANSFORMS[GetNextSequenceValue] = lambda s, e: (
+    f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {s.sql(e, 'this')})"
+)
+
+invalidate_generator_dispatch(BigQueryGenerator, PostgresGenerator)
+
+SpannerGenerator = BigQueryGenerator
+SpangresGenerator = PostgresGenerator

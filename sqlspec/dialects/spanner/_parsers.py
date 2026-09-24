@@ -73,11 +73,6 @@ def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, 
     return exp.Property(this=exp.Literal.string(_INTERLEAVE_NAME), value=exp.Tuple(expressions=values))
 
 
-def register_spanner_property_parsers() -> None:
-    """Retained as an idempotent no-op for backward compatibility."""
-    return
-
-
 def extract_interleave_property(sql: str) -> "tuple[str, exp.Property | None]":
     """Strip an INTERLEAVE clause out of raw DDL, returning the repaired SQL and property."""
     match = _INTERLEAVE_PATTERN.search(sql)
@@ -186,6 +181,22 @@ def _build_property_entry(handler: Any, original: Any) -> Any:
     return _entry
 
 
+def register_spanner_property_parsers() -> None:
+    """Install Spanner property parsers on the BigQuery and Postgres parser classes."""
+    for parser_class in (BigQueryParser, PostgresParser):
+        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
+            continue
+        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
+        for key, handler in (
+            ("INTERLEAVE", _parse_interleave),
+            ("ROW", _parse_row_deletion_policy),
+            ("TTL", _parse_ttl),
+        ):
+            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
+        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
+        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
+
+
 def _parse_get_next_sequence_value(parser: Any) -> exp.Func:
     """Parse GET_NEXT_SEQUENCE_VALUE(SEQUENCE sequence_name)."""
     parser._match_text_seq("SEQUENCE")
@@ -279,7 +290,7 @@ def _parse_create_change_stream(parser: Any) -> exp.Create:
         else:
 
             def _parse_stream_target() -> exp.Expr:
-                target_table = parser._parse_id_var()
+                target_table = cast("exp.Expr", parser._parse_id_var())
                 if parser._match(TokenType.L_PAREN):
                     cols = parser._parse_csv(parser._parse_column)
                     parser._match(TokenType.R_PAREN)
@@ -350,34 +361,18 @@ def _parse_spangres_comment_hint(comments: "list[str] | None") -> "exp.Hint | No
     return None
 
 
-class SpannerParser(BigQueryParser):
-    """Parser for Cloud Spanner GoogleSQL dialect."""
+_original_bq_parse_create = BigQueryParser._parse_create
+_original_bq_parse_alter = BigQueryParser._parse_alter
+_original_bq_parse_drop = BigQueryParser._parse_drop
+_original_bq_parse_statement = BigQueryParser._parse_statement
+_original_bq_parse_table_alias = BigQueryParser._parse_table_alias
+_original_bq_parse_table = BigQueryParser._parse_table
 
-    PROPERTY_PARSERS = {
-        **BigQueryParser.PROPERTY_PARSERS,
-        "INTERLEAVE": _parse_interleave,
-        "ROW": _parse_row_deletion_policy,
-        "TTL": _parse_ttl,
-    }
 
-    FUNCTIONS = {
-        **BigQueryParser.FUNCTIONS,
-        "COSINE_DISTANCE": CosineDistance.from_arg_list,
-        "EUCLIDEAN_DISTANCE": EuclideanDistance.from_arg_list,
-        "DOT_PRODUCT": DotProduct.from_arg_list,
-        "APPROX_COSINE_DISTANCE": ApproxCosineDistance.from_arg_list,
-        "SEARCH": Search.from_arg_list,
-        "SEARCH_SUBSTRING": SearchSubstring.from_arg_list,
-        "SCORE": Score.from_arg_list,
-        "TOKENIZE_FULLTEXT": TokenizeFulltext.from_arg_list,
-        "TOKENIZE_SUBSTRING": TokenizeSubstring.from_arg_list,
-        "TOKENIZE_NGRAMS": TokenizeNgrams.from_arg_list,
-    }
-
-    FUNCTION_PARSERS = {**BigQueryParser.FUNCTION_PARSERS, "GET_NEXT_SEQUENCE_VALUE": _parse_get_next_sequence_value}
-
-    def _parse_create(self) -> "exp.Create | exp.Index | exp.Command":
-        """Parse Spanner CREATE statements including VECTOR INDEX, SEARCH INDEX, SEQUENCE, and CHANGE STREAM."""
+def _bq_parse_create(self: Any) -> "exp.Create | exp.Index | exp.Command":
+    """Parse Spanner CREATE statements including VECTOR INDEX, SEARCH INDEX, SEQUENCE, and CHANGE STREAM."""
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spanner":
         if self._match_text_seq("VECTOR", "INDEX"):
             return _parse_create_vector_index(self)
         if self._match_text_seq("SEARCH", "INDEX"):
@@ -386,101 +381,143 @@ class SpannerParser(BigQueryParser):
             return _parse_create_sequence(self)
         if self._match_text_seq("CHANGE", "STREAM"):
             return _parse_create_change_stream(self)
-        return cast("exp.Create | exp.Index | exp.Command", super()._parse_create())
+    return cast("exp.Create | exp.Index | exp.Command", _original_bq_parse_create(self))
 
-    def _parse_alter(self) -> "exp.Alter | exp.Command":
-        """Parse Spanner ALTER statements including SEQUENCE and CHANGE STREAM."""
+
+def _bq_parse_alter(self: Any) -> "exp.Alter | exp.Command":
+    """Parse Spanner ALTER statements including SEQUENCE and CHANGE STREAM."""
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spanner":
         if self._match_text_seq("SEQUENCE"):
             return _parse_alter_sequence(self)
         if self._match_text_seq("CHANGE", "STREAM"):
             return _parse_alter_change_stream(self)
-        return cast("exp.Alter | exp.Command", super()._parse_alter())
+    return _original_bq_parse_alter(self)
 
-    def _parse_drop(self, *args: Any, **kwargs: Any) -> "exp.Drop | exp.Command":
-        """Parse Spanner DROP statements including CHANGE STREAM."""
-        if self._match_text_seq("CHANGE", "STREAM"):
-            return _parse_drop_change_stream(self)
-        return cast("exp.Drop | exp.Command", super()._parse_drop(*args, **kwargs))
 
-    def _parse_statement(self) -> "exp.Expr | None":
-        """Parse statement with optional preceding statement-level hint @{...}."""
-        hint: exp.Hint | None = None
-        if (
-            self._curr
-            and self._curr.token_type == TokenType.PARAMETER
-            and self._next
-            and self._next.token_type == TokenType.L_BRACE
-        ):
-            hint = _parse_spanner_hint(self)
-        statement = super()._parse_statement()
-        if hint is not None and statement is not None:
-            statement.set("hint", hint)
-        return statement
+def _bq_parse_drop(self: Any, *args: Any, **kwargs: Any) -> "exp.Drop | exp.Command":
+    """Parse Spanner DROP statements including CHANGE STREAM."""
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spanner" and self._match_text_seq("CHANGE", "STREAM"):
+        return _parse_drop_change_stream(self)
+    return _original_bq_parse_drop(self, *args, **kwargs)
 
-    def _parse_table_alias(self, alias_tokens: Any = None) -> "exp.TableAlias | None":
-        """Avoid treating @{ as an implicit table alias."""
-        if (
-            self._curr
-            and self._curr.token_type == TokenType.PARAMETER
-            and self._next
-            and self._next.token_type == TokenType.L_BRACE
-        ):
-            return None
-        return super()._parse_table_alias(alias_tokens=alias_tokens)
 
-    def _parse_table(self, *args: Any, **kwargs: Any) -> "exp.Expr | None":
-        """Parse table with optional table-level hint @{...}."""
-        table = super()._parse_table(*args, **kwargs)
-        if (
-            isinstance(table, exp.Table)
-            and self._curr
-            and self._curr.token_type == TokenType.PARAMETER
-            and self._next
-            and self._next.token_type == TokenType.L_BRACE
-        ):
-            hint = _parse_spanner_hint(self)
+def _bq_parse_statement(self: Any) -> "exp.Expr | None":
+    """Parse statement with optional preceding statement-level hint @{...}."""
+    hint: exp.Hint | None = None
+    dialect = getattr(self, "dialect", None)
+    if (
+        dialect is not None
+        and type(dialect).__name__ == "Spanner"
+        and self._curr
+        and self._curr.token_type == TokenType.PARAMETER
+        and self._next
+        and self._next.token_type == TokenType.L_BRACE
+    ):
+        hint = _parse_spanner_hint(self)
+    statement = _original_bq_parse_statement(self)
+    if hint is not None and statement is not None:
+        statement.set("hint", hint)
+    return statement
+
+
+def _bq_parse_table_alias(self: Any, alias_tokens: Any = None) -> "exp.TableAlias | None":
+    """Avoid treating @{ as an implicit table alias."""
+    dialect = getattr(self, "dialect", None)
+    if (
+        dialect is not None
+        and type(dialect).__name__ == "Spanner"
+        and self._curr
+        and self._curr.token_type == TokenType.PARAMETER
+        and self._next
+        and self._next.token_type == TokenType.L_BRACE
+    ):
+        return None
+    return _original_bq_parse_table_alias(self, alias_tokens=alias_tokens)
+
+
+def _bq_parse_table(self: Any, *args: Any, **kwargs: Any) -> "exp.Expr | None":
+    """Parse table with optional table-level hint @{...}."""
+    table = _original_bq_parse_table(self, *args, **kwargs)
+    dialect = getattr(self, "dialect", None)
+    if (
+        dialect is not None
+        and type(dialect).__name__ == "Spanner"
+        and isinstance(table, exp.Table)
+        and self._curr
+        and self._curr.token_type == TokenType.PARAMETER
+        and self._next
+        and self._next.token_type == TokenType.L_BRACE
+    ):
+        hint = _parse_spanner_hint(self)
+        table.set("hints", [hint])
+    return table
+
+
+_original_pg_parse_statement = PostgresParser._parse_statement
+_original_pg_parse_table = PostgresParser._parse_table
+
+
+def _pg_parse_statement(self: Any) -> "exp.Expr | None":
+    """Parse statement with optional preceding comment hint /*@ ... */."""
+    hint: exp.Hint | None = None
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spangres" and self._curr and self._curr.comments:
+        hint = _parse_spangres_comment_hint(self._curr.comments)
+    statement = _original_pg_parse_statement(self)
+    if hint is not None and statement is not None:
+        statement.set("hint", hint)
+    return statement
+
+
+def _pg_parse_table(self: Any, *args: Any, **kwargs: Any) -> "exp.Expr | None":
+    """Parse table with optional trailing comment hint /*@ ... */."""
+    table = _original_pg_parse_table(self, *args, **kwargs)
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spangres" and isinstance(table, exp.Table):
+        comments = getattr(table.this, "comments", None)
+        hint = _parse_spangres_comment_hint(comments) if comments else None
+        if hint is None and self._prev and self._prev.comments:
+            hint = _parse_spangres_comment_hint(self._prev.comments)
+        if hint is not None:
             table.set("hints", [hint])
-        return table
+    return table
 
 
-class SpangresParser(PostgresParser):
-    """Parser for Cloud Spanner PostgreSQL-compatible dialect."""
+BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = CosineDistance.from_arg_list
+BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = EuclideanDistance.from_arg_list
+BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = DotProduct.from_arg_list
+BigQueryParser.FUNCTIONS["APPROX_COSINE_DISTANCE"] = ApproxCosineDistance.from_arg_list
+BigQueryParser.FUNCTIONS["SEARCH"] = Search.from_arg_list
+BigQueryParser.FUNCTIONS["SEARCH_SUBSTRING"] = SearchSubstring.from_arg_list
+BigQueryParser.FUNCTIONS["SCORE"] = Score.from_arg_list
+BigQueryParser.FUNCTIONS["TOKENIZE_FULLTEXT"] = TokenizeFulltext.from_arg_list
+BigQueryParser.FUNCTIONS["TOKENIZE_SUBSTRING"] = TokenizeSubstring.from_arg_list
+BigQueryParser.FUNCTIONS["TOKENIZE_NGRAMS"] = TokenizeNgrams.from_arg_list
 
-    PROPERTY_PARSERS = {
-        **PostgresParser.PROPERTY_PARSERS,
-        "INTERLEAVE": _parse_interleave,
-        "ROW": _parse_row_deletion_policy,
-        "TTL": _parse_ttl,
-    }
 
-    FUNCTIONS = {
-        **PostgresParser.FUNCTIONS,
-        "COSINE_DISTANCE": CosineDistance.from_arg_list,
-        "EUCLIDEAN_DISTANCE": EuclideanDistance.from_arg_list,
-        "DOT_PRODUCT": DotProduct.from_arg_list,
-        "APPROX_COSINE_DISTANCE": ApproxCosineDistance.from_arg_list,
-    }
+BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
 
-    FUNCTION_PARSERS = {**PostgresParser.FUNCTION_PARSERS, "GET_NEXT_SEQUENCE_VALUE": _parse_get_next_sequence_value}
+PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = CosineDistance.from_arg_list
+PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = EuclideanDistance.from_arg_list
+PostgresParser.FUNCTIONS["DOT_PRODUCT"] = DotProduct.from_arg_list
+PostgresParser.FUNCTIONS["APPROX_COSINE_DISTANCE"] = ApproxCosineDistance.from_arg_list
 
-    def _parse_statement(self) -> "exp.Expr | None":
-        """Parse statement with optional preceding comment hint /*@ ... */."""
-        hint: exp.Hint | None = None
-        if self._curr and self._curr.comments:
-            hint = _parse_spangres_comment_hint(self._curr.comments)
-        statement = super()._parse_statement()
-        if hint is not None and statement is not None:
-            statement.set("hint", hint)
-        return statement
+PostgresParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
 
-    def _parse_table(self, *args: Any, **kwargs: Any) -> "exp.Expr | None":
-        """Parse table with optional trailing comment hint /*@ ... */."""
-        table = super()._parse_table(*args, **kwargs)
-        if isinstance(table, exp.Table):
-            comments = getattr(table.this, "comments", None)
-            hint = _parse_spangres_comment_hint(comments) if comments else None
-            if hint is None and self._prev and self._prev.comments:
-                hint = _parse_spangres_comment_hint(self._prev.comments)
-            if hint is not None:
-                table.set("hints", [hint])
-        return table
+setattr(BigQueryParser, "_parse_create", _bq_parse_create)
+setattr(BigQueryParser, "_parse_alter", _bq_parse_alter)
+setattr(BigQueryParser, "_parse_drop", _bq_parse_drop)
+setattr(BigQueryParser, "_parse_statement", _bq_parse_statement)
+setattr(BigQueryParser, "_parse_table_alias", _bq_parse_table_alias)
+setattr(BigQueryParser, "_parse_table", _bq_parse_table)
+
+setattr(PostgresParser, "_parse_statement", _pg_parse_statement)
+setattr(PostgresParser, "_parse_table", _pg_parse_table)
+
+
+register_spanner_property_parsers()
+
+SpannerParser = BigQueryParser
+SpangresParser = PostgresParser
