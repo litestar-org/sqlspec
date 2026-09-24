@@ -1,22 +1,16 @@
-"""IBM Db2 migration tracker."""
+"""IBM Db2 migration trackers."""
 
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlspec.adapters.db2.core import TABLE_EXISTS_SQL, split_db2_table_name
+from sqlspec.adapters.db2.core import TABLE_EXISTS_SQL, split_db2_table_name, utc_now
 from sqlspec.builder import sql
-from sqlspec.migrations.tracker import SyncMigrationTracker
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
 if TYPE_CHECKING:
     from sqlspec.builder import CreateTable, Insert
-    from sqlspec.driver import SyncDriverAdapterBase
+    from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 
-__all__ = ("Db2MigrationTrackerMixin", "Db2SyncMigrationTracker")
-
-
-def _utc_now() -> datetime:
-    """Return the current UTC time as a naive ``datetime``."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+__all__ = ("Db2AsyncMigrationTracker", "Db2MigrationTrackerMixin", "Db2SyncMigrationTracker")
 
 
 class Db2MigrationTrackerMixin:
@@ -53,11 +47,14 @@ class Db2MigrationTrackerMixin:
     def _tracking_table_exists_sql(self) -> "tuple[str, tuple[str | None, str]]":
         """Return the catalog probe for the tracking table and its bound names.
 
+        The tracker's DDL and DML render the table name unquoted, so Db2 stores it uppercase; the
+        probe binds the upper-folded names.
+
         Returns:
             The probe SQL and its ``(schema, table)`` parameters; the schema is ``None`` for an
             unqualified table so the probe checks ``CURRENT SCHEMA``.
         """
-        return TABLE_EXISTS_SQL, split_db2_table_name(self.version_table)
+        return TABLE_EXISTS_SQL, split_db2_table_name(self.version_table.upper())
 
     def _record_migration_statement(
         self,
@@ -101,7 +98,7 @@ class Db2MigrationTrackerMixin:
                 version_type,
                 execution_sequence,
                 description,
-                _utc_now(),
+                utc_now(),
                 execution_time_ms,
                 checksum,
                 applied_by,
@@ -153,7 +150,7 @@ class Db2MigrationTrackerMixin:
                 version_type,
                 execution_sequence,
                 description,
-                _utc_now(),
+                utc_now(),
                 execution_time_ms,
                 checksum,
                 applied_by,
@@ -176,3 +173,19 @@ class Db2SyncMigrationTracker(Db2MigrationTrackerMixin, SyncMigrationTracker):
             driver.execute(self._tracking_table_ddl())
             self._safe_commit(driver)
         self._migrate_schema_if_needed(driver)
+
+
+class Db2AsyncMigrationTracker(Db2MigrationTrackerMixin, AsyncMigrationTracker):
+    """Db2 asynchronous migration tracker."""
+
+    async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Create the tracking table when the catalog does not list it, then add missing columns.
+
+        Args:
+            driver: The async database driver to use.
+        """
+        probe_sql, parameters = self._tracking_table_exists_sql()
+        if await driver.select_value_or_none(probe_sql, parameters) is None:
+            await driver.execute(self._tracking_table_ddl())
+            await self._safe_commit(driver)
+        await self._migrate_schema_if_needed(driver)

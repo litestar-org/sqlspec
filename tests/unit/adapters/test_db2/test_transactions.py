@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 import sqlspec.adapters.db2._typing as typing_module
-from sqlspec.adapters.db2.config import Db2SyncConfig
 from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
@@ -22,8 +21,10 @@ FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
 INSERT = "INSERT INTO t (a) VALUES (1)"
 
 
-def _config(fake_ibm_db: FakeModules, *, autocommit: "bool | None" = None) -> "tuple[Db2SyncConfig, FakeDb2Connection]":
-    """Build a config whose pool hands out one scripted fake connection.
+def _config(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, *, autocommit: "bool | None" = None
+) -> "tuple[Any, FakeDb2Connection]":
+    """Build a config of the given mode whose pool hands out one scripted fake connection.
 
     Returns:
         The config and the connection its pool will open.
@@ -34,7 +35,7 @@ def _config(fake_ibm_db: FakeModules, *, autocommit: "bool | None" = None) -> "t
     connection_config: dict[str, Any] = {"database": "d"}
     if autocommit is not None:
         connection_config["autocommit"] = autocommit
-    return Db2SyncConfig(connection_config=connection_config), connection
+    return db2_mode.config(connection_config=connection_config), connection
 
 
 def _registered_connection(fake_ibm_db: FakeModules, *, autocommit: bool = True) -> FakeDb2Connection:
@@ -66,30 +67,34 @@ def _record_autocommit_calls(monkeypatch: pytest.MonkeyPatch, connection: FakeDb
     return calls
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize(("autocommit", "expected"), [(None, {102: 1}), (True, {102: 1}), (False, {102: 0})])
-def test_pool_connects_with_autocommit_on_by_default(
-    fake_ibm_db: FakeModules, autocommit: "bool | None", expected: "dict[int, int]"
+async def test_pool_connects_with_autocommit_on_by_default(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, autocommit: "bool | None", expected: "dict[int, int]"
 ) -> None:
     """Connections open with autocommit on unless the config turns it off."""
     _, fake_module = fake_ibm_db
-    config, connection = _config(fake_ibm_db, autocommit=autocommit)
+    config, connection = _config(fake_ibm_db, db2_mode, autocommit=autocommit)
 
-    config.create_connection()
+    await db2_mode.call(config.create_connection)
 
     assert fake_module.connect_calls[0][5] == expected
     assert connection.autocommit is (autocommit is not False)
+    await db2_mode.call(config.close_pool)
 
 
-def test_implicit_write_commits_without_begin(fake_ibm_db: FakeModules) -> None:
+@pytest.mark.anyio
+async def test_implicit_write_commits_without_begin(fake_ibm_db: FakeModules, db2_mode: DriverMode) -> None:
     """A write outside ``begin()`` is durable immediately on a default connection."""
-    config, connection = _config(fake_ibm_db)
+    config, connection = _config(fake_ibm_db, db2_mode)
 
-    with config.provide_session() as driver:
-        driver.execute(INSERT)
+    async with db2_mode.enter(config.provide_session()) as driver:
+        await db2_mode.call(driver.execute, INSERT)
 
     assert [sql for sql, _ in connection.committed] == [INSERT]
     assert connection.pending == []
     assert connection.rollbacks == 0
+    await db2_mode.call(config.close_pool)
 
 
 @pytest.mark.anyio
@@ -187,48 +192,54 @@ async def test_session_context_exit_keeps_committed_autocommit_work(
     assert released == [(connection, None)]
 
 
-def test_session_exit_rolls_back_active_transaction(fake_ibm_db: FakeModules) -> None:
+@pytest.mark.anyio
+async def test_session_exit_rolls_back_active_transaction(fake_ibm_db: FakeModules, db2_mode: DriverMode) -> None:
     """Leaving a session with an open transaction rolls it back and restores autocommit."""
-    config, connection = _config(fake_ibm_db)
+    config, connection = _config(fake_ibm_db, db2_mode)
 
-    with config.provide_session() as driver:
-        driver.begin()
-        driver.execute(INSERT)
+    async with db2_mode.enter(config.provide_session()) as driver:
+        await db2_mode.call(driver.begin)
+        await db2_mode.call(driver.execute, INSERT)
 
     assert connection.rollbacks == 1
     assert connection.committed == []
     assert connection.pending == []
     assert connection.autocommit is True
+    await db2_mode.call(config.close_pool)
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize(("commit", "persisted"), [(False, False), (True, True)], ids=["uncommitted", "committed"])
-def test_transaction_session_begins_and_rolls_back_uncommitted_work(
-    fake_ibm_db: FakeModules, commit: bool, persisted: bool
+async def test_transaction_session_begins_and_rolls_back_uncommitted_work(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, commit: bool, persisted: bool
 ) -> None:
     """``provide_session(transaction=True)`` opens a transaction the session must commit."""
-    config, connection = _config(fake_ibm_db)
+    config, connection = _config(fake_ibm_db, db2_mode)
 
-    with config.provide_session(transaction=True) as driver:
+    async with db2_mode.enter(config.provide_session(transaction=True)) as driver:
         assert driver._connection_in_transaction() is True
-        driver.execute(INSERT)
+        await db2_mode.call(driver.execute, INSERT)
         if commit:
-            driver.commit()
+            await db2_mode.call(driver.commit)
 
     assert [sql for sql, _ in connection.committed] == ([INSERT] if persisted else [])
     assert connection.pending == []
     assert connection.autocommit is True
+    await db2_mode.call(config.close_pool)
 
 
-def test_session_exit_rolls_back_autocommit_off_work(fake_ibm_db: FakeModules) -> None:
+@pytest.mark.anyio
+async def test_session_exit_rolls_back_autocommit_off_work(fake_ibm_db: FakeModules, db2_mode: DriverMode) -> None:
     """On an autocommit-off baseline, implicit work left open is rolled back on release."""
-    config, connection = _config(fake_ibm_db, autocommit=False)
+    config, connection = _config(fake_ibm_db, db2_mode, autocommit=False)
 
-    with config.provide_session() as driver:
-        driver.execute(INSERT)
+    async with db2_mode.enter(config.provide_session()) as driver:
+        await db2_mode.call(driver.execute, INSERT)
 
     assert connection.rollbacks == 1
     assert connection.committed == []
     assert connection.pending == []
+    await db2_mode.call(config.close_pool)
 
 
 @pytest.mark.anyio

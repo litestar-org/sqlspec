@@ -22,7 +22,9 @@ from typing import Any
 from typing_extensions import Self
 
 import sqlspec.adapters.db2._typing as db2_typing
+import sqlspec.adapters.db2.config as db2_config
 import sqlspec.adapters.db2.driver as db2_driver
+import sqlspec.adapters.db2.migrations as db2_migrations
 from sqlspec.adapters.db2._typing import Db2Error
 from sqlspec.adapters.db2.core import default_statement_config
 from sqlspec.adapters.db2.driver import Db2SyncDriver
@@ -538,6 +540,18 @@ class DriverMode:
         """Build a driver of this mode over the fake connection."""
         driver_class = db2_driver.Db2AsyncDriver if self.is_async else Db2SyncDriver
         return driver_class(self.connection(connection), **kwargs)
+
+    def config(self, **kwargs: Any) -> Any:
+        """Build the Db2 configuration of this mode."""
+        config_class = db2_config.Db2AsyncConfig if self.is_async else db2_config.Db2SyncConfig
+        return config_class(**kwargs)
+
+    def tracker(self, *args: Any) -> Any:
+        """Build the Db2 migration tracker of this mode."""
+        tracker_class = (
+            db2_migrations.Db2AsyncMigrationTracker if self.is_async else db2_migrations.Db2SyncMigrationTracker
+        )
+        return tracker_class(*args)
 
     def exception_handler(self) -> Any:
         """Build the exception handler of this mode."""

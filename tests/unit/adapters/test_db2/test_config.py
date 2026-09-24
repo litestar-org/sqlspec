@@ -4,7 +4,11 @@ from typing import Any, cast
 
 import pytest
 
+from sqlspec.adapters.db2 import Db2AsyncConfig as ExportedDb2AsyncConfig
 from sqlspec.adapters.db2.config import (
+    Db2AsyncConfig,
+    Db2AsyncConnectionContext,
+    Db2AsyncPoolParams,
     Db2ConnectionParams,
     Db2DriverFeatures,
     Db2PoolParams,
@@ -12,10 +16,17 @@ from sqlspec.adapters.db2.config import (
     Db2SyncConnectionContext,
 )
 from sqlspec.adapters.db2.core import build_dsn_string, parse_db2_dsn
-from sqlspec.adapters.db2.driver import Db2SyncDriver
-from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
-from sqlspec.exceptions import ImproperConfigurationError
-from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeIbmDbDbiModule, FakeIbmDbModule
+from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
+from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
+from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
+from sqlspec.exceptions import ConnectionTimeoutError, ImproperConfigurationError
+from tests.unit.adapters.test_db2._fakes import (
+    DriverMode,
+    FakeDb2AsyncConnection,
+    FakeDb2Connection,
+    FakeIbmDbDbiModule,
+    FakeIbmDbModule,
+)
 
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
 
@@ -216,12 +227,16 @@ def test_canonical_keys_render_in_order() -> None:
     assert config.connection_config["port"] == 50001
 
 
-def test_db2_config_defaults() -> None:
-    """Validate configuration properties and capabilities."""
-    config = Db2SyncConfig(connection_config={"database": "SAMPLE"})
+@pytest.mark.anyio
+async def test_db2_config_defaults(db2_mode: DriverMode) -> None:
+    """Sync and async configs share capabilities and pick the driver and tracker of their mode."""
+    config = db2_mode.config(connection_config={"database": "SAMPLE"})
+
     assert config.connection_config == {"database": "SAMPLE"}
-    assert config.driver_type is Db2SyncDriver
+    assert config.driver_type is (Db2AsyncDriver if db2_mode.is_async else Db2SyncDriver)
+    assert config.migration_tracker_type is (Db2AsyncMigrationTracker if db2_mode.is_async else Db2SyncMigrationTracker)
     assert config.supports_transactional_ddl is True
+    assert config.supports_migration_schemas is True
     assert config.supports_native_row_streaming is True
     assert config.supports_native_arrow_export is False
     assert config.type_coercion_capabilities.datetime_binding == "native"
@@ -266,9 +281,93 @@ def test_db2_config_signature_namespace() -> None:
     assert namespace["Db2PoolParams"] is Db2PoolParams
 
 
-def test_db2_config_event_runtime_hints() -> None:
-    """Verify default runtime hints for event subscription channels."""
-    config = Db2SyncConfig(connection_config={"database": "d"})
-    hints = config.get_event_runtime_hints()
+@pytest.mark.anyio
+async def test_db2_config_event_runtime_hints(db2_mode: DriverMode) -> None:
+    """Sync and async configs report the same event channel runtime hints."""
+    hints = db2_mode.config(connection_config={"database": "d"}).get_event_runtime_hints()
+
     assert hints.poll_interval == 0.25
     assert hints.lease_seconds == 5
+
+
+def test_db2_async_config_signature_namespace() -> None:
+    """The async config registers its own types for dependency injection."""
+    namespace = Db2AsyncConfig(connection_config={"database": "d"}).get_signature_namespace()
+
+    assert namespace["Db2AsyncConfig"] is Db2AsyncConfig
+    assert namespace["Db2AsyncConnectionContext"] is Db2AsyncConnectionContext
+    assert namespace["Db2AsyncConnectionPool"] is Db2AsyncConnectionPool
+    assert namespace["Db2AsyncDriver"] is Db2AsyncDriver
+    assert namespace["Db2AsyncPoolParams"] is Db2AsyncPoolParams
+    assert ExportedDb2AsyncConfig is Db2AsyncConfig
+
+
+@pytest.mark.anyio
+async def test_async_config_pool_params_are_applied(fake_ibm_db: FakeModules) -> None:
+    """Pool sizing, timeout, recycle and health-check settings reach the async pool, not the DSN."""
+    _, fake_module = fake_ibm_db
+    hook_calls: list[Any] = []
+
+    async def hook(connection: Any) -> None:
+        hook_calls.append(connection)
+
+    config = Db2AsyncConfig(
+        connection_config={
+            "database": "TESTDB",
+            "max_size": 1,
+            "acquire_timeout": 0.05,
+            "pool_recycle_seconds": 60,
+            "health_check_interval": 5.0,
+        },
+        driver_features={"on_connection_create": hook},
+    )
+    assert config.get_connection_string() == "DATABASE=TESTDB;"
+    pool = await config.provide_pool()
+    try:
+        assert isinstance(pool, Db2AsyncConnectionPool)
+        assert (pool._recycle_seconds, pool._health_check_interval) == (60, 5.0)
+        held = await pool.acquire()
+        with pytest.raises(ConnectionTimeoutError, match=r"0\.05s"):
+            await pool.acquire()
+        assert fake_module.connect_calls[0][0] == "DATABASE=TESTDB;"
+        assert hook_calls == [held]
+        await pool.release(held)
+    finally:
+        await config.close_pool()
+    assert config.connection_instance is None
+
+
+@pytest.mark.anyio
+async def test_async_provide_session_yields_async_driver(fake_ibm_db: FakeModules) -> None:
+    """Async sessions hand out an async driver over a pooled connection and return it on exit."""
+    config = Db2AsyncConfig(connection_config={"database": "TESTDB"})
+    try:
+        async with config.provide_session() as driver:
+            assert isinstance(driver, Db2AsyncDriver)
+            assert isinstance(driver.connection, FakeDb2AsyncConnection)
+            pool = await config.provide_pool()
+            assert pool.checked_out() == 1
+        assert pool.checked_out() == 0
+        async with config.provide_connection() as connection:
+            assert connection is driver.connection
+    finally:
+        await config.close_pool()
+
+
+@pytest.mark.anyio
+async def test_async_create_connection_is_standalone(fake_ibm_db: FakeModules) -> None:
+    """``create_connection`` opens a caller-owned connection outside the pool's accounting."""
+    _, fake_module = fake_ibm_db
+    connection = FakeDb2Connection()
+    fake_module.pending_connections.append(connection)
+    config = Db2AsyncConfig(connection_config={"database": "TESTDB"})
+    try:
+        created = await config.create_connection()
+
+        assert isinstance(created, FakeDb2AsyncConnection)
+        assert created.sync_connection is connection
+        assert connection.autocommit is True
+        assert (await config.provide_pool()).size() == 0
+    finally:
+        await config.close_pool()
+    assert connection.closed is False

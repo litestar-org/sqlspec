@@ -615,6 +615,43 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         """Create a transaction savepoint retaining open cursors."""
         await self.execute_script(f"SAVEPOINT {validate_savepoint_name(name)} ON ROLLBACK RETAIN CURSORS")
 
+    async def set_migration_session_schema(self, schema: str) -> None:
+        """Switch the session's current schema, remembering the schema in effect on the first switch.
+
+        Args:
+            schema: Schema to make current. Unquoted all-lowercase names fold to uppercase.
+        """
+        async with self.with_cursor(self.connection) as cursor:
+            if self._migration_schema_restore is None:
+                await cursor.execute("VALUES CURRENT SCHEMA")
+                row = await cursor.fetchone()
+                self._migration_schema_restore = str(row[0])
+            await cursor.execute(build_set_schema_sql(schema))
+
+    async def reset_migration_session_schema(self) -> None:
+        """Restore the current schema captured by ``set_migration_session_schema``."""
+        previous_schema = self._migration_schema_restore
+        if previous_schema is None:
+            return
+        self._migration_schema_restore = None
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(build_set_schema_sql(quote_identifier(previous_schema)))
+
+    async def has_schema(self, schema: str) -> bool:
+        """Return whether the schema exists in the catalog.
+
+        Args:
+            schema: Schema name. Unquoted all-lowercase names fold to uppercase.
+
+        Returns:
+            True when ``SYSCAT.SCHEMATA`` lists the schema.
+        """
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.execute(
+                "SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?", (normalize_identifier(schema, "db2"),)
+            )
+            return await cursor.fetchone() is not None
+
     @property
     def data_dictionary(self) -> "Db2AsyncDataDictionary":
         """Return the Db2 async data dictionary bound to this driver.

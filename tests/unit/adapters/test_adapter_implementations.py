@@ -690,7 +690,7 @@ def test_every_config_declares_type_coercion_capabilities() -> None:
             ):
                 concrete_configs.append(obj)
 
-    assert len(concrete_configs) == 24
+    assert len(concrete_configs) == 25
 
     for config_cls in concrete_configs:
         assert "type_coercion_capabilities" in config_cls.__dict__, (
