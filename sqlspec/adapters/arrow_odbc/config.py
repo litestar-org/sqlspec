@@ -88,7 +88,11 @@ class ArrowOdbcConnectionParams(TypedDict):
 
 
 class ArrowOdbcDriverFeatures(TypedDict):
-    """arrow-odbc driver feature flags."""
+    """arrow-odbc driver feature flags.
+
+    ``connection_autocommit`` is the autocommit mode of connections created by
+    the config; the config sets it from ``connection_config["autocommit"]``.
+    """
 
     chunk_size: NotRequired[int]
     max_bytes_per_batch: NotRequired[int]
@@ -100,6 +104,7 @@ class ArrowOdbcDriverFeatures(TypedDict):
     enable_driver_pooling: NotRequired[bool]
     connection_string: NotRequired[str]
     dbms_name: NotRequired[str]
+    connection_autocommit: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]
@@ -194,6 +199,7 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
             features.setdefault("connection_string", str(connection_string))
         elif normalized.get("driver") is not None:
             features.setdefault("dbms_name", str(normalized["driver"]))
+        features["connection_autocommit"] = bool(normalized.get("autocommit", True))
         if provided_statement_config is None:
             statement_config = _resolve_statement_config(features)
         self._user_connection_hook = cast(

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlglot import Dialect
+from sqlglot import Dialect, exp
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
@@ -102,6 +102,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     __slots__ = (
         "_chunk_size_val",
+        "_connection_autocommit",
         "_data_dictionary",
         "_dbms_name",
         "_dialect",
@@ -140,6 +141,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._query_timeout_sec_val: int | None = features.get("query_timeout_sec")
         self._payload_text_encoding: Any = features.get("payload_text_encoding")
         self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
+        self._connection_autocommit: bool = bool(features.get("connection_autocommit", True))
         self.dialect = statement_dialect
         self._data_dictionary: ArrowOdbcDataDictionary | None = None
         self._transaction_active = False
@@ -214,6 +216,23 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return 0
 
     def begin(self) -> None:
+        """Begin an explicit transaction.
+
+        SQL Server starts one with ``BEGIN TRANSACTION``. Db2 has no begin
+        statement: a connection opened with autocommit off is always inside a
+        unit of work, so only the boundary is recorded, and an autocommit
+        connection is refused because each statement would commit on its own.
+
+        Raises:
+            ImproperConfigurationError: If the Db2 connection was opened with autocommit on.
+            SQLSpecError: If the begin statement fails.
+        """
+        if self._dialect == "db2":
+            if self._connection_autocommit:
+                msg = "Db2 transactions through arrow-odbc require connection_config={'autocommit': False}"
+                raise ImproperConfigurationError(msg)
+            self._transaction_active = True
+            return
         try:
             self.connection.execute("BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN")
         except Exception as exc:
@@ -254,6 +273,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         safe_name = validate_savepoint_name(name)
         if self._dialect == "mssql":
             self.execute_script(f"SAVE TRANSACTION {safe_name}")
+            return
+        if self._dialect == "db2":
+            self.execute_script(f"SAVEPOINT {safe_name} ON ROLLBACK RETAIN CURSORS")
             return
         self.execute_script(f"SAVEPOINT {safe_name}")
 
@@ -359,7 +381,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            self.execute(f"DELETE FROM {_quote_odbc_table(table)}")
+            target = _db2_table_reference(table) if self._dialect == "db2" else _quote_odbc_table(table)
+            self.execute(f"DELETE FROM {target}")
         self.bulk_insert_arrow(table, arrow_table)
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -422,12 +445,32 @@ def _quote_odbc_table(table: str) -> str:
     return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
 
 
+def _db2_table_reference(table: str) -> str:
+    """Render a table name the way Db2 resolves the bulk-insert target.
+
+    Unquoted parts that are plain identifiers stay unquoted so Db2 folds them
+    to uppercase; quoted parts and anything else are double-quoted verbatim.
+
+    Args:
+        table: Table name, optionally schema-qualified and quoted.
+
+    Returns:
+        The table reference for use in a Db2 statement.
+    """
+    rendered: list[str] = []
+    for part in exp.to_table(table, dialect="db2").parts:
+        plain = isinstance(part, exp.Identifier) and not part.quoted
+        rendered.append(part.name if plain and _DB2_PLAIN_IDENTIFIER.match(part.name) else quote_identifier(part.name))
+    return ".".join(rendered)
+
+
 def _statement_dialect_for(dialect: str) -> str:
     if dialect == "mssql":
         return "tsql"
     return dialect
 
 
+_DB2_PLAIN_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MSSQL_OFFSET_FETCH_PATTERN = re.compile(
     r"OFFSET\s+\?\s+ROWS\s+FETCH\s+(?P<fetch_keyword>NEXT|FIRST)\s+\?\s+ROWS\s+ONLY", re.IGNORECASE
 )
