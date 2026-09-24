@@ -8,6 +8,7 @@ import pytest
 pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
+from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
     EMPTY_RESULT,
@@ -192,3 +193,28 @@ async def test_tsql_session_delete_expired() -> None:
         ),
         ("DELETE FROM sess WHERE expires_at IS NOT NULL AND expires_at < SYSUTCDATETIME()", None),
     ]
+
+
+def test_tsql_event_store_create_and_drop_statements() -> None:
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        extension_config={"events": {"queue_table": "app_events"}},
+    )
+    store = ArrowOdbcEventQueueStore(config)
+
+    assert store.create_statements() == [
+        (
+            "IF OBJECT_ID(N'[dbo].[app_events]', N'U') IS NULL BEGIN CREATE TABLE app_events (event_id NVARCHAR(64) "
+            "PRIMARY KEY, channel NVARCHAR(128) NOT NULL, payload_json NVARCHAR(MAX) NOT NULL, metadata_json NVARCHAR(MAX), "
+            "status NVARCHAR(32) NOT NULL DEFAULT 'pending', available_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME(), "
+            "lease_expires_at DATETIME2(6), attempts INT NOT NULL DEFAULT 0, created_at DATETIME2(6) NOT NULL DEFAULT "
+            "SYSUTCDATETIME(), acknowledged_at DATETIME2(6)); END"
+        ),
+        (
+            "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_app_events_channel_status' AND object_id = "
+            "OBJECT_ID(N'[dbo].[app_events(channel,]')) BEGIN CREATE INDEX idx_app_events_channel_status ON "
+            "app_events(channel, status, available_at); END"
+        ),
+    ]
+    assert store.drop_statements() == ["IF OBJECT_ID(N'[dbo].[app_events]', N'U') IS NOT NULL DROP TABLE app_events;"]
+    assert store._index_existence_target() is None  # pyright: ignore[reportPrivateUsage]

@@ -10,6 +10,7 @@ pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
 from sqlspec.adapters.arrow_odbc.core import split_db2_name
+from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from sqlspec.migrations.schema import SchemaTarget
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
@@ -165,3 +166,39 @@ def test_db2_litestar_ddl_parses_with_db2_dialect() -> None:
     ]
     assert "IF NOT EXISTS" not in ddl.upper()
     assert store._drop_table_sql() == ["DROP TABLE sess_chunks", "DROP TABLE sess"]  # pyright: ignore[reportPrivateUsage]
+
+
+def _event_store(queue_table: str = "app_events") -> ArrowOdbcEventQueueStore:
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": DB2_CONNECTION_STRING},
+        extension_config={"events": {"queue_table": queue_table}},
+    )
+    return ArrowOdbcEventQueueStore(config)
+
+
+def test_db2_event_store_create_statements() -> None:
+    """The Db2 queue DDL is plain CREATE TABLE/INDEX text that parses with the db2 dialect."""
+    store = _event_store()
+
+    statements = store.create_statements()
+
+    assert statements == [
+        (
+            "CREATE TABLE app_events (event_id VARCHAR(64) NOT NULL PRIMARY KEY, channel VARCHAR(128) NOT NULL, "
+            "payload_json CLOB NOT NULL, metadata_json CLOB, status VARCHAR(32) NOT NULL DEFAULT 'pending', "
+            "available_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, lease_expires_at TIMESTAMP, "
+            "attempts INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, "
+            "acknowledged_at TIMESTAMP)"
+        ),
+        "CREATE INDEX idx_app_events_channel_status ON app_events(channel, status, available_at)",
+    ]
+    assert [sqlglot.parse_one(statement, read="db2").key for statement in statements] == ["create", "create"]
+    assert store.drop_statements() == ["DROP TABLE app_events"]
+
+
+@pytest.mark.parametrize(
+    ("queue_table", "expected"), [("app_events", (None, "APP_EVENTS")), ("queue.app_events", ("QUEUE", "APP_EVENTS"))]
+)
+def test_db2_event_store_index_existence_target(queue_table: str, expected: "tuple[str | None, str]") -> None:
+    """The index check targets the upper-folded catalog names of the unquoted queue table."""
+    assert _event_store(queue_table)._index_existence_target() == expected  # pyright: ignore[reportPrivateUsage]
