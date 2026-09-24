@@ -443,13 +443,18 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         )
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = @session_id{shard_clause}"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = @app_name AND user_id = @user_id AND id = @session_id{shard_clause}"
-        params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
-        types = {
+        delete_events_params = {"session_id": session_id}
+        delete_events_types = {"session_id": SPANNER_PARAM_TYPES.STRING}
+        delete_session_params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+        delete_session_types = {
             "app_name": SPANNER_PARAM_TYPES.STRING,
             "user_id": SPANNER_PARAM_TYPES.STRING,
             "session_id": SPANNER_PARAM_TYPES.STRING,
         }
-        self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
+        self._run_write([
+            (delete_events_sql, delete_events_params, delete_events_types),
+            (delete_session_sql, delete_session_params, delete_session_types),
+        ])
 
     def _append_event_and_update_state(
         self,
