@@ -12,7 +12,7 @@ from google.api_core.client_info import ClientInfo as BigQueryClientInfo
 from google.api_core.client_options import ClientOptions as BigQueryClientOptions
 from google.api_core.retry import Retry as BigQueryRetry
 from google.auth.credentials import Credentials as BigQueryCredentials
-from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter
+from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter, StructQueryParameter
 from google.cloud.bigquery import LoadJobConfig as BigQueryLoadJobConfig
 from google.cloud.bigquery import QueryJob as BigQueryQueryJob
 from google.cloud.bigquery import QueryJobConfig as BigQueryQueryJobConfig
@@ -33,13 +33,13 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     BigQueryConnection: TypeAlias = Client
-    BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter
+    BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter | StructQueryParameter
     BigQueryStorageWriteModule: Any
     BigQueryStorageWriteTypes: Any
 
 if not TYPE_CHECKING:
     BigQueryConnection = Client
-    BigQueryParam = ArrayQueryParameter | ScalarQueryParameter
+    BigQueryParam = ArrayQueryParameter | ScalarQueryParameter | StructQueryParameter
     bigquery_storage_read_module = import_optional("google.cloud.bigquery_storage")
     BigQueryStorageWriteModule = import_optional("google.cloud.bigquery_storage_v1")
     BigQueryStorageWriteTypes = import_optional("google.cloud.bigquery_storage_v1.types")

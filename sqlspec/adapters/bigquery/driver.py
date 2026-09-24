@@ -9,17 +9,22 @@ from collections.abc import Mapping
 from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
 
+import sqlglot
+
 from sqlspec.adapters.bigquery._typing import BIGQUERY_POLLING_DEFAULT_VALUE as POLLING_DEFAULT_VALUE
 from sqlspec.adapters.bigquery._typing import (
     BigQueryConnection,
     BigQueryCursor,
+    BigQueryQueryJobConfig,
     BigQuerySessionContext,
     BigQueryStorageWriteModule,
     BigQueryStorageWriteTypes,
     GoogleCloudError,
 )
 from sqlspec.adapters.bigquery.core import (
+    COST_PER_TERABYTE_USD,
     DEFAULT_REQUEST_TIMEOUT,
+    BigQueryDryRunResult,
     BigQueryStreamSource,
     _build_export_statement,
     _build_export_uri,
@@ -45,6 +50,7 @@ from sqlspec.adapters.bigquery.core import (
 )
 from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.core import (
+    ParameterProfile,
     StatementConfig,
     build_arrow_result_from_reader,
     build_arrow_result_from_table,
@@ -53,7 +59,7 @@ from sqlspec.core import (
     register_driver_profile,
 )
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
-from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
+from sqlspec.exceptions import ImproperConfigurationError, OperationalError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import to_json
@@ -113,6 +119,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_data_dictionary",
         "_default_query_job_config",
         "_enable_storage_write_api",
+        "_in_transaction",
         "_job_result_kwargs_defaults",
         "_job_result_timeout",
         "_job_retry",
@@ -120,6 +127,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         "_json_serializer",
         "_literal_inliner",
         "_request_timeout",
+        "_session_id",
         "_use_query_and_wait",
     )
     dialect = "bigquery"
@@ -153,8 +161,34 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
         self._request_timeout = self._resolve_request_timeout(features)
-        self._use_query_and_wait = bool(features.get("use_query_and_wait", False))
+        self._use_query_and_wait = bool(features.get("use_query_and_wait", True))
         self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
+        self._session_id: str | None = None
+        self._in_transaction: bool = False
+
+    @property
+    def session_id(self) -> str | None:
+        """Return the current BigQuery server-side session ID, if active."""
+        return self._session_id
+
+    def _can_use_query_and_wait(
+        self, statement: "SQL", job_config: "QueryJobConfig | None" = None, sql: str = ""
+    ) -> bool:
+        """Determine whether statement qualifies for query_and_wait execution."""
+        if not self._use_query_and_wait:
+            return False
+        if not hasattr(self.connection, "query_and_wait"):
+            return False
+        config = job_config or self._default_query_job_config
+        if config is not None:
+            if getattr(config, "destination", None) is not None:
+                return False
+            if getattr(config, "dry_run", False):
+                return False
+            priority = getattr(config, "priority", None)
+            if priority and str(priority).upper() == "BATCH":
+                return False
+        return "EXPORT DATA OPTIONS" not in sql.upper()
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
@@ -167,16 +201,22 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with query results and metadata
         """
         sql, parameters = self._compiled_sql(statement, self.statement_config)
-        if self._use_query_and_wait:
+        statement_job_config = getattr(statement, "job_config", None)
+        effective_job_config = statement_job_config or self._default_query_job_config
+        if self._can_use_query_and_wait(statement, job_config=effective_job_config, sql=sql):
             row_iterator = _run_query_and_wait(
                 cursor,
                 sql,
                 parameters,
                 default_job_config=self._default_query_job_config,
+                job_config=statement_job_config,
                 json_serializer=self._json_serializer,
                 retry=self._job_retry,
                 wait_timeout=self._job_request_timeout(),
                 job_retry=self._job_retry,
+                page_size=self._job_result_kwargs_defaults.get("page_size"),
+                max_results=self._job_result_kwargs_defaults.get("max_results"),
+                session_id=self._session_id,
             )
             cursor.job = None
             iterator_schema = getattr(row_iterator, "schema", None)
@@ -196,7 +236,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             affected_rows = build_dml_rowcount(row_iterator, 0)
             return self.create_execution_result(cursor, rowcount_override=affected_rows)
 
-        cursor.job = self._run_query_job(cursor, sql, parameters)
+        cursor.job = self._run_query_job(cursor, sql, parameters, job_config=statement_job_config)
         statement_type = str(cursor.job.statement_type or "").upper()
         is_select_like = (
             statement.returns_rows() or statement_type == "SELECT" or self._should_force_select(statement, cursor)
@@ -269,10 +309,58 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute SQL script with statement splitting and parameter handling.
+    def _inline_script_parameters(self, sql: str, parameters: Any) -> str:
+        """Inline literal values into a multi-statement script for procedural SQL compatibility."""
+        if not parameters:
+            return sql
+        try:
+            expressions = sqlglot.parse(sql, read="bigquery")
+            inlined_parts: list[str] = []
+            for expr in expressions:
+                if expr is not None:
+                    transformed, _ = self._literal_inliner(expr.copy(), parameters, ParameterProfile.empty())
+                    inlined_parts.append(str(transformed.sql(dialect="bigquery")))
+            if inlined_parts:
+                return ";\n".join(inlined_parts) + ";"
+        except Exception as exc:
+            logger.debug("Failed to inline script parameters: %s", exc)
+        return sql
 
-        Parameters are embedded as static values for script execution compatibility.
+    def _extract_script_statement_count(self, job: Any) -> int:
+        """Extract total statement count executed by a BigQuery script job."""
+        properties = getattr(job, "_properties", {})
+        if isinstance(properties, dict):
+            stats = properties.get("statistics", {})
+            query_stats = stats.get("query", {})
+            script_stats = query_stats.get("scriptStatistics", {})
+            exec_path = script_stats.get("executionPath", [])
+            if exec_path:
+                return len(exec_path)
+        script_stats = getattr(job, "script_statistics", None)
+        if script_stats is not None:
+            exec_path = getattr(script_stats, "execution_path", None)
+            if exec_path:
+                return len(exec_path)
+            child_job_ids = getattr(script_stats, "child_job_ids", None)
+            if child_job_ids:
+                return len(child_job_ids)
+        stats = getattr(job, "statistics", None)
+        if stats is not None:
+            query_stats = getattr(stats, "query", None)
+            if query_stats is not None:
+                script_statistics = getattr(query_stats, "script_statistics", None) or getattr(
+                    query_stats, "scriptStatistics", None
+                )
+                if script_statistics is not None:
+                    exec_path = getattr(script_statistics, "execution_path", None) or getattr(
+                        script_statistics, "executionPath", None
+                    )
+                    if exec_path:
+                        return len(exec_path)
+        return 1
+
+    def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
+        """Execute SQL script with statement splitting or single procedural query job.
 
         Args:
             cursor: BigQuery cursor object
@@ -282,37 +370,81 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with script execution details
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        split_script = bool(
+            getattr(statement.statement_config, "split_script_statements", False)
+            or self.driver_features.get("split_script_statements", False)
+        )
 
-        successful_count = 0
-        last_job = None
-        last_rowcount = 0
+        if split_script:
+            statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+            successful_count = 0
+            last_job = None
+            last_rowcount = 0
 
-        for stmt in statements:
-            job = self._run_query_job(cursor, stmt, prepared_parameters or {})
-            job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
-            last_job = job
-            last_rowcount = normalize_script_rowcount(last_rowcount, job)
-            successful_count += 1
+            for stmt in statements:
+                job = self._run_query_job(cursor, stmt, prepared_parameters or {})
+                job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
+                last_job = job
+                last_rowcount = normalize_script_rowcount(last_rowcount, job)
+                successful_count += 1
 
-        cursor.job = last_job
+            cursor.job = last_job
+
+            return self.create_execution_result(
+                cursor,
+                statement_count=len(statements),
+                successful_statements=successful_count,
+                rowcount_override=last_rowcount,
+                is_script_result=True,
+            )
+
+        if prepared_parameters:
+            sql = self._inline_script_parameters(sql, prepared_parameters)
+            prepared_parameters = None
+
+        cursor.job = self._run_query_job(cursor, sql, prepared_parameters or {})
+        cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
+        rowcount = normalize_script_rowcount(0, cursor.job)
+        statement_count = self._extract_script_statement_count(cursor.job)
 
         return self.create_execution_result(
             cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            rowcount_override=last_rowcount,
+            statement_count=statement_count,
+            successful_statements=statement_count,
+            rowcount_override=rowcount,
             is_script_result=True,
         )
 
     def begin(self) -> None:
-        """Begin transaction - BigQuery doesn't support transactions."""
+        """Begin a multi-statement transaction inside a BigQuery session.
+
+        Raises:
+            OperationalError: If a transaction is already active.
+        """
+        if self._in_transaction:
+            msg = "Transaction already in progress"
+            raise OperationalError(msg)
+
+        create_session = self._session_id is None
+        if hasattr(self.connection, "query"):
+            self._run_query_job(self.connection, "BEGIN TRANSACTION;", None, create_session=create_session)
+        self._in_transaction = True
 
     def commit(self) -> None:
-        """Commit transaction - BigQuery doesn't support transactions."""
+        """Commit the active BigQuery multi-statement transaction."""
+        if not self._in_transaction:
+            return
+        if hasattr(self.connection, "query"):
+            self._run_query_job(self.connection, "COMMIT TRANSACTION;", None)
+        self._in_transaction = False
 
     def rollback(self) -> None:
-        """Rollback transaction - BigQuery doesn't support transactions."""
+        """Rollback the active BigQuery multi-statement transaction."""
+        if not self._in_transaction:
+            return
+        if hasattr(self.connection, "query"):
+            self._run_query_job(self.connection, "ROLLBACK TRANSACTION;", None)
+        self._in_transaction = False
 
     def create_savepoint(self, name: str) -> None:
         """Raise because BigQuery does not support savepoints.
@@ -355,6 +487,72 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(BigQueryStreamSource(self, sql, prepared_parameters, chunk_size))
+
+    def dry_run(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> BigQueryDryRunResult:
+        """Execute query with dry_run=True to validate and calculate estimated cost without billing.
+
+        Args:
+            statement: Query statement to validate.
+            *parameters: Query parameters.
+            statement_config: Optional statement configuration override.
+            **kwargs: Additional statement keyword arguments.
+
+        Returns:
+            BigQueryDryRunResult with byte counts, estimated USD cost, and schema.
+        """
+        config = statement_config or self.statement_config
+        prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        sql, driver_params = self._compiled_sql(prepared_statement, config)
+
+        job_config = BigQueryQueryJobConfig(dry_run=True, use_query_cache=False)
+        if driver_params:
+            job_config.query_parameters = driver_params
+        if self._default_query_job_config is not None and getattr(self._default_query_job_config, "labels", None):
+            job_config.labels = dict(self._default_query_job_config.labels)
+
+        job = self.connection.query(sql, job_config=job_config)
+
+        total_bytes = getattr(job, "total_bytes_processed", 0) or 0
+        estimated_cost = (total_bytes / (1024**4)) * COST_PER_TERABYTE_USD
+
+        schema_fields: list[dict[str, Any]] = [
+            {
+                "name": getattr(field, "name", ""),
+                "field_type": getattr(field, "field_type", ""),
+                "mode": getattr(field, "mode", "NULLABLE"),
+            }
+            for field in (getattr(job, "schema", None) or ())
+        ]
+
+        referenced_tables: list[str] = []
+        raw_tables = getattr(job, "referenced_tables", None)
+        if raw_tables:
+            for table_ref in raw_tables:
+                project = getattr(table_ref, "project", "")
+                dataset_id = getattr(table_ref, "dataset_id", "")
+                table_id = getattr(table_ref, "table_id", "")
+                if project and dataset_id and table_id:
+                    referenced_tables.append(f"{project}.{dataset_id}.{table_id}")
+                elif dataset_id and table_id:
+                    referenced_tables.append(f"{dataset_id}.{table_id}")
+                else:
+                    referenced_tables.append(str(table_ref))
+
+        statement_type = getattr(job, "statement_type", "SELECT") or "SELECT"
+
+        return {
+            "total_bytes_processed": total_bytes,
+            "estimated_cost_usd": estimated_cost,
+            "schema": schema_fields,
+            "referenced_tables": referenced_tables,
+            "statement_type": statement_type,
+        }
 
     def handle_database_exceptions(self) -> "BigQueryExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately."""
@@ -703,18 +901,32 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def _job_request_timeout(self) -> float:
         return self._request_timeout
 
-    def _run_query_job(self, connection: "BigQueryConnection", sql: str, parameters: Any) -> "QueryJob":
-        return run_query_job(
+    def _run_query_job(
+        self,
+        connection: "BigQueryConnection",
+        sql: str,
+        parameters: Any,
+        job_config: "QueryJobConfig | None" = None,
+        create_session: bool | None = None,
+    ) -> "QueryJob":
+        job = run_query_job(
             connection,
             sql,
             parameters,
             default_job_config=self._default_query_job_config,
-            job_config=None,
+            job_config=job_config,
             json_serializer=self._json_serializer,
             retry=self._job_retry,
             timeout=self._job_request_timeout(),
             job_retry=self._job_retry,
+            session_id=self._session_id,
+            create_session=create_session,
         )
+        if self._session_id is None:
+            session_info = getattr(job, "session_info", None)
+            if session_info is not None and getattr(session_info, "session_id", None):
+                self._session_id = session_info.session_id
+        return job
 
     def _job_result_kwargs(self) -> dict[str, Any]:
         return dict(self._job_result_kwargs_defaults)
@@ -730,12 +942,17 @@ class BigQueryDriver(SyncDriverAdapterBase):
         else:
             return cast("bigquery_storage.BigQueryReadClient | None", client)
 
-    def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
-        """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
+    def _load_arrow_via_storage_write_api(
+        self, table: str, arrow_table: "Any", *, stream_type: str | None = None
+    ) -> "StorageTelemetry":
+        """Ingest an Arrow table via BigQuery Storage Write API using native arrow_rows."""
         if BigQueryStorageWriteModule is None or BigQueryStorageWriteTypes is None:
             msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion"
             raise ImportError(msg)
         types = BigQueryStorageWriteTypes
+
+        resolved_stream_type = stream_type or self.driver_features.get("storage_write_stream_type", "COMMITTED")
+        is_committed = str(resolved_stream_type).upper() == "COMMITTED"
 
         project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 
@@ -746,8 +963,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
             credentials = getattr(self.connection, "_credentials", None)
             client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
+        write_stream_type_enum = types.WriteStream.Type.COMMITTED if is_committed else types.WriteStream.Type.PENDING
         write_stream = client.create_write_stream(
-            parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)
+            parent=parent, write_stream=types.WriteStream(type_=write_stream_type_enum)
         )
         stream_name = write_stream.name
 
@@ -757,13 +975,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 if response.error.code:
                     msg = f"Storage Write API append failed: {response.error.message}"
                     raise StorageOperationFailedError(msg)
-        client.finalize_write_stream(name=stream_name)
-        commit = client.batch_commit_write_streams(
-            request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
-        )
-        if getattr(commit, "stream_errors", None):
-            msg = f"Storage Write API commit failed: {commit.stream_errors}"
-            raise StorageOperationFailedError(msg)
+
+        if not is_committed:
+            client.finalize_write_stream(name=stream_name)
+            commit = client.batch_commit_write_streams(
+                request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
+            )
+            if getattr(commit, "stream_errors", None):
+                msg = f"Storage Write API commit failed: {commit.stream_errors}"
+                raise StorageOperationFailedError(msg)
 
         telemetry_payload = self._ingest_telemetry(arrow_table, format_label="arrow-storage-write")
         telemetry_payload["destination"] = table
@@ -772,12 +992,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
 
-        BigQuery does not support transactions.
-
         Returns:
-            False - BigQuery has no transaction support.
+            True if the connection has an active transaction session.
         """
-        return False
+        return self._in_transaction
 
 
 def _close_bigquery_cursor(cursor: BigQueryCursor) -> None:
