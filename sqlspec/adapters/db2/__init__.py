@@ -1,15 +1,6 @@
 """IBM Db2 adapter for SQLSpec."""
 
-from sqlspec.adapters.db2._typing import (
-    IBM_DB_DBI_INSTALLED,
-    IBM_DB_INSTALLED,
-    Db2Error,
-    Db2QueryParams,
-    Db2RawCursor,
-    Db2SyncConnection,
-    Db2SyncCursor,
-    Db2SyncSessionContext,
-)
+from sqlspec.adapters.db2._typing import Db2Error, Db2RawCursor, Db2SyncConnection, Db2SyncCursor, Db2SyncSessionContext
 from sqlspec.adapters.db2.config import (
     Db2ConnectionParams,
     Db2DriverFeatures,
@@ -41,13 +32,10 @@ from sqlspec.adapters.db2.driver import Db2SyncDriver, Db2SyncExceptionHandler
 from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
 
 __all__ = (
-    "IBM_DB_DBI_INSTALLED",
-    "IBM_DB_INSTALLED",
     "Db2ConnectionParams",
     "Db2DriverFeatures",
     "Db2Error",
     "Db2PoolParams",
-    "Db2QueryParams",
     "Db2RawCursor",
     "Db2SyncConfig",
     "Db2SyncConnection",

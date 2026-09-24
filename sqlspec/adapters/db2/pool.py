@@ -7,10 +7,10 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.adapters.db2._typing import ibm_db_dbi
 from sqlspec.adapters.db2.core import build_connection_config, build_dsn_string
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
+from sqlspec.utils.module_loader import import_optional
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -20,6 +20,24 @@ __all__ = ("Db2SyncConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "db2"
+_IBM_DB_DBI: "Any | None" = None
+
+
+def _require_ibm_db_dbi() -> Any:
+    """Return the ``ibm_db_dbi`` module, importing it on first use.
+
+    Returns:
+        Any: The ``ibm_db_dbi`` module.
+
+    Raises:
+        MissingDependencyError: When ibm_db is not installed.
+    """
+    global _IBM_DB_DBI
+    if _IBM_DB_DBI is None:
+        _IBM_DB_DBI = import_optional("ibm_db_dbi")
+        if _IBM_DB_DBI is None:
+            raise MissingDependencyError(package="ibm_db", install_package="db2")
+    return _IBM_DB_DBI
 
 
 class Db2SyncConnectionPool:
@@ -95,8 +113,7 @@ class Db2SyncConnectionPool:
         if self._connection_factory is not None:
             connection = self._connection_factory()
         else:
-            if ibm_db_dbi is None:
-                raise MissingDependencyError(package="ibm_db", install_package="db2")
+            ibm_db_dbi = _require_ibm_db_dbi()
             if "dsn" in self._connection_parameters:
                 connection = ibm_db_dbi.connect(self._connection_parameters["dsn"], "", "")
             else:

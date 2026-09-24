@@ -3,37 +3,40 @@
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.typing import import_optional_attr
 from sqlspec.utils.module_loader import import_optional
+
+
+class _Db2UnavailableError(Exception):
+    """Fallback Db2 exception base when ibm_db_dbi is not installed."""
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import TypeAlias
 
+    from ibm_db_dbi import Connection as _Db2Connection
+    from ibm_db_dbi import Cursor as _Db2Cursor
+    from ibm_db_dbi import Error as _Db2Error
+
+    from sqlspec.adapters.db2.driver import Db2SyncDriver
     from sqlspec.core import StatementConfig
+
+    Db2SyncConnection: TypeAlias = _Db2Connection
+    Db2RawCursor: TypeAlias = _Db2Cursor
+    Db2Error: TypeAlias = _Db2Error
+
+if not TYPE_CHECKING:
+    Db2SyncConnection = import_optional_attr("ibm_db_dbi", "Connection") or Any
+    Db2RawCursor = import_optional_attr("ibm_db_dbi", "Cursor") or Any
+    Db2Error = import_optional_attr("ibm_db_dbi", "Error") or _Db2UnavailableError
 
 ibm_db = import_optional("ibm_db")
 ibm_db_dbi = import_optional("ibm_db_dbi")
 
-IBM_DB_INSTALLED = ibm_db is not None
-IBM_DB_DBI_INSTALLED = ibm_db_dbi is not None
-
-if TYPE_CHECKING:
-    Db2SyncConnection: TypeAlias = Any
-    Db2RawCursor: TypeAlias = Any
-    Db2QueryParams: TypeAlias = Any
-    Db2Error: TypeAlias = type[Exception]
-else:
-    Db2SyncConnection = Any
-    Db2RawCursor = Any
-    Db2QueryParams = Any
-    Db2Error = getattr(ibm_db_dbi, "Error", Exception) if ibm_db_dbi is not None else Exception
-
 __all__ = (
-    "IBM_DB_DBI_INSTALLED",
-    "IBM_DB_INSTALLED",
     "Db2Error",
-    "Db2QueryParams",
     "Db2RawCursor",
     "Db2SyncConnection",
     "Db2SyncCursor",
@@ -109,7 +112,7 @@ class Db2SyncSessionContext:
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
         self._connection: Any = None
-        self._driver: Any = None
+        self._driver: Db2SyncDriver | None = None
 
     def __enter__(self) -> Any:
         """Checkout connection and build initialized driver adapter.
@@ -117,13 +120,10 @@ class Db2SyncSessionContext:
         Returns:
             Any: Initialized driver adapter.
         """
-        import importlib
-
-        driver_module = importlib.import_module("sqlspec.adapters.db2.driver")
-        driver_cls = driver_module.Db2SyncDriver
+        from sqlspec.adapters.db2.driver import Db2SyncDriver
 
         self._connection = self._acquire_connection()
-        self._driver = driver_cls(
+        self._driver = Db2SyncDriver(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)

@@ -18,7 +18,7 @@ def fake_ibm_db(monkeypatch: pytest.MonkeyPatch) -> "tuple[FakeIbmDbModule, Fake
     ibm_db_dbi = FakeIbmDbDbiModule(ibm_db)
     monkeypatch.setattr(typing_module, "ibm_db", ibm_db)
     monkeypatch.setattr(typing_module, "ibm_db_dbi", ibm_db_dbi)
-    monkeypatch.setattr(pool_module, "ibm_db_dbi", ibm_db_dbi)
+    monkeypatch.setattr(pool_module, "_IBM_DB_DBI", ibm_db_dbi)
     return ibm_db, ibm_db_dbi
 
 

@@ -21,6 +21,7 @@ from sqlspec.adapters.db2.core import (
     resolve_many_rowcount,
     resolve_rowcount,
 )
+from sqlspec.adapters.db2.data_dictionary import Db2SyncDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import (
     BaseSyncExceptionHandler,
@@ -131,7 +132,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: Any = None
+        self._data_dictionary: Db2SyncDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
         self._transaction_active = False
@@ -277,12 +278,14 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
 
     @property
-    def data_dictionary(self) -> Any:
-        if self._data_dictionary is None:
-            import importlib
+    def data_dictionary(self) -> "Db2SyncDataDictionary":
+        """Return the Db2 data dictionary bound to this driver.
 
-            dd_module = importlib.import_module("sqlspec.adapters.db2.data_dictionary")
-            self._data_dictionary = dd_module.Db2SyncDataDictionary()
+        Returns:
+            The lazily created data dictionary instance.
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = Db2SyncDataDictionary()
         return self._data_dictionary
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":

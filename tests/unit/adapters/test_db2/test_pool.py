@@ -76,7 +76,8 @@ def test_pool_connects_with_explicit_dsn(fake_ibm_db: FakeModules) -> None:
 
 def test_pool_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """MissingDependencyError is raised when ibm_db_dbi is not available and no factory is set."""
-    monkeypatch.setattr(pool_module, "ibm_db_dbi", None)
+    monkeypatch.setattr(pool_module, "_IBM_DB_DBI", None)
+    monkeypatch.setattr(pool_module, "import_optional", lambda _name: None)
 
     pool = Db2SyncConnectionPool({"database": "TESTDB"})
 

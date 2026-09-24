@@ -50,6 +50,7 @@ __all__ = (
     "CATTRS_INSTALLED",
     "CLOUD_SQL_CONNECTOR_INSTALLED",
     "FSSPEC_INSTALLED",
+    "IBM_DB_INSTALLED",
     "LITESTAR_INSTALLED",
     "MSGSPEC_INSTALLED",
     "NANOID_INSTALLED",
@@ -666,6 +667,7 @@ ATTRS_INSTALLED = dependency_flag("attrs")
 CATTRS_INSTALLED = dependency_flag("cattrs")
 CLOUD_SQL_CONNECTOR_INSTALLED = dependency_flag("google.cloud.sql.connector")
 FSSPEC_INSTALLED = dependency_flag("fsspec")
+IBM_DB_INSTALLED = dependency_flag("ibm_db")
 LITESTAR_INSTALLED = dependency_flag("litestar")
 MSGSPEC_INSTALLED = dependency_flag("msgspec")
 NUMPY_INSTALLED = dependency_flag("numpy")
