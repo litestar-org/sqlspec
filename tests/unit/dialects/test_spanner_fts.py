@@ -2,14 +2,7 @@
 
 from sqlglot import exp, parse_one
 
-from sqlspec.dialects.spanner._expressions import (
-    Score,
-    Search,
-    SearchSubstring,
-    TokenizeFulltext,
-    TokenizeNgrams,
-    TokenizeSubstring,
-)
+from sqlspec.dialects.spanner._expressions import Search
 
 
 def test_tokenlist_column_in_create_table() -> None:
@@ -37,9 +30,9 @@ def test_search_substring_function() -> None:
     """Verify SEARCH_SUBSTRING(Tokens, 'query') parses and round-trips."""
     sql = "SELECT Title FROM Albums WHERE SEARCH_SUBSTRING(Tokens, 'sub')"
     parsed = parse_one(sql, dialect="spanner")
-    node = parsed.find(SearchSubstring)
+    node = parsed.find(exp.Anonymous)
     assert node is not None
-    assert isinstance(node, SearchSubstring)
+    assert node.this.upper() == "SEARCH_SUBSTRING"
     rendered = parsed.sql(dialect="spanner")
     assert "SEARCH_SUBSTRING(Tokens, 'sub')" in rendered
 
@@ -48,9 +41,9 @@ def test_score_function_parsing_and_generation() -> None:
     """Verify SCORE(Tokens, 'query') parses and round-trips."""
     sql = "SELECT Title, SCORE(Tokens, 'rock') AS score FROM Albums ORDER BY score DESC"
     parsed = parse_one(sql, dialect="spanner")
-    node = parsed.find(Score)
+    node = parsed.find(exp.Anonymous)
     assert node is not None
-    assert isinstance(node, Score)
+    assert node.this.upper() == "SCORE"
     rendered = parsed.sql(dialect="spanner")
     assert "SCORE(Tokens, 'rock')" in rendered
 
@@ -59,9 +52,10 @@ def test_tokenize_functions() -> None:
     """Verify tokenization functions parse to typed AST nodes."""
     sql = "SELECT TOKENIZE_FULLTEXT(c), TOKENIZE_SUBSTRING(c), TOKENIZE_NGRAMS(c) FROM t"
     parsed = parse_one(sql, dialect="spanner")
-    assert parsed.find(TokenizeFulltext) is not None
-    assert parsed.find(TokenizeSubstring) is not None
-    assert parsed.find(TokenizeNgrams) is not None
+    names = [n.this.upper() for n in parsed.find_all(exp.Anonymous)]
+    assert "TOKENIZE_FULLTEXT" in names
+    assert "TOKENIZE_SUBSTRING" in names
+    assert "TOKENIZE_NGRAMS" in names
 
 
 def test_create_search_index_full_options() -> None:

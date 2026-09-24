@@ -7,6 +7,7 @@ is accepted on parse and normalized to the canonical row deletion policy so
 generation always emits valid GoogleSQL.
 """
 
+import re
 from typing import Any
 
 from sqlglot import exp
@@ -14,7 +15,12 @@ from sqlglot.dialects.bigquery import BigQuery
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.dialects.spanner._generators import SpannerGenerator
-from sqlspec.dialects.spanner._parsers import SpannerParser, attach_create_property, extract_interleave_property
+from sqlspec.dialects.spanner._parsers import (
+    SpannerParser,
+    attach_create_property,
+    attach_hints,
+    extract_interleave_property,
+)
 
 __all__ = ("Spanner",)
 
@@ -34,17 +40,26 @@ class Spanner(BigQuery):
     Generator = SpannerGenerator
 
     def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
-        """Repair CREATE TABLE statements that sqlglot still falls back to Command for."""
-        expressions = super().parse(sql, **opts)
-        if len(expressions) != 1 or not isinstance(expressions[0], exp.Command):
-            return expressions
+        """Parse Spanner SQL statements, normalizing hints and repairing CREATE TABLE statements."""
+        normalized_sql = re.sub(r"@\{([^}]+)\}", r"/*@ \1 */", sql)
+        expressions = super().parse(normalized_sql, **opts)
+        if len(expressions) == 1 and isinstance(expressions[0], exp.Command):
+            repaired_sql, interleave_property = extract_interleave_property(normalized_sql)
+            if interleave_property is not None:
+                reparsed = BigQuery.parse(self, repaired_sql, **opts)
+                if len(reparsed) == 1 and isinstance(reparsed[0], exp.Create):
+                    expressions = [attach_create_property(reparsed[0], interleave_property)]
 
-        repaired_sql, interleave_property = extract_interleave_property(sql)
-        if interleave_property is None:
-            return expressions
+        for expression in expressions:
+            if expression is not None:
+                attach_hints(expression)
+        return expressions
 
-        reparsed = BigQuery.parse(self, repaired_sql, **opts)
-        if len(reparsed) != 1 or not isinstance(reparsed[0], exp.Create):
-            return expressions
-
-        return [attach_create_property(reparsed[0], interleave_property)]
+    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> "list[exp.Expr | None]":
+        """Parse into specific expression type with normalized hints."""
+        normalized_sql = re.sub(r"@\{([^}]+)\}", r"/*@ \1 */", sql)
+        expressions = super().parse_into(expression_type, normalized_sql, **opts)
+        for expression in expressions:
+            if expression is not None:
+                attach_hints(expression)
+        return expressions

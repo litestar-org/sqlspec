@@ -2,8 +2,6 @@
 
 from sqlglot import exp, parse_one
 
-from sqlspec.dialects.spanner._expressions import GetNextSequenceValue
-
 
 def test_create_sequence_with_options() -> None:
     """Verify CREATE SEQUENCE with OPTIONS parses and generates canonical DDL."""
@@ -60,8 +58,8 @@ def test_get_next_sequence_value() -> None:
     """Verify GET_NEXT_SEQUENCE_VALUE(SEQUENCE name) parses and round-trips."""
     sql = "SELECT GET_NEXT_SEQUENCE_VALUE(SEQUENCE CustomerSequence) AS next_id"
     parsed = parse_one(sql, dialect="spanner")
-    node = parsed.find(GetNextSequenceValue)
+    node = parsed.find(exp.Anonymous)
     assert node is not None
-    assert isinstance(node, GetNextSequenceValue)
+    assert node.this.upper() == "GET_NEXT_SEQUENCE_VALUE"
     rendered = parsed.sql(dialect="spanner")
     assert "GET_NEXT_SEQUENCE_VALUE(SEQUENCE CustomerSequence)" in rendered

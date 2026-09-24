@@ -23,23 +23,12 @@ from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.generators.postgres import PostgresGenerator
 
 from sqlspec.builder._generation import invalidate_generator_dispatch
-from sqlspec.dialects.spanner._expressions import (
-    ApproxCosineDistance,
-    CosineDistance,
-    DotProduct,
-    EuclideanDistance,
-    GetNextSequenceValue,
-    Score,
-    Search,
-    SearchSubstring,
-    TokenizeFulltext,
-    TokenizeNgrams,
-    TokenizeSubstring,
-)
+from sqlspec.dialects.spanner._expressions import CosineDistance, DotProduct, EuclideanDistance, Search
 
 __all__ = ("SpangresGenerator", "SpannerGenerator")
 
 _TTL_MIN_COMPONENTS = 2
+_APPROX_COSINE_MIN_ARGS = 2
 _ROW_DELETION_NAME = "ROW_DELETION_POLICY"
 _INTERLEAVE_NAME = "INTERLEAVE_IN_PARENT"
 _INTERLEAVE_IN_NAME = "INTERLEAVE_IN"
@@ -252,12 +241,14 @@ _original_bq_datatype_transform = BigQueryGenerator.TRANSFORMS.get(exp.DataType)
 _original_bq_hint_transform = BigQueryGenerator.TRANSFORMS.get(exp.Hint)
 _original_bq_select_transform = BigQueryGenerator.TRANSFORMS.get(exp.Select)
 _original_bq_table_transform = BigQueryGenerator.TRANSFORMS.get(exp.Table)
+_original_bq_anonymous_transform = BigQueryGenerator.TRANSFORMS.get(exp.Anonymous)
 
 _original_pg_property_transform = PostgresGenerator.TRANSFORMS.get(exp.Property)
 _original_pg_properties_transform = PostgresGenerator.TRANSFORMS.get(exp.Properties)
 _original_pg_hint_transform = PostgresGenerator.TRANSFORMS.get(exp.Hint)
 _original_pg_select_transform = PostgresGenerator.TRANSFORMS.get(exp.Select)
 _original_pg_table_transform = PostgresGenerator.TRANSFORMS.get(exp.Table)
+_original_pg_anonymous_transform = PostgresGenerator.TRANSFORMS.get(exp.Anonymous)
 
 
 def _bq_property_transform(self: Any, expression: exp.Property) -> str:
@@ -280,8 +271,16 @@ def _bq_properties_transform(self: Any, expression: exp.Properties) -> str:
     return str(_original_bq_properties_sql(self, expression))
 
 
-def _render_approx_cosine_distance(generator: Any, expression: ApproxCosineDistance) -> str:
+def _render_approx_cosine_distance(generator: Any, expression: exp.Expr) -> str:
     """Render APPROX_COSINE_DISTANCE function with optional neighbor count options."""
+    exprs = getattr(expression, "expressions", None)
+    if exprs:
+        this = generator.sql(exprs[0])
+        expr = generator.sql(exprs[1]) if len(exprs) > 1 else ""
+        if len(exprs) > _APPROX_COSINE_MIN_ARGS:
+            opts_sql = generator.sql(exprs[2])
+            return f"APPROX_COSINE_DISTANCE({this}, {expr}, {opts_sql})"
+        return f"APPROX_COSINE_DISTANCE({this}, {expr})"
     this = generator.sql(expression, "this")
     expr = generator.sql(expression, "expression")
     options = expression.args.get("options")
@@ -291,13 +290,13 @@ def _render_approx_cosine_distance(generator: Any, expression: ApproxCosineDista
     return f"APPROX_COSINE_DISTANCE({this}, {expr})"
 
 
-def _render_tokenize_fulltext(generator: Any, expression: TokenizeFulltext) -> str:
+def _render_tokenize_fulltext(generator: Any, expression: exp.Expr) -> str:
     """Render TOKENIZE_FULLTEXT function with optional extra parameters."""
-    this = generator.sql(expression, "this")
-    exprs = expression.args.get("expressions")
+    exprs = getattr(expression, "expressions", None)
     if exprs:
-        extra_args = ", ".join(generator.sql(x) for x in exprs)
-        return f"TOKENIZE_FULLTEXT({this}, {extra_args})"
+        args = ", ".join(generator.sql(x) for x in exprs)
+        return f"TOKENIZE_FULLTEXT({args})"
+    this = generator.sql(expression, "this")
     return f"TOKENIZE_FULLTEXT({this})"
 
 
@@ -652,6 +651,44 @@ def _pg_table_transform(generator: Any, expression: exp.Table) -> str:
     return str(PostgresGenerator.table_sql(generator, expression))
 
 
+def _spanner_anonymous_transform(generator: Any, expression: exp.Anonymous) -> str:
+    """Transform Anonymous function calls for Spanner."""
+    dialect_name = _get_dialect_name(generator)
+    if dialect_name == "Spanner":
+        name = str(expression.this).upper()
+        if name == "GET_NEXT_SEQUENCE_VALUE" and expression.expressions:
+            seq = generator.sql(expression.expressions[0])
+            return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
+        if name == "APPROX_COSINE_DISTANCE":
+            return _render_approx_cosine_distance(generator, expression)
+        if name == "TOKENIZE_FULLTEXT":
+            return _render_tokenize_fulltext(generator, expression)
+        if name in {"SEARCH_SUBSTRING", "SCORE", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
+            args = ", ".join(generator.sql(e) for e in expression.expressions)
+            return f"{name}({args})"
+    if _original_bq_anonymous_transform is not None:
+        return str(_original_bq_anonymous_transform(generator, expression))
+    return str(generator.anonymous_sql(expression))
+
+
+def _spangres_anonymous_transform(generator: Any, expression: exp.Anonymous) -> str:
+    """Transform Anonymous function calls for Spangres."""
+    dialect_name = _get_dialect_name(generator)
+    if dialect_name == "Spangres":
+        name = str(expression.this).upper()
+        if name == "GET_NEXT_SEQUENCE_VALUE" and expression.expressions:
+            seq = generator.sql(expression.expressions[0])
+            return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
+        if name == "APPROX_COSINE_DISTANCE":
+            return _render_approx_cosine_distance(generator, expression)
+        if name in {"SEARCH_SUBSTRING", "SCORE", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
+            args = ", ".join(generator.sql(e) for e in expression.expressions)
+            return f"{name}({args})"
+    if _original_pg_anonymous_transform is not None:
+        return str(_original_pg_anonymous_transform(generator, expression))
+    return str(generator.anonymous_sql(expression))
+
+
 BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
 BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
 BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
@@ -663,6 +700,7 @@ BigQueryGenerator.TRANSFORMS[exp.DataType] = _bq_datatype_transform
 BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
 BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
 BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
+BigQueryGenerator.TRANSFORMS[exp.Anonymous] = _spanner_anonymous_transform
 BigQueryGenerator.TRANSFORMS[CosineDistance] = lambda s, e: (
     f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
 )
@@ -670,24 +708,14 @@ BigQueryGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: (
     f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
 )
 BigQueryGenerator.TRANSFORMS[DotProduct] = lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-BigQueryGenerator.TRANSFORMS[ApproxCosineDistance] = _render_approx_cosine_distance
 BigQueryGenerator.TRANSFORMS[Search] = lambda s, e: f"SEARCH({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-BigQueryGenerator.TRANSFORMS[SearchSubstring] = lambda s, e: (
-    f"SEARCH_SUBSTRING({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-)
-BigQueryGenerator.TRANSFORMS[Score] = lambda s, e: f"SCORE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-BigQueryGenerator.TRANSFORMS[TokenizeFulltext] = _render_tokenize_fulltext
-BigQueryGenerator.TRANSFORMS[TokenizeSubstring] = lambda s, e: f"TOKENIZE_SUBSTRING({s.sql(e, 'this')})"
-BigQueryGenerator.TRANSFORMS[TokenizeNgrams] = lambda s, e: f"TOKENIZE_NGRAMS({s.sql(e, 'this')})"
-BigQueryGenerator.TRANSFORMS[GetNextSequenceValue] = lambda s, e: (
-    f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {s.sql(e, 'this')})"
-)
 
 PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
 PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
 PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
 PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
 PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
+PostgresGenerator.TRANSFORMS[exp.Anonymous] = _spangres_anonymous_transform
 PostgresGenerator.TRANSFORMS[CosineDistance] = lambda s, e: (
     f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
 )
@@ -695,10 +723,6 @@ PostgresGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: (
     f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
 )
 PostgresGenerator.TRANSFORMS[DotProduct] = lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-PostgresGenerator.TRANSFORMS[ApproxCosineDistance] = _render_approx_cosine_distance
-PostgresGenerator.TRANSFORMS[GetNextSequenceValue] = lambda s, e: (
-    f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {s.sql(e, 'this')})"
-)
 
 invalidate_generator_dispatch(BigQueryGenerator, PostgresGenerator)
 
