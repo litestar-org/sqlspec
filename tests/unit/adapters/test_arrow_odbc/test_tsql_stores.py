@@ -1,6 +1,7 @@
 """Characterization tests for the SQL Server statements of the arrow-odbc extension stores."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -8,6 +9,7 @@ import pytest
 pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
+from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKStore
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
@@ -15,6 +17,7 @@ from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
     ISO_TIMESTAMP,
     MSSQL_CONNECTION_STRING,
     FakeArrowOdbcConnection,
+    FakeOdbcError,
     ScriptedResponder,
     as_connection,
     normalized_calls,
@@ -218,3 +221,193 @@ def test_tsql_event_store_create_and_drop_statements() -> None:
     ]
     assert store.drop_statements() == ["IF OBJECT_ID(N'[dbo].[app_events]', N'U') IS NOT NULL DROP TABLE app_events;"]
     assert store._index_existence_target() is None  # pyright: ignore[reportPrivateUsage]
+
+
+_ADK_TIME = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=timezone.utc)
+_ADK_SESSION_ROW = pa.table({
+    "id": ["s1"],
+    "app_name": ["app"],
+    "user_id": ["u"],
+    "state": ['{"a": 1}'],
+    "create_time": [_ADK_TIME.replace(tzinfo=None)],
+    "update_time": [_ADK_TIME.replace(tzinfo=None)],
+})
+_ADK_RESPONDER = ScriptedResponder(
+    ("row_count", pa.table({"row_count": [3]})),
+    ("SELECT TOP 1 state", pa.table({"state": ['{"b": 2}']})),
+    ("SELECT TOP 1 value", pa.table({"value": ["v"]})),
+    ("SELECT TOP 1 id,", _ADK_SESSION_ROW),
+    ("SELECT id, app_name, user_id, state", _ADK_SESSION_ROW),
+)
+_ADK_EVENT: "Any" = {
+    "id": "e1",
+    "app_name": "app",
+    "user_id": "u",
+    "session_id": "s1",
+    "invocation_id": "i1",
+    "timestamp": _ADK_TIME,
+    "event_data": {"x": 1},
+}
+_TSQL_ADK_SESSION_CALLS = [
+    (
+        "INSERT INTO [dbo].[adk_session] ( id, app_name, user_id, [tenant_id], state, create_time, update_time ) VALUES (?, ?, ?, ?, ?, SYSUTCDATETIME(), SYSUTCDATETIME())",
+        ["s1", "app", "u", "7", '{"a":1}'],
+    ),
+    (
+        "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?",
+        ["app", "u", "s1"],
+    ),
+    (
+        "UPDATE [dbo].[adk_session] SET update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
+        ["app", "u", "s1"],
+    ),
+    (
+        "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?",
+        ["app", "u", "s1"],
+    ),
+    (
+        "UPDATE [dbo].[adk_session] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
+        ['{"a":2}', "app", "u", "s1"],
+    ),
+    (
+        "SELECT id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? ORDER BY update_time DESC, id DESC OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY",
+        ["app", "u"],
+    ),
+    ("DELETE FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?", ["app", "u", "s1"]),
+    (
+        "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}'],
+    ),
+    (
+        "UPDATE [dbo].[adk_session] SET state = ?, update_time = SYSUTCDATETIME() WHERE app_name = ? AND user_id = ? AND id = ?",
+        ['{"a":3}', "app", "u", "s1"],
+    ),
+    (
+        "SELECT TOP 1 id, app_name, user_id, state, create_time, update_time FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? AND id = ?",
+        ["app", "u", "s1"],
+    ),
+    (
+        "INSERT INTO [dbo].[adk_event] ( id, app_name, user_id, session_id, invocation_id, timestamp, event_data ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["e1", "app", "u", "s1", "i1", "2026-01-02T03:04:05.678901", '{"x":1}'],
+    ),
+    (
+        "MERGE INTO [dbo].[adk_app_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS state) AS source ON (target.[app_name] = source.[app_name]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [state], [update_time]) VALUES (source.[app_name], source.[state], SYSUTCDATETIME());",
+        ["app", '{"g":1}'],
+    ),
+    (
+        "MERGE INTO [dbo].[adk_user_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS [user_id], ? AS state) AS source ON (target.[app_name] = source.[app_name] AND target.[user_id] = source.[user_id]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [user_id], [state], [update_time]) VALUES (source.[app_name], source.[user_id], source.[state], SYSUTCDATETIME());",
+        ["app", "u", '{"h":2}'],
+    ),
+    (
+        "SELECT TOP 4 id, app_name, user_id, session_id, invocation_id, timestamp, event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND session_id = ? AND timestamp > ? ORDER BY timestamp ASC",
+        ["app", "u", "s1", "2026-01-02T03:04:05.678901"],
+    ),
+    (
+        "SELECT id, app_name, user_id, session_id, invocation_id, timestamp, event_data FROM [dbo].[adk_event] WHERE app_name = ? AND user_id = ? AND session_id = ? ORDER BY timestamp ASC",
+        ["app", "u", "s1"],
+    ),
+    (
+        "SELECT COUNT(*) AS row_count FROM [dbo].[adk_event] WHERE timestamp < ? AND app_name = ?",
+        ["2026-01-02T03:04:05.678901", "app"],
+    ),
+    ("DELETE FROM [dbo].[adk_event] WHERE timestamp < ? AND app_name = ?", ["2026-01-02T03:04:05.678901", "app"]),
+    ("SELECT COUNT(*) AS row_count FROM [dbo].[adk_session] WHERE update_time < ?", ["2026-01-02T03:04:05.678901"]),
+    ("DELETE FROM [dbo].[adk_session] WHERE update_time < ?", ["2026-01-02T03:04:05.678901"]),
+    (
+        "SELECT COUNT(*) AS row_count FROM [dbo].[adk_user_state] WHERE update_time < ? AND app_name = ?",
+        ["2026-01-02T03:04:05.678901", "app"],
+    ),
+    (
+        "DELETE FROM [dbo].[adk_user_state] WHERE update_time < ? AND app_name = ?",
+        ["2026-01-02T03:04:05.678901", "app"],
+    ),
+    ("SELECT TOP 1 state FROM [dbo].[adk_app_state] WHERE app_name = ?", ["app"]),
+    ("SELECT TOP 1 state FROM [dbo].[adk_user_state] WHERE app_name = ? AND user_id = ?", ["app", "u"]),
+    (
+        "MERGE INTO [dbo].[adk_app_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS state) AS source ON (target.[app_name] = source.[app_name]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [state], [update_time]) VALUES (source.[app_name], source.[state], SYSUTCDATETIME());",
+        ["app", '{"g":2}'],
+    ),
+    (
+        "MERGE INTO [dbo].[adk_user_state] WITH (HOLDLOCK) AS target USING (SELECT ? AS [app_name], ? AS [user_id], ? AS state) AS source ON (target.[app_name] = source.[app_name] AND target.[user_id] = source.[user_id]) WHEN MATCHED THEN UPDATE SET state = source.state, update_time = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT ([app_name], [user_id], [state], [update_time]) VALUES (source.[app_name], source.[user_id], source.[state], SYSUTCDATETIME());",
+        ["app", "u", '{"h":3}'],
+    ),
+    ("SELECT TOP 1 value FROM [dbo].[adk_internal_metadata] WHERE [key] = ?", ["k"]),
+    (
+        "MERGE INTO [dbo].[adk_internal_metadata] WITH (HOLDLOCK) AS target USING (SELECT ? AS [key], ? AS value) AS source ON (target.[key] = source.[key]) WHEN MATCHED THEN UPDATE SET value = source.value WHEN NOT MATCHED THEN INSERT ([key], value) VALUES (source.[key], source.value);",
+        ["k", "v"],
+    ),
+]
+_TSQL_ADK_DDL = [
+    "CREATE TABLE [dbo].[adk_session] ( row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT [df_adk_session_row_id] DEFAULT NEWSEQUENTIALID(), id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, tenant_id INTEGER, state NVARCHAR(MAX) NOT NULL, create_time DATETIME2(6) NOT NULL CONSTRAINT [df_adk_session_create_time] DEFAULT SYSUTCDATETIME(), update_time DATETIME2(6) NOT NULL CONSTRAINT [df_adk_session_update_time] DEFAULT SYSUTCDATETIME(), CONSTRAINT [pk_adk_session_row_id] PRIMARY KEY (row_id), CONSTRAINT [uq_adk_session_id] UNIQUE (id) )",
+    "CREATE TABLE [dbo].[adk_event] ( row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT [df_adk_event_row_id] DEFAULT NEWSEQUENTIALID(), id NVARCHAR(128) NOT NULL, app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, session_id NVARCHAR(128) NOT NULL, invocation_id NVARCHAR(256) NOT NULL, timestamp DATETIME2(6) NOT NULL, event_data NVARCHAR(MAX) NOT NULL, CONSTRAINT [pk_adk_event_row_id] PRIMARY KEY (row_id), CONSTRAINT [uq_adk_event_id] UNIQUE (id), CONSTRAINT [fk_adk_event_session] FOREIGN KEY (session_id) REFERENCES [dbo].[adk_session](id) ON DELETE CASCADE )",
+    "CREATE TABLE [dbo].[adk_app_state] ( app_name NVARCHAR(128) NOT NULL, state NVARCHAR(MAX) NOT NULL, update_time DATETIME2(6) NOT NULL CONSTRAINT [df_adk_app_state_update_time] DEFAULT SYSUTCDATETIME(), CONSTRAINT [pk_adk_app_state_app_name] PRIMARY KEY (app_name) )",
+    "CREATE TABLE [dbo].[adk_user_state] ( app_name NVARCHAR(128) NOT NULL, user_id NVARCHAR(128) NOT NULL, state NVARCHAR(MAX) NOT NULL, update_time DATETIME2(6) NOT NULL CONSTRAINT [df_adk_user_state_update_time] DEFAULT SYSUTCDATETIME(), CONSTRAINT [pk_adk_user_state_app_user] PRIMARY KEY (app_name, user_id) )",
+    "CREATE TABLE [dbo].[adk_internal_metadata] ( [key] NVARCHAR(128) NOT NULL, value NVARCHAR(512) NOT NULL, CONSTRAINT [pk_adk_internal_metadata_key] PRIMARY KEY ([key]) )",
+]
+_TSQL_ADK_DROPS = [
+    "DROP TABLE IF EXISTS [dbo].[adk_internal_metadata]",
+    "DROP TABLE IF EXISTS [dbo].[adk_user_state]",
+    "DROP TABLE IF EXISTS [dbo].[adk_app_state]",
+    "DROP TABLE IF EXISTS [dbo].[adk_event]",
+    "DROP TABLE IF EXISTS [dbo].[adk_session]",
+]
+
+
+def _tsql_adk_config(connection: FakeArrowOdbcConnection) -> ArrowOdbcConfig:
+    return ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        connection_instance=as_connection(connection),
+        extension_config={"adk": {"owner_id_column": "tenant_id INTEGER"}},
+    )
+
+
+def test_tsql_adk_session_store_statements() -> None:
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT, responder=_ADK_RESPONDER)
+    store = ArrowOdbcADKStore(_tsql_adk_config(connection))
+
+    store.create_session("s1", "app", "u", {"a": 1}, owner_id=7)
+    store.get_session("app", "u", "s1", renew_for=60)
+    store.update_session_state("app", "u", "s1", {"a": 2})
+    store.list_sessions("app", "u", limit=5, offset=10)
+    store.delete_session("app", "u", "s1")
+    store.append_event(_ADK_EVENT)
+    store.append_event_and_update_state(_ADK_EVENT, "app", "u", "s1", {"a": 3}, app_state={"g": 1}, user_state={"h": 2})
+    store.get_events("app", "u", "s1", after_timestamp=_ADK_TIME, limit=4)
+    store.get_events("app", "u", "s1")
+    store.delete_expired_events(_ADK_TIME, app_name="app")
+    store.delete_idle_sessions(_ADK_TIME)
+    store.delete_idle_user_states(_ADK_TIME, app_name="app")
+    store.get_app_state("app")
+    store.get_user_state("app", "u")
+    store.upsert_app_state("app", {"g": 2})
+    store.upsert_user_state("app", "u", {"h": 3})
+    store.get_metadata("k")
+    store.set_metadata("k", "v")
+
+    assert normalized_calls(connection) == _TSQL_ADK_SESSION_CALLS
+
+
+def test_tsql_adk_session_store_ddl() -> None:
+    store = ArrowOdbcADKStore(_tsql_adk_config(FakeArrowOdbcConnection()))
+
+    ddls = [
+        store._sessions_table_ddl(),  # pyright: ignore[reportPrivateUsage]
+        store._events_table_ddl(),  # pyright: ignore[reportPrivateUsage]
+        store._app_states_table_ddl(),  # pyright: ignore[reportPrivateUsage]
+        store._user_states_table_ddl(),  # pyright: ignore[reportPrivateUsage]
+        store._metadata_table_ddl(),  # pyright: ignore[reportPrivateUsage]
+    ]
+
+    assert [" ".join(ddl.split()) for ddl in ddls] == _TSQL_ADK_DDL
+    assert store._drop_tables_sql() == _TSQL_ADK_DROPS  # pyright: ignore[reportPrivateUsage]
+
+
+def test_tsql_adk_missing_table_reads_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
+    error = FakeOdbcError(
+        "State: 42S02, Native error: 208, Message: [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+        "Invalid object name 'dbo.adk_app_state'."
+    )
+    store = ArrowOdbcADKStore(_tsql_adk_config(FakeArrowOdbcConnection(error=error)))
+
+    assert store.get_app_state("app") is None

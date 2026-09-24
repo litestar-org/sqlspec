@@ -44,6 +44,7 @@ __all__ = (
     "db2_timestamp_text",
     "default_statement_config",
     "driver_profile",
+    "extract_native_error_number",
     "normalize_column_names",
     "resolve_dialect_from_dbms_name",
     "split_db2_name",
@@ -188,7 +189,7 @@ def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> S
     del logger
     message = str(error)
     if _is_sql_server_diagnostic(message):
-        error_number = _extract_error_number(error)
+        error_number = extract_native_error_number(error)
         if error_number is not None:
             mapping = _ERROR_CODE_MAPPING.get(error_number)
             if mapping is not None:
@@ -458,7 +459,15 @@ def _extract_sqlstate(message: str) -> "str | None":
     return match.group(1) if match is not None else None
 
 
-def _extract_error_number(error: Exception) -> "int | None":
+def extract_native_error_number(error: BaseException) -> "int | None":
+    """Return the ``Native error`` number an arrow-odbc diagnostic carries.
+
+    Args:
+        error: An arrow-odbc error, or a SQLSpec exception wrapping its text.
+
+    Returns:
+        The native error number, or ``None`` when the text carries none.
+    """
     match = _ARROW_ODBC_ERROR_NUMBER_PATTERN.search(str(error))
     if match is None:
         return None
