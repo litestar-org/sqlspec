@@ -1,27 +1,31 @@
-"""Unit tests for the Db2 event queue store."""
+"""Unit tests for the Db2 event queue stores.
 
-from typing import TYPE_CHECKING, cast
+DDL behaviors run against the sync and async stores through ``db2_mode``.
+"""
+
+import importlib
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import sqlglot
 
 import sqlspec.dialects.db2  # noqa: F401  # pyright: ignore[reportUnusedImport]
-from sqlspec.adapters.db2.events import Db2SyncEventQueueStore
-from tests.unit.adapters.test_db2._fakes import FakeDb2SessionConfig
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.db2.config import Db2SyncConfig
+from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
+from sqlspec.adapters.db2.events import Db2AsyncEventQueueStore, Db2SyncEventQueueStore
+from tests.unit.adapters.test_db2._fakes import DriverMode
 
 
-def _store(queue_table: "str | None" = None) -> Db2SyncEventQueueStore:
+def _store(db2_mode: DriverMode, queue_table: "str | None" = None) -> Any:
     events = {"queue_table": queue_table} if queue_table else {}
-    config = FakeDb2SessionConfig(extension_config={"events": events})
-    return Db2SyncEventQueueStore(cast("Db2SyncConfig", config))
+    config = db2_mode.session_config(extension_config={"events": events})
+    store_class = Db2AsyncEventQueueStore if db2_mode.is_async else Db2SyncEventQueueStore
+    return store_class(config)
 
 
-def test_create_statements_are_valid_db2_ddl() -> None:
+def test_create_statements_are_valid_db2_ddl(db2_mode: DriverMode) -> None:
     """Queue DDL declares a NOT NULL key, has no existence clauses, and parses as Db2."""
-    statements = _store().create_statements()
+    statements = _store(db2_mode).create_statements()
 
     assert len(statements) == 2
     assert all("IF NOT EXISTS" not in statement.upper() for statement in statements)
@@ -34,9 +38,9 @@ def test_create_statements_are_valid_db2_ddl() -> None:
         sqlglot.parse_one(statement, read="db2")
 
 
-def test_drop_statements_are_plain_drop_table() -> None:
+def test_drop_statements_are_plain_drop_table(db2_mode: DriverMode) -> None:
     """Dropping the queue uses Db2's plain DROP TABLE."""
-    assert _store().drop_statements() == ["DROP TABLE sqlspec_event_queue"]
+    assert _store(db2_mode).drop_statements() == ["DROP TABLE sqlspec_event_queue"]
 
 
 @pytest.mark.parametrize(
@@ -49,7 +53,19 @@ def test_drop_statements_are_plain_drop_table() -> None:
     ids=["qualified", "default", "mixed-case"],
 )
 def test_index_existence_target_uses_normalized_table(
-    queue_table: "str | None", expected: "tuple[str | None, str]"
+    db2_mode: DriverMode, queue_table: "str | None", expected: "tuple[str | None, str]"
 ) -> None:
     """The catalog index check targets the upper-folded schema and table of the unquoted DDL."""
-    assert _store(queue_table)._index_existence_target() == expected
+    assert _store(db2_mode, queue_table)._index_existence_target() == expected
+
+
+@pytest.mark.parametrize(
+    ("config_class", "store_class"),
+    [(Db2SyncConfig, Db2SyncEventQueueStore), (Db2AsyncConfig, Db2AsyncEventQueueStore)],
+)
+def test_event_store_resolves_by_config_name(config_class: Any, store_class: Any) -> None:
+    """The events migration loads the queue store matching each Db2 config."""
+    migration = importlib.import_module("sqlspec.extensions.events.migrations.0001_create_event_queue")
+    context = SimpleNamespace(config=config_class(connection_config={"database": "d"}))
+
+    assert type(migration._load_store(context)) is store_class

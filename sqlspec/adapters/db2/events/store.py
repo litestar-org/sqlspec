@@ -2,11 +2,11 @@
 
 from typing import TYPE_CHECKING, Final
 
-from sqlspec.adapters.db2.config import Db2SyncConfig
+from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.db2.core import split_db2_table_name
 from sqlspec.extensions.events import BaseEventQueueStore
 
-__all__ = ("Db2SyncEventQueueStore",)
+__all__ = ("Db2AsyncEventQueueStore", "Db2SyncEventQueueStore")
 
 DB2_EVENT_TABLE_DDL: Final[str] = (
     "CREATE TABLE {table} (event_id VARCHAR(64) NOT NULL PRIMARY KEY, channel VARCHAR(128) NOT NULL, "
@@ -57,5 +57,11 @@ class _Db2EventStoreMixin:
 
 class Db2SyncEventQueueStore(_Db2EventStoreMixin, BaseEventQueueStore[Db2SyncConfig]):
     """IBM Db2 event queue store for synchronous configs."""
+
+    __slots__ = ()
+
+
+class Db2AsyncEventQueueStore(_Db2EventStoreMixin, BaseEventQueueStore[Db2AsyncConfig]):
+    """IBM Db2 event queue store for asynchronous configs."""
 
     __slots__ = ()

@@ -463,8 +463,8 @@ class FakeIbmDbDbiModule:
         return connection
 
 
-class FakeDb2SessionConfig:
-    """Config stand-in whose sessions run a real ``Db2SyncDriver`` over one scripted fake connection.
+class _FakeDb2SessionState:
+    """Scripted connection state shared by the sync and async session-config fakes.
 
     Cursors are consumed in statement order; once the scripted cursors are exhausted every further
     statement gets an empty cursor. ``executed`` lists every ``(sql, parameters)`` pair the driver
@@ -478,15 +478,34 @@ class FakeDb2SessionConfig:
         self.extension_config: dict[str, Any] = extension_config or {}
         self.statement_config = default_statement_config
 
+    @property
+    def executed(self) -> "list[tuple[str, Any]]":
+        """Return every statement and its parameters in execution order."""
+        return [call for cursor in self.connection.cursors for call in cursor.executed]
+
+
+class FakeDb2SessionConfig(_FakeDb2SessionState):
+    """Config stand-in whose sessions run a real ``Db2SyncDriver`` over one scripted fake connection."""
+
     @contextmanager
     def provide_session(self, **_: Any) -> "Iterator[Db2SyncDriver]":
         """Yield a driver bound to the shared fake connection."""
         yield Db2SyncDriver(self.connection, statement_config=default_statement_config)
 
-    @property
-    def executed(self) -> "list[tuple[str, Any]]":
-        """Return every statement and its parameters in execution order."""
-        return [call for cursor in self.connection.cursors for call in cursor.executed]
+
+class FakeDb2AsyncSessionConfig(_FakeDb2SessionState):
+    """Config stand-in whose sessions run a real ``Db2AsyncDriver`` over one scripted fake connection.
+
+    The async driver works through ``FakeDb2AsyncConnection`` over the scripted sync connection, so
+    ``executed`` and ``connection`` report the same way as ``FakeDb2SessionConfig``.
+    """
+
+    @asynccontextmanager
+    async def provide_session(self, **_: Any) -> "AsyncIterator[Any]":
+        """Yield an async driver bound to the shared fake connection."""
+        yield db2_driver.Db2AsyncDriver(
+            FakeDb2AsyncConnection(self.connection), statement_config=default_statement_config
+        )
 
 
 class AsyncDriverDouble:
@@ -545,6 +564,18 @@ class DriverMode:
         """Build the Db2 configuration of this mode."""
         config_class = db2_config.Db2AsyncConfig if self.is_async else db2_config.Db2SyncConfig
         return config_class(**kwargs)
+
+    def session_config(
+        self, cursors: "Sequence[FakeDb2Cursor]" = (), extension_config: "dict[str, Any] | None" = None
+    ) -> Any:
+        """Build the session-config fake of this mode over scripted cursors.
+
+        Returns:
+            A ``FakeDb2SessionConfig`` or ``FakeDb2AsyncSessionConfig``, typed loosely so it can
+            stand in for the matching ``Db2SyncConfig`` / ``Db2AsyncConfig``.
+        """
+        config_class = FakeDb2AsyncSessionConfig if self.is_async else FakeDb2SessionConfig
+        return config_class(cursors, extension_config=extension_config)
 
     def tracker(self, *args: Any) -> Any:
         """Build the Db2 migration tracker of this mode."""

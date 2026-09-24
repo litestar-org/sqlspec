@@ -8,9 +8,9 @@ from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.db2.config import Db2SyncConfig
+    from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 
-__all__ = ("Db2SyncStore",)
+__all__ = ("Db2AsyncStore", "Db2SyncStore")
 
 
 def session_catalog_names(table: str) -> "tuple[str | None, str]":
@@ -200,6 +200,18 @@ def delete_expired_sql(table: str) -> str:
     return f"DELETE FROM {table} WHERE expires_at IS NOT NULL AND expires_at <= ?"
 
 
+def drop_session_table_sql(table: str) -> str:
+    """Return the statement dropping the session table.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The DROP TABLE statement.
+    """
+    return f"DROP TABLE {table}"
+
+
 def _coerce_bytes(value: Any) -> "bytes | None":
     """Coerce row data into bytes if not None."""
     if value is None:
@@ -277,7 +289,7 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
 
     def _drop_table_sql(self) -> "list[str]":
         """Get Db2 DROP TABLE statements."""
-        return [f"DROP TABLE {self._table_name}"]
+        return [drop_session_table_sql(self._table_name)]
 
     def _create_table(self) -> None:
         """Create the table and its expiry index when the catalog does not list them."""
@@ -348,3 +360,106 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
         if count > 0:
             self._log_delete_expired(count)
         return count
+
+
+class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
+    """IBM Db2-backed session store using asynchronous Db2 sessions.
+
+    Runs the same statements with the same parameters as ``Db2SyncStore``; every timestamp
+    written or compared is a naive-UTC value bound from Python.
+    """
+
+    __slots__ = ()
+
+    def __init__(self, config: "Db2AsyncConfig") -> None:
+        """Initialize Db2 async session store."""
+        super().__init__(config)
+
+    async def create_table(self) -> None:
+        """Create the session table if it does not exist."""
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
+            return
+        await self._create_table()
+        await self.reconcile_schema(assume_existing=True)
+
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Retrieve session data by key, extending its expiry when requested."""
+        async with self._config.provide_session() as driver:
+            row = await driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
+            if row is None:
+                return None
+            if renew_for is not None and row["expires_at"] is not None:
+                new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
+                if new_expires_at is not None:
+                    await driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))
+                    await driver.commit()
+            return _coerce_bytes(row["data"])
+
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Upsert session data using an atomic MERGE."""
+        data = self._value_to_bytes(value)
+        expires_at = to_db_timestamp(self._calculate_expires_at(expires_in))
+        async with self._config.provide_session() as driver:
+            await driver.execute(upsert_session_sql(self._table_name), (key, data, expires_at, utc_now()))
+            await driver.commit()
+
+    async def delete(self, key: str) -> None:
+        """Delete a session by key."""
+        async with self._config.provide_session() as driver:
+            await driver.execute(delete_session_sql(self._table_name), (key,))
+            await driver.commit()
+
+    async def delete_all(self) -> None:
+        """Delete every session row."""
+        async with self._config.provide_session() as driver:
+            await driver.execute(delete_all_sql(self._table_name))
+            await driver.commit()
+        self._log_delete_all()
+
+    async def exists(self, key: str) -> bool:
+        """Check that an unexpired session exists."""
+        async with self._config.provide_session() as driver:
+            row = await driver.select_one_or_none(exists_session_sql(self._table_name), (key, utc_now()))
+        return row is not None
+
+    async def expires_in(self, key: str) -> "int | None":
+        """Calculate seconds until session expiration."""
+        async with self._config.provide_session() as driver:
+            expires_at = _normalize_utc(await driver.select_value_or_none(expires_at_sql(self._table_name), (key,)))
+        if expires_at is None:
+            return None
+        remaining = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        return max(remaining, 0)
+
+    async def delete_expired(self) -> int:
+        """Remove expired sessions and return the deleted row count."""
+        async with self._config.provide_session() as driver:
+            result = await driver.execute(delete_expired_sql(self._table_name), (utc_now(),))
+            await driver.commit()
+        count = max(result.rows_affected, 0)
+        if count > 0:
+            self._log_delete_expired(count)
+        return count
+
+    def _table_ddl(self) -> str:
+        """Get Db2 CREATE TABLE SQL."""
+        return session_table_ddl(self._table_name)
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get Db2 DROP TABLE statements."""
+        return [drop_session_table_sql(self._table_name)]
+
+    async def _create_table(self) -> None:
+        """Create the table and its expiry index when the catalog does not list them."""
+        schema, table = session_catalog_names(self._table_name)
+        async with self._config.provide_session() as driver:
+            if await driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is None:
+                await driver.execute(session_table_ddl(self._table_name))
+            if (
+                await driver.select_one_or_none(INDEX_EXISTS_SQL, (schema, session_index_name(self._table_name)))
+                is None
+            ):
+                await driver.execute(session_index_ddl(self._table_name))
+            await driver.commit()
+        self._log_table_created()
