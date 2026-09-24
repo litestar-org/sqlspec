@@ -111,11 +111,10 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
     def _build_params(
         self, key: str, expires_at: "datetime | None" = None, data: "bytes | None" = None
     ) -> "dict[str, Any]":
-        return {
-            "session_id": key,
-            "data": bytes_to_spanner(data),
-            "expires_at": self._datetime_to_timestamp(expires_at),
-        }
+        params: dict[str, Any] = {"session_id": key, "expires_at": self._datetime_to_timestamp(expires_at)}
+        if data is not None:
+            params["data"] = bytes_to_spanner(data)
+        return params
 
     def _get_param_types(
         self, session_id: bool = True, expires_at: bool = False, data: bool = False
@@ -189,7 +188,9 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
 
         def _job(driver: "SpannerSyncDriver") -> None:
             result = driver.execute(update_sql, params)
-            if not getattr(result, "rowcount", None):
+            rows_affected = getattr(result, "rows_affected", None)
+            has_rows = rows_affected > 0 if isinstance(rows_affected, int) else bool(getattr(result, "rowcount", None))
+            if not has_rows:
                 driver.execute(insert_sql, params)
 
         self._config.run_in_transaction(_job)
@@ -239,7 +240,10 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
         result = self._config.run_in_transaction(lambda driver: driver.execute(sql))
-        return cast("int", getattr(result, "rowcount", 0))
+        rows_affected = getattr(result, "rows_affected", None)
+        if isinstance(rows_affected, int):
+            return rows_affected
+        return int(getattr(result, "rowcount", 0))
 
     def _create_table(self) -> None:
         database = self._config.get_database()
