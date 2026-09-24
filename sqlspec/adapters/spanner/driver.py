@@ -395,7 +395,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         if effective_request_options is not None:
             call_kwargs["request_options"] = effective_request_options
 
-        return database.execute_partitioned_dml(sql, **call_kwargs)
+        result = database.execute_partitioned_dml(sql, **call_kwargs)
+        return int(result)
 
     def execute(
         self,

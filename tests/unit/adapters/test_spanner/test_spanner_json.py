@@ -1,5 +1,6 @@
 """Unit tests for Spanner JsonObject direct unwrapping optimization."""
 
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 from google.cloud.spanner_v1.data_types import JsonObject
@@ -11,13 +12,13 @@ from sqlspec.utils.serializers import from_json
 class MonitoredJsonObject(JsonObject):
     """JsonObject subclass that tracks calls to serialize()."""
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        cast("Any", super()).__init__(*args, **kwargs)
         self.serialize_called = False
 
     def serialize(self) -> str | None:
         self.serialize_called = True
-        return super().serialize()
+        return cast("str | None", cast("Any", super()).serialize())
 
 
 def test_convert_json_row_value_unwraps_without_serialize() -> None:

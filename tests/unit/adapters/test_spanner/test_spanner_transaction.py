@@ -1,6 +1,6 @@
 """Unit tests for Spanner transaction retry closures."""
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 from google.api_core.exceptions import Aborted
@@ -42,7 +42,7 @@ def test_config_run_in_transaction_retry_on_aborted() -> None:
     def unit_of_work(driver: SpannerSyncDriver) -> str:
         call_count[0] += 1
         if call_count[0] == 1:
-            raise Aborted("Concurrency conflict")
+            raise cast("Any", Aborted)("Concurrency conflict")
         return "success"
 
     result = config.run_in_transaction(unit_of_work)
@@ -63,7 +63,7 @@ def test_config_run_in_transaction_retry_on_deadlock_error_with_aborted_cause() 
     def unit_of_work(driver: SpannerSyncDriver) -> str:
         call_count[0] += 1
         if call_count[0] == 1:
-            abort_exc = Aborted("Lock conflict")
+            abort_exc = cast("Any", Aborted)("Lock conflict")
             deadlock_exc = DeadlockError("transaction aborted")
             deadlock_exc.__cause__ = abort_exc
             raise deadlock_exc
@@ -91,7 +91,7 @@ def test_driver_run_in_transaction_delegates_to_database() -> None:
     def unit_of_work(txn_driver: SpannerSyncDriver) -> str:
         call_count[0] += 1
         if call_count[0] == 1:
-            raise Aborted("Retryable abort")
+            raise cast("Any", Aborted)("Retryable abort")
         return "driver-delegated"
 
     result = driver.run_in_transaction(unit_of_work)

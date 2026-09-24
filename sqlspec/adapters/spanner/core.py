@@ -320,7 +320,7 @@ def _unwrap_spanner_json_object(val: Any) -> Any:
             return [_unwrap_spanner_json_object(item) for item in array_val] if array_val is not None else []
         if getattr(val, "_is_scalar_value", False):
             return getattr(val, "_simple_value", None)
-        return {k: _unwrap_spanner_json_object(v) for k, v in val.items()}
+        return {k: _unwrap_spanner_json_object(v) for k, v in cast("dict[str, Any]", val).items()}
     if isinstance(val, dict):
         return {k: _unwrap_spanner_json_object(v) for k, v in val.items()}
     if isinstance(val, (list, tuple)):

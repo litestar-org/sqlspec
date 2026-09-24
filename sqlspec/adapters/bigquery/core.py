@@ -254,7 +254,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | 
             if _is_query_parameter(value):
                 bq_parameters.append(cast("BigQueryParam", value))
                 continue
-            declared_type: type[Any] | None = None
+            declared_type: type[Any] | str | None = None
             if type(value) is TypedParameter:
                 declared_type = value.original_type
                 actual_value = value.value
@@ -1007,7 +1007,9 @@ def _load_bigquery_module() -> Any:
     return _BIGQUERY_MODULE
 
 
-def _query_parameter_type(value: Any, declared_type: "type[Any] | None" = None) -> "tuple[str | None, str | None]":
+def _query_parameter_type(
+    value: Any, declared_type: "type[Any] | str | None" = None
+) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
     Args:

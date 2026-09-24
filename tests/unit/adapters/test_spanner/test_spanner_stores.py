@@ -45,7 +45,12 @@ def test_litestar_store_writes_route_through_config_run_in_transaction() -> None
         mock_driver = MagicMock(spec=SpannerSyncDriver)
         mock_result = MagicMock()
         mock_result.rowcount = 1
-        mock_driver.execute.side_effect = lambda sql, *a, **kw: (executed_sqls.append(str(sql)), mock_result)[1]
+
+        def mock_execute(sql: Any, *a: Any, **kw: Any) -> Any:
+            executed_sqls.append(str(sql))
+            return mock_result
+
+        mock_driver.execute.side_effect = mock_execute
         return func(mock_driver, *args, **kwargs)
 
     config.run_in_transaction = MagicMock(side_effect=mock_run_in_transaction)
