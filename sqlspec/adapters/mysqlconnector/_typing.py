@@ -12,8 +12,10 @@ import mysql.connector as _mysql_connector
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
 from mysql.connector import aio as _mysql_connector_aio
 from mysql.connector import pooling as _mysql_connector_pooling
-from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection  # pyright: ignore[reportMissingImports]
-from mysql.connector.aio.cursor import MySQLCursor as _MysqlConnectorAsyncRawCursor  # pyright: ignore[reportMissingImports]
+from mysql.connector.abstracts import MySQLConnectionAbstract, MySQLCursorAbstract
+from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection
+from mysql.connector.aio import pooling as _mysql_connector_aio_pooling
+from mysql.connector.aio.cursor import MySQLCursor as _MysqlConnectorAsyncRawCursor
 from mysql.connector.constants import FieldType as _MysqlConnectorFieldType
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
@@ -53,6 +55,7 @@ if TYPE_CHECKING:
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
     MysqlConnectorSyncRawCursor: TypeAlias = _MysqlConnectorSyncRawCursor
     MysqlConnectorConnectionPool: TypeAlias = _mysql_connector_pooling.MySQLConnectionPool
+    MysqlConnectorAsyncPool: TypeAlias = _mysql_connector_aio_pooling.MySQLConnectionPool
     MysqlConnectorError: TypeAlias = _mysql_connector.Error
     MysqlConnectorFieldType: TypeAlias = MysqlConnectorFieldTypeProtocol
     MysqlConnectorMysqlModule: TypeAlias = MysqlConnectorMysqlModuleProtocol
@@ -63,6 +66,7 @@ if not TYPE_CHECKING:
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
     MysqlConnectorConnectionPool = _mysql_connector_pooling.MySQLConnectionPool
+    MysqlConnectorAsyncPool = _mysql_connector_aio_pooling.MySQLConnectionPool
     MysqlConnectorError = _mysql_connector.Error
     MysqlConnectorFieldType = _MysqlConnectorFieldType
     MysqlConnectorMysqlModule = _mysql
@@ -70,9 +74,12 @@ if not TYPE_CHECKING:
     MysqlConnectorAsyncRawCursor = _MysqlConnectorAsyncRawCursor
 
 __all__ = (
+    "MySQLConnectionAbstract",
+    "MySQLCursorAbstract",
     "MysqlConnectorAio",
     "MysqlConnectorAsyncConnection",
     "MysqlConnectorAsyncCursor",
+    "MysqlConnectorAsyncPool",
     "MysqlConnectorAsyncRawCursor",
     "MysqlConnectorAsyncSessionContext",
     "MysqlConnectorConnectionPool",
