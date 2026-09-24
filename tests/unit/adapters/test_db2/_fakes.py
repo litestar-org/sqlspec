@@ -482,3 +482,30 @@ class FakeDb2SessionConfig:
     def executed(self) -> "list[tuple[str, Any]]":
         """Return every statement and its parameters in execution order."""
         return [call for cursor in self.connection.cursors for call in cursor.executed]
+
+
+class AsyncDriverDouble:
+    """Async driver stand-in that answers ``select`` calls through a sync driver.
+
+    Delegating to a real ``Db2SyncDriver`` over scripted fake cursors returns rows exactly as the
+    driver shapes them (lowercased keys) while the cursors record the SQL and parameters sent.
+    """
+
+    def __init__(self, delegate: Any) -> None:
+        self.delegate = delegate
+
+    async def select(self, *args: Any, **kwargs: Any) -> Any:
+        """Run ``select`` on the delegate.
+
+        Returns:
+            The delegate's rows.
+        """
+        return self.delegate.select(*args, **kwargs)
+
+    async def select_one_or_none(self, *args: Any, **kwargs: Any) -> Any:
+        """Run ``select_one_or_none`` on the delegate.
+
+        Returns:
+            The delegate's row or ``None``.
+        """
+        return self.delegate.select_one_or_none(*args, **kwargs)
