@@ -4,7 +4,7 @@ import pytest
 
 import sqlspec.adapters.db2._typing as typing_module
 import sqlspec.adapters.db2.pool as pool_module
-from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeIbmDbDbiModule, FakeIbmDbModule
+from tests.unit.adapters.test_db2._fakes import DriverMode, FakeDb2Connection, FakeIbmDbDbiModule, FakeIbmDbModule
 
 
 @pytest.fixture
@@ -30,3 +30,13 @@ def fake_connection() -> FakeDb2Connection:
         The fake connection.
     """
     return FakeDb2Connection()
+
+
+@pytest.fixture(params=["sync", "async"])
+def db2_mode(request: pytest.FixtureRequest) -> DriverMode:
+    """Return the sync or async driver mode.
+
+    Returns:
+        The driver mode.
+    """
+    return DriverMode(str(request.param))

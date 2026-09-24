@@ -29,8 +29,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-    from sqlspec.adapters.db2.driver import Db2SyncDriver
-    from sqlspec.driver import AsyncDriverAdapterBase
+    from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 
 __all__ = ("DB2_CONFIG", "Db2AsyncDataDictionary", "Db2SyncDataDictionary", "Db2VersionInfo")
 
@@ -322,13 +321,13 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         super().__init__()
 
     async def get_metadata_capabilities(
-        self, driver: "AsyncDriverAdapterBase", domains: "Sequence[str] | None" = None
+        self, driver: "Db2AsyncDriver", domains: "Sequence[str] | None" = None
     ) -> MetadataCapabilityProfile:
         """Get Db2 data-dictionary capability profile."""
         _ = driver
         return build_db2_metadata_capability_profile(type(self).__name__, domains)
 
-    async def get_version(self, driver: "AsyncDriverAdapterBase") -> Db2VersionInfo | None:
+    async def get_version(self, driver: "Db2AsyncDriver") -> Db2VersionInfo | None:
         """Get Db2 database version information.
 
         The instance service level is parsed once per driver and cached. Query errors propagate
@@ -348,12 +347,12 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_feature_flag(self, driver: "AsyncDriverAdapterBase", feature: str) -> bool:
+    async def get_feature_flag(self, driver: "Db2AsyncDriver", feature: str) -> bool:
         """Check whether Db2 supports a feature."""
         version_info = await self.get_version(driver)
         return resolve_db2_feature_flag(feature, version_info)
 
-    async def get_optimal_type(self, driver: "AsyncDriverAdapterBase", type_category: str) -> str:
+    async def get_optimal_type(self, driver: "Db2AsyncDriver", type_category: str) -> str:
         """Get optimal Db2 type for a category."""
         _ = driver
         return DB2_CONFIG.get_optimal_type(type_category)
@@ -362,7 +361,7 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         """List available feature flags for this dialect."""
         return list_db2_available_features()
 
-    async def get_tables(self, driver: "AsyncDriverAdapterBase", schema: str | None = None) -> list[TableMetadata]:
+    async def get_tables(self, driver: "Db2AsyncDriver", schema: str | None = None) -> list[TableMetadata]:
         """Get tables sorted by dependency order with catalog fallback."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -388,7 +387,7 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         return merge_db2_table_lists(ordered_rows, all_rows)
 
     async def get_columns(
-        self, driver: "AsyncDriverAdapterBase", table: str | None = None, schema: str | None = None
+        self, driver: "Db2AsyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[ColumnMetadata]:
         """Get columns for a table or schema from SYSCAT.COLUMNS."""
         schema_name = self.resolve_schema(schema)
@@ -405,7 +404,7 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         return build_column_metadata(rows)
 
     async def get_indexes(
-        self, driver: "AsyncDriverAdapterBase", table: str | None = None, schema: str | None = None
+        self, driver: "Db2AsyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[IndexMetadata]:
         """Get indexes for a table or schema from SYSCAT.INDEXES and SYSCAT.INDEXCOLUSE."""
         schema_name = self.resolve_schema(schema)
@@ -422,7 +421,7 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         return build_index_metadata(rows)
 
     async def get_foreign_keys(
-        self, driver: "AsyncDriverAdapterBase", table: str | None = None, schema: str | None = None
+        self, driver: "Db2AsyncDriver", table: str | None = None, schema: str | None = None
     ) -> list[ForeignKeyMetadata]:
         """Get foreign keys from SYSCAT.REFERENCES and SYSCAT.KEYCOLUSE."""
         schema_name = self.resolve_schema(schema)
@@ -441,7 +440,7 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         return build_foreign_key_metadata(rows)
 
     async def get_constraints(
-        self, driver: "AsyncDriverAdapterBase", table: str | None = None, schema: str | None = None
+        self, driver: "Db2AsyncDriver", table: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get Db2 constraint metadata."""
         schema_name = self.resolve_schema(schema)
@@ -450,14 +449,14 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         rows = await driver.select(query, schema_name=schema_name, table_name=table_name)
         return MetadataResult("constraints", items=tuple(rows))
 
-    async def get_views(self, driver: "AsyncDriverAdapterBase", schema: str | None = None) -> MetadataResult:
+    async def get_views(self, driver: "Db2AsyncDriver", schema: str | None = None) -> MetadataResult:
         """Get Db2 view metadata."""
         schema_name = self.resolve_schema(schema)
         query = self.get_query("views", "by_schema")
         rows = await driver.select(query, schema_name=schema_name, view_name=None)
         return MetadataResult("views", items=tuple(rows))
 
-    async def get_objects(self, driver: "AsyncDriverAdapterBase", schema: "str | None" = None) -> MetadataResult:
+    async def get_objects(self, driver: "Db2AsyncDriver", schema: "str | None" = None) -> MetadataResult:
         """Get tables, views, aliases, sequences and routines from the Db2 catalog.
 
         Args:
@@ -472,7 +471,7 @@ class Db2AsyncDataDictionary(AsyncDataDictionaryBase):
         )
         return MetadataResult("objects", items=tuple(rows))
 
-    async def get_schemas(self, driver: "AsyncDriverAdapterBase") -> MetadataResult:
+    async def get_schemas(self, driver: "Db2AsyncDriver") -> MetadataResult:
         """Get Db2 schema metadata."""
         query = self.get_query("schemas", "by_schema")
         rows = await driver.select(query, schema_name=None)

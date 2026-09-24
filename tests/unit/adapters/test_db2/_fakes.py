@@ -14,12 +14,15 @@ The fakes reproduce the ``ibm_db_dbi`` 3.3 semantics the Db2 adapter depends on:
   ``description`` and ``rowcount`` stay plain properties.
 """
 
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+import inspect
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 from typing_extensions import Self
 
+import sqlspec.adapters.db2._typing as db2_typing
+import sqlspec.adapters.db2.driver as db2_driver
 from sqlspec.adapters.db2._typing import Db2Error
 from sqlspec.adapters.db2.core import default_statement_config
 from sqlspec.adapters.db2.driver import Db2SyncDriver
@@ -509,3 +512,111 @@ class AsyncDriverDouble:
             The delegate's row or ``None``.
         """
         return self.delegate.select_one_or_none(*args, **kwargs)
+
+
+class DriverMode:
+    """Build sync or async Db2 driver objects over the same sync fakes and run them uniformly.
+
+    In ``async`` mode connections and cursors are wrapped in the ``ibm_db_dbi`` async fakes, so
+    the state tests assert on (executed SQL, pending and committed work, closed flags) lives on
+    the sync fakes in both modes.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.is_async = name == "async"
+
+    def connection(self, connection: FakeDb2Connection) -> Any:
+        """Return the connection object the driver of this mode expects."""
+        return FakeDb2AsyncConnection(connection) if self.is_async else connection
+
+    def cursor(self, cursor: FakeDb2Cursor) -> Any:
+        """Return the cursor object the driver of this mode expects."""
+        return FakeDb2AsyncCursor(cursor) if self.is_async else cursor
+
+    def driver(self, connection: FakeDb2Connection, **kwargs: Any) -> Any:
+        """Build a driver of this mode over the fake connection."""
+        driver_class = db2_driver.Db2AsyncDriver if self.is_async else Db2SyncDriver
+        return driver_class(self.connection(connection), **kwargs)
+
+    def exception_handler(self) -> Any:
+        """Build the exception handler of this mode."""
+        return db2_driver.Db2AsyncExceptionHandler() if self.is_async else db2_driver.Db2SyncExceptionHandler()
+
+    def session_context(
+        self,
+        connection: FakeDb2Connection,
+        released: "list[tuple[object, object]]",
+        *,
+        statement_config: Any = default_statement_config,
+        **kwargs: Any,
+    ) -> Any:
+        """Build a session context of this mode that acquires ``connection`` and records releases.
+
+        Each release appends ``(sync fake connection, exc_type)`` to ``released``.
+        """
+        wrapped = self.connection(connection)
+
+        def record(conn: Any, **release_kwargs: Any) -> None:
+            released.append((getattr(conn, "sync_connection", conn), release_kwargs.get("exc_type")))
+
+        if self.is_async:
+
+            async def acquire_async() -> Any:
+                return wrapped
+
+            async def release_async(conn: Any, **release_kwargs: Any) -> None:
+                record(conn, **release_kwargs)
+
+            return db2_typing.Db2AsyncSessionContext(
+                acquire_connection=acquire_async,
+                release_connection=release_async,
+                statement_config=statement_config,
+                driver_features={},
+                prepare_driver=lambda driver: driver,
+                **kwargs,
+            )
+        return db2_typing.Db2SyncSessionContext(
+            acquire_connection=lambda: wrapped,
+            release_connection=record,
+            statement_config=statement_config,
+            driver_features={},
+            prepare_driver=lambda driver: driver,
+            **kwargs,
+        )
+
+    async def call(self, function: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
+        """Call ``function`` and await the result when it is awaitable.
+
+        Returns:
+            The (awaited) result.
+        """
+        result = function(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    @asynccontextmanager
+    async def enter(self, manager: Any) -> "AsyncIterator[Any]":
+        """Enter a sync or async context manager.
+
+        Yields:
+            The value the context manager produced.
+        """
+        if hasattr(manager, "__aenter__"):
+            async with manager as value:
+                yield value
+        else:
+            with manager as value:
+                yield value
+
+    async def collect(self, stream: Any) -> "list[Any]":
+        """Drain a sync or async row stream inside its context.
+
+        Returns:
+            Every streamed row.
+        """
+        async with self.enter(stream) as opened:
+            if self.is_async:
+                return [row async for row in opened]
+            return list(opened)

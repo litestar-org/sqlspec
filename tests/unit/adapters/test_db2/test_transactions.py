@@ -1,16 +1,17 @@
-"""Tests for the Db2 autocommit baseline and transaction lifecycle."""
+"""Tests for the Db2 autocommit baseline and transaction lifecycle.
+
+Driver and session-context behaviors run in both driver modes through ``db2_mode``.
+"""
 
 from typing import Any
 
 import pytest
 
 import sqlspec.adapters.db2._typing as typing_module
-from sqlspec.adapters.db2._typing import Db2SyncSessionContext
 from sqlspec.adapters.db2.config import Db2SyncConfig
-from sqlspec.adapters.db2.core import default_statement_config
-from sqlspec.adapters.db2.driver import Db2SyncDriver
 from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 from tests.unit.adapters.test_db2._fakes import (
+    DriverMode,
     FakeDb2Connection,
     FakeDb2OperationalError,
     FakeIbmDbDbiModule,
@@ -34,6 +35,18 @@ def _config(fake_ibm_db: FakeModules, *, autocommit: "bool | None" = None) -> "t
     if autocommit is not None:
         connection_config["autocommit"] = autocommit
     return Db2SyncConfig(connection_config=connection_config), connection
+
+
+def _registered_connection(fake_ibm_db: FakeModules, *, autocommit: bool = True) -> FakeDb2Connection:
+    """Build a fake connection whose autocommit mode the ``ibm_db`` fake can read.
+
+    Returns:
+        The registered connection.
+    """
+    ibm_db, _ = fake_ibm_db
+    connection = FakeDb2Connection(autocommit=autocommit)
+    ibm_db.register(connection)
+    return connection
 
 
 def _record_autocommit_calls(monkeypatch: pytest.MonkeyPatch, connection: FakeDb2Connection) -> "list[bool]":
@@ -79,52 +92,99 @@ def test_implicit_write_commits_without_begin(fake_ibm_db: FakeModules) -> None:
     assert connection.rollbacks == 0
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize(("finish", "persisted"), [("commit", True), ("rollback", False)])
-def test_begin_commit_restores_autocommit(fake_ibm_db: FakeModules, finish: str, persisted: bool) -> None:
+async def test_begin_commit_restores_autocommit(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, finish: str, persisted: bool
+) -> None:
     """``commit()`` and ``rollback()`` end the transaction and restore autocommit."""
-    config, connection = _config(fake_ibm_db)
+    connection = _registered_connection(fake_ibm_db)
+    driver = db2_mode.driver(connection)
 
-    with config.provide_session() as driver:
-        driver.begin()
-        assert connection.autocommit is False
-        driver.execute(INSERT)
-        getattr(driver, finish)()
-        assert connection.autocommit is True
-        assert driver._connection_in_transaction() is False
+    await db2_mode.call(driver.begin)
+    assert connection.autocommit is False
+    await db2_mode.call(driver.execute, INSERT)
+    await db2_mode.call(getattr(driver, finish))
 
+    assert connection.autocommit is True
+    assert driver._connection_in_transaction() is False
     assert [sql for sql, _ in connection.committed] == ([INSERT] if persisted else [])
     assert connection.pending == []
 
 
-def test_begin_is_idempotent_while_active(fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.anyio
+async def test_begin_is_idempotent_while_active(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A second ``begin()`` inside an active transaction changes nothing."""
-    config, connection = _config(fake_ibm_db)
+    connection = _registered_connection(fake_ibm_db)
     calls = _record_autocommit_calls(monkeypatch, connection)
+    driver = db2_mode.driver(connection)
 
-    with config.provide_session() as driver:
-        driver.begin()
-        driver.begin()
-        assert calls == [False]
-        driver.commit()
+    await db2_mode.call(driver.begin)
+    await db2_mode.call(driver.begin)
+    assert calls == [False]
+    await db2_mode.call(driver.commit)
 
     assert calls == [False, True]
 
 
-def test_begin_on_autocommit_off_connection_does_not_toggle(
-    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.anyio
+async def test_begin_on_autocommit_off_connection_does_not_toggle(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """On an autocommit-off baseline, transactions never switch autocommit on."""
-    config, connection = _config(fake_ibm_db, autocommit=False)
+    connection = _registered_connection(fake_ibm_db, autocommit=False)
     calls = _record_autocommit_calls(monkeypatch, connection)
+    driver = db2_mode.driver(connection)
 
-    with config.provide_session() as driver:
-        driver.begin()
-        driver.execute(INSERT)
-        driver.commit()
+    await db2_mode.call(driver.begin)
+    await db2_mode.call(driver.execute, INSERT)
+    await db2_mode.call(driver.commit)
 
     assert calls == []
     assert connection.autocommit is False
     assert [sql for sql, _ in connection.committed] == [INSERT]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("autocommit", "begin"), [(True, True), (False, False), (False, True)], ids=["transaction", "implicit", "both"]
+)
+async def test_session_context_exit_rolls_back_open_work(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, autocommit: bool, begin: bool
+) -> None:
+    """Session exit rolls back an active transaction or autocommit-off work, then releases."""
+    connection = _registered_connection(fake_ibm_db, autocommit=autocommit)
+    released: list[tuple[object, object]] = []
+    context = db2_mode.session_context(connection, released, autocommit_baseline=autocommit, begin_transaction=begin)
+
+    async with db2_mode.enter(context) as driver:
+        assert driver._connection_in_transaction() is begin
+        await db2_mode.call(driver.execute, INSERT)
+
+    assert connection.rollbacks == 1
+    assert connection.committed == []
+    assert connection.pending == []
+    assert connection.autocommit is autocommit
+    assert released == [(connection, None)]
+
+
+@pytest.mark.anyio
+async def test_session_context_exit_keeps_committed_autocommit_work(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode
+) -> None:
+    """On an autocommit baseline with no open transaction, session exit issues no rollback."""
+    connection = _registered_connection(fake_ibm_db)
+    released: list[tuple[object, object]] = []
+    context = db2_mode.session_context(connection, released)
+
+    async with db2_mode.enter(context) as driver:
+        await db2_mode.call(driver.execute, INSERT)
+
+    assert connection.rollbacks == 0
+    assert [sql for sql, _ in connection.committed] == [INSERT]
+    assert released == [(connection, None)]
 
 
 def test_session_exit_rolls_back_active_transaction(fake_ibm_db: FakeModules) -> None:
@@ -171,53 +231,45 @@ def test_session_exit_rolls_back_autocommit_off_work(fake_ibm_db: FakeModules) -
     assert connection.pending == []
 
 
-def test_session_exit_releases_connection_when_rollback_fails(
-    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.anyio
+async def test_session_exit_releases_connection_when_rollback_fails(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failing release rollback neither masks the session error nor skips the release."""
-    ibm_db, _ = fake_ibm_db
-    connection = FakeDb2Connection(autocommit=True)
-    ibm_db.register(connection)
+    connection = _registered_connection(fake_ibm_db)
 
     def failing_rollback() -> None:
         raise FakeDb2OperationalError("SQL30081N  A communication error has been detected.")
 
     monkeypatch.setattr(connection, "rollback", failing_rollback)
     released: list[tuple[object, object]] = []
-    context = Db2SyncSessionContext(
-        acquire_connection=lambda: connection,
-        release_connection=lambda conn, **kwargs: released.append((conn, kwargs.get("exc_type"))),
-        statement_config=default_statement_config,
-        driver_features={},
-        prepare_driver=lambda driver: driver,
-    )
+    context = db2_mode.session_context(connection, released)
 
     with pytest.raises(RuntimeError, match="body failed"):
-        with context as driver:
-            driver.begin()
+        async with db2_mode.enter(context) as driver:
+            await db2_mode.call(driver.begin)
             raise RuntimeError("body failed")
 
     assert released == [(connection, RuntimeError)]
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize("method", ["commit", "rollback"])
-def test_transaction_error_wraps_only_vendor_errors(
-    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch, method: str
+async def test_transaction_error_wraps_only_vendor_errors(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
     """Driver errors from commit/rollback become ``SQLSpecError``; other errors propagate unchanged."""
-    ibm_db, _ = fake_ibm_db
-    connection = FakeDb2Connection(autocommit=True)
-    ibm_db.register(connection)
-    driver = Db2SyncDriver(connection)
+    connection = _registered_connection(fake_ibm_db)
+    driver = db2_mode.driver(connection)
     vendor_error = FakeDb2OperationalError("SQL0911N  The current transaction has been rolled back.")
 
     def raise_vendor() -> None:
         raise vendor_error
 
     monkeypatch.setattr(connection, method, raise_vendor)
-    driver.begin()
+    await db2_mode.call(driver.begin)
     with pytest.raises(SQLSpecError) as exc_info:
-        getattr(driver, method)()
+        await db2_mode.call(getattr(driver, method))
     assert exc_info.value.__cause__ is vendor_error
 
     def raise_runtime() -> None:
@@ -225,45 +277,38 @@ def test_transaction_error_wraps_only_vendor_errors(
 
     monkeypatch.setattr(connection, method, raise_runtime)
     with pytest.raises(RuntimeError, match="not a driver error"):
-        getattr(driver, method)()
+        await db2_mode.call(getattr(driver, method))
 
 
-def test_transaction_session_releases_connection_when_begin_fails(
-    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.anyio
+async def test_transaction_session_releases_connection_when_begin_fails(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A session that cannot begin its transaction still releases the connection."""
-    ibm_db, _ = fake_ibm_db
-    connection = FakeDb2Connection(autocommit=True)
-    ibm_db.register(connection)
+    connection = _registered_connection(fake_ibm_db)
 
     def failing_set_autocommit(is_on: bool) -> None:
         raise FakeDb2OperationalError("SQL30081N  A communication error has been detected.")
 
     monkeypatch.setattr(connection, "set_autocommit", failing_set_autocommit)
     released: list[tuple[object, object]] = []
-    context = Db2SyncSessionContext(
-        acquire_connection=lambda: connection,
-        release_connection=lambda conn, **kwargs: released.append((conn, kwargs.get("exc_type"))),
-        statement_config=default_statement_config,
-        driver_features={},
-        prepare_driver=lambda driver: driver,
-        begin_transaction=True,
-    )
+    context = db2_mode.session_context(connection, released, begin_transaction=True)
 
     with pytest.raises(SQLSpecError, match="Failed to begin Db2 transaction"):
-        with context:
+        async with db2_mode.enter(context):
             pytest.fail("the session body must not run")
 
     assert released == [(connection, SQLSpecError)]
 
 
-def test_restoring_autocommit_wraps_vendor_errors(fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.anyio
+async def test_restoring_autocommit_wraps_vendor_errors(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A driver error while switching autocommit back on is reported as ``SQLSpecError``."""
-    ibm_db, _ = fake_ibm_db
-    connection = FakeDb2Connection(autocommit=True)
-    ibm_db.register(connection)
-    driver = Db2SyncDriver(connection)
-    driver.begin()
+    connection = _registered_connection(fake_ibm_db)
+    driver = db2_mode.driver(connection)
+    await db2_mode.call(driver.begin)
 
     def failing_set_autocommit(is_on: bool) -> None:
         raise FakeDb2OperationalError("SQL30081N  A communication error has been detected.")
@@ -271,14 +316,15 @@ def test_restoring_autocommit_wraps_vendor_errors(fake_ibm_db: FakeModules, monk
     monkeypatch.setattr(connection, "set_autocommit", failing_set_autocommit)
 
     with pytest.raises(SQLSpecError, match="Failed to restore Db2 autocommit"):
-        driver.commit()
+        await db2_mode.call(driver.commit)
     assert driver._connection_in_transaction() is False
 
 
-def test_begin_requires_ibm_db(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.anyio
+async def test_begin_requires_ibm_db(db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch) -> None:
     """Reading the autocommit mode needs ``ibm_db``; without it ``begin()`` reports the missing extra."""
     monkeypatch.setattr(typing_module, "ibm_db", None)
-    driver = Db2SyncDriver(FakeDb2Connection(autocommit=True))
+    driver = db2_mode.driver(FakeDb2Connection(autocommit=True))
 
     with pytest.raises(MissingDependencyError):
-        driver.begin()
+        await db2_mode.call(driver.begin)

@@ -26,7 +26,13 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from tests.unit.adapters.test_db2._fakes import DiagnosticAttributeError, FakeDb2Connection, db2_description, db2_error
+from tests.unit.adapters.test_db2._fakes import (
+    DiagnosticAttributeError,
+    DriverMode,
+    FakeDb2Connection,
+    db2_description,
+    db2_error,
+)
 
 
 @pytest.mark.parametrize(
@@ -160,13 +166,17 @@ def test_unmapped_error_keeps_message() -> None:
     assert "SQL4302N" in str(mapped)
 
 
-def test_handler_ignores_non_vendor_exceptions() -> None:
+@pytest.mark.anyio
+async def test_handler_ignores_non_vendor_exceptions(db2_mode: DriverMode) -> None:
     """Errors that do not come from the Db2 driver pass through untranslated."""
-    driver = Db2SyncDriver(FakeDb2Connection())
+    driver = db2_mode.driver(FakeDb2Connection())
+    handler = driver.handle_database_exceptions()
 
     with pytest.raises(ValueError, match="not a driver error"):
-        with driver.handle_database_exceptions():
+        async with db2_mode.enter(handler):
             raise ValueError("not a driver error")
+
+    assert handler.pending_exception is None
 
 
 def test_handler_maps_vendor_exceptions() -> None:
