@@ -77,6 +77,8 @@ class Db2DriverFeatures(TypedDict):
     connection_factory: Optional factory callable for custom connection instantiation.
     enable_events: Enable database event channel support.
     events_backend: Event channel backend selection.
+    enable_lowercase_column_names: Normalize implicit uppercase column names to lowercase.
+     Defaults to True.
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -85,6 +87,7 @@ class Db2DriverFeatures(TypedDict):
     connection_factory: "NotRequired[Callable[[], Db2Connection]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["poll_queue"]]
+    enable_lowercase_column_names: NotRequired[bool]
 
 
 class Db2ConnectionContext(SyncPoolConnectionContext):

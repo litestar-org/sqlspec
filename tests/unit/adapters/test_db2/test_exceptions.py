@@ -6,6 +6,7 @@ from sqlspec.adapters.db2.core import (
     build_connection_config,
     build_dsn_string,
     build_insert_statement,
+    collect_rows,
     create_mapped_exception,
     format_identifier,
     normalize_execute_many_parameters,
@@ -28,7 +29,7 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
-from tests.unit.adapters.test_db2._fakes import DiagnosticAttributeError
+from tests.unit.adapters.test_db2._fakes import DiagnosticAttributeError, FakeDb2Cursor, db2_description
 
 
 @pytest.mark.parametrize(
@@ -152,14 +153,15 @@ def test_normalize_parameters() -> None:
 
 def test_resolve_column_names() -> None:
     """Verify column name resolution from cursor description."""
-    description = [("id", 1, 10), ("name", 2, 50)]
-    assert resolve_column_names(description) == ["id", "name"]
-    assert resolve_column_names(None) == []
+    description = [("ID", 1, 10), ("Name", 2, 50)]
+    assert resolve_column_names(description, lowercase=True) == ["id", "Name"]
+    assert resolve_column_names(description, lowercase=False) == ["ID", "Name"]
+    assert resolve_column_names(None, lowercase=True) == []
 
     cache: dict[int, tuple[object, list[str]]] = {}
-    names = resolve_column_names(description, cache)
-    assert names == ["id", "name"]
-    assert resolve_column_names(description, cache) is names
+    names = resolve_column_names(description, cache, lowercase=True)
+    assert names == ["id", "Name"]
+    assert resolve_column_names(description, cache, lowercase=True) is names
 
 
 def test_resolve_rowcount() -> None:
@@ -202,3 +204,14 @@ def test_build_connection_config_and_dsn() -> None:
     assert "UID=db2inst1;" in dsn
     assert "PWD=secretpassword;" in dsn
     assert "SECURITY=SSL;" in dsn
+
+
+def test_collect_rows_reads_description_from_cursor() -> None:
+    """Rows fetched from a cursor use its description, lowercasing implicit-uppercase names."""
+    cursor = FakeDb2Cursor(rows=[(1, "a")], description=db2_description("id", '"Label"'))
+
+    rows, column_names, row_format = collect_rows(cursor, lowercase=True)
+
+    assert rows == [(1, "a")]
+    assert column_names == ["id", "Label"]
+    assert row_format == "tuple"

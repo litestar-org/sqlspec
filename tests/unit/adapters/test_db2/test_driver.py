@@ -8,7 +8,13 @@ from sqlspec.adapters.db2.core import default_statement_config
 from sqlspec.adapters.db2.driver import Db2Driver, Db2ExceptionHandler
 from sqlspec.core import SQL
 from sqlspec.exceptions import TransactionError, UniqueViolationError
-from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, FakeDb2IntegrityError, db2_error
+from tests.unit.adapters.test_db2._fakes import (
+    FakeDb2Connection,
+    FakeDb2Cursor,
+    FakeDb2IntegrityError,
+    db2_description,
+    db2_error,
+)
 
 UNSAFE_SAVEPOINT_NAMES = ["1; DROP TABLE users", "sp-1", "sp 1", "", '"sp"']
 DUPLICATE_KEY_TEXT = (
@@ -195,3 +201,46 @@ def test_select_to_arrow_conversion() -> None:
     table = arrow_result.get_data()
     assert table.num_rows == 2
     assert table.column_names == ["id", "name"]
+
+
+def test_select_lowercases_implicit_uppercase_columns() -> None:
+    """Names Db2 folded to uppercase surface as lowercase keys; quoted mixed case is kept."""
+    cursor = FakeDb2Cursor(rows=[("S", 1, 2)], description=db2_description("schema_name", '"MixedCase"', "col_1"))
+    driver = Db2Driver(FakeDb2Connection(lambda: cursor))
+
+    result = driver.execute('SELECT schema_name, "MixedCase", col_1 FROM t')
+
+    assert result.column_names == ["schema_name", "MixedCase", "col_1"]
+    assert result.get_data() == [{"schema_name": "S", "MixedCase": 1, "col_1": 2}]
+
+
+def test_lowercase_column_names_can_be_disabled() -> None:
+    """Disabling the feature keeps the names exactly as Db2 reports them."""
+    cursor = FakeDb2Cursor(rows=[("S",)], description=db2_description("schema_name"))
+    driver = Db2Driver(FakeDb2Connection(lambda: cursor), driver_features={"enable_lowercase_column_names": False})
+
+    assert driver.select("SELECT schema_name FROM t") == [{"SCHEMA_NAME": "S"}]
+
+
+def test_select_stream_lowercases_implicit_uppercase_columns() -> None:
+    """Streamed rows use the same lowercase keys as eager results."""
+    cursor = FakeDb2Cursor(rows=[(1, "Ada"), (2, "Grace")], description=db2_description("id", "name"))
+    driver = Db2Driver(FakeDb2Connection(lambda: cursor))
+
+    with driver.select_stream("SELECT id, name FROM users", chunk_size=1) as stream:
+        rows = list(stream)
+
+    assert rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]
+
+
+def test_repeated_select_keeps_lowercase_columns() -> None:
+    """Re-executing a cached query returns the same lowercase keys as the first execution."""
+    driver = Db2Driver(
+        FakeDb2Connection(lambda: FakeDb2Cursor(rows=[(1,)], description=db2_description("schema_name")))
+    )
+
+    first = driver.execute("SELECT schema_name FROM t WHERE id = ?", (1,))
+    second = driver.execute("SELECT schema_name FROM t WHERE id = ?", (1,))
+
+    assert first.get_data() == [{"schema_name": 1}]
+    assert second.get_data() == [{"schema_name": 1}]

@@ -93,7 +93,9 @@ class Db2StreamSource:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names = resolve_column_names(cursor.description or None, self._driver._column_name_cache)
+            column_names = resolve_column_names(
+                cursor.description or None, self._driver._column_name_cache, lowercase=self._driver._lowercase_columns
+            )
             self._column_names = column_names
         return rows_to_dicts(rows, column_names)
 
@@ -108,7 +110,13 @@ class Db2StreamSource:
 class Db2Driver(SyncDriverAdapterBase):
     """IBM Db2 database driver."""
 
-    __slots__ = ("_column_name_cache", "_data_dictionary", "_explicit_transaction", "_transaction_active")
+    __slots__ = (
+        "_column_name_cache",
+        "_data_dictionary",
+        "_explicit_transaction",
+        "_lowercase_columns",
+        "_transaction_active",
+    )
     dialect = "db2"
 
     def __init__(
@@ -125,6 +133,7 @@ class Db2Driver(SyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: Any = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
+        self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
         self._transaction_active = False
         self._explicit_transaction = False
 
@@ -135,7 +144,9 @@ class Db2Driver(SyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
             description = cursor.description or None
-            rows, column_names, row_format = collect_rows(fetched_data, description, self._column_name_cache)
+            rows, column_names, row_format = collect_rows(
+                fetched_data, description, self._column_name_cache, lowercase=self._lowercase_columns
+            )
             return self.create_execution_result(
                 cursor,
                 selected_data=rows,
@@ -275,7 +286,9 @@ class Db2Driver(SyncDriverAdapterBase):
         return self._data_dictionary
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        column_names = resolve_column_names(cursor.description or None, self._column_name_cache)
+        column_names = resolve_column_names(
+            cursor.description or None, self._column_name_cache, lowercase=self._lowercase_columns
+        )
         return fetched, column_names, len(fetched)
 
     def resolve_rowcount(self, cursor: Any) -> int:

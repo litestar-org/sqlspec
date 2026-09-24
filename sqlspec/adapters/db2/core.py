@@ -40,6 +40,7 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "format_identifier",
+    "normalize_column_names",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "parse_db2_dsn",
@@ -48,6 +49,7 @@ __all__ = (
     "resolve_rowcount",
 )
 
+IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:SQLSTATE[=:\s]+|state[:=\s]+)([0-9A-Z]{5})\b", re.IGNORECASE
 )
@@ -200,19 +202,49 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
+def normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":
+    """Lowercase column names that Db2 folded to uppercase.
+
+    Names made only of uppercase letters, digits and underscores (and not starting with a digit)
+    are lowercased; any other name, such as a quoted mixed-case identifier, is returned unchanged.
+
+    Args:
+        column_names: Column names as reported by the cursor description.
+        lowercase: Whether to lowercase implicit-uppercase names.
+
+    Returns:
+        Normalized column names in their original order.
+    """
+    if not lowercase:
+        return column_names
+    return [name.lower() if name and IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name) else name for name in column_names]
+
+
 def resolve_column_names(
-    description: Sequence[Any] | None, column_name_cache: dict[int, tuple[Any, list[str]]] | None = None
+    description: Sequence[Any] | None,
+    column_name_cache: dict[int, tuple[Any, list[str]]] | None = None,
+    *,
+    lowercase: bool,
 ) -> list[str]:
-    """Extract ordered column names from Db2 cursor description metadata."""
+    """Extract ordered column names from Db2 cursor description metadata.
+
+    Args:
+        description: DB-API cursor description.
+        column_name_cache: Optional cache keyed by description identity; it stores normalized names.
+        lowercase: Whether to lowercase names Db2 folded to uppercase.
+
+    Returns:
+        Column names in description order.
+    """
     if not description:
         return []
     if column_name_cache is None:
-        return [str(desc[0]) for desc in description]
+        return normalize_column_names([str(desc[0]) for desc in description], lowercase)
     cache_key = id(description)
     cached = column_name_cache.get(cache_key)
     if cached is not None and cached[0] is description:
         return cached[1]
-    names = [str(desc[0]) for desc in description]
+    names = normalize_column_names([str(desc[0]) for desc in description], lowercase)
     column_name_cache[cache_key] = (description, names)
     return names
 
@@ -239,20 +271,32 @@ def collect_rows(
     fetched_data: Any,
     description: Sequence[Any] | None = None,
     column_name_cache: dict[int, tuple[Any, list[str]]] | None = None,
+    *,
+    lowercase: bool,
 ) -> tuple[list[Any], list[str], Literal["dict", "tuple", "record"]]:
-    """Collect Db2 rows, preserving dictionary or tuple row shape."""
+    """Collect Db2 rows, preserving dictionary or tuple row shape.
+
+    Args:
+        fetched_data: Fetched rows, or a cursor to fetch them from.
+        description: DB-API cursor description used when ``fetched_data`` holds rows.
+        column_name_cache: Optional cache of resolved column names.
+        lowercase: Whether to lowercase names Db2 folded to uppercase.
+
+    Returns:
+        Rows, column names, and the row format.
+    """
     if hasattr(fetched_data, "fetchall") and not isinstance(fetched_data, (list, tuple)):
         cursor = fetched_data
         fetched = cursor.fetchall() or []
         desc = getattr(cursor, "description", None)
-        column_names = resolve_column_names(desc, column_name_cache)
+        column_names = resolve_column_names(desc, column_name_cache, lowercase=lowercase)
         if not fetched:
             return [], column_names, "tuple"
         if isinstance(fetched[0], dict):
             return list(fetched), column_names, "dict"
         return list(fetched), column_names, "tuple"
 
-    column_names = resolve_column_names(description, column_name_cache)
+    column_names = resolve_column_names(description, column_name_cache, lowercase=lowercase)
     if not fetched_data:
         return [], column_names, "tuple"
     if isinstance(fetched_data[0], dict):
@@ -303,6 +347,7 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
+    features.setdefault("enable_lowercase_column_names", True)
 
     if json_serializer is not None:
         parameter_config = statement_config.parameter_config.with_json_serializers(

@@ -1,10 +1,12 @@
 """Tests for Db2SyncDataDictionary schema reflection and metadata queries."""
 
+from typing import Any
 from unittest.mock import MagicMock
 
 from sqlspec.adapters.db2.data_dictionary import DB2_CONFIG, Db2SyncDataDictionary, Db2VersionInfo
-from sqlspec.core import SQL
+from sqlspec.adapters.db2.driver import Db2Driver
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
+from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeDb2Cursor, db2_description
 
 
 def test_db2_dialect_config_registered() -> None:
@@ -17,62 +19,56 @@ def test_db2_dialect_config_registered() -> None:
     assert DB2_CONFIG.get_optimal_type("decimal") == "DECFLOAT"
 
 
+def _driver_with_results(
+    *results: "tuple[tuple[str, ...], list[tuple[Any, ...]]]",
+) -> "tuple[Db2Driver, FakeDb2Connection]":
+    """Build a real driver whose cursors return rows with Db2-folded column descriptions."""
+    cursors = [FakeDb2Cursor(rows=rows, description=db2_description(*names)) for names, rows in results]
+    connection = FakeDb2Connection(cursors)
+    return Db2Driver(connection), connection
+
+
 def test_db2_get_tables() -> None:
     """Verify get_tables loads query and maps SYSCAT.TABLES rows to TableMetadata."""
-    mock_driver = MagicMock()
-    mock_driver.select.return_value = [
-        {"schema_name": "MYSCHEMA", "table_name": "USERS", "table_type": "BASE TABLE"},
-        {"schema_name": "MYSCHEMA", "table_name": "ACTIVE_USERS", "table_type": "VIEW"},
-    ]
+    names = ("schema_name", "table_name", "table_type")
+    rows = [("MYSCHEMA", "USERS", "BASE TABLE"), ("MYSCHEMA", "ACTIVE_USERS", "VIEW")]
+    driver, connection = _driver_with_results((names, rows), (names, rows))
 
     dd = Db2SyncDataDictionary()
-    tables = dd.get_tables(mock_driver, schema="MYSCHEMA")
+    tables = dd.get_tables(driver, schema="MYSCHEMA")
 
     assert len(tables) == 2
     assert tables[0] == TableMetadata(schema_name="MYSCHEMA", table_name="USERS", table_type="BASE TABLE")
     assert tables[1] == TableMetadata(schema_name="MYSCHEMA", table_name="ACTIVE_USERS", table_type="VIEW")
-    assert mock_driver.select.call_count == 2
-    first_call_stmt = mock_driver.select.call_args_list[0][0][0]
-    assert isinstance(first_call_stmt, SQL)
-    assert "SYSCAT.TABLES" in str(first_call_stmt)
+    executed = [cursor.executed[0][0] for cursor in connection.cursors]
+    assert len(executed) == 2
+    assert "SYSCAT.TABLES" in executed[0]
 
 
 def test_db2_get_columns() -> None:
     """Verify get_columns maps SYSCAT.COLUMNS rows to ColumnMetadata."""
-    mock_driver = MagicMock()
-    mock_driver.select.return_value = [
-        {
-            "schema_name": "MYSCHEMA",
-            "table_name": "USERS",
-            "column_name": "ID",
-            "data_type": "BIGINT",
-            "is_nullable": 0,
-            "column_default": None,
-            "ordinal_position": 1,
-            "max_length": 8,
-            "numeric_scale": 0,
-            "is_primary": 1,
-            "identity_generation": "A",
-            "is_generated": "A",
-        },
-        {
-            "schema_name": "MYSCHEMA",
-            "table_name": "USERS",
-            "column_name": "NAME",
-            "data_type": "VARCHAR",
-            "is_nullable": 1,
-            "column_default": "'anonymous'",
-            "ordinal_position": 2,
-            "max_length": 255,
-            "numeric_scale": 0,
-            "is_primary": 0,
-            "identity_generation": None,
-            "is_generated": None,
-        },
+    names = (
+        "schema_name",
+        "table_name",
+        "column_name",
+        "data_type",
+        "is_nullable",
+        "column_default",
+        "ordinal_position",
+        "max_length",
+        "numeric_scale",
+        "is_primary",
+        "identity_generation",
+        "is_generated",
+    )
+    rows = [
+        ("MYSCHEMA", "USERS", "ID", "BIGINT", 0, None, 1, 8, 0, 1, "A", "A"),
+        ("MYSCHEMA", "USERS", "NAME", "VARCHAR", 1, "'anonymous'", 2, 255, 0, 0, None, None),
     ]
+    driver, connection = _driver_with_results((names, rows))
 
     dd = Db2SyncDataDictionary()
-    columns = dd.get_columns(mock_driver, table="USERS", schema="MYSCHEMA")
+    columns = dd.get_columns(driver, table="USERS", schema="MYSCHEMA")
 
     assert len(columns) == 2
     assert columns[0] == ColumnMetadata(
@@ -105,47 +101,22 @@ def test_db2_get_columns() -> None:
         identity_generation=None,
         is_generated=False,
     )
-    mock_driver.select.assert_called_once()
-    sql = mock_driver.select.call_args[0][0]
-    assert isinstance(sql, SQL)
-    assert "SYSCAT.COLUMNS" in str(sql)
+    assert len(connection.cursors) == 1
+    assert "SYSCAT.COLUMNS" in connection.cursors[0].executed[0][0]
 
 
 def test_db2_get_indexes() -> None:
     """Verify get_indexes combines multiple column rows into IndexMetadata."""
-    mock_driver = MagicMock()
-    mock_driver.select.return_value = [
-        {
-            "schema_name": "MYSCHEMA",
-            "table_name": "ORDERS",
-            "index_name": "PK_ORDERS",
-            "column_name": "ID",
-            "column_position": 1,
-            "is_unique": 1,
-            "is_primary": 1,
-        },
-        {
-            "schema_name": "MYSCHEMA",
-            "table_name": "ORDERS",
-            "index_name": "IX_CUSTOMER_DATE",
-            "column_name": "CUSTOMER_ID",
-            "column_position": 1,
-            "is_unique": 0,
-            "is_primary": 0,
-        },
-        {
-            "schema_name": "MYSCHEMA",
-            "table_name": "ORDERS",
-            "index_name": "IX_CUSTOMER_DATE",
-            "column_name": "ORDER_DATE",
-            "column_position": 2,
-            "is_unique": 0,
-            "is_primary": 0,
-        },
+    names = ("schema_name", "table_name", "index_name", "column_name", "column_position", "is_unique", "is_primary")
+    rows = [
+        ("MYSCHEMA", "ORDERS", "PK_ORDERS", "ID", 1, 1, 1),
+        ("MYSCHEMA", "ORDERS", "IX_CUSTOMER_DATE", "CUSTOMER_ID", 1, 0, 0),
+        ("MYSCHEMA", "ORDERS", "IX_CUSTOMER_DATE", "ORDER_DATE", 2, 0, 0),
     ]
+    driver, _ = _driver_with_results((names, rows))
 
     dd = Db2SyncDataDictionary()
-    indexes = dd.get_indexes(mock_driver, table="ORDERS", schema="MYSCHEMA")
+    indexes = dd.get_indexes(driver, table="ORDERS", schema="MYSCHEMA")
 
     assert len(indexes) == 2
     assert indexes[0] == IndexMetadata(
@@ -168,21 +139,20 @@ def test_db2_get_indexes() -> None:
 
 def test_db2_get_foreign_keys() -> None:
     """Verify get_foreign_keys maps joined SYSCAT.REFERENCES rows to ForeignKeyMetadata."""
-    mock_driver = MagicMock()
-    mock_driver.select.return_value = [
-        {
-            "schema_name": "MYSCHEMA",
-            "table_name": "ORDERS",
-            "constraint_name": "FK_ORDERS_USERS",
-            "column_name": "USER_ID",
-            "referenced_schema": "MYSCHEMA",
-            "referenced_table": "USERS",
-            "referenced_column": "ID",
-        }
-    ]
+    names = (
+        "schema_name",
+        "table_name",
+        "constraint_name",
+        "column_name",
+        "referenced_schema",
+        "referenced_table",
+        "referenced_column",
+    )
+    rows = [("MYSCHEMA", "ORDERS", "FK_ORDERS_USERS", "USER_ID", "MYSCHEMA", "USERS", "ID")]
+    driver, _ = _driver_with_results((names, rows))
 
     dd = Db2SyncDataDictionary()
-    fks = dd.get_foreign_keys(mock_driver, table="ORDERS", schema="MYSCHEMA")
+    fks = dd.get_foreign_keys(driver, table="ORDERS", schema="MYSCHEMA")
 
     assert len(fks) == 1
     assert fks[0] == ForeignKeyMetadata(
