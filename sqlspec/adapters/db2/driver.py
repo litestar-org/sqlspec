@@ -1,6 +1,7 @@
 """IBM Db2 database driver implementation."""
 
 import contextlib
+import logging
 from collections.abc import Sequence, Sized
 from typing import TYPE_CHECKING, Any, cast
 
@@ -9,7 +10,7 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, Statement, StatementFilter
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
 
-from sqlspec.adapters.db2._typing import Db2SyncCursor, Db2SyncSessionContext
+from sqlspec.adapters.db2._typing import Db2Error, Db2SyncCursor, Db2SyncSessionContext, connection_autocommit_enabled
 from sqlspec.adapters.db2.core import (
     collect_rows,
     create_mapped_exception,
@@ -32,7 +33,7 @@ from sqlspec.driver import (
     validate_savepoint_name,
 )
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.logging import get_logger
+from sqlspec.utils.logging import get_logger, log_with_context
 
 __all__ = ("Db2SyncCursor", "Db2SyncDriver", "Db2SyncExceptionHandler", "Db2SyncSessionContext")
 
@@ -114,8 +115,8 @@ class Db2SyncDriver(SyncDriverAdapterBase):
     __slots__ = (
         "_column_name_cache",
         "_data_dictionary",
-        "_explicit_transaction",
         "_lowercase_columns",
+        "_restore_autocommit",
         "_transaction_active",
     )
     dialect = "db2"
@@ -136,7 +137,7 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._lowercase_columns = bool(self.driver_features.get("enable_lowercase_column_names", True))
         self._transaction_active = False
-        self._explicit_transaction = False
+        self._restore_autocommit = False
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -182,47 +183,85 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         )
 
     def begin(self) -> None:
-        """Begin a transaction on the Db2 connection."""
+        """Begin a transaction by turning autocommit off for its duration.
+
+        Does nothing while a transaction started by this driver is active. When the connection
+        was in autocommit mode, ``commit()`` and ``rollback()`` switch it back on.
+
+        Raises:
+            SQLSpecError: When the driver reports an error.
+        """
+        if self._transaction_active:
+            return
         try:
-            if hasattr(self.connection, "autocommit_state") and self.connection.autocommit_state:
-                self.connection.autocommit_state = False
-                self._explicit_transaction = True
-            elif hasattr(self.connection, "set_autocommit"):
+            enabled = connection_autocommit_enabled(self.connection)
+            if enabled:
                 self.connection.set_autocommit(False)
-                self._explicit_transaction = True
-            self._transaction_active = True
-        except Exception as exc:
+        except Db2Error as exc:
             msg = f"Failed to begin Db2 transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        self._restore_autocommit = enabled
+        self._transaction_active = True
 
     def commit(self) -> None:
-        """Commit the active Db2 transaction."""
+        """Commit the current unit of work and restore the autocommit baseline.
+
+        Raises:
+            SQLSpecError: When the driver reports an error.
+        """
         try:
             self.connection.commit()
-            if self._explicit_transaction:
-                if hasattr(self.connection, "autocommit_state"):
-                    self.connection.autocommit_state = True
-                elif hasattr(self.connection, "set_autocommit"):
-                    self.connection.set_autocommit(True)
-                self._explicit_transaction = False
-            self._transaction_active = False
-        except Exception as exc:
+        except Db2Error as exc:
             msg = f"Failed to commit Db2 transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        self._transaction_active = False
+        self._restore_connection_autocommit()
 
     def rollback(self) -> None:
-        """Rollback the active Db2 transaction."""
+        """Roll back the current unit of work and restore the autocommit baseline.
+
+        Raises:
+            SQLSpecError: When the driver reports an error.
+        """
         try:
             self.connection.rollback()
-            if self._explicit_transaction:
-                if hasattr(self.connection, "autocommit_state"):
-                    self.connection.autocommit_state = True
-                elif hasattr(self.connection, "set_autocommit"):
-                    self.connection.set_autocommit(True)
-                self._explicit_transaction = False
-            self._transaction_active = False
-        except Exception as exc:
+        except Db2Error as exc:
             msg = f"Failed to rollback Db2 transaction: {exc}"
+            raise SQLSpecError(msg) from exc
+        self._transaction_active = False
+        self._restore_connection_autocommit()
+
+    def release_open_work(self, *, autocommit_baseline: bool) -> None:
+        """Roll back work left open before the connection is returned to its pool.
+
+        A transaction started by this driver is always rolled back; on a connection whose
+        autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
+        failure is logged and not raised, so it never masks an error from the session body.
+
+        Args:
+            autocommit_baseline: Autocommit mode the connection was opened in.
+        """
+        if not self._transaction_active and autocommit_baseline:
+            return
+        try:
+            self.rollback()
+        except SQLSpecError as exc:
+            log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+
+    def _restore_connection_autocommit(self) -> None:
+        """Switch autocommit back on when ``begin()`` turned it off.
+
+        Raises:
+            SQLSpecError: When the driver reports an error.
+        """
+        restore_autocommit = self._restore_autocommit
+        self._restore_autocommit = False
+        if not restore_autocommit:
+            return
+        try:
+            self.connection.set_autocommit(True)
+        except Db2Error as exc:
+            msg = f"Failed to restore Db2 autocommit: {exc}"
             raise SQLSpecError(msg) from exc
 
     def with_cursor(self, connection: Any) -> "Db2SyncCursor":

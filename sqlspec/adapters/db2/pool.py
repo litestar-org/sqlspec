@@ -44,6 +44,7 @@ class Db2SyncConnectionPool:
     """Thread-local connection manager for IBM Db2."""
 
     __slots__ = (
+        "_autocommit",
         "_connection_parameters",
         "_connection_registry",
         "_dsn",
@@ -67,13 +68,15 @@ class Db2SyncConnectionPool:
 
         Args:
             connection_parameters: Normalized Db2 connection parameters. The CLI connection
-                string is rendered from them once, here.
+                string is rendered from them once, here; ``autocommit`` (default True) sets the
+                autocommit mode every new connection opens in.
             recycle_seconds: Connection recycle time in seconds (default 24h).
             health_check_interval: Seconds of idle time before running health check.
             on_connection_create: Callback executed when connection is created.
         """
         self._connection_parameters = connection_parameters
         self._dsn = build_dsn_string(connection_parameters)
+        self._autocommit = bool(connection_parameters.get("autocommit", True))
         self._thread_local = threading.local()
         self._connection_registry: set[Any] = set()
         self._generation = 0
@@ -100,6 +103,8 @@ class Db2SyncConnectionPool:
     def new_connection(self) -> Any:
         """Open a standalone connection configured like a pooled one.
 
+        The connection opens in the pool's autocommit mode.
+
         The result is owned by the caller: it is not thread-local and is not
         tracked for pool shutdown.
 
@@ -109,7 +114,9 @@ class Db2SyncConnectionPool:
         Raises:
             MissingDependencyError: When ibm_db is not installed.
         """
-        connection = _require_ibm_db_dbi().connect(self._dsn, "", "", "", "", None)
+        ibm_db_dbi = _require_ibm_db_dbi()
+        autocommit_mode = ibm_db_dbi.SQL_AUTOCOMMIT_ON if self._autocommit else ibm_db_dbi.SQL_AUTOCOMMIT_OFF
+        connection = ibm_db_dbi.connect(self._dsn, "", "", "", "", {ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode})
 
         if self._on_connection_create is not None:
             self._on_connection_create(connection)

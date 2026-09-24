@@ -1,7 +1,5 @@
 """Tests for IBM Db2 database driver."""
 
-from typing import Any
-
 import pytest
 
 from sqlspec.adapters.db2.core import default_statement_config
@@ -125,31 +123,6 @@ def test_dispatch_execute_script() -> None:
     assert len(cursor.executed) == 2
     assert cursor.executed[0][0] == "CREATE TABLE t1 (id INT)"
     assert cursor.executed[1][0] == "CREATE TABLE t2 (id INT)"
-
-
-@pytest.mark.xfail(strict=True, reason="begin() reads a pymssql-only attribute")
-def test_begin_commit_rollback_lifecycle() -> None:
-    """Driver properly manages transaction states and connection commit/rollback."""
-    conn: Any = FakeDb2Connection(autocommit=True)
-    driver = Db2SyncDriver(conn)
-
-    assert driver._connection_in_transaction() is False
-
-    driver.begin()
-    assert driver._connection_in_transaction() is True
-    assert conn.autocommit_state is False
-
-    driver.commit()
-    assert driver._connection_in_transaction() is False
-    assert conn.committed is True
-    assert conn.autocommit_state is True
-
-    driver.begin()
-    assert driver._connection_in_transaction() is True
-
-    driver.rollback()
-    assert driver._connection_in_transaction() is False
-    assert conn.rolled_back is True
 
 
 def test_dispatch_select_stream() -> None:

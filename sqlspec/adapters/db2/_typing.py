@@ -3,6 +3,7 @@
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import import_optional_attr
 from sqlspec.utils.module_loader import import_optional
 
@@ -41,9 +42,30 @@ __all__ = (
     "Db2SyncConnection",
     "Db2SyncCursor",
     "Db2SyncSessionContext",
+    "connection_autocommit_enabled",
     "ibm_db",
     "ibm_db_dbi",
 )
+
+
+def connection_autocommit_enabled(connection: Any) -> bool:
+    """Return whether a Db2 connection is currently in autocommit mode.
+
+    ``ibm_db_dbi.Connection`` has no autocommit getter, so the mode is read from the underlying
+    ``ibm_db`` handle.
+
+    Args:
+        connection: ``ibm_db_dbi`` connection exposing ``conn_handler``.
+
+    Returns:
+        bool: True when autocommit is on.
+
+    Raises:
+        MissingDependencyError: When ibm_db is not installed.
+    """
+    if ibm_db is None:
+        raise MissingDependencyError(package="ibm_db", install_package="db2")
+    return bool(ibm_db.autocommit(connection.conn_handler))
 
 
 class Db2SyncCursor:
@@ -77,10 +99,17 @@ class Db2SyncCursor:
 
 
 class Db2SyncSessionContext:
-    """Synchronous context manager for Db2 sessions."""
+    """Synchronous context manager for Db2 sessions.
+
+    On exit, work left open by the session is rolled back before the connection is released: an
+    active transaction always, and any pending unit of work when the connection's autocommit
+    baseline is off.
+    """
 
     __slots__ = (
         "_acquire_connection",
+        "_autocommit_baseline",
+        "_begin_transaction",
         "_connection",
         "_driver",
         "_driver_features",
@@ -96,6 +125,9 @@ class Db2SyncSessionContext:
         statement_config: "StatementConfig",
         driver_features: dict[str, Any],
         prepare_driver: "Callable[[Any], Any]",
+        *,
+        autocommit_baseline: bool = True,
+        begin_transaction: bool = False,
     ) -> None:
         """Initialize the session context manager.
 
@@ -105,12 +137,16 @@ class Db2SyncSessionContext:
             statement_config: SQL compilation configuration.
             driver_features: Feature flags and hooks for driver instance.
             prepare_driver: Hook to customize or decorate driver before yielding.
+            autocommit_baseline: Autocommit mode the pool opens connections in.
+            begin_transaction: Begin a transaction before yielding the driver.
         """
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
+        self._autocommit_baseline = autocommit_baseline
+        self._begin_transaction = begin_transaction
         self._connection: Any = None
         self._driver: Db2SyncDriver | None = None
 
@@ -126,13 +162,27 @@ class Db2SyncSessionContext:
         self._driver = Db2SyncDriver(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
+        if self._begin_transaction:
+            try:
+                self._driver.begin()
+            except BaseException as exc:
+                self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
+                self._connection = None
+                self._driver = None
+                raise
         return self._prepare_driver(self._driver)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        """Return connection to pool on session completion."""
-        if self._connection is not None:
+        """Roll back open work, then return the connection to the pool."""
+        if self._connection is None:
+            return None
+        try:
+            if self._driver is not None:
+                self._driver.release_open_work(autocommit_baseline=self._autocommit_baseline)
+        finally:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
+            self._driver = None
         return None

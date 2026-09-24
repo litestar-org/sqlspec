@@ -8,11 +8,13 @@ The fakes reproduce the ``ibm_db_dbi`` 3.3 semantics the Db2 adapter depends on:
   read through ``ibm_db.autocommit(conn_handler)``.
 - ``Connection.close()`` rolls back pending work before closing.
 - Cursor descriptions carry column names exactly as Db2 reports them (see ``db2_description``).
-- Errors are ``Error`` subclasses whose text embeds the CLI diagnostic, SQLSTATE and SQLCODE.
+- Errors are ``Db2Error`` subclasses whose text embeds the CLI diagnostic, SQLSTATE and SQLCODE.
 """
 
 from collections.abc import Callable, Sequence
 from typing import Any
+
+from sqlspec.adapters.db2._typing import Db2Error
 
 SQL_ATTR_AUTOCOMMIT = 102
 SQL_AUTOCOMMIT_ON = 1
@@ -20,8 +22,12 @@ SQL_AUTOCOMMIT_OFF = 0
 _READ_ONLY_KEYWORDS = ("SELECT", "WITH", "VALUES")
 
 
-class FakeDb2Error(Exception):
-    """Base driver error rendered the way ``ibm_db_dbi.Error`` renders itself."""
+class FakeDb2Error(Db2Error):  # type: ignore[misc]
+    """Base driver error rendered the way ``ibm_db_dbi.Error`` renders itself.
+
+    It derives from the adapter's ``Db2Error`` alias, so it is caught wherever a real
+    ``ibm_db_dbi.Error`` would be.
+    """
 
     dbi_name = "Error"
 

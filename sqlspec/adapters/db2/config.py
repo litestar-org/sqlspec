@@ -192,6 +192,31 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
             on_connection_create=self._user_connection_hook,
         )
 
+    def _provide_session_impl(
+        self, *args: Any, statement_config: "StatementConfig | None" = None, transaction: bool = False, **kwargs: Any
+    ) -> "Db2SyncSessionContext":
+        """Build a session context that restores the connection's autocommit baseline on exit.
+
+        Args:
+            *args: Unused positional arguments.
+            statement_config: Statement configuration override for the session.
+            transaction: Begin a transaction before the session driver is yielded.
+            **kwargs: Unused keyword arguments.
+
+        Returns:
+            Db2SyncSessionContext: The session context manager.
+        """
+        handler = self._session_factory_class(self)
+        return Db2SyncSessionContext(
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config or self.statement_config or self._default_statement_config,
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+            autocommit_baseline=bool(self.connection_config.get("autocommit", True)),
+            begin_transaction=transaction,
+        )
+
     def _close_pool(self) -> None:
         """Close connection pool and release resources."""
         if self.connection_instance:
