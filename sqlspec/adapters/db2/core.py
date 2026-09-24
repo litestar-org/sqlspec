@@ -13,9 +13,7 @@ from sqlspec.exceptions import (
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
-    IntegrityError,
     NotNullViolationError,
-    OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
     SQLParsingError,
@@ -42,6 +40,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "extract_sqlstate",
     "format_identifier",
     "normalize_column_names",
     "normalize_execute_many_parameters",
@@ -85,14 +84,22 @@ IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[
 _SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:SQLSTATE[=:\s]+|state[:=\s]+)([0-9A-Z]{5})\b", re.IGNORECASE
 )
-_SQLCODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b(SQL-?[0-9]{3,5}[A-Z]?)\b", re.IGNORECASE)
+_SQLCODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\bSQL(?:CODE[=:\s]*)?(-?\d{3,5})[NCW]?\b", re.IGNORECASE)
+_REASON_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"Reason code\s*\"?(\d+)\"?", re.IGNORECASE)
+_INTEGER_TEXT_PATTERN: Final[re.Pattern[str]] = re.compile(r"-?\d+")
+_LOCK_TIMEOUT_REASON_CODE: Final[int] = 68
+_STATEMENT_ROLLBACK_SQLSTATE: Final[str] = "57033"
+_STATEMENT_ROLLBACK_SQLCODE: Final[int] = 913
+_ROLLBACK_SQLSTATES: Final[frozenset[str]] = frozenset({"40001", _STATEMENT_ROLLBACK_SQLSTATE})
+_ROLLBACK_SQLCODES: Final[frozenset[int]] = frozenset({911, _STATEMENT_ROLLBACK_SQLCODE})
+_UNDEFINED_OBJECT_SQLSTATE: Final[str] = "42704"
+_UNDEFINED_OBJECT_SQLCODE: Final[int] = 204
 
 _SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23505": (UniqueViolationError, "unique constraint violation"),
     "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
     "23502": (NotNullViolationError, "not-null constraint violation"),
     "23513": (CheckViolationError, "check constraint violation"),
-    "40001": (DeadlockError, "deadlock or serialization failure"),
     "42501": (PermissionDeniedError, "permission denied"),
     "08001": (DatabaseConnectionError, "database connection unavailable"),
     "08003": (DatabaseConnectionError, "database connection does not exist"),
@@ -105,26 +112,36 @@ _SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "42601": (SQLParsingError, "sql syntax error"),
 }
 
-_SQLCODE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
-    "SQL0803N": (UniqueViolationError, "unique constraint violation"),
-    "SQL0530N": (ForeignKeyViolationError, "foreign key constraint violation"),
-    "SQL0407N": (NotNullViolationError, "not-null constraint violation"),
-    "SQL0545N": (CheckViolationError, "check constraint violation"),
-    "SQL0911N": (DeadlockError, "deadlock or timeout occurred"),
-    "SQL0551N": (PermissionDeniedError, "permission denied"),
-    "SQL0552N": (PermissionDeniedError, "authorization error"),
-    "SQL0900N": (DatabaseConnectionError, "connection does not exist or was severed"),
-    "SQL1042C": (DatabaseConnectionError, "unexpected system error occurred"),
-    "SQL30081N": (DatabaseConnectionError, "communication failure"),
-    "SQL0104N": (SQLParsingError, "sql syntax error"),
+_SQLCODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    803: (UniqueViolationError, "unique constraint violation"),
+    530: (ForeignKeyViolationError, "foreign key constraint violation"),
+    407: (NotNullViolationError, "not-null constraint violation"),
+    545: (CheckViolationError, "check constraint violation"),
+    551: (PermissionDeniedError, "permission denied"),
+    552: (PermissionDeniedError, "authorization error"),
+    900: (DatabaseConnectionError, "connection does not exist or was severed"),
+    1042: (DatabaseConnectionError, "unexpected system error occurred"),
+    30081: (DatabaseConnectionError, "communication failure"),
+    104: (SQLParsingError, "sql syntax error"),
 }
 
 
 _SQLSTATE_LENGTH: Final[int] = 5
 
 
-def _extract_sqlstate(error: Exception) -> str | None:
-    """Extract 5-character SQLSTATE code from exception attributes or message text."""
+def extract_sqlstate(error: BaseException) -> str | None:
+    """Extract the five-character SQLSTATE from an exception.
+
+    Reads a ``sqlstate``/``state`` attribute first, then the last ``SQLSTATE=``/``SQLSTATE `` token
+    in the message, so it also recovers the SQLSTATE of an exception mapped by
+    :func:`create_mapped_exception`.
+
+    Args:
+        error: Driver error or mapped SQLSpec exception.
+
+    Returns:
+        str | None: The SQLSTATE, or None when the error carries none.
+    """
     explicit_state = getattr(error, "sqlstate", None) or getattr(error, "state", None)
     if isinstance(explicit_state, str) and len(explicit_state.strip()) == _SQLSTATE_LENGTH:
         return explicit_state.strip().upper()
@@ -134,24 +151,70 @@ def _extract_sqlstate(error: Exception) -> str | None:
     return None
 
 
-def _extract_sqlcode(error: Exception) -> str | None:
-    """Extract standard IBM Db2 SQLCODE identifier (e.g. SQL0803N) from exception."""
-    explicit_code = getattr(error, "error_code", None) or getattr(error, "sqlcode", None)
+def _extract_sqlcode(error: BaseException) -> int | None:
+    """Extract the absolute SQLCODE number from an exception.
+
+    Integer ``sqlcode``/``error_code`` attributes are used directly; string attributes and the
+    message are searched for ``SQLnnnnN``/``C``/``W`` message identifiers or ``SQLCODE=-n``.
+
+    Args:
+        error: Driver error.
+
+    Returns:
+        int | None: The SQLCODE without sign, or None when the error carries none.
+    """
+    explicit_code = getattr(error, "sqlcode", None)
+    if explicit_code is None:
+        explicit_code = getattr(error, "error_code", None)
+    if isinstance(explicit_code, int) and not isinstance(explicit_code, bool):
+        return abs(explicit_code)
+    candidates: list[str] = []
     if isinstance(explicit_code, str) and explicit_code.strip():
-        code = explicit_code.strip().upper()
-        if not code.startswith("SQL"):
-            code = f"SQL{code}"
-        return code
-    if isinstance(explicit_code, int):
-        return f"SQL{abs(explicit_code):04d}N"
-    matches = _SQLCODE_PATTERN.findall(str(error))
-    if matches:
-        return str(matches[-1]).upper()
+        code_text = explicit_code.strip()
+        if _INTEGER_TEXT_PATTERN.fullmatch(code_text):
+            return abs(int(code_text))
+        candidates.append(code_text)
+    candidates.append(str(error))
+    for text in candidates:
+        match = _SQLCODE_PATTERN.search(text)
+        if match is not None:
+            return abs(int(match.group(1)))
     return None
 
 
-def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
-    """Map a Db2 database exception to the appropriate SQLSpec exception class.
+def _extract_reason_code(message: str) -> int | None:
+    """Extract a Db2 reason code such as ``Reason code "68"`` from message text.
+
+    Args:
+        message: Error message.
+
+    Returns:
+        int | None: The reason code, or None when the message has none.
+    """
+    match = _REASON_CODE_PATTERN.search(message)
+    return int(match.group(1)) if match is not None else None
+
+
+def _build_mapped_exception(
+    error_cls: "type[SQLSpecError]", description: str, sqlstate: str | None, sqlcode: int | None, error: BaseException
+) -> SQLSpecError:
+    """Build a mapped exception whose message leads with the SQLSTATE when one is known.
+
+    Returns:
+        SQLSpecError: The mapped exception.
+    """
+    if sqlstate is not None:
+        return error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
+    return error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
+
+
+def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
+    """Map a Db2 driver error to the SQLSpec exception its diagnostics describe.
+
+    Rules, in order: SQLSTATE ``40001``/``57033`` or SQLCODE ``911``/``913`` is a lock timeout
+    (``QueryTimeoutError``) with reason code 68 and a deadlock otherwise; SQLSTATE ``42704`` or
+    SQLCODE ``204`` (undefined object) is ``SQLParsingError``; then the SQLSTATE table, then the
+    SQLCODE table. Anything else becomes ``SQLSpecError`` carrying the original message.
 
     Args:
         error: Caught Db2 driver exception.
@@ -160,42 +223,30 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
     Returns:
         SQLSpecError: Mapped domain exception wrapping the original error.
     """
-    sqlstate = _extract_sqlstate(error)
-    if sqlstate and sqlstate in _SQLSTATE_MAP:
-        error_cls, description = _SQLSTATE_MAP[sqlstate]
-        return error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
-
+    sqlstate = extract_sqlstate(error)
     sqlcode = _extract_sqlcode(error)
-    if sqlcode and sqlcode in _SQLCODE_MAP:
+
+    if sqlstate in _ROLLBACK_SQLSTATES or sqlcode in _ROLLBACK_SQLCODES:
+        if _extract_reason_code(str(error)) == _LOCK_TIMEOUT_REASON_CODE:
+            return _build_mapped_exception(QueryTimeoutError, "lock timeout", sqlstate, sqlcode, error)
+        statement_only = sqlstate == _STATEMENT_ROLLBACK_SQLSTATE or sqlcode == _STATEMENT_ROLLBACK_SQLCODE
+        rolled_back = "statement" if statement_only else "transaction"
+        description = f"deadlock; the {rolled_back} was rolled back"
+        return _build_mapped_exception(DeadlockError, description, sqlstate, sqlcode, error)
+
+    if sqlstate == _UNDEFINED_OBJECT_SQLSTATE or sqlcode == _UNDEFINED_OBJECT_SQLCODE:
+        return _build_mapped_exception(SQLParsingError, "undefined object", sqlstate, sqlcode, error)
+
+    if sqlstate is not None and sqlstate in _SQLSTATE_MAP:
+        error_cls, description = _SQLSTATE_MAP[sqlstate]
+        return _build_mapped_exception(error_cls, description, sqlstate, sqlcode, error)
+
+    if sqlcode is not None and sqlcode in _SQLCODE_MAP:
         error_cls, description = _SQLCODE_MAP[sqlcode]
-        return error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
+        return _build_mapped_exception(error_cls, description, sqlstate, sqlcode, error)
 
     if logger is not None and (sqlstate or sqlcode):
         logger.debug("Unmapped Db2 SQLSTATE: %s, SQLCODE: %s", sqlstate, sqlcode)
-
-    message = str(error).lower()
-    if "unique" in message or "duplicate" in message:
-        return UniqueViolationError(f"Db2 unique constraint violation. Original error: {error}")
-    if "foreign key" in message:
-        return ForeignKeyViolationError(f"Db2 foreign key constraint violation. Original error: {error}")
-    if "null" in message and "cannot be null" in message:
-        return NotNullViolationError(f"Db2 not-null constraint violation. Original error: {error}")
-    if "deadlock" in message or "lock timeout" in message:
-        return DeadlockError(f"Db2 deadlock or lock timeout. Original error: {error}")
-    if "connection" in message or "communication" in message:
-        return DatabaseConnectionError(f"Db2 connection error. Original error: {error}")
-    if "permission" in message or "not authorized" in message:
-        return PermissionDeniedError(f"Db2 permission denied. Original error: {error}")
-
-    for cls in type(error).__mro__:
-        name = cls.__name__.lower()
-        if "integrityerror" in name:
-            return IntegrityError(f"Db2 integrity error. Original error: {error}")
-        if "operationalerror" in name:
-            return OperationalError(f"Db2 operational error. Original error: {error}")
-        if "dataerror" in name:
-            return DataError(f"Db2 data error. Original error: {error}")
-
     return SQLSpecError(f"Db2 database error. Original error: {error}")
 
 

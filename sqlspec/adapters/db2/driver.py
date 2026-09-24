@@ -41,14 +41,17 @@ logger = get_logger("sqlspec.adapters.db2")
 
 
 class Db2SyncExceptionHandler(BaseSyncExceptionHandler):
-    """Context manager for handling IBM Db2 exceptions."""
+    """Context manager that maps ``ibm_db_dbi`` errors to SQLSpec exceptions.
+
+    Exceptions that do not come from the driver propagate unchanged.
+    """
 
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if isinstance(exc_val, Exception):
+        if isinstance(exc_val, cast("type[Exception]", Db2Error)):
             self.pending_exception = create_mapped_exception(exc_val, logger=logger)
             return True
         return False
