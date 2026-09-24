@@ -1,5 +1,7 @@
 """Custom AST expressions for Cloud Spanner dialects."""
 
+from typing import Any
+
 from sqlglot import exp
 
 __all__ = (
@@ -14,70 +16,63 @@ __all__ = (
     "TokenizeFulltext",
     "TokenizeNgrams",
     "TokenizeSubstring",
+    "approx_cosine_distance",
+    "get_next_sequence_value",
+    "score",
+    "search_substring",
+    "tokenize_fulltext",
+    "tokenize_ngrams",
+    "tokenize_substring",
 )
 
-
-class CosineDistance(exp.Expression, exp.Func):
-    """Cosine distance between two vector embeddings."""
-
-    arg_types = {"this": True, "expression": True}
-
-
-class EuclideanDistance(exp.Expression, exp.Func):
-    """Euclidean distance between two vector embeddings."""
-
-    arg_types = {"this": True, "expression": True}
+CosineDistance = exp.CosineDistance
+EuclideanDistance = exp.EuclideanDistance
+DotProduct = exp.DotProduct
+Search = exp.Search
 
 
-class DotProduct(exp.Expression, exp.Func):
-    """Dot product between two vector embeddings."""
-
-    arg_types = {"this": True, "expression": True}
-
-
-class ApproxCosineDistance(exp.Expression, exp.Func):
-    """Approximate cosine distance with optional neighbor count options."""
-
-    arg_types = {"this": True, "expression": True, "options": False}
+def approx_cosine_distance(this: Any, expression: Any, options: Any = None) -> exp.Anonymous:
+    """Build an APPROX_COSINE_DISTANCE function call."""
+    exprs = [this, expression]
+    if options is not None:
+        exprs.append(options)
+    return exp.Anonymous(this="APPROX_COSINE_DISTANCE", expressions=exprs)
 
 
-class Search(exp.Expression, exp.Func):
-    """Spanner full-text search function SEARCH(tokens, query)."""
-
-    arg_types = {"this": True, "expression": True}
-
-
-class SearchSubstring(exp.Expression, exp.Func):
-    """Spanner full-text substring search function SEARCH_SUBSTRING(tokens, subquery)."""
-
-    arg_types = {"this": True, "expression": True}
+def search_substring(this: Any, expression: Any) -> exp.Anonymous:
+    """Build a SEARCH_SUBSTRING function call."""
+    return exp.Anonymous(this="SEARCH_SUBSTRING", expressions=[this, expression])
 
 
-class Score(exp.Expression, exp.Func):
-    """Spanner full-text search score function SCORE(tokens, query)."""
-
-    arg_types = {"this": True, "expression": True}
-
-
-class TokenizeFulltext(exp.Expression, exp.Func):
-    """Spanner full-text tokenization function TOKENIZE_FULLTEXT."""
-
-    arg_types = {"this": True, "expressions": False}
+def score(this: Any, expression: Any) -> exp.Anonymous:
+    """Build a SCORE function call."""
+    return exp.Anonymous(this="SCORE", expressions=[this, expression])
 
 
-class TokenizeSubstring(exp.Expression, exp.Func):
-    """Spanner substring tokenization function TOKENIZE_SUBSTRING."""
-
-    arg_types = {"this": True, "expressions": False}
-
-
-class TokenizeNgrams(exp.Expression, exp.Func):
-    """Spanner ngram tokenization function TOKENIZE_NGRAMS."""
-
-    arg_types = {"this": True, "expressions": False}
+def tokenize_fulltext(this: Any, *expressions: Any) -> exp.Anonymous:
+    """Build a TOKENIZE_FULLTEXT function call."""
+    return exp.Anonymous(this="TOKENIZE_FULLTEXT", expressions=[this, *expressions])
 
 
-class GetNextSequenceValue(exp.Expression, exp.Func):
-    """Spanner sequence function GET_NEXT_SEQUENCE_VALUE(SEQUENCE sequence_name)."""
+def tokenize_substring(this: Any) -> exp.Anonymous:
+    """Build a TOKENIZE_SUBSTRING function call."""
+    return exp.Anonymous(this="TOKENIZE_SUBSTRING", expressions=[this])
 
-    arg_types = {"this": True}
+
+def tokenize_ngrams(this: Any) -> exp.Anonymous:
+    """Build a TOKENIZE_NGRAMS function call."""
+    return exp.Anonymous(this="TOKENIZE_NGRAMS", expressions=[this])
+
+
+def get_next_sequence_value(this: Any) -> exp.Anonymous:
+    """Build a GET_NEXT_SEQUENCE_VALUE function call."""
+    return exp.Anonymous(this="GET_NEXT_SEQUENCE_VALUE", expressions=[this])
+
+
+ApproxCosineDistance = approx_cosine_distance
+SearchSubstring = search_substring
+Score = score
+TokenizeFulltext = tokenize_fulltext
+TokenizeSubstring = tokenize_substring
+TokenizeNgrams = tokenize_ngrams
+GetNextSequenceValue = get_next_sequence_value

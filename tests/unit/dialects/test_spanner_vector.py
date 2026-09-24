@@ -2,7 +2,7 @@
 
 from sqlglot import exp, parse_one
 
-from sqlspec.dialects.spanner._expressions import ApproxCosineDistance, CosineDistance, DotProduct, EuclideanDistance
+from sqlspec.dialects.spanner._expressions import CosineDistance, DotProduct, EuclideanDistance
 
 
 def test_cosine_distance_parsing_and_generation() -> None:
@@ -11,7 +11,6 @@ def test_cosine_distance_parsing_and_generation() -> None:
     parsed = parse_one(sql, dialect="spanner")
     col = parsed.find(CosineDistance)
     assert col is not None
-    assert col.name == ""
     assert isinstance(col, CosineDistance)
     rendered = parsed.sql(dialect="spanner")
     assert "COSINE_DISTANCE(v1, v2)" in rendered
@@ -43,9 +42,9 @@ def test_approx_cosine_distance_with_options() -> None:
     """Verify APPROX_COSINE_DISTANCE parses options and round-trips."""
     sql = "SELECT APPROX_COSINE_DISTANCE(v1, v2, 100) AS dist FROM items"
     parsed = parse_one(sql, dialect="spanner")
-    col = parsed.find(ApproxCosineDistance)
+    col = parsed.find(exp.Anonymous)
     assert col is not None
-    assert isinstance(col, ApproxCosineDistance)
+    assert col.this.upper() == "APPROX_COSINE_DISTANCE"
     rendered = parsed.sql(dialect="spanner")
     assert "APPROX_COSINE_DISTANCE(v1, v2, 100)" in rendered
 
