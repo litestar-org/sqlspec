@@ -8,7 +8,7 @@ generation always emits valid GoogleSQL.
 """
 
 import re
-from typing import Any
+from typing import Any, cast
 
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
@@ -48,7 +48,9 @@ class Spanner(BigQuery):
             if interleave_property is not None:
                 reparsed = BigQuery.parse(self, repaired_sql, **opts)
                 if len(reparsed) == 1 and isinstance(reparsed[0], exp.Create):
-                    expressions = [attach_create_property(reparsed[0], interleave_property)]
+                    expressions = cast(
+                        "list[exp.Expr | None]", [attach_create_property(reparsed[0], interleave_property)]
+                    )
 
         for expression in expressions:
             if expression is not None:

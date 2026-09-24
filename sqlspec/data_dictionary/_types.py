@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from mypy_extensions import mypyc_attr
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterator, Mapping
     from re import Pattern
 
     from sqlspec.core.statement import SQL
@@ -324,6 +324,14 @@ class MetadataResult:
         )
         self.items = items
         self.warnings = warnings
+
+    def __len__(self) -> int:
+        """Return the number of metadata items in this result envelope."""
+        return len(self.items)
+
+    def __iter__(self) -> "Iterator[object]":
+        """Iterate over the metadata items in this result envelope."""
+        return iter(self.items)
 
     @classmethod
     def unsupported(cls, domain: str, *, source: "MetadataSource | str" = MetadataSource.UNKNOWN) -> "MetadataResult":
