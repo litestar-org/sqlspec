@@ -19,6 +19,19 @@ from sqlglot.parsers.bigquery import BigQueryParser
 from sqlglot.parsers.postgres import PostgresParser
 from sqlglot.tokenizer_core import TokenType
 
+from sqlspec.dialects.spanner._expressions import (
+    ApproxCosineDistance,
+    CosineDistance,
+    DotProduct,
+    EuclideanDistance,
+    GetNextSequenceValue,
+    Score,
+    Search,
+    SearchSubstring,
+    TokenizeFulltext,
+    TokenizeNgrams,
+    TokenizeSubstring,
+)
 from sqlspec.dialects.spanner._generators import (
     _INTERLEAVE_IN_NAME,
     _INTERLEAVE_NAME,
@@ -27,6 +40,8 @@ from sqlspec.dialects.spanner._generators import (
 )
 
 __all__ = (
+    "SpangresParser",
+    "SpannerParser",
     "attach_create_property",
     "build_interleave_property",
     "extract_interleave_property",
@@ -59,19 +74,8 @@ def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, 
 
 
 def register_spanner_property_parsers() -> None:
-    """Install Spanner property parsers on the BigQuery and Postgres parser classes."""
-    for parser_class in (BigQueryParser, PostgresParser):
-        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
-            continue
-        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
-        for key, handler in (
-            ("INTERLEAVE", _parse_interleave),
-            ("ROW", _parse_row_deletion_policy),
-            ("TTL", _parse_ttl),
-        ):
-            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
-        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
-        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
+    """Retained as an idempotent no-op for backward compatibility."""
+    return
 
 
 def extract_interleave_property(sql: str) -> "tuple[str, exp.Property | None]":
@@ -180,3 +184,303 @@ def _build_property_entry(handler: Any, original: Any) -> Any:
         return None
 
     return _entry
+
+
+def _parse_get_next_sequence_value(parser: Any) -> exp.Func:
+    """Parse GET_NEXT_SEQUENCE_VALUE(SEQUENCE sequence_name)."""
+    parser._match_text_seq("SEQUENCE")
+    seq_name = parser._parse_id_var()
+    parser._match(TokenType.R_PAREN)
+    return GetNextSequenceValue(this=seq_name)
+
+
+def _parse_options_properties(parser: Any) -> "exp.Properties | None":
+    """Parse an OPTIONS (key = value, ...) property block."""
+    if not parser._match_text_seq("OPTIONS"):
+        return None
+    parser._match(TokenType.L_PAREN)
+    props = parser._parse_csv(parser._parse_property)
+    parser._match(TokenType.R_PAREN)
+    return exp.Properties(expressions=props)
+
+
+def _parse_create_vector_index(parser: Any) -> exp.Index:
+    """Parse CREATE VECTOR INDEX name ON table (cols) [WHERE ...] [OPTIONS (...)]."""
+    name = parser._parse_id_var()
+    parser._match_text_seq("ON")
+    table = exp.Table(this=parser._parse_id_var())
+    parser._match(TokenType.L_PAREN)
+    cols = parser._parse_csv(parser._parse_column)
+    parser._match(TokenType.R_PAREN)
+    where = parser._parse_where()
+    options = _parse_options_properties(parser)
+    params = exp.IndexParameters(columns=cols)
+    idx = exp.Index(this=name, table=table, params=params, where=where, kind="VECTOR")
+    if options:
+        idx.set("options", options)
+    return idx
+
+
+def _parse_create_search_index(parser: Any) -> exp.Index:
+    """Parse CREATE SEARCH INDEX name ON table (cols) [STORING (cols)] [PARTITION BY cols] [ORDER BY order] [OPTIONS (...)]."""
+    name = parser._parse_id_var()
+    parser._match_text_seq("ON")
+    table = exp.Table(this=parser._parse_id_var())
+    parser._match(TokenType.L_PAREN)
+    cols = parser._parse_csv(parser._parse_column)
+    parser._match(TokenType.R_PAREN)
+    storing: list[exp.Expr] | None = None
+    if parser._match_text_seq("STORING"):
+        parser._match(TokenType.L_PAREN)
+        storing = parser._parse_csv(parser._parse_column)
+        parser._match(TokenType.R_PAREN)
+    partition_by: list[exp.Expr] | None = None
+    if parser._match(TokenType.PARTITION_BY) or parser._match_text_seq("PARTITION", "BY"):
+        partition_by = parser._parse_csv(parser._parse_column)
+    order = parser._parse_order()
+    options = _parse_options_properties(parser)
+    params = exp.IndexParameters(columns=cols)
+    idx = exp.Index(this=name, table=table, params=params, kind="SEARCH")
+    if storing:
+        idx.set("storing", storing)
+    if partition_by:
+        idx.set("partition_by", partition_by)
+    if order:
+        idx.set("order", order)
+    if options:
+        idx.set("options", options)
+    return idx
+
+
+def _parse_create_sequence(parser: Any) -> exp.Create:
+    """Parse CREATE SEQUENCE name [OPTIONS (...)]."""
+    name = parser._parse_id_var()
+    options = _parse_options_properties(parser)
+    return exp.Create(this=name, kind="SEQUENCE", properties=options)
+
+
+def _parse_alter_sequence(parser: Any) -> exp.Alter:
+    """Parse ALTER SEQUENCE name SET OPTIONS (...)."""
+    name = parser._parse_id_var()
+    options: exp.Properties | None = None
+    if parser._match_text_seq("SET", "OPTIONS") or parser._match_text_seq("OPTIONS"):
+        parser._retreat(parser._index - 1)
+        options = _parse_options_properties(parser)
+    return exp.Alter(this=name, kind="SEQUENCE", options=options)
+
+
+def _parse_create_change_stream(parser: Any) -> exp.Create:
+    """Parse CREATE CHANGE STREAM name [FOR ...] [OPTIONS (...)]."""
+    name = parser._parse_id_var()
+    for_expressions: list[exp.Expr] = []
+    if parser._match_text_seq("FOR"):
+        if parser._match_text_seq("ALL"):
+            for_expressions.append(exp.var("ALL"))
+        else:
+
+            def _parse_stream_target() -> exp.Expr:
+                target_table = parser._parse_id_var()
+                if parser._match(TokenType.L_PAREN):
+                    cols = parser._parse_csv(parser._parse_column)
+                    parser._match(TokenType.R_PAREN)
+                    return exp.Anonymous(this=target_table.name, expressions=cols)
+                return target_table
+
+            targets = parser._parse_csv(_parse_stream_target)
+            for_expressions.extend(targets)
+    options = _parse_options_properties(parser)
+    return exp.Create(this=name, kind="CHANGE STREAM", expressions=for_expressions, properties=options)
+
+
+def _parse_alter_change_stream(parser: Any) -> exp.Alter:
+    """Parse ALTER CHANGE STREAM name [SET ...] [OPTIONS (...)]."""
+    name = parser._parse_id_var()
+    options: exp.Properties | None = None
+    if parser._match_text_seq("SET", "OPTIONS") or parser._match_text_seq("OPTIONS"):
+        parser._retreat(parser._index - 1)
+        options = _parse_options_properties(parser)
+    return exp.Alter(this=name, kind="CHANGE STREAM", options=options)
+
+
+def _parse_drop_change_stream(parser: Any) -> exp.Drop:
+    """Parse DROP CHANGE STREAM name."""
+    name = parser._parse_id_var()
+    return exp.Drop(this=name, kind="CHANGE STREAM")
+
+
+def _parse_spanner_hint(parser: Any) -> exp.Hint:
+    """Parse @{key=value, ...} into canonical exp.Hint."""
+    parser._advance(2)
+    exprs: list[exp.Expr] = []
+    while parser._curr and parser._curr.token_type != TokenType.R_BRACE:
+        key = parser._parse_id_var()
+        if parser._match(TokenType.EQ):
+            val = parser._parse_number() or parser._parse_var() or parser._parse_string() or parser._parse_id_var()
+            exprs.append(exp.EQ(this=key, expression=val))
+        else:
+            exprs.append(key)
+        parser._match(TokenType.COMMA)
+    parser._match(TokenType.R_BRACE)
+    return exp.Hint(expressions=exprs)
+
+
+def _parse_spangres_comment_hint(comments: "list[str] | None") -> "exp.Hint | None":
+    """Extract and parse /*@ ... */ comment hint into canonical exp.Hint."""
+    if not comments:
+        return None
+    for comment in list(comments):
+        stripped = comment.strip()
+        if stripped.startswith("@"):
+            comments.remove(comment)
+            raw = stripped[1:].strip()
+            pairs = [p.strip() for p in raw.split(",") if p.strip()]
+            exprs: list[exp.Expr] = []
+            for pair in pairs:
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    v_str = v.strip()
+                    if v_str.isdigit():
+                        val_expr: exp.Expr = exp.Literal.number(int(v_str))
+                    else:
+                        val_expr = exp.var(v_str)
+                    exprs.append(exp.EQ(this=exp.to_identifier(k.strip()), expression=val_expr))
+                else:
+                    exprs.append(exp.to_identifier(pair.strip()))
+            return exp.Hint(expressions=exprs)
+    return None
+
+
+class SpannerParser(BigQueryParser):
+    """Parser for Cloud Spanner GoogleSQL dialect."""
+
+    PROPERTY_PARSERS = {
+        **BigQueryParser.PROPERTY_PARSERS,
+        "INTERLEAVE": _parse_interleave,
+        "ROW": _parse_row_deletion_policy,
+        "TTL": _parse_ttl,
+    }
+
+    FUNCTIONS = {
+        **BigQueryParser.FUNCTIONS,
+        "COSINE_DISTANCE": CosineDistance.from_arg_list,
+        "EUCLIDEAN_DISTANCE": EuclideanDistance.from_arg_list,
+        "DOT_PRODUCT": DotProduct.from_arg_list,
+        "APPROX_COSINE_DISTANCE": ApproxCosineDistance.from_arg_list,
+        "SEARCH": Search.from_arg_list,
+        "SEARCH_SUBSTRING": SearchSubstring.from_arg_list,
+        "SCORE": Score.from_arg_list,
+        "TOKENIZE_FULLTEXT": TokenizeFulltext.from_arg_list,
+        "TOKENIZE_SUBSTRING": TokenizeSubstring.from_arg_list,
+        "TOKENIZE_NGRAMS": TokenizeNgrams.from_arg_list,
+    }
+
+    FUNCTION_PARSERS = {**BigQueryParser.FUNCTION_PARSERS, "GET_NEXT_SEQUENCE_VALUE": _parse_get_next_sequence_value}
+
+    def _parse_create(self) -> "exp.Create | exp.Index | exp.Command":
+        """Parse Spanner CREATE statements including VECTOR INDEX, SEARCH INDEX, SEQUENCE, and CHANGE STREAM."""
+        if self._match_text_seq("VECTOR", "INDEX"):
+            return _parse_create_vector_index(self)
+        if self._match_text_seq("SEARCH", "INDEX"):
+            return _parse_create_search_index(self)
+        if self._match_text_seq("SEQUENCE"):
+            return _parse_create_sequence(self)
+        if self._match_text_seq("CHANGE", "STREAM"):
+            return _parse_create_change_stream(self)
+        return cast("exp.Create | exp.Index | exp.Command", super()._parse_create())
+
+    def _parse_alter(self) -> "exp.Alter | exp.Command":
+        """Parse Spanner ALTER statements including SEQUENCE and CHANGE STREAM."""
+        if self._match_text_seq("SEQUENCE"):
+            return _parse_alter_sequence(self)
+        if self._match_text_seq("CHANGE", "STREAM"):
+            return _parse_alter_change_stream(self)
+        return cast("exp.Alter | exp.Command", super()._parse_alter())
+
+    def _parse_drop(self, *args: Any, **kwargs: Any) -> "exp.Drop | exp.Command":
+        """Parse Spanner DROP statements including CHANGE STREAM."""
+        if self._match_text_seq("CHANGE", "STREAM"):
+            return _parse_drop_change_stream(self)
+        return cast("exp.Drop | exp.Command", super()._parse_drop(*args, **kwargs))
+
+    def _parse_statement(self) -> "exp.Expr | None":
+        """Parse statement with optional preceding statement-level hint @{...}."""
+        hint: exp.Hint | None = None
+        if (
+            self._curr
+            and self._curr.token_type == TokenType.PARAMETER
+            and self._next
+            and self._next.token_type == TokenType.L_BRACE
+        ):
+            hint = _parse_spanner_hint(self)
+        statement = super()._parse_statement()
+        if hint is not None and statement is not None:
+            statement.set("hint", hint)
+        return statement
+
+    def _parse_table_alias(self, alias_tokens: Any = None) -> "exp.TableAlias | None":
+        """Avoid treating @{ as an implicit table alias."""
+        if (
+            self._curr
+            and self._curr.token_type == TokenType.PARAMETER
+            and self._next
+            and self._next.token_type == TokenType.L_BRACE
+        ):
+            return None
+        return super()._parse_table_alias(alias_tokens=alias_tokens)
+
+    def _parse_table(self, *args: Any, **kwargs: Any) -> "exp.Expr | None":
+        """Parse table with optional table-level hint @{...}."""
+        table = super()._parse_table(*args, **kwargs)
+        if (
+            isinstance(table, exp.Table)
+            and self._curr
+            and self._curr.token_type == TokenType.PARAMETER
+            and self._next
+            and self._next.token_type == TokenType.L_BRACE
+        ):
+            hint = _parse_spanner_hint(self)
+            table.set("hints", [hint])
+        return table
+
+
+class SpangresParser(PostgresParser):
+    """Parser for Cloud Spanner PostgreSQL-compatible dialect."""
+
+    PROPERTY_PARSERS = {
+        **PostgresParser.PROPERTY_PARSERS,
+        "INTERLEAVE": _parse_interleave,
+        "ROW": _parse_row_deletion_policy,
+        "TTL": _parse_ttl,
+    }
+
+    FUNCTIONS = {
+        **PostgresParser.FUNCTIONS,
+        "COSINE_DISTANCE": CosineDistance.from_arg_list,
+        "EUCLIDEAN_DISTANCE": EuclideanDistance.from_arg_list,
+        "DOT_PRODUCT": DotProduct.from_arg_list,
+        "APPROX_COSINE_DISTANCE": ApproxCosineDistance.from_arg_list,
+    }
+
+    FUNCTION_PARSERS = {**PostgresParser.FUNCTION_PARSERS, "GET_NEXT_SEQUENCE_VALUE": _parse_get_next_sequence_value}
+
+    def _parse_statement(self) -> "exp.Expr | None":
+        """Parse statement with optional preceding comment hint /*@ ... */."""
+        hint: exp.Hint | None = None
+        if self._curr and self._curr.comments:
+            hint = _parse_spangres_comment_hint(self._curr.comments)
+        statement = super()._parse_statement()
+        if hint is not None and statement is not None:
+            statement.set("hint", hint)
+        return statement
+
+    def _parse_table(self, *args: Any, **kwargs: Any) -> "exp.Expr | None":
+        """Parse table with optional trailing comment hint /*@ ... */."""
+        table = super()._parse_table(*args, **kwargs)
+        if isinstance(table, exp.Table):
+            comments = getattr(table.this, "comments", None)
+            hint = _parse_spangres_comment_hint(comments) if comments else None
+            if hint is None and self._prev and self._prev.comments:
+                hint = _parse_spangres_comment_hint(self._prev.comments)
+            if hint is not None:
+                table.set("hints", [hint])
+        return table

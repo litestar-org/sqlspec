@@ -11,29 +11,26 @@ from typing import Any
 
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
+from sqlglot.tokens import TokenType
 
 from sqlspec.dialects.spanner._generators import SpannerGenerator
-from sqlspec.dialects.spanner._parsers import (
-    attach_create_property,
-    extract_interleave_property,
-    register_spanner_property_parsers,
-)
+from sqlspec.dialects.spanner._parsers import SpannerParser, attach_create_property, extract_interleave_property
 
 __all__ = ("Spanner",)
-
-register_spanner_property_parsers()
 
 
 class SpannerTokenizer(BigQuery.Tokenizer):
     """Tokenizer for Spanner GoogleSQL string literal escapes."""
 
     STRING_ESCAPES = ["'", "\\"]
+    KEYWORDS = {**BigQuery.Tokenizer.KEYWORDS, "FLOAT32": TokenType.FLOAT, "TOKENLIST": TokenType.USERDEFINED}
 
 
 class Spanner(BigQuery):
     """Google Cloud Spanner SQL dialect."""
 
     Tokenizer = SpannerTokenizer
+    Parser = SpannerParser
     Generator = SpannerGenerator
 
     def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":

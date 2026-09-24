@@ -11,7 +11,7 @@ SPANNER_FEATURE_FLAGS: "FeatureFlags" = {
     "supports_generators": False,
     "supports_index_clustering": True,
     "supports_interleaved_tables": True,
-    "supports_for_update": False,
+    "supports_for_update": True,
     "supports_skip_locked": False,
     "supports_on_conflict": True,
     "supports_update_from": False,
@@ -30,6 +30,8 @@ SPANNER_TYPE_MAPPINGS: dict[str, str] = {
     "integer": "INT64",
     "bigint": "INT64",
     "float": "FLOAT64",
+    "float32": "FLOAT32",
+    "tokenlist": "TOKENLIST",
     "varchar": "STRING({length})",
 }
 
