@@ -1,4 +1,4 @@
-"""Integration tests for the IBM Db2 adapter against live or mock container."""
+"""Integration tests for the IBM Db2 adapter against a live database."""
 
 import os
 from collections.abc import Generator
@@ -25,30 +25,27 @@ pytestmark = [
 ]
 
 
+_USERS_TABLE_EXISTS_SQL = (
+    "SELECT COUNT(*) FROM SYSCAT.TABLES WHERE TABSCHEMA = CURRENT SCHEMA AND TABNAME = 'TEST_INTEGRATION_USERS'"
+)
+
+
+def _drop_users_table(session: Db2SyncDriver) -> None:
+    if session.select_value(_USERS_TABLE_EXISTS_SQL):
+        session.execute_script("DROP TABLE TEST_INTEGRATION_USERS")
+        session.commit()
+
+
 @pytest.fixture
 def clean_users_table(db2_session: Db2SyncDriver) -> Generator[None, None, None]:
-    """Ensure test table is created fresh and dropped after test completion."""
-    try:
-        tables = db2_session.data_dictionary.get_tables(db2_session)
-        table_names = {t["table_name"].upper() for t in tables}
-        if "TEST_INTEGRATION_USERS" in table_names:
-            db2_session.execute_script("DROP TABLE TEST_INTEGRATION_USERS")
-            db2_session.commit()
-    except Exception:
-        pass
-
+    """Create ``TEST_INTEGRATION_USERS`` fresh and drop it after the test."""
+    _drop_users_table(db2_session)
     db2_session.execute_script(
         "CREATE TABLE TEST_INTEGRATION_USERS (id INT NOT NULL PRIMARY KEY, name VARCHAR(64) NOT NULL, balance DECFLOAT)"
     )
     db2_session.commit()
-
     yield
-
-    try:
-        db2_session.execute_script("DROP TABLE TEST_INTEGRATION_USERS")
-        db2_session.commit()
-    except Exception:
-        pass
+    _drop_users_table(db2_session)
 
 
 def test_db2_integration_connection_ping(db2_session: Db2SyncDriver) -> None:

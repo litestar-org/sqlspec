@@ -1,54 +1,73 @@
 """Pytest Docker service extension for IBM Db2."""
 
 import contextlib
-from collections.abc import Generator
+import os
+import socket
+import tempfile
+import time
+from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import filelock
+import ibm_db_dbi
 import pytest
-from pytest_databases._service import DockerService
+from docker.errors import NotFound
+from pytest_databases._service import get_docker_client
 from pytest_databases.helpers import get_xdist_worker_num
 from pytest_databases.types import ServiceContainer
 
-from sqlspec.adapters.db2.config import Db2SyncConfig
+from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.db2.driver import Db2SyncDriver
+    from docker import DockerClient
+    from docker.models.containers import Container
+
+    from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
+
+DB2_CONTAINER_PORT = 50000
+DB2_READY_TIMEOUT = 600
+DB2_READY_INTERVAL = 5.0
 
 
 def db2_responsive(host: str, port: int, database: str, user: str, password: str) -> bool:
-    """Check if IBM Db2 database service is ready to accept connections.
+    """Report whether Db2 accepts a connection and answers a query.
 
-    Tries a TCP socket check first. If open, attempts an actual query if
-    ibm_db_dbi is available.
+    Args:
+        host: Database host name.
+        port: Database TCP port.
+        database: Database name.
+        user: User name.
+        password: User password.
+
+    Returns:
+        ``True`` once ``SELECT 1 FROM SYSIBM.SYSDUMMY1`` returns 1; ``False`` while the port is
+        closed or Db2 refuses the connection or query.
     """
-    import socket
-
     try:
         with socket.create_connection((host, port), timeout=1.0):
             pass
     except OSError:
         return False
 
+    dsn = f"DATABASE={database};HOSTNAME={host};PORT={port};PROTOCOL=TCPIP;UID={user};PWD={password};"
     try:
-        import ibm_db_dbi
-    except (ImportError, AttributeError):
-        return True
-
-    if ibm_db_dbi is None:
-        return True
-
-    try:
-        dsn = f"DATABASE={database};HOSTNAME={host};PORT={port};PROTOCOL=TCPIP;UID={user};PWD={password};"
-        conn = ibm_db_dbi.connect(dsn, "", "")
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1")
-        row = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return row is not None and row[0] == 1
-    except Exception:
+        connection = ibm_db_dbi.connect(dsn, "", "", "", "", None)
+    except ibm_db_dbi.Error:
         return False
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1")
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+        return row is not None and row[0] == 1
+    except ibm_db_dbi.Error:
+        return False
+    finally:
+        connection.close()
 
 
 @dataclass
@@ -60,42 +79,145 @@ class Db2Service(ServiceContainer):
     database: str
 
 
+def _find_running_container(client: "DockerClient", name: str) -> "Container | None":
+    """Return the running container with exactly this name, if any."""
+    for container in client.containers.list(filters={"name": name}):
+        if container.name == name:
+            return container
+    return None
+
+
+@contextlib.contextmanager
+def _run_privileged_container(
+    image: str,
+    name: str,
+    env: "dict[str, str]",
+    container_port: int = DB2_CONTAINER_PORT,
+    timeout: int = DB2_READY_TIMEOUT,
+) -> "Generator[ServiceContainer, None, None]":
+    """Run a privileged container, reusing a running container with the same name.
+
+    Container creation is serialized across processes with a file lock. The container is stopped
+    when the context exits.
+
+    Args:
+        image: Image reference.
+        name: Container name suffix; the container is named ``pytest_databases_<name>``.
+        env: Container environment.
+        container_port: Container port to publish on a random host port.
+        timeout: Seconds to wait for Docker to report the port mapping.
+
+    Yields:
+        The container with its published host and port.
+
+    Raises:
+        RuntimeError: If Docker never reports the published port.
+    """
+    container_name = f"pytest_databases_{name}"
+    client = get_docker_client()
+    try:
+        with filelock.FileLock(Path(tempfile.gettempdir()) / f"{container_name}.lock"):
+            container = _find_running_container(client, container_name)
+            if container is None:
+                container = client.containers.run(
+                    image,
+                    detach=True,
+                    remove=True,
+                    privileged=True,
+                    ports={f"{container_port}/tcp": None},
+                    environment=env,
+                    labels=["pytest_databases"],
+                    name=container_name,
+                )
+        binding_key = f"{container_port}/tcp"
+        deadline = time.monotonic() + timeout
+        while True:
+            container.reload()
+            bindings = container.ports.get(binding_key)
+            if bindings:
+                break
+            if time.monotonic() >= deadline:
+                msg = f"Service {container_name!r} never published port {binding_key}"
+                raise RuntimeError(msg)
+            time.sleep(0.5)
+        try:
+            yield ServiceContainer(container=container, host="127.0.0.1", port=int(bindings[0]["HostPort"]))
+        finally:
+            with contextlib.suppress(NotFound):
+                container.stop()
+    finally:
+        client.close()
+
+
+def _wait_for_db2(service: Db2Service, name: str, timeout: int = DB2_READY_TIMEOUT) -> None:
+    """Block until Db2 answers a query.
+
+    Args:
+        service: Service to probe.
+        name: Service name used in error messages.
+        timeout: Seconds to wait.
+
+    Raises:
+        RuntimeError: If the container exits or Db2 does not answer within ``timeout`` seconds.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if db2_responsive(service.host, service.port, service.database, service.user, service.password):
+            return
+        try:
+            service.container.reload()
+        except NotFound:
+            msg = f"Service {name!r} failed to come online: the container exited"
+            raise RuntimeError(msg) from None
+        if service.container.status != "running":
+            msg = f"Service {name!r} failed to come online: the container is {service.container.status}"
+            raise RuntimeError(msg)
+        time.sleep(DB2_READY_INTERVAL)
+    msg = f"Service {name!r} failed to come online within {timeout} seconds"
+    raise RuntimeError(msg)
+
+
 @contextlib.contextmanager
 def _provide_db2_service(
-    docker_service: DockerService, image: str, name: str, database: str, user: str, password: str
-) -> Generator[Db2Service, None, None]:
-    """Launch IBM Db2 Docker container service with xdist isolation."""
+    image: str, name: str, database: str, user: str, password: str
+) -> "Generator[Db2Service, None, None]":
+    """Run the Db2 Community container and wait until the database answers a query.
 
-    def check(_service: ServiceContainer) -> bool:
-        return db2_responsive(host=_service.host, port=_service.port, database=database, user=user, password=password)
+    Args:
+        image: Db2 Community image reference.
+        name: Container name suffix; xdist workers append their worker number.
+        database: Database created on first boot.
+        user: Instance owner.
+        password: Instance owner password.
 
+    Yields:
+        The ready Db2 service.
+    """
     worker_num = get_xdist_worker_num()
     if worker_num is not None:
         name = f"{name}_{worker_num}"
 
-    with docker_service.run(
-        image=image,
-        name=name,
-        check=check,
-        container_port=50000,
-        timeout=180,
-        env={
-            "DB2INSTANCE": user,
-            "DB2INST1_PASSWORD": password,
-            "DBNAME": database,
-            "BLU": "false",
-            "ENABLE_ORACLE_COMPATIBILITY": "false",
-            "AUTOCONFIG": "false",
-        },
-    ) as service:
-        yield Db2Service(
-            host=service.host,
-            port=service.port,
-            container=service.container,
+    env = {
+        "LICENSE": "accept",
+        "DB2INSTANCE": user,
+        "DB2INST1_PASSWORD": password,
+        "DBNAME": database,
+        "BLU": "false",
+        "ENABLE_ORACLE_COMPATIBILITY": "false",
+        "AUTOCONFIG": "false",
+        "ARCHIVE_LOGS": "false",
+    }
+    with _run_privileged_container(image=image, name=name, env=env) as container:
+        service = Db2Service(
+            container=container.container,
+            host=container.host,
+            port=container.port,
             user=user,
             password=password,
             database=database,
         )
+        _wait_for_db2(service, name)
+        yield service
 
 
 @pytest.fixture(autouse=False, scope="session")
@@ -124,35 +246,30 @@ def db2_password() -> str:
 
 @pytest.fixture(autouse=False, scope="session")
 def db2_service(
-    docker_service: DockerService, db2_image: str, db2_database: str, db2_user: str, db2_password: str
-) -> Generator[Db2Service, None, None]:
-    """Session-scoped IBM Db2 container service fixture."""
-    import os
-
+    request: pytest.FixtureRequest, db2_image: str, db2_database: str, db2_user: str, db2_password: str
+) -> "Generator[Db2Service, None, None]":
+    """Session-scoped Db2 service: ``DB2_HOST`` when set, otherwise a local container."""
     if host := os.environ.get("DB2_HOST"):
-        port = int(os.environ.get("DB2_PORT", "50000"))
-        database = os.environ.get("DB2_DATABASE", db2_database)
-        user = os.environ.get("DB2_USER", db2_user)
-        password = os.environ.get("DB2_PASSWORD", db2_password)
         yield Db2Service(
-            container=cast("Any", None), host=host, port=port, user=user, password=password, database=database
+            container=cast("Any", None),
+            host=host,
+            port=int(os.environ.get("DB2_PORT", str(DB2_CONTAINER_PORT))),
+            user=os.environ.get("DB2_USER", db2_user),
+            password=os.environ.get("DB2_PASSWORD", db2_password),
+            database=os.environ.get("DB2_DATABASE", db2_database),
         )
         return
 
+    request.getfixturevalue("docker_service")
     with _provide_db2_service(
-        docker_service=docker_service,
-        image=db2_image,
-        name="db2_test",
-        database=db2_database,
-        user=db2_user,
-        password=db2_password,
+        image=db2_image, name="db2_test", database=db2_database, user=db2_user, password=db2_password
     ) as service:
         yield service
 
 
 @pytest.fixture(autouse=False, scope="session")
-def db2_connection_config(db2_service: Db2Service) -> dict[str, Any]:
-    """Connection parameters mapping derived from Db2Service container."""
+def db2_connection_config(db2_service: Db2Service) -> "dict[str, Any]":
+    """Connection parameters for the Db2 service."""
     return {
         "database": db2_service.database,
         "hostname": db2_service.host,
@@ -163,15 +280,34 @@ def db2_connection_config(db2_service: Db2Service) -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=False, scope="session")
-def db2_sync_config(db2_connection_config: dict[str, Any]) -> Generator[Db2SyncConfig, None, None]:
-    """Session-scoped Db2SyncConfig initialized with container connection parameters."""
+def db2_sync_config(db2_connection_config: "dict[str, Any]") -> "Generator[Db2SyncConfig, None, None]":
+    """Session-scoped Db2SyncConfig for the Db2 service."""
     config = Db2SyncConfig(connection_config=db2_connection_config)
-    yield config
-    config.close_pool()
+    try:
+        yield config
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture(autouse=False, scope="session")
+async def db2_async_config(db2_connection_config: "dict[str, Any]") -> "AsyncGenerator[Db2AsyncConfig, None]":
+    """Session-scoped Db2AsyncConfig for the Db2 service."""
+    config = Db2AsyncConfig(connection_config=db2_connection_config)
+    try:
+        yield config
+    finally:
+        await config.close_pool()
 
 
 @pytest.fixture(autouse=False, scope="function")
 def db2_session(db2_sync_config: Db2SyncConfig) -> "Generator[Db2SyncDriver, None, None]":
-    """Function-scoped Db2SyncDriver session providing driver access."""
+    """Function-scoped Db2 sync driver session."""
     with db2_sync_config.provide_session() as driver:
+        yield driver
+
+
+@pytest.fixture(autouse=False, scope="function")
+async def db2_async_session(db2_async_config: Db2AsyncConfig) -> "AsyncGenerator[Db2AsyncDriver, None]":
+    """Function-scoped Db2 async driver session."""
+    async with db2_async_config.provide_session() as driver:
         yield driver
