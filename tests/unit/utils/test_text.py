@@ -195,6 +195,9 @@ def test_text_utilities_integration() -> None:
         ("oracle", "myapp", "MYAPP"),
         ("oracle", "MYAPP", "MYAPP"),
         ("oracle", "MixedCase", "MixedCase"),
+        ("db2", "orders", "ORDERS"),
+        ("db2", "Orders", "Orders"),
+        ("db2", "ORDERS", "ORDERS"),
         ("sqlite", "MixedCase", "MixedCase"),
     ],
 )
@@ -207,6 +210,7 @@ def test_normalize_identifier_applies_dialect_case_rules(dialect: str, identifie
     [
         ("postgres", '"MixedCase"', "MixedCase"),
         ("oracle", '"MixedCase"', "MixedCase"),
+        ("db2", '"orders"', "orders"),
         ("mysql", "`MixedCase`", "MixedCase"),
     ],
 )

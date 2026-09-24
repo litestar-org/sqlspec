@@ -6,7 +6,7 @@ Provides abstract base classes and core functionality for SQL query builders.
 import re
 from abc import abstractmethod
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, NoReturn, cast
+from typing import Any, Final, NoReturn, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -38,6 +38,7 @@ __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
+_UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
 
 
 logger = get_logger(__name__)
@@ -639,8 +640,8 @@ class QueryBuilder:
         try:
             if isinstance(final_expression, exp.Expr):
                 normalized_expression = (
-                    self._unquote_oracle_identifiers(final_expression)
-                    if self._is_oracle_dialect(target_dialect)
+                    self._unquote_identifiers(final_expression)
+                    if self._folds_unquoted_to_upper(target_dialect)
                     else final_expression
                 )
                 identify = self._should_identify(target_dialect)
@@ -994,8 +995,8 @@ class QueryBuilder:
 
         if statement_expression.find(exp.Lock) and resolved_dialect != "db2":
             register_lock_generator(resolved_dialect)
-        if self._is_oracle_dialect(resolved_dialect):
-            statement_expression = self._unquote_oracle_identifiers(statement_expression)
+        if self._folds_unquoted_to_upper(resolved_dialect):
+            statement_expression = self._unquote_identifiers(statement_expression)
         return _BuilderCacheEntry(statement_expression, resolved_dialect)
 
     def _statement_from_cache_entry(self, cache_entry: "_BuilderCacheEntry", config: "StatementConfig | None") -> "SQL":
@@ -1085,15 +1086,18 @@ class QueryBuilder:
         """Set query parameters (public API)."""
         self._parameters = parameters.copy()
 
-    def _is_oracle_dialect(self, dialect: "DialectType | str | None") -> bool:
-        """Check if target dialect is Oracle."""
+    def _folds_unquoted_to_upper(self, dialect: "DialectType | str | None") -> bool:
+        """Check if the target dialect folds unquoted identifiers to uppercase."""
         if dialect is None:
             return False
-        return str(dialect).lower() == "oracle"
+        return str(dialect).lower() in _UPPER_FOLDING_DIALECTS
 
-    def _unquote_oracle_identifiers(self, expression: exp.Expr) -> exp.Expr:
-        """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
-        # SQLGlot transform(copy=True) deep-copies internally. Copy once here, then mutate that copy.
+    def _unquote_identifiers(self, expression: exp.Expr) -> exp.Expr:
+        """Return a copy of the expression with identifier quoting removed.
+
+        Upper-folding dialects resolve quoted lowercase names case-sensitively, so quoting is
+        removed to keep lookups aligned with how unquoted DDL created the objects.
+        """
         return expression.copy().transform(_unquote_identifier, copy=False)
 
     def _strip_merge_target_quotes(self, sql_string: str) -> str:
@@ -1110,9 +1114,7 @@ class QueryBuilder:
         """Determine whether to quote identifiers for the given dialect."""
         if dialect is None:
             return True
-        dialect_name = str(dialect).lower()
-        # Oracle folds unquoted identifiers to uppercase; quoting lower-case breaks table lookup
-        return dialect_name != "oracle"
+        return str(dialect).lower() not in _UPPER_FOLDING_DIALECTS
 
     @property
     def with_ctes(self) -> "dict[str, exp.CTE]":

@@ -160,7 +160,7 @@ def normalize_identifier(identifier: str, dialect: str) -> str:
     normalized_dialect = dialect.lower().replace("-", "_")
     if normalized_dialect in {"postgres", "postgresql", "cockroach", "cockroachdb"}:
         return value.lower()
-    if normalized_dialect == "oracle" and value.islower():
+    if normalized_dialect in {"oracle", "db2"} and value.islower():
         return value.upper()
     return value
 
