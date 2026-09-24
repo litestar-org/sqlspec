@@ -1,10 +1,12 @@
 """Tests for the Db2 optional-dependency facade and vendor type aliases."""
 
+import importlib
 import sys
 
 import ibm_db_dbi
 import pytest
 
+import sqlspec.adapters
 import sqlspec.adapters.db2.pool as pool_module
 import sqlspec.typing
 from sqlspec.adapters.db2._typing import Db2Error, Db2SyncSessionContext
@@ -12,6 +14,8 @@ from sqlspec.adapters.db2.core import default_statement_config
 from sqlspec.adapters.db2.data_dictionary import Db2SyncDataDictionary
 from sqlspec.adapters.db2.driver import Db2SyncDriver
 from sqlspec.adapters.db2.pool import Db2SyncConnectionPool
+from sqlspec.core import DRIVER_PARAMETER_PROFILES
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.utils.module_loader import reset_dependency_cache
 from tests.unit.adapters.test_db2._fakes import FakeDb2Connection, FakeIbmDbDbiModule
 
@@ -87,3 +91,21 @@ def test_driver_data_dictionary_is_reused() -> None:
 
     assert isinstance(dictionary, Db2SyncDataDictionary)
     assert driver.data_dictionary is dictionary
+
+
+def test_db2_adapter_imports_without_ibm_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The adapter package imports without the driver installed and fails only when connecting."""
+    monkeypatch.setitem(sys.modules, "ibm_db", None)
+    monkeypatch.setitem(sys.modules, "ibm_db_dbi", None)
+    for name in [module for module in sys.modules if module.split(".")[:3] == ["sqlspec", "adapters", "db2"]]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.delattr(sqlspec.adapters, "db2", raising=False)
+    monkeypatch.delitem(DRIVER_PARAMETER_PROFILES, "db2")
+    reset_dependency_cache()
+    try:
+        db2_package = importlib.import_module("sqlspec.adapters.db2")
+
+        with pytest.raises(MissingDependencyError):
+            db2_package.Db2SyncConfig(connection_config={"database": "d"}).create_connection()
+    finally:
+        reset_dependency_cache()
