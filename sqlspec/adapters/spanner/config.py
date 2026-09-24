@@ -9,8 +9,9 @@ from sqlspec.adapters.spanner._typing import SpannerConnection
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
 from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
+from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.core import TypeCoercionCapabilities
+from sqlspec.core import SQL, TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -132,7 +133,7 @@ class SpannerConnectionParams(TypedDict):
 class SpannerPoolParams(SpannerConnectionParams):
     """Session pool configuration."""
 
-    pool_type: "NotRequired[type[AbstractSessionPool]]"
+    pool_type: "NotRequired[type[AbstractSessionPool] | str | None]"
     size: "NotRequired[int]"
     target_size: "NotRequired[int]"
     max_sessions: "NotRequired[int]"
@@ -140,7 +141,9 @@ class SpannerPoolParams(SpannerConnectionParams):
     session_labels: "NotRequired[dict[str, str]]"
     labels: "NotRequired[dict[str, str]]"
     ping_interval: "NotRequired[int]"
+    ping_timeout: "NotRequired[float]"
     max_age_minutes: "NotRequired[int]"
+    enable_multiplexed_sessions: "NotRequired[bool]"
 
 
 class SpannerDriverFeatures(TypedDict):
@@ -174,6 +177,7 @@ class SpannerDriverFeatures(TypedDict):
     retry: "NotRequired[Retry | None]"
     timeout: "NotRequired[float | None]"
     request_options: "NotRequired[RequestOptions | dict[str, Any] | None]"
+    query_options: "NotRequired[ExecuteSqlRequest.QueryOptions | dict[str, Any] | None]"
     directed_read_options: "NotRequired[DirectedReadOptions | None]"
     session_labels: "NotRequired[dict[str, str]]"
     enable_events: "NotRequired[bool]"
@@ -212,22 +216,26 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
     def __enter__(self) -> SpannerConnection:
         database = self._config.get_database()
         if self._transaction:
-            manager = cast("Any", database).sessions_manager
-            self._session = manager.get_session(TransactionType.READ_WRITE)
-            try:
-                txn = self._session.transaction()
-                txn.__enter__()
-                self._connection = cast("SpannerConnection", txn)
-            except Exception:
-                manager.put_session(self._session)
-                self._session = None
-                raise
-            else:
-                return self._connection
-        else:
-            self._session = cast("Any", database).snapshot(multi_use=True)
-            self._connection = cast("SpannerConnection", self._session.__enter__())
+            manager = getattr(database, "sessions_manager", None)
+            if manager is not None and hasattr(manager, "get_session"):
+                self._session = manager.get_session(TransactionType.READ_WRITE)
+                try:
+                    txn = self._session.transaction()
+                    txn.__enter__()
+                    self._connection = cast("SpannerConnection", txn)
+                except Exception:
+                    manager.put_session(self._session)
+                    self._session = None
+                    raise
+                else:
+                    return self._connection
+            txn = database.transaction()
+            self._session = txn
+            self._connection = cast("SpannerConnection", txn.__enter__())
             return self._connection
+        self._session = cast("Any", database).snapshot(multi_use=True)
+        self._connection = cast("SpannerConnection", self._session.__enter__())
+        return self._connection
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -256,7 +264,12 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
                         txn.rollback()
             finally:
                 if self._session:
-                    cast("Any", self._config.get_database()).sessions_manager.put_session(self._session)
+                    db = self._config.get_database()
+                    manager = getattr(db, "sessions_manager", None)
+                    if manager is not None and hasattr(manager, "put_session"):
+                        manager.put_session(self._session)
+                    elif hasattr(self._session, "__exit__"):
+                        self._session.__exit__(exc_type, exc_val, exc_tb)
         elif self._session:
             self._session.__exit__(exc_type, exc_val, exc_tb)
 
@@ -324,10 +337,15 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         ):
             self.connection_config["session_labels"] = legacy_session_labels
 
-        from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
-
         self.connection_config.setdefault("size", self.connection_config.pop("max_sessions", 10))
-        self.connection_config.setdefault("pool_type", FixedSizePool)
+        enable_multiplexed = self.connection_config.get("enable_multiplexed_sessions", True)
+        if enable_multiplexed and "pool_type" not in self.connection_config:
+            self.connection_config["pool_type"] = None
+        elif not enable_multiplexed and "pool_type" not in self.connection_config:
+            from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
+
+            self.connection_config["pool_type"] = PingingPool
+            self.connection_config.setdefault("ping_interval", 1800)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, raw_driver_features)
@@ -362,7 +380,11 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        if self.connection_instance is None:
+        pool_type = self.connection_config.get("pool_type")
+        enable_multiplexed = self.connection_config.get("enable_multiplexed_sessions", True)
+        is_multiplexed = enable_multiplexed and (pool_type is None or pool_type == "multiplexed")
+
+        if not is_multiplexed and self.connection_instance is None:
             self.connection_instance = self.provide_pool()
 
         if self._database is None:
@@ -372,7 +394,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             if instance_labels is not None:
                 instance_kwargs["labels"] = instance_labels
             database_kwargs = self._connection_kwargs_for(_DATABASE_CONFIG_FIELDS)
-            database_kwargs["pool"] = self.connection_instance
+            if self.connection_instance is not None:
+                database_kwargs["pool"] = self.connection_instance
             self._database = client.instance(instance_id, **instance_kwargs).database(  # type: ignore[no-untyped-call]
                 database_id, **database_kwargs
             )
@@ -401,11 +424,16 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        pool_type = cast("type[AbstractSessionPool]", self.connection_config.get("pool_type", FixedSizePool))
+        raw_pool_type = self.connection_config.get("pool_type")
+        if raw_pool_type is None or raw_pool_type == "multiplexed":
+            pool_type = PingingPool
+        else:
+            pool_type = cast("type[AbstractSessionPool]", raw_pool_type)
 
         labels = self.connection_config.get("session_labels", self.connection_config.get("labels"))
         pool_kwargs: dict[str, Any] = self._pool_base_kwargs(labels=cast("dict[str, str] | None", labels))
         if issubclass(pool_type, PingingPool):
+            self.connection_config.setdefault("ping_interval", 1800)
             pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "ping_interval"}))
         elif issubclass(pool_type, FixedSizePool):
             pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "max_age_minutes"}))
@@ -480,6 +508,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -497,6 +526,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 Snapshot (False).
             request_options: Session-scoped RequestOptions for Spanner statements.
             directed_read_options: Session-scoped DirectedReadOptions for reads.
+            query_options: Session-scoped QueryOptions for Spanner statements.
             retry: Session-scoped retry policy for Spanner statement calls.
             timeout: Session-scoped timeout for Spanner statement calls.
             **kwargs: Additional keyword arguments.
@@ -514,6 +544,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             driver_features=self._session_driver_features(
                 request_options=request_options,
                 directed_read_options=directed_read_options,
+                query_options=query_options,
                 retry=retry,
                 timeout=timeout,
             ),
@@ -526,6 +557,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -537,6 +569,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             transaction=True,
             request_options=request_options,
             directed_read_options=directed_read_options,
+            query_options=query_options,
             retry=retry,
             timeout=timeout,
             **kwargs,
@@ -548,6 +581,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -563,26 +597,124 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             transaction=False,
             request_options=request_options,
             directed_read_options=directed_read_options,
+            query_options=query_options,
             retry=retry,
             timeout=timeout,
             **kwargs,
         )
+
+    def run_in_transaction(self, func: "Callable[[SpannerSyncDriver], Any]", *args: Any, **kwargs: Any) -> Any:
+        """Execute a unit of work inside a transaction, retrying on abort.
+
+        Args:
+            func: Callback taking a prepared SpannerSyncDriver and returning a result.
+            *args: Positional arguments passed to the callback.
+            **kwargs: Keyword arguments passed to the callback.
+
+        Returns:
+            The return value of the callback.
+        """
+        database = self.get_database()
+
+        def _callback(spanner_transaction: Any, *cb_args: Any, **cb_kwargs: Any) -> Any:
+            driver = SpannerSyncDriver(
+                connection=spanner_transaction,
+                statement_config=self.statement_config,
+                driver_features=self.driver_features,
+            )
+            prepared_driver = self._prepare_driver(driver)
+            call_args = cb_args or args
+            call_kwargs = cb_kwargs or kwargs
+            try:
+                return func(prepared_driver, *call_args, **call_kwargs)
+            except Exception as exc:
+                cause = getattr(exc, "__cause__", None)
+                from google.api_core import exceptions as api_exceptions
+
+                if isinstance(exc, api_exceptions.Aborted):
+                    raise
+                if cause is not None and isinstance(cause, api_exceptions.Aborted):
+                    raise cause from exc
+                raise
+
+        return database.run_in_transaction(_callback, *args, **kwargs)
+
+    def execute_partitioned_dml(
+        self,
+        statement: "SQL | str",
+        *parameters: Any,
+        query_options: Any = None,
+        request_options: Any = None,
+        exclude_txn_from_change_streams: bool = False,
+        **kwargs: Any,
+    ) -> int:
+        """Execute a Partitioned DML statement across database partitions.
+
+        Args:
+            statement: The SQL string or SQL object to execute.
+            *parameters: Positional parameters or parameter mapping.
+            query_options: Optional Spanner QueryOptions.
+            request_options: Optional Spanner RequestOptions.
+            exclude_txn_from_change_streams: Whether to exclude the transaction from change streams.
+            **kwargs: Additional keyword arguments or parameters.
+
+        Returns:
+            The number of affected rows.
+        """
+        database = self.get_database()
+        if isinstance(statement, SQL):
+            sql_statement = statement
+        else:
+            sql_statement = SQL(statement, *parameters, statement_config=self.statement_config, **kwargs)
+
+        sql, raw_params = sql_statement.compile()
+        params = raw_params if isinstance(raw_params, dict) else None
+        coerced_params = coerce_params_for_spanner(
+            params,
+            json_serializer=self.driver_features.get("json_serializer"),
+            enable_uuid_conversion=self.driver_features.get("enable_uuid_conversion", True),
+        )
+        param_types = infer_spanner_param_types(params)
+
+        effective_request_options = request_options or self.driver_features.get("request_options")
+        effective_query_options = query_options or self.driver_features.get("query_options")
+
+        call_kwargs: dict[str, Any] = {
+            "params": coerced_params,
+            "param_types": param_types,
+            "exclude_txn_from_change_streams": exclude_txn_from_change_streams,
+        }
+        if effective_query_options is not None:
+            call_kwargs["query_options"] = effective_query_options
+        if effective_request_options is not None:
+            call_kwargs["request_options"] = effective_request_options
+
+        return database.execute_partitioned_dml(sql, **call_kwargs)
 
     def _session_driver_features(
         self,
         *,
         request_options: "RequestOptions | dict[str, Any] | None",
         directed_read_options: "DirectedReadOptions | None",
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None",
         timeout: "float | None",
     ) -> "dict[str, Any]":
-        if request_options is None and directed_read_options is None and retry is None and timeout is None:
+        if (
+            request_options is None
+            and directed_read_options is None
+            and query_options is None
+            and retry is None
+            and timeout is None
+        ):
             return self.driver_features
         driver_features = dict(self.driver_features)
         if request_options is not None:
             driver_features["request_options"] = request_options
         if directed_read_options is not None:
             driver_features["directed_read_options"] = directed_read_options
+        if query_options is not None:
+            driver_features["query_options"] = query_options
         if retry is not None:
             driver_features["retry"] = retry
         if timeout is not None:

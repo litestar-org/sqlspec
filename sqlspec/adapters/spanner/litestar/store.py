@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.adapters.spanner.config import SpannerSyncConfig
+    from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 
     class _DatabaseProtocol(Protocol):
         def run_in_transaction(self, func: "Callable[[Transaction], Any]") -> Any: ...
@@ -163,8 +164,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
             if self._shard_count > 1:
                 update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
             params = self._build_params(key, new_expires)
-            types = self._get_param_types(expires_at=True)
-            self._database().run_in_transaction(_SpannerExecuteUpdateJob(update_sql, params, types))
+            self._config.run_in_transaction(lambda driver: driver.execute(update_sql, params))
 
         return spanner_to_bytes(data)
 
@@ -172,7 +172,6 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         params = self._build_params(key, expires_at, data)
-        types = self._get_param_types(session_id=True, expires_at=True, data=True)
 
         update_sql = f"""
         UPDATE {self._table_name}
@@ -187,19 +186,24 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         INSERT {self._table_name} (session_id, data, expires_at, created_at, updated_at)
         VALUES (@session_id, @data, @expires_at, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())
         """
-        self._database().run_in_transaction(_SpannerUpsertJob(update_sql, insert_sql, params, types))
+
+        def _job(driver: "SpannerSyncDriver") -> None:
+            result = driver.execute(update_sql, params)
+            if not getattr(result, "rowcount", None):
+                driver.execute(insert_sql, params)
+
+        self._config.run_in_transaction(_job)
 
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id"
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         params = {"session_id": key}
-        types = self._get_param_types(session_id=True)
-        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql, params, types))
+        self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE TRUE"
-        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql))
+        self._config.run_in_transaction(lambda driver: driver.execute(sql))
 
     def _exists(self, key: str) -> bool:
         sql = f"""
@@ -234,8 +238,8 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         DELETE FROM {self._table_name}
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
-        result = self._database().run_in_transaction(_SpannerExecuteUpdateCountJob(sql))
-        return cast("int", result)
+        result = self._config.run_in_transaction(lambda driver: driver.execute(sql))
+        return cast("int", getattr(result, "rowcount", 0))
 
     def _create_table(self) -> None:
         database = self._config.get_database()
@@ -275,43 +279,3 @@ CREATE TABLE {self._table_name} (
 
     def _drop_table_sql(self) -> "list[str]":
         return [f"DROP INDEX idx_{self._table_name}_expires_at", f"DROP TABLE {self._table_name}"]
-
-
-class _SpannerExecuteUpdateJob:
-    __slots__ = ("_params", "_sql", "_types")
-
-    def __init__(self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None) -> None:
-        self._sql = sql
-        self._params = params
-        self._types = types
-
-    def __call__(self, transaction: "Transaction") -> None:
-        if self._params is None and self._types is None:
-            transaction.execute_update(self._sql)  # type: ignore[no-untyped-call]
-            return
-        transaction.execute_update(self._sql, params=self._params or {}, param_types=self._types)  # type: ignore[no-untyped-call]
-
-
-class _SpannerUpsertJob:
-    __slots__ = ("_insert_sql", "_params", "_types", "_update_sql")
-
-    def __init__(self, update_sql: str, insert_sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._update_sql = update_sql
-        self._insert_sql = insert_sql
-        self._params = params
-        self._types = types
-
-    def __call__(self, transaction: "Transaction") -> None:
-        row_ct = transaction.execute_update(self._update_sql, params=self._params, param_types=self._types)  # type: ignore[no-untyped-call]
-        if row_ct == 0:
-            transaction.execute_update(self._insert_sql, params=self._params, param_types=self._types)  # type: ignore[no-untyped-call]
-
-
-class _SpannerExecuteUpdateCountJob:
-    __slots__ = ("_sql",)
-
-    def __init__(self, sql: str) -> None:
-        self._sql = sql
-
-    def __call__(self, transaction: "Transaction") -> int:
-        return int(transaction.execute_update(self._sql))  # type: ignore[no-untyped-call]

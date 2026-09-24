@@ -310,19 +310,44 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     return _create_spanner_error(error, SQLSpecError, "error")
 
 
+def _unwrap_spanner_json_object(val: Any) -> Any:
+    """Recursively unwrap Spanner JsonObject instances into native Python primitives."""
+    if isinstance(val, JsonObject):
+        if getattr(val, "_is_null", False):
+            return None
+        if getattr(val, "_is_array", False):
+            array_val = getattr(val, "_array_value", None)
+            return [_unwrap_spanner_json_object(item) for item in array_val] if array_val is not None else []
+        if getattr(val, "_is_scalar_value", False):
+            return getattr(val, "_simple_value", None)
+        return {k: _unwrap_spanner_json_object(v) for k, v in val.items()}
+    if isinstance(val, dict):
+        return {k: _unwrap_spanner_json_object(v) for k, v in val.items()}
+    if isinstance(val, (list, tuple)):
+        return [_unwrap_spanner_json_object(item) for item in val]
+    return val
+
+
 def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], Any]") -> Any:
     """Convert a native Spanner JSON cell using the configured deserializer."""
     if isinstance(value, JsonObject):
-        json_value = cast("Any", value).serialize()
+        if json_deserializer is from_json:
+            return _unwrap_spanner_json_object(value)
+        if getattr(value, "_is_null", False):
+            return None
+        try:
+            serialized = cast("Any", value).serialize()
+            if serialized is None:
+                return None
+            return json_deserializer(serialized)
+        except (TypeError, ValueError):
+            return _unwrap_spanner_json_object(value)
     elif isinstance(value, str):
-        json_value = value
-    else:
-        return value
-
-    try:
-        return json_deserializer(json_value)
-    except (TypeError, ValueError):
-        return value
+        try:
+            return json_deserializer(value)
+        except (TypeError, ValueError):
+            return value
+    return value
 
 
 def _create_spanner_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:
