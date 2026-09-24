@@ -151,7 +151,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         if result is None:
             return None
 
-        data = result.get("data")
+        data = spanner_to_bytes(result.get("data"))
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
         if renew_for is not None and expires_at is not None:
