@@ -7,10 +7,11 @@ creates, so no shared sqlglot class is modified.
 """
 
 from collections.abc import Callable
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from sqlglot import exp, generator
 
+from sqlspec.dialects.db2._parsers import DB2_TAIL_ARG_KEYS
 from sqlspec.dialects.db2._transforms import (
     add_sysibm_dual,
     render_anonymous,
@@ -35,7 +36,9 @@ __all__ = (
     "mod_sql",
     "offset_sql",
     "parameter_sql",
+    "render_statement_tail",
     "select_sql",
+    "set_operation_sql",
     "str_position_sql",
     "time_to_str_sql",
 )
@@ -72,16 +75,92 @@ if _DBCLOB is not None:
     DB2_TYPE_MAPPING[_DBCLOB] = "DBCLOB"
 
 
+def _detach_statement_tail(expression: "exp.Query") -> "tuple[exp.Query, list[exp.Lock], dict[str, object]]":
+    if not expression.args.get("locks") and not any(key in expression.args for key in DB2_TAIL_ARG_KEYS):
+        return expression, [], {}
+    expression = expression.copy()
+    locks = list(expression.args.get("locks") or [])
+    tail_args: dict[str, object] = {key: expression.args.get(key) for key in DB2_TAIL_ARG_KEYS}
+    expression.set("locks", None)
+    for key in DB2_TAIL_ARG_KEYS:
+        expression.set(key, None)
+    return expression, locks, tail_args
+
+
+def render_statement_tail(
+    generator: "generator.Generator", tail_args: "dict[str, object]", locks: "list[exp.Lock]"
+) -> str:
+    """Render the Db2 select-statement tail for a query.
+
+    Locks parsed from Db2 SQL keep their ``FOR UPDATE [OF ...]`` spelling. Locks
+    from other dialects or the query builder render as the Db2 isolation clause
+    ``WITH RS USE AND KEEP UPDATE|SHARE LOCKS``, which is valid on read-only
+    cursors. ``NOWAIT``/``WAIT n``, table lock targets and additional locking
+    clauses are reported as unsupported and omitted.
+
+    Args:
+        generator: Generator rendering the query.
+        tail_args: ``sqlspec_db2_*`` args detached from the query.
+        locks: Locks detached from the query.
+
+    Returns:
+        The tail clauses separated by single spaces, or an empty string.
+    """
+    lock = locks[0] if locks else None
+    if len(locks) > 1:
+        generator.unsupported("Db2 accepts one locking clause")
+    native_update = lock is not None and bool(lock.args.get("sqlspec_db2_native")) and bool(lock.args.get("update"))
+    for candidate in locks:
+        wait = candidate.args.get("wait")
+        if wait is True or isinstance(wait, exp.Literal):
+            generator.unsupported("Db2 has no per-statement NOWAIT/WAIT; set CURRENT LOCK TIMEOUT")
+    if lock is not None and lock.expressions and not native_update:
+        generator.unsupported("Db2 FOR UPDATE OF takes column names, not tables")
+
+    parts: list[str] = []
+    if lock is not None and native_update:
+        columns = ", ".join(generator.sql(column) for column in lock.expressions)
+        parts.append(f"FOR UPDATE OF {columns}" if columns else "FOR UPDATE")
+    if tail_args.get("sqlspec_db2_read_only"):
+        parts.append("FOR READ ONLY")
+    optimize_rows = tail_args.get("sqlspec_db2_optimize_rows")
+    if optimize_rows is not None:
+        parts.append(f"OPTIMIZE FOR {optimize_rows} ROWS")
+    isolation = tail_args.get("sqlspec_db2_isolation")
+    if isolation:
+        lock_request = tail_args.get("sqlspec_db2_lock_request")
+        parts.append(f"WITH {isolation} USE AND KEEP {lock_request} LOCKS" if lock_request else f"WITH {isolation}")
+    elif lock is not None and not native_update:
+        lock_request = "UPDATE" if lock.args.get("update") else "SHARE"
+        parts.append(f"WITH RS USE AND KEEP {lock_request} LOCKS")
+    if tail_args.get("sqlspec_db2_skip_locked") or any(candidate.args.get("wait") is False for candidate in locks):
+        parts.append("SKIP LOCKED DATA")
+    return " ".join(parts)
+
+
+def _with_statement_tail(sql: str, tail: str) -> str:
+    return f"{sql} {tail}" if tail else sql
+
+
 def select_sql(generator: "generator.Generator", expression: exp.Select) -> str:
-    """Render a SELECT with a Db2 dummy table and FETCH pagination."""
-    expression = add_sysibm_dual(expression)
-    limit = expression.args.get("limit")
+    """Render a SELECT with a Db2 dummy table, FETCH pagination and statement tail."""
+    detached, locks, tail_args = _detach_statement_tail(expression)
+    select = add_sysibm_dual(cast("exp.Select", detached))
+    limit = select.args.get("limit")
     if isinstance(limit, exp.Limit):
-        expression = expression.copy()
-        direction = "NEXT" if expression.args.get("offset") else "FIRST"
+        select = select.copy()
+        direction = "NEXT" if select.args.get("offset") else "FIRST"
         fetch = exp.Fetch(direction=direction, count=exp.maybe_copy(limit.expression))
-        expression.set("limit", fetch)
-    return generator.select_sql(expression)
+        select.set("limit", fetch)
+    return _with_statement_tail(generator.select_sql(select), render_statement_tail(generator, tail_args, locks))
+
+
+def set_operation_sql(generator: "generator.Generator", expression: exp.SetOperation) -> str:
+    """Render UNION, INTERSECT or EXCEPT followed by the Db2 statement tail."""
+    detached, locks, tail_args = _detach_statement_tail(expression)
+    return _with_statement_tail(
+        generator.set_operations(cast("exp.SetOperation", detached)), render_statement_tail(generator, tail_args, locks)
+    )
 
 
 def offset_sql(generator: "generator.Generator", expression: exp.Offset) -> str:
@@ -154,6 +233,9 @@ def ilike_sql(generator: "generator.Generator", expression: exp.ILike) -> str:
 
 DB2_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
     exp.Select: select_sql,
+    exp.Union: set_operation_sql,
+    exp.Intersect: set_operation_sql,
+    exp.Except: set_operation_sql,
     exp.Offset: offset_sql,
     exp.DataType: datatype_sql,
     exp.Interval: interval_sql,

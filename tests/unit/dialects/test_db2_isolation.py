@@ -77,10 +77,13 @@ def test_db2_usage_leaves_shared_generator_and_parser_tables_unchanged() -> None
         "import sqlspec\n"
         "import sqlglot\n"
         "from sqlglot import generator, parser\n"
+        "from sqlspec import sql\n"
+        "sql.select('a').from_('t').order_by('a').build(dialect='postgres')\n"
         "before = (dict(generator.Generator.TRANSFORMS), dict(parser.Parser.FUNCTION_PARSERS))\n"
         "import sqlspec.dialects.db2\n"
         "sqlglot.parse_one(\"SELECT POSSTR(a, 'b') FROM t\", read='db2').sql(dialect='db2')\n"
         "sqlglot.transpile('SELECT a FROM t LIMIT 1', read='postgres', write='db2')\n"
+        "sql.select('a').from_('t').for_update(skip_locked=True).build(dialect='db2')\n"
         "after = (dict(generator.Generator.TRANSFORMS), dict(parser.Parser.FUNCTION_PARSERS))\n"
         "print(json.dumps(before == after))\n"
     )

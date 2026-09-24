@@ -1,8 +1,10 @@
 """IBM Db2 sqlglot dialect.
 
 The dialect renders through sqlglot's root generator with a per-instance
-dispatch table that carries the Db2 handlers, and normalises Db2-only syntax
-after parsing, so shared sqlglot classes are never modified.
+dispatch table that carries the Db2 handlers. Parsing removes Db2
+select-statement tails from the token stream, parses with sqlglot's base
+parser, and restores the tails and Db2-only function spellings on the
+resulting AST, so shared sqlglot classes are never modified.
 """
 
 from typing import Any
@@ -11,7 +13,7 @@ from sqlglot import TokenType, exp, generator, tokens
 from sqlglot.dialects.dialect import Dialect, NormalizationStrategy
 
 from sqlspec.dialects.db2._generators import db2_dispatch
-from sqlspec.dialects.db2._parsers import normalize_db2_expression
+from sqlspec.dialects.db2._parsers import apply_statement_tails, split_statement_tails
 
 __all__ = ("DB2", "DB2Tokenizer")
 
@@ -68,7 +70,7 @@ class DB2(Dialect):
         return instance
 
     def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
-        """Parse Db2 SQL and normalise Db2-only function spellings.
+        """Parse Db2 SQL, including Db2 select-statement tails.
 
         Args:
             sql: Db2 SQL text.
@@ -77,13 +79,11 @@ class DB2(Dialect):
         Returns:
             One expression per statement.
         """
-        return [
-            normalize_db2_expression(expression) if expression is not None else None
-            for expression in super().parse(sql, **opts)
-        ]
+        tokens, tails = split_statement_tails(self.tokenize(sql))
+        return apply_statement_tails(self.parser(**opts).parse(tokens, sql), tails)
 
     def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> "list[exp.Expr | None]":
-        """Parse Db2 SQL into a target expression type and normalise it.
+        """Parse Db2 SQL into a target expression type, including statement tails.
 
         Args:
             expression_type: Target sqlglot expression type or types.
@@ -93,7 +93,5 @@ class DB2(Dialect):
         Returns:
             One expression per statement.
         """
-        return [
-            normalize_db2_expression(expression) if expression is not None else None
-            for expression in super().parse_into(expression_type, sql, **opts)
-        ]
+        tokens, tails = split_statement_tails(self.tokenize(sql))
+        return apply_statement_tails(self.parser(**opts).parse_into(expression_type, tokens, sql), tails)

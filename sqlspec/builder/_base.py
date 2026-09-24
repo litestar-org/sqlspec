@@ -28,7 +28,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import _expression_cache_fingerprint
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, is_expression
@@ -644,7 +644,7 @@ class QueryBuilder:
                     else final_expression
                 )
                 identify = self._should_identify(target_dialect)
-                if normalized_expression.find(exp.Lock):
+                if normalized_expression.find(exp.Lock) and target_dialect != "db2":
                     register_lock_generator(target_dialect)
                 sql_string = normalized_expression.sql(dialect=target_dialect, pretty=True, identify=identify)
                 sql_string = self._strip_merge_target_quotes(sql_string)
@@ -658,6 +658,29 @@ class QueryBuilder:
 
     def _build_dialect(self, dialect: DialectType = None) -> str | None:
         return _normalize_dialect(dialect or self.dialect)
+
+    def _validate_dialect_lock(self, lock: exp.Lock, dialect: str, config: DialectConfig) -> None:
+        """Reject lock options the target dialect cannot express."""
+        if dialect in {"spanner", "spangres"} and (
+            not lock.args.get("update") or lock.args.get("wait") is not None or lock.expressions or lock.args.get("key")
+        ):
+            self._raise_builder_error(f"Dialect '{dialect}' supports only plain FOR UPDATE without lock modifiers.")
+        if lock.args.get("key") and dialect != "postgres":
+            self._raise_builder_error(f"Dialect '{dialect}' does not support PostgreSQL key lock modes.")
+        if dialect == "oracle" and not lock.args.get("update"):
+            self._raise_builder_error("Dialect 'oracle' does not support FOR SHARE.")
+        if dialect not in {"spanner", "spangres"} and config.get_feature_flag("supports_for_update") is False:
+            self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
+        if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
+            self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
+        if dialect == "db2":
+            wait = lock.args.get("wait")
+            if wait is True or isinstance(wait, exp.Literal):
+                self._raise_builder_error(
+                    "Dialect 'db2' does not support NOWAIT or WAIT; set CURRENT LOCK TIMEOUT on the session."
+                )
+            if lock.expressions:
+                self._raise_builder_error("Dialect 'db2' does not support FOR UPDATE OF table targets.")
 
     def _prepare_dialect_expression(
         self, expression: exp.Expr, dialect: str | None, source_dialect: DialectType = None
@@ -677,21 +700,7 @@ class QueryBuilder:
                 if not lock.args.get("update"):
                     lock.set("sqlspec_share_mode", True)
         for lock in expression.find_all(exp.Lock):
-            if dialect in {"spanner", "spangres"} and (
-                not lock.args.get("update")
-                or lock.args.get("wait") is not None
-                or lock.expressions
-                or lock.args.get("key")
-            ):
-                self._raise_builder_error(f"Dialect '{dialect}' supports only plain FOR UPDATE without lock modifiers.")
-            if lock.args.get("key") and dialect != "postgres":
-                self._raise_builder_error(f"Dialect '{dialect}' does not support PostgreSQL key lock modes.")
-            if dialect == "oracle" and not lock.args.get("update"):
-                self._raise_builder_error("Dialect 'oracle' does not support FOR SHARE.")
-            if dialect not in {"spanner", "spangres"} and config.get_feature_flag("supports_for_update") is False:
-                self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
-            if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
-                self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
+            self._validate_dialect_lock(lock, dialect, config)
         if dialect == "spangres":
             self._validate_spangres_conflicts(expression)
         if config.get_feature_flag("supports_on_conflict") is not False or not expression.find(exp.OnConflict):
@@ -983,7 +992,7 @@ class QueryBuilder:
             statement_expression, resolved_dialect, dialect_override
         )
 
-        if statement_expression.find(exp.Lock):
+        if statement_expression.find(exp.Lock) and resolved_dialect != "db2":
             register_lock_generator(resolved_dialect)
         if self._is_oracle_dialect(resolved_dialect):
             statement_expression = self._unquote_oracle_identifiers(statement_expression)
