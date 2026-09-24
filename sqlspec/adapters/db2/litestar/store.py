@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_db2_table_name, to_db_timestamp, utc_now
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -12,14 +13,194 @@ if TYPE_CHECKING:
 __all__ = ("Db2SyncStore",)
 
 
-def _row_value(row: Any, key: str, index: int) -> Any:
-    """Extract a column value from a dictionary or tuple row."""
-    if isinstance(row, dict):
-        return row.get(key)
-    return row[index]
+def session_catalog_names(table: str) -> "tuple[str | None, str]":
+    """Return the catalog schema and table name for an unquoted session table name.
+
+    Session DDL writes the table name unquoted, so Db2 folds it to uppercase.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The schema, or ``None`` for ``CURRENT SCHEMA``, and the upper-folded table name.
+    """
+    return split_db2_table_name(table.upper())
 
 
-def _coerce_bytes(value: Any) -> bytes | None:
+def session_index_name(table: str) -> str:
+    """Return the catalog name of the session expiry index.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The upper-folded index name.
+    """
+    return f"IX_{session_catalog_names(table)[1]}_EXP"
+
+
+def session_table_ddl(table: str) -> str:
+    """Return the CREATE TABLE statement for the session table.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        Db2 DDL for the session table.
+    """
+    return f"""
+    CREATE TABLE {table} (
+        session_id VARCHAR(255) NOT NULL PRIMARY KEY,
+        data BLOB(10M) NOT NULL,
+        expires_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP
+    )
+    """
+
+
+def session_index_ddl(table: str) -> str:
+    """Return the CREATE INDEX statement for the session expiry index.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        Db2 DDL for the expiry index.
+    """
+    return f"CREATE INDEX {session_index_name(table)} ON {table}(expires_at)"
+
+
+def select_session_sql(table: str) -> str:
+    """Return the query reading an unexpired session.
+
+    Parameters: session id, current naive-UTC time.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The SELECT statement.
+    """
+    return f"SELECT data, expires_at FROM {table} WHERE session_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+
+
+def renew_session_sql(table: str) -> str:
+    """Return the statement extending a session's expiry.
+
+    Parameters: new naive-UTC expiry, current naive-UTC time, session id.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The UPDATE statement.
+    """
+    return f"UPDATE {table} SET expires_at = ?, updated_at = ? WHERE session_id = ?"
+
+
+def upsert_session_sql(table: str) -> str:
+    """Return the MERGE statement inserting or replacing a session.
+
+    Parameters: session id, data, naive-UTC expiry or ``None``, current naive-UTC time.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The MERGE statement.
+    """
+    return f"""
+    MERGE INTO {table} AS target
+    USING (
+        SELECT
+            CAST(? AS VARCHAR(255)) AS session_id,
+            CAST(? AS BLOB(10M)) AS data,
+            CAST(? AS TIMESTAMP) AS expires_at,
+            CAST(? AS TIMESTAMP) AS now_utc
+        FROM SYSIBM.SYSDUMMY1
+    ) AS src
+       ON target.session_id = src.session_id
+    WHEN MATCHED THEN
+        UPDATE SET
+            data = src.data,
+            expires_at = src.expires_at,
+            updated_at = src.now_utc
+    WHEN NOT MATCHED THEN
+        INSERT (session_id, data, expires_at, created_at, updated_at)
+        VALUES (src.session_id, src.data, src.expires_at, src.now_utc, src.now_utc)
+    """
+
+
+def delete_session_sql(table: str) -> str:
+    """Return the statement deleting one session.
+
+    Parameters: session id.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The DELETE statement.
+    """
+    return f"DELETE FROM {table} WHERE session_id = ?"
+
+
+def delete_all_sql(table: str) -> str:
+    """Return the statement deleting every session.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The DELETE statement.
+    """
+    return f"DELETE FROM {table}"
+
+
+def exists_session_sql(table: str) -> str:
+    """Return the query checking that an unexpired session exists.
+
+    Parameters: session id, current naive-UTC time.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The SELECT statement.
+    """
+    return f"SELECT 1 AS present FROM {table} WHERE session_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+
+
+def expires_at_sql(table: str) -> str:
+    """Return the query reading a session's expiry.
+
+    Parameters: session id.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The SELECT statement.
+    """
+    return f"SELECT expires_at FROM {table} WHERE session_id = ?"
+
+
+def delete_expired_sql(table: str) -> str:
+    """Return the statement deleting expired sessions.
+
+    Parameters: current naive-UTC time.
+
+    Args:
+        table: Session table name.
+
+    Returns:
+        The DELETE statement.
+    """
+    return f"DELETE FROM {table} WHERE expires_at IS NOT NULL AND expires_at <= ?"
+
+
+def _coerce_bytes(value: Any) -> "bytes | None":
     """Coerce row data into bytes if not None."""
     if value is None:
         return None
@@ -30,8 +211,8 @@ def _coerce_bytes(value: Any) -> bytes | None:
     return bytes(value)
 
 
-def _normalize_utc(dt: Any) -> datetime | None:
-    """Normalize datetime to UTC timezone."""
+def _normalize_utc(dt: Any) -> "datetime | None":
+    """Return a stored naive-UTC timestamp as an aware UTC datetime."""
     if dt is None:
         return None
     if isinstance(dt, datetime):
@@ -42,7 +223,11 @@ def _normalize_utc(dt: Any) -> datetime | None:
 
 
 class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
-    """IBM Db2-backed session store using synchronous Db2 sessions."""
+    """IBM Db2-backed session store using synchronous Db2 sessions.
+
+    Every timestamp written or compared is a naive-UTC value bound from Python, so expiry does
+    not depend on the server's time zone.
+    """
 
     __slots__ = ()
 
@@ -58,11 +243,11 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    async def get(self, key: str, renew_for: int | timedelta | None = None) -> bytes | None:
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""
         return await async_(self._get)(key, renew_for)
 
-    async def set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value."""
         await async_(self._set)(key, value, expires_in)
 
@@ -78,7 +263,7 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
         """Check if a session key exists and is not expired."""
         return await async_(self._exists)(key)
 
-    async def expires_in(self, key: str) -> int | None:
+    async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires."""
         return await async_(self._expires_in)(key)
 
@@ -88,168 +273,78 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
 
     def _table_ddl(self) -> str:
         """Get Db2 CREATE TABLE SQL."""
-        return f"""
-        CREATE TABLE {self._table_name} (
-            session_id VARCHAR(255) NOT NULL PRIMARY KEY,
-            data BLOB(10M) NOT NULL,
-            expires_at TIMESTAMP,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP
-        )
-        """
+        return session_table_ddl(self._table_name)
 
-    def _drop_table_sql(self) -> list[str]:
+    def _drop_table_sql(self) -> "list[str]":
         """Get Db2 DROP TABLE statements."""
         return [f"DROP TABLE {self._table_name}"]
 
     def _create_table(self) -> None:
-        """Execute table and index creation in Db2."""
+        """Create the table and its expiry index when the catalog does not list them."""
+        schema, table = session_catalog_names(self._table_name)
         with self._config.provide_session() as driver:
-            tables = driver.data_dictionary.get_tables(driver)
-            table_names = {t["table_name"].upper() for t in tables if t.get("table_name")}
-            bare_table_name = self._table_name.split(".")[-1].upper()
-            if bare_table_name not in table_names:
-                driver.execute_script(self._table_ddl())
-                driver.execute_script(f"CREATE INDEX IX_{bare_table_name}_exp ON {self._table_name}(expires_at)")
-                driver.commit()
+            if driver.select_one_or_none(TABLE_EXISTS_SQL, (schema, table)) is None:
+                driver.execute(session_table_ddl(self._table_name))
+            if driver.select_one_or_none(INDEX_EXISTS_SQL, (schema, session_index_name(self._table_name))) is None:
+                driver.execute(session_index_ddl(self._table_name))
+            driver.commit()
         self._log_table_created()
 
-    def _get(self, key: str, renew_for: int | timedelta | None = None) -> bytes | None:
-        """Retrieve session data by key synchronously."""
-        sql = f"""
-        SELECT data, expires_at FROM {self._table_name}
-        WHERE session_id = ?
-          AND (expires_at IS NULL OR expires_at > CURRENT TIMESTAMP)
-        """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key,))
-                row = cursor.fetchone()
-            finally:
-                cursor.close()
-
+    def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        """Retrieve session data by key, extending its expiry when requested."""
+        with self._config.provide_session() as driver:
+            row = driver.select_one_or_none(select_session_sql(self._table_name), (key, utc_now()))
             if row is None:
                 return None
-
-            expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if renew_for is not None and expires_at is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
+            if renew_for is not None and row["expires_at"] is not None:
+                new_expires_at = to_db_timestamp(self._calculate_expires_at(renew_for))
                 if new_expires_at is not None:
-                    update_cursor = conn.cursor()
-                    try:
-                        update_cursor.execute(
-                            f"""
-                            UPDATE {self._table_name}
-                            SET expires_at = ?, updated_at = CURRENT TIMESTAMP
-                            WHERE session_id = ?
-                            """,
-                            (new_expires_at, key),
-                        )
-                    finally:
-                        update_cursor.close()
-                    conn.commit()
+                    driver.execute(renew_session_sql(self._table_name), (new_expires_at, utc_now(), key))
+                    driver.commit()
+            return _coerce_bytes(row["data"])
 
-            return _coerce_bytes(_row_value(row, "data", 0))
-
-    def _set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
-        """Upsert session data using atomic MERGE INTO."""
+    def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+        """Upsert session data using an atomic MERGE."""
         data = self._value_to_bytes(value)
-        expires_at = self._calculate_expires_at(expires_in)
-        sql = f"""
-        MERGE INTO {self._table_name} AS target
-        USING (
-            SELECT
-                CAST(? AS VARCHAR(255)) AS session_id,
-                CAST(? AS BLOB(10M)) AS data,
-                CAST(? AS TIMESTAMP) AS expires_at
-            FROM SYSIBM.SYSDUMMY1
-        ) AS src
-           ON target.session_id = src.session_id
-        WHEN MATCHED THEN
-            UPDATE SET
-                data = src.data,
-                expires_at = src.expires_at,
-                updated_at = CURRENT TIMESTAMP
-        WHEN NOT MATCHED THEN
-            INSERT (session_id, data, expires_at, created_at, updated_at)
-            VALUES (src.session_id, src.data, src.expires_at, CURRENT TIMESTAMP, CURRENT TIMESTAMP)
-        """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key, data, expires_at))
-            finally:
-                cursor.close()
-            conn.commit()
+        expires_at = to_db_timestamp(self._calculate_expires_at(expires_in))
+        with self._config.provide_session() as driver:
+            driver.execute(upsert_session_sql(self._table_name), (key, data, expires_at, utc_now()))
+            driver.commit()
 
     def _delete(self, key: str) -> None:
         """Delete session by key."""
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key,))
-            finally:
-                cursor.close()
-            conn.commit()
+        with self._config.provide_session() as driver:
+            driver.execute(delete_session_sql(self._table_name), (key,))
+            driver.commit()
 
     def _delete_all(self) -> None:
-        """Truncate all rows in session table."""
-        sql = f"DELETE FROM {self._table_name}"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql)
-            finally:
-                cursor.close()
-            conn.commit()
+        """Delete every session row."""
+        with self._config.provide_session() as driver:
+            driver.execute(delete_all_sql(self._table_name))
+            driver.commit()
+        self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
-        """Check key presence."""
-        sql = f"""
-        SELECT 1 FROM {self._table_name}
-        WHERE session_id = ?
-          AND (expires_at IS NULL OR expires_at > CURRENT TIMESTAMP)
-        """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key,))
-                row = cursor.fetchone()
-                return row is not None
-            finally:
-                cursor.close()
+        """Check that an unexpired session exists."""
+        with self._config.provide_session() as driver:
+            row = driver.select_one_or_none(exists_session_sql(self._table_name), (key, utc_now()))
+        return row is not None
 
-    def _expires_in(self, key: str) -> int | None:
+    def _expires_in(self, key: str) -> "int | None":
         """Calculate seconds until session expiration."""
-        sql = f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key,))
-                row = cursor.fetchone()
-            finally:
-                cursor.close()
-
-            if row is None:
-                return None
-            expires_at = _normalize_utc(_row_value(row, "expires_at", 0))
-            if expires_at is None:
-                return None
-            now = datetime.now(timezone.utc)
-            remaining = int((expires_at - now).total_seconds())
-            return max(remaining, 0)
+        with self._config.provide_session() as driver:
+            expires_at = _normalize_utc(driver.select_value_or_none(expires_at_sql(self._table_name), (key,)))
+        if expires_at is None:
+            return None
+        remaining = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        return max(remaining, 0)
 
     def _delete_expired(self) -> int:
-        """Remove expired sessions and return deleted row count."""
-        sql = f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at <= CURRENT TIMESTAMP"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql)
-                affected = getattr(cursor, "rowcount", 0)
-            finally:
-                cursor.close()
-            conn.commit()
-            return int(affected) if affected and affected > 0 else 0
+        """Remove expired sessions and return the deleted row count."""
+        with self._config.provide_session() as driver:
+            result = driver.execute(delete_expired_sql(self._table_name), (utc_now(),))
+            driver.commit()
+        count = max(result.rows_affected, 0)
+        if count > 0:
+            self._log_delete_expired(count)
+        return count

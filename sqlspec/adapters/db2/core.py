@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -51,6 +52,8 @@ __all__ = (
     "resolve_many_rowcount",
     "resolve_rowcount",
     "split_db2_table_name",
+    "to_db_timestamp",
+    "utc_now",
 )
 
 TABLE_EXISTS_SQL: Final[str] = (
@@ -257,6 +260,32 @@ def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = N
     if logger is not None and (sqlstate or sqlcode):
         logger.debug("Unmapped Db2 SQLSTATE: %s, SQLCODE: %s", sqlstate, sqlcode)
     return SQLSpecError(f"Db2 database error. Original error: {error}")
+
+
+def utc_now() -> datetime:
+    """Return the current UTC time as a naive ``datetime`` for Db2 ``TIMESTAMP`` binds.
+
+    Returns:
+        The current UTC time without a time zone.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def to_db_timestamp(value: "datetime | None") -> "datetime | None":
+    """Convert a ``datetime`` to the naive-UTC form bound to Db2 ``TIMESTAMP`` columns.
+
+    Aware values are converted to UTC and stripped of their time zone; naive values are taken to be
+    UTC already.
+
+    Args:
+        value: Datetime to bind, or ``None``.
+
+    Returns:
+        The naive-UTC datetime, or ``None``.
+    """
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def split_db2_table_name(name: str) -> "tuple[str | None, str]":

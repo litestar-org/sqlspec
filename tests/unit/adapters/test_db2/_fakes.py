@@ -11,10 +11,13 @@ The fakes reproduce the ``ibm_db_dbi`` 3.3 semantics the Db2 adapter depends on:
 - Errors are ``Db2Error`` subclasses whose text embeds the CLI diagnostic, SQLSTATE and SQLCODE.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from sqlspec.adapters.db2._typing import Db2Error
+from sqlspec.adapters.db2.core import default_statement_config
+from sqlspec.adapters.db2.driver import Db2SyncDriver
 
 SQL_ATTR_AUTOCOMMIT = 102
 SQL_AUTOCOMMIT_ON = 1
@@ -323,3 +326,29 @@ class FakeIbmDbDbiModule:
         connection.dsn = effective_dsn
         self.ibm_db.register(connection)
         return connection
+
+
+class FakeDb2SessionConfig:
+    """Config stand-in whose sessions run a real ``Db2SyncDriver`` over one scripted fake connection.
+
+    Cursors are consumed in statement order; once the scripted cursors are exhausted every further
+    statement gets an empty cursor. ``executed`` lists every ``(sql, parameters)`` pair the driver
+    sent, across all sessions.
+    """
+
+    def __init__(
+        self, cursors: "Sequence[FakeDb2Cursor]" = (), extension_config: "dict[str, Any] | None" = None
+    ) -> None:
+        self.connection = FakeDb2Connection(list(cursors), autocommit=True)
+        self.extension_config: dict[str, Any] = extension_config or {}
+        self.statement_config = default_statement_config
+
+    @contextmanager
+    def provide_session(self, **_: Any) -> "Iterator[Db2SyncDriver]":
+        """Yield a driver bound to the shared fake connection."""
+        yield Db2SyncDriver(self.connection, statement_config=default_statement_config)
+
+    @property
+    def executed(self) -> "list[tuple[str, Any]]":
+        """Return every statement and its parameters in execution order."""
+        return [call for cursor in self.connection.cursors for call in cursor.executed]
