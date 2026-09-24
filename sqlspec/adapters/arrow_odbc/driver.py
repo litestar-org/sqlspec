@@ -15,6 +15,7 @@ from sqlspec.adapters.arrow_odbc.core import (
     build_statement_config,
     create_mapped_exception,
     driver_profile,
+    normalize_column_names,
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
@@ -72,7 +73,7 @@ class ArrowOdbcStreamSource:
         handler = self._driver.handle_database_exceptions()
         with handler:
             reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
-            self._reader = iter(_to_pyarrow_reader(reader))
+            self._reader = iter(self._driver._normalize_reader(_to_pyarrow_reader(reader)))
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -106,6 +107,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         "_data_dictionary",
         "_dbms_name",
         "_dialect",
+        "_lowercase_column_names",
         "_max_batch_bytes",
         "_max_binary_size_val",
         "_max_text_size_val",
@@ -142,6 +144,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._payload_text_encoding: Any = features.get("payload_text_encoding")
         self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
         self._connection_autocommit: bool = bool(features.get("connection_autocommit", True))
+        self._lowercase_column_names: bool = bool(features.get("enable_lowercase_column_names", self._dialect == "db2"))
         self.dialect = statement_dialect
         self._data_dictionary: ArrowOdbcDataDictionary | None = None
         self._transaction_active = False
@@ -160,7 +163,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
         if statement.returns_rows():
             reader = self._read_arrow_batches(sql, parameters, self._chunk_size())
-            table = _reader_to_table(reader)
+            table = self._normalize_table(_reader_to_table(reader))
             rows = table.to_pylist()
             column_names = table.column_names
             return self.create_execution_result(
@@ -323,7 +326,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 resolved_batch_size,
             )
             if return_format in {"reader", "batches"}:
-                arrow_reader = _to_pyarrow_reader(reader)
+                arrow_reader = self._normalize_reader(_to_pyarrow_reader(reader))
                 return build_arrow_result_from_reader(
                     prepared_statement,
                     arrow_reader,
@@ -331,7 +334,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                     batch_size=resolved_batch_size,
                     arrow_schema=arrow_schema,
                 )
-            table = _reader_to_table(reader)
+            table = self._normalize_table(_reader_to_table(reader))
         self._check_pending_exception(exc_handler)
 
         if table is None:
@@ -429,6 +432,28 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     def _chunk_size(self) -> int:
         return self._chunk_size_val
+
+    def _normalize_table(self, table: Any) -> Any:
+        """Rename implicit-uppercase columns of an Arrow table when lowercasing is enabled."""
+        names = normalize_column_names(table.column_names, self._lowercase_column_names)
+        if names == table.column_names:
+            return table
+        return table.rename_columns(names)
+
+    def _normalize_reader(self, reader: "ArrowRecordBatchReader") -> "ArrowRecordBatchReader":
+        """Wrap a record batch reader so its schema and batches carry normalized column names."""
+        import pyarrow as pa
+
+        schema = reader.schema
+        names = normalize_column_names(schema.names, self._lowercase_column_names)
+        if names == schema.names:
+            return reader
+        renamed = schema
+        for index, name in enumerate(names):
+            renamed = renamed.set(index, renamed.field(index).with_name(name))
+        return pa.RecordBatchReader.from_batches(
+            renamed, (pa.RecordBatch.from_arrays(batch.columns, schema=renamed) for batch in reader)
+        )
 
     @staticmethod
     def _resolve_dbms_name(features: "dict[str, Any]") -> str | None:

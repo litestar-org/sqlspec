@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, build_statement_config_from_profile
 from sqlspec.exceptions import (
+    CheckViolationError,
     DatabaseConnectionError,
     DataError,
     DeadlockError,
@@ -37,6 +38,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "normalize_column_names",
     "resolve_dialect_from_dbms_name",
 )
 
@@ -110,9 +112,15 @@ _SPECIFIC_SQLSTATE_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23505": (UniqueViolationError, "unique constraint violation"),
     "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
     "23502": (NotNullViolationError, "not-null constraint violation"),
+    "23513": (CheckViolationError, "check constraint violation"),
     "40001": (DeadlockError, "deadlock detected"),
+    "57033": (DeadlockError, "statement rolled back due to deadlock or timeout"),
     "57014": (QueryTimeoutError, "query timeout or cancellation"),
 }
+_LOCK_TIMEOUT_SQLSTATES: Final[frozenset[str]] = frozenset({"40001", "57033"})
+_DB2_REASON_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r'Reason code\s*"?(\d+)"?', re.IGNORECASE)
+_DB2_LOCK_TIMEOUT_REASON_CODE: Final[str] = "68"
+_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _SQLSTATE_CLASS_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "08": (DatabaseConnectionError, "connection error"),
     "22": (DataError, "data error"),
@@ -175,6 +183,8 @@ def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> S
 
     sqlstate = _extract_sqlstate(message)
     if sqlstate is not None:
+        if sqlstate in _LOCK_TIMEOUT_SQLSTATES and _is_db2_lock_timeout(message):
+            return QueryTimeoutError(f"ODBC error {sqlstate}: lock timeout. Original error: {error}")
         specific = _SPECIFIC_SQLSTATE_MAPPING.get(sqlstate)
         if specific is not None:
             error_class, description = specific
@@ -442,6 +452,30 @@ def _extract_error_number(error: Exception) -> "int | None":
         return int(match.group(1))
     except ValueError:
         return None
+
+
+def _is_db2_lock_timeout(message: str) -> bool:
+    match = _DB2_REASON_CODE_PATTERN.search(message)
+    return match is not None and match.group(1) == _DB2_LOCK_TIMEOUT_REASON_CODE
+
+
+def normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":
+    """Lowercase column names a database folded to uppercase.
+
+    Names made only of uppercase letters, digits and underscores (and not
+    starting with a digit) are lowercased; any other name, such as a quoted
+    mixed-case identifier, is returned unchanged.
+
+    Args:
+        column_names: Column names as reported in the result schema.
+        lowercase: Whether to lowercase implicit-uppercase names.
+
+    Returns:
+        Normalized column names in their original order.
+    """
+    if not lowercase:
+        return column_names
+    return [name.lower() if name and _IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name) else name for name in column_names]
 
 
 def _identity(value: Any) -> Any:

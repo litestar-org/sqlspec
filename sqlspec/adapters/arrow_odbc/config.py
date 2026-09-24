@@ -92,6 +92,9 @@ class ArrowOdbcDriverFeatures(TypedDict):
 
     ``connection_autocommit`` is the autocommit mode of connections created by
     the config; the config sets it from ``connection_config["autocommit"]``.
+    ``enable_lowercase_column_names`` lowercases result column names the
+    database folded to uppercase (quoted mixed-case names are kept); it
+    defaults to on for Db2 and off for every other dialect.
     """
 
     chunk_size: NotRequired[int]
@@ -105,6 +108,7 @@ class ArrowOdbcDriverFeatures(TypedDict):
     connection_string: NotRequired[str]
     dbms_name: NotRequired[str]
     connection_autocommit: NotRequired[bool]
+    enable_lowercase_column_names: NotRequired[bool]
     json_serializer: "NotRequired[Callable[[Any], str]]"
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     enable_events: NotRequired[bool]

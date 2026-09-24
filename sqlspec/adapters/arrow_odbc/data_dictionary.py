@@ -177,6 +177,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
             return driver.select(
                 self.get_query("tables", "by_schema"),
                 schema_name=self.resolve_schema(schema),
+                table_name=None,
                 schema_type=TableMetadata,
             )
         except SQLFileNotFoundError:
@@ -189,9 +190,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
         operation = "by_table" if table is not None else "by_schema"
         resolved_schema = self.resolve_schema(schema)
         resolved_table = self.resolve_identifier(table) if table is not None else None
-        parameters: dict[str, Any] = {"schema_name": resolved_schema}
-        if table is not None:
-            parameters["table_name"] = resolved_table
+        parameters: dict[str, Any] = {"schema_name": resolved_schema, "table_name": resolved_table}
         try:
             rows = driver.select(self.get_query("columns", operation), schema_type=ColumnMetadata, **parameters)
         except SQLFileNotFoundError:
@@ -205,9 +204,10 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     ) -> list[IndexMetadata]:
         """Get index metadata for dialects with bundled catalog queries."""
         operation = "by_table" if table is not None else "by_schema"
-        parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
-        if table is not None:
-            parameters["table_name"] = self.resolve_identifier(table)
+        parameters: dict[str, Any] = {
+            "schema_name": self.resolve_schema(schema),
+            "table_name": self.resolve_identifier(table) if table is not None else None,
+        }
         try:
             return driver.select(self.get_query("indexes", operation), schema_type=IndexMetadata, **parameters)
         except SQLFileNotFoundError:
@@ -218,9 +218,10 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     ) -> list[ForeignKeyMetadata]:
         """Get foreign-key metadata for dialects with bundled catalog queries."""
         operation = "by_table" if table is not None else "by_schema"
-        parameters: dict[str, Any] = {"schema_name": self.resolve_schema(schema)}
-        if table is not None:
-            parameters["table_name"] = self.resolve_identifier(table)
+        parameters: dict[str, Any] = {
+            "schema_name": self.resolve_schema(schema),
+            "table_name": self.resolve_identifier(table) if table is not None else None,
+        }
         try:
             return driver.select(
                 self.get_query("foreign_keys", operation), schema_type=ForeignKeyMetadata, **parameters
