@@ -37,6 +37,10 @@ __all__ = (
     "SqliteConnectionParams",
     "SqliteDriverFeatures",
     "SqliteFunctionConfig",
+    "SqliteWindowFunctionConfig",
+    "apply_extension_pragmas",
+    "extension_pragma_statements",
+    "render_pragmas",
 )
 
 logger = get_logger("sqlspec.adapters.sqlite")
@@ -58,6 +62,10 @@ class SqliteConnectionParams(TypedDict):
     health_check_interval: NotRequired[float]
     enable_optimizations: NotRequired[bool]
     enable_foreign_keys: NotRequired[bool]
+    busy_timeout: NotRequired[int]
+    cache_size: NotRequired[int]
+    mmap_size: NotRequired[int]
+    default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
     extra: NotRequired[dict[str, Any]]
 
 
@@ -83,6 +91,14 @@ class SqliteAggregateConfig(TypedDict):
     name: str
     narg: int
     aggregate_class: "type[Any]"
+
+
+class SqliteWindowFunctionConfig(TypedDict):
+    """User-defined SQLite window function registration."""
+
+    name: str
+    narg: int
+    window_class: "type[Any]"
 
 
 class SqliteDriverFeatures(TypedDict):
@@ -114,6 +130,9 @@ class SqliteDriverFeatures(TypedDict):
      Each entry must include name and func.
     custom_aggregates: Register SQL aggregates with step/finalize classes.
      Each entry must include name, narg, and aggregate_class.
+    custom_window_functions: Register user-defined aggregate window functions.
+     Each entry must include name, narg, and window_class.
+    default_transaction_mode: Default SQLite transaction mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
     authorizer_callback: sqlite3 authorizer hook run during statement compilation.
     trace_callback: sqlite3 trace hook run for executed statements.
     progress_handler: sqlite3 progress hook run every progress_handler_interval VM opcodes.
@@ -137,6 +156,8 @@ class SqliteDriverFeatures(TypedDict):
     custom_functions: "NotRequired[Sequence[SqliteFunctionConfig]]"
     custom_collations: "NotRequired[Sequence[SqliteCollationConfig]]"
     custom_aggregates: "NotRequired[Sequence[SqliteAggregateConfig]]"
+    custom_window_functions: "NotRequired[Sequence[SqliteWindowFunctionConfig]]"
+    default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
     authorizer_callback: "NotRequired[Callable[[int, str | None, str | None, str | None, str | None], int]]"
     trace_callback: "NotRequired[Callable[[str], None]]"
     progress_handler: "NotRequired[Callable[[], int | None]]"
@@ -155,6 +176,7 @@ _RUNTIME_FEATURE_KEYS = (
     "custom_aggregates",
     "custom_collations",
     "custom_functions",
+    "custom_window_functions",
     "extensions",
     "pragmas",
     "progress_handler",
@@ -251,7 +273,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[SqliteConnection], None] | None = features_dict.pop(
             "on_connection_create", None
@@ -305,6 +326,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             "SqliteExceptionHandler": SqliteExceptionHandler,
             "SqliteFunctionConfig": SqliteFunctionConfig,
             "SqliteSessionContext": SqliteSessionContext,
+            "SqliteWindowFunctionConfig": SqliteWindowFunctionConfig,
         })
         return namespace
 
@@ -328,6 +350,18 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         enable_foreign_keys = self.connection_config.get("enable_foreign_keys")
         if enable_foreign_keys is not None:
             pool_kwargs["enable_foreign_keys"] = enable_foreign_keys
+
+        busy_timeout = self.connection_config.get("busy_timeout")
+        if busy_timeout is not None:
+            pool_kwargs["busy_timeout"] = busy_timeout
+
+        cache_size = self.connection_config.get("cache_size")
+        if cache_size is not None:
+            pool_kwargs["cache_size"] = cache_size
+
+        mmap_size = self.connection_config.get("mmap_size")
+        if mmap_size is not None:
+            pool_kwargs["mmap_size"] = mmap_size
 
         pool = SqliteConnectionPool(
             connection_parameters=config_dict,
@@ -358,7 +392,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             self.connection_instance.close()
 
 
-def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
+def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
     extension_config = cast("dict[str, Any]", config.extension_config)
     settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
     profile = settings.get("pragma_profile", False)
@@ -373,7 +407,7 @@ def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str
         msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
         raise ImproperConfigurationError(msg)
     try:
-        statements.extend(f"PRAGMA {name} = {value}" for name, value in _render_pragmas(overrides))
+        statements.extend(f"PRAGMA {name} = {value}" for name, value in render_pragmas(overrides))
     except ImproperConfigurationError as exc:
         msg = str(exc).replace(
             "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
@@ -382,12 +416,12 @@ def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str
     return tuple(statements)
 
 
-def _apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
+def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
     for statement in statements:
         connection.execute(statement)
 
 
-def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
     rendered: list[tuple[str, str]] = []
     for pragma_name, pragma_value in pragmas.items():
         if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
@@ -404,6 +438,11 @@ def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
             raise ImproperConfigurationError(msg)
         rendered.append((pragma_name, rendered_value))
     return rendered
+
+
+_extension_pragma_statements = extension_pragma_statements
+_apply_extension_pragmas = apply_extension_pragmas
+_render_pragmas = render_pragmas
 
 
 def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:
@@ -423,7 +462,7 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
         return None
 
     if "pragmas" in runtime_setup:
-        runtime_setup["pragmas"] = _render_pragmas(runtime_setup["pragmas"])
+        runtime_setup["pragmas"] = render_pragmas(runtime_setup["pragmas"])
 
     row_factory = runtime_setup.get("row_factory")
     if row_factory is not None and not isinstance(row_factory, str) and not callable(row_factory):
@@ -437,6 +476,9 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
     _validate_entries(runtime_setup.get("custom_collations", ()), ("name", "func"), "custom_collations")
     _validate_entries(
         runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
+    )
+    _validate_entries(
+        runtime_setup.get("custom_window_functions", ()), ("name", "narg", "window_class"), "custom_window_functions"
     )
 
     interval = runtime_setup.get("progress_handler_interval")

@@ -45,6 +45,9 @@ __all__ = (
     "AiosqliteDriverFeatures",
     "AiosqliteFunctionConfig",
     "AiosqlitePoolParams",
+    "apply_extension_pragmas",
+    "extension_pragma_statements",
+    "render_pragmas",
 )
 
 logger = get_logger("sqlspec.adapters.aiosqlite")
@@ -440,7 +443,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             self.connection_instance = None
 
 
-def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
+def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
     extension_config = cast("dict[str, Any]", config.extension_config)
     settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
     profile = settings.get("pragma_profile", False)
@@ -455,7 +458,7 @@ def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str
         msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
         raise ImproperConfigurationError(msg)
     try:
-        statements.extend(f"PRAGMA {name} = {value}" for name, value in _render_pragmas(overrides))
+        statements.extend(f"PRAGMA {name} = {value}" for name, value in render_pragmas(overrides))
     except ImproperConfigurationError as exc:
         msg = str(exc).replace(
             "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
@@ -464,12 +467,12 @@ def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str
     return tuple(statements)
 
 
-async def _apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
+async def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
     for statement in statements:
         await connection.execute(statement)
 
 
-def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
     rendered: list[tuple[str, str]] = []
     for pragma_name, pragma_value in pragmas.items():
         if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
@@ -486,6 +489,11 @@ def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
             raise ImproperConfigurationError(msg)
         rendered.append((pragma_name, rendered_value))
     return rendered
+
+
+_extension_pragma_statements = extension_pragma_statements
+_apply_extension_pragmas = apply_extension_pragmas
+_render_pragmas = render_pragmas
 
 
 def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:
@@ -505,7 +513,7 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
         return None
 
     if "pragmas" in runtime_setup:
-        runtime_setup["pragmas"] = _render_pragmas(runtime_setup["pragmas"])
+        runtime_setup["pragmas"] = render_pragmas(runtime_setup["pragmas"])
 
     row_factory = runtime_setup.get("row_factory")
     if row_factory is not None and not isinstance(row_factory, str) and not callable(row_factory):

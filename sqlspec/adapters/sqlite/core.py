@@ -36,9 +36,11 @@ from sqlspec.utils.type_guards import has_sqlite_error
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core.compiler import OperationType
 
 __all__ = (
+    "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "SqliteStreamSource",
     "apply_driver_features",
     "build_connection_config",
@@ -49,6 +51,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "end_transaction",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -75,8 +78,36 @@ SQLITE_READONLY_CODE = 8
 SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT = sys.version_info >= (3, 12)
 SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
-SQLITE_TABLE_INFO_MIN_COLUMNS = 2
-SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
+
+
+def end_transaction(
+    connection: "SqliteConnection | Any",
+    *,
+    commit: bool,
+    supports_autocommit: bool = SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT,
+) -> None:
+    """End an open transaction on a connection.
+
+    Connection.commit and Connection.rollback are no-ops while the connection runs
+    in sqlite3's autocommit mode, so the statement is issued directly there.
+
+    Args:
+        connection: Connection whose transaction should end.
+        commit: Whether to commit rather than roll back.
+        supports_autocommit: Whether this runtime's sqlite3 exposes autocommit.
+    """
+    if not getattr(connection, "in_transaction", True):
+        return
+    if supports_autocommit and getattr(connection, "autocommit", None) is True:
+        connection.execute("COMMIT" if commit else "ROLLBACK")
+        return
+    if commit:
+        connection.commit()
+    else:
+        connection.rollback()
+
+
+_end_transaction = end_transaction
 
 
 _TIME_TO_ISO = time_iso_convert
@@ -221,13 +252,14 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 class SqliteStreamSource:
     """Compiled chunk source streaming dict rows from a SQLite cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_as_dict", "_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, as_dict: bool = True) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._as_dict = as_dict
         self._cursor: Any = None
         self._column_names: list[str] | None = None
 
@@ -240,7 +272,7 @@ class SqliteStreamSource:
             cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._driver._check_pending_exception(handler)
 
-    def fetch_chunk(self) -> "list[dict[str, Any]]":
+    def fetch_chunk(self) -> "list[Any]":
         handler = self._driver.handle_database_exceptions()
         rows: list[Any] = []
         with handler:
@@ -248,6 +280,8 @@ class SqliteStreamSource:
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
+        if not self._as_dict:
+            return rows
         if self._column_names is None:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
@@ -294,13 +328,17 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         "path",
         "file",
     }
-    connection_parameters = {
-        key: value
-        for key, value in connection_config.items()
-        if key not in excluded_keys
-        and (value is not None or key == "isolation_level")
-        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-    }
+
+    def _filter_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in mapping.items()
+            if key not in excluded_keys
+            and (value is not None or key == "isolation_level")
+            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+        }
+
+    connection_parameters = _filter_params(connection_config)
 
     if "database" not in connection_parameters:
         database = (
@@ -314,13 +352,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
 
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
-        connection_parameters.update({
-            key: value
-            for key, value in extra.items()
-            if key not in excluded_keys
-            and (value is not None or key == "isolation_level")
-            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-        })
+        connection_parameters.update(_filter_params(extra))
 
     return connection_parameters
 
@@ -360,9 +392,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
-    # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
-    # SQLITE_BUSY means another process has the database locked
-    # SQLITE_LOCKED means another connection has the table/rows locked
     if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
         return _create_sqlite_error(error, error_code, DeadlockError, "database busy")
     if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
@@ -370,13 +399,11 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if "locked" in error_msg or "busy" in error_msg:
         return _create_sqlite_error(error, error_code or 0, DeadlockError, "database locked")
 
-    # Query interruption (timeout-like behavior)
     if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_sqlite_error(error, error_code, OperationCancelledError, "query interrupted")
     if "interrupt" in error_msg:
         return _create_sqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
 
-    # Permission errors
     if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_sqlite_error(error, error_code, PermissionDeniedError, "permission denied")
     if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
@@ -397,7 +424,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
             return _create_sqlite_error(error, None, SQLParsingError, "SQL syntax error")
         return _create_sqlite_error(error, None, SQLSpecError, "database error")
 
-    # Constraint violations (check extended error codes first)
     if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
         return _create_sqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
     if error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
@@ -407,17 +433,14 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
         return _create_sqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
 
-    # Connection/file errors
     if error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
         return _create_sqlite_error(error, error_code, DatabaseConnectionError, "connection error")
     if error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
         return _create_sqlite_error(error, error_code, OperationalError, "operational error")
 
-    # Data type errors
     if error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
         return _create_sqlite_error(error, error_code, DataError, "data error")
 
-    # SQL syntax errors
     if error_code == 1 or "syntax" in error_msg:
         return _create_sqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
 
@@ -440,7 +463,7 @@ def build_profile() -> "DriverParameterProfile":
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
-            bool: _bool_to_int,
+            bool: int,
             datetime: _TIME_TO_ISO,
             date: _TIME_TO_ISO,
             Decimal: _DECIMAL_TO_STRING,
@@ -507,7 +530,7 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
             with contextlib.suppress(Exception):
                 table_cursor.close()
     except sqlite3.Error:
-        return _target_supports_rowid_legacy(connection, target)
+        return False
 
     candidates = [
         row
@@ -521,10 +544,10 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
     if target_schema is not None:
         candidates = [row for row in candidates if row[0].casefold() == target_schema.casefold()]
         if not candidates:
-            return _target_supports_rowid_legacy(connection, target)
+            return False
         return len(candidates) == 1 and candidates[0][4] == 0
     if not candidates:
-        return _target_supports_rowid_legacy(connection, target)
+        return False
 
     schema_order = ["temp", "main"]
     if not any(row[0].casefold() in {"temp", "main"} for row in candidates):
@@ -549,80 +572,6 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
     return False
 
 
-def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, str]") -> bool:
-    target_schema, target_table = target
-    schema_order = [target_schema] if target_schema is not None else ["temp", "main"]
-    if target_schema is None:
-        try:
-            database_cursor = connection.execute("PRAGMA database_list")
-            try:
-                schema_order.extend(
-                    row[1]
-                    for row in database_cursor.fetchall()
-                    if len(row) >= SQLITE_DATABASE_LIST_MIN_COLUMNS
-                    and isinstance(row[1], str)
-                    and row[1] not in {"main", "temp"}
-                )
-            finally:
-                with contextlib.suppress(Exception):
-                    database_cursor.close()
-        except sqlite3.Error:
-            return False
-
-    for schema_name in schema_order:
-        if schema_name is None:
-            continue
-        quoted_schema = quote_identifier(schema_name)
-        schema_cursor = None
-        schema_row = None
-        try:
-            schema_cursor = connection.execute(
-                f"SELECT type FROM {quoted_schema}.sqlite_master WHERE name = ? COLLATE NOCASE", (target_table,)
-            )
-            schema_row = schema_cursor.fetchone()
-        except sqlite3.Error:
-            pass
-        finally:
-            if schema_cursor is not None:
-                with contextlib.suppress(Exception):
-                    schema_cursor.close()
-        if schema_row is None:
-            continue
-        if not schema_row or schema_row[0] != "table":
-            return False
-        qualified_target = f"{quoted_schema}.{quote_identifier(target_table)}"
-        table_info_cursor = None
-        try:
-            table_info_cursor = connection.execute(
-                f"PRAGMA {quoted_schema}.table_info({quote_identifier(target_table)})"
-            )
-            column_names = {
-                row[1].casefold()
-                for row in table_info_cursor.fetchall()
-                if len(row) >= SQLITE_TABLE_INFO_MIN_COLUMNS and isinstance(row[1], str)
-            }
-        except sqlite3.Error:
-            return False
-        finally:
-            if table_info_cursor is not None:
-                with contextlib.suppress(Exception):
-                    table_info_cursor.close()
-        hidden_alias = next((alias for alias in SQLITE_ROWID_ALIASES if alias not in column_names), None)
-        if hidden_alias is None:
-            return False
-        probe_cursor = None
-        try:
-            probe_cursor = connection.execute(f"SELECT {hidden_alias} FROM {qualified_target} LIMIT 0")
-        except sqlite3.Error:
-            return False
-        finally:
-            if probe_cursor is not None:
-                with contextlib.suppress(Exception):
-                    probe_cursor.close()
-        return True
-    return False
-
-
 def _create_sqlite_error(
     error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
 ) -> SQLSpecError:
@@ -642,10 +591,6 @@ def _create_sqlite_error(
     exc = error_class(msg)
     exc.__cause__ = cast("BaseException", error)
     return exc
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
 
 
 driver_profile = build_profile()

@@ -235,6 +235,8 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "custom_functions",
         "custom_collations",
         "custom_aggregates",
+        "custom_window_functions",
+        "default_transaction_mode",
         "authorizer_callback",
         "trace_callback",
         "progress_handler",

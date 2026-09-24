@@ -51,8 +51,12 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_and_resolve_metadata",
     "execute_and_resolve_rowcount",
     "execute_fetchall_with_description",
+    "execute_fetchall_with_metadata",
+    "execute_many_on_worker_thread",
+    "execute_script_on_worker_thread",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -83,18 +87,13 @@ SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
 SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
-SQLITE_TABLE_INFO_MIN_COLUMNS = 2
-SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
 
 
 async def run_on_worker_thread(
     connection: "AiosqliteConnection", function: "Callable[..., _T]", *args: Any, **kwargs: Any
 ) -> _T:
     """Execute a sqlite3 callable on the aiosqlite worker thread."""
-    execute = cast(
-        "Callable[..., Awaitable[_T]]",
-        connection._execute,  # pyright: ignore[reportPrivateUsage]
-    )
+    execute = cast("Callable[..., Awaitable[_T]]", connection._execute)
     return await execute(function, *args, **kwargs)
 
 
@@ -244,15 +243,16 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 
 
 class AiosqliteStreamSource:
-    """Compiled async chunk source streaming dict rows from an aiosqlite cursor via ``fetchmany``."""
+    """Compiled async chunk source streaming dict or tuple rows from an aiosqlite cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_as_dict", "_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, as_dict: bool = True) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._as_dict = as_dict
         self._cursor: Any = None
         self._column_names: list[str] | None = None
 
@@ -267,12 +267,16 @@ class AiosqliteStreamSource:
         self._cursor = cursor
         await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
 
-    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+    async def fetch_chunk(self) -> "list[Any]":
         handler = self._driver.handle_database_exceptions()
-        rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
+        rows: list[Any] = await self._driver._run_with_exception_handler(
+            handler, self._cursor.fetchmany, self._chunk_size
+        )
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
+        if not self._as_dict:
+            return rows
         if self._column_names is None:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
@@ -368,8 +372,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
-    # SQLITE_BUSY means another process has the database locked
-    # SQLITE_LOCKED means another connection has the table/rows locked
     if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
         return _create_aiosqlite_error(error, error_code, DeadlockError, "database busy")
     if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
@@ -377,13 +379,11 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if "locked" in error_msg or "busy" in error_msg:
         return _create_aiosqlite_error(error, error_code or 0, DeadlockError, "database locked")
 
-    # Query interruption (timeout-like behavior)
     if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_aiosqlite_error(error, error_code, OperationCancelledError, "query interrupted")
     if "interrupt" in error_msg:
         return _create_aiosqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
 
-    # Permission errors
     if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "permission denied")
     if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
@@ -439,7 +439,7 @@ def build_profile() -> "DriverParameterProfile":
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
-            bool: _bool_to_int,
+            bool: int,
             datetime: _TIME_TO_ISO,
             date: _TIME_TO_ISO,
             Decimal: _DECIMAL_TO_STRING,
@@ -491,7 +491,7 @@ def _execute_fetchall_with_metadata(
     eligibility_cache: "dict[tuple[str | None, str], bool]",
 ) -> "tuple[list[Any], Any, int, int | None]":
     """Execute a query and return rows plus execution metadata on the worker thread."""
-    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    raw_connection = connection._conn
     cursor = cast("Any", raw_connection.execute(sql, normalize_execute_parameters(parameters)))
     try:
         fetched_data = cursor.fetchall()
@@ -514,7 +514,7 @@ def _execute_and_resolve_metadata(
     eligibility_cache: "dict[tuple[str | None, str], bool]",
 ) -> "tuple[int, int | None]":
     """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
-    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    raw_connection = connection._conn
     cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
     try:
         rowcount = (
@@ -526,6 +526,44 @@ def _execute_and_resolve_metadata(
     finally:
         with contextlib.suppress(Exception):
             cast("Any", cursor).close()
+
+
+def _execute_many_on_worker_thread(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
+    """Execute SQL with multiple parameter sets on the worker thread."""
+    raw_connection = connection._conn
+    cursor = raw_connection.cursor()
+    try:
+        cursor.executemany(sql, normalize_execute_many_parameters(parameters))
+        return (
+            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            cast("Any", cursor).close()
+
+
+def _execute_script_on_worker_thread(
+    connection: "AiosqliteConnection", statements: "Sequence[str]", parameters: Any
+) -> tuple[int, int]:
+    """Execute multi-statement SQL script on the worker thread."""
+    raw_connection = connection._conn
+    cursor = raw_connection.cursor()
+    normalized_params = normalize_execute_parameters(parameters)
+    successful_count = 0
+    try:
+        for stmt in statements:
+            cursor.execute(stmt, normalized_params)
+            successful_count += 1
+        return len(statements), successful_count
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
+
+
+execute_and_resolve_metadata = _execute_and_resolve_metadata
+execute_fetchall_with_metadata = _execute_fetchall_with_metadata
+execute_many_on_worker_thread = _execute_many_on_worker_thread
+execute_script_on_worker_thread = _execute_script_on_worker_thread
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
@@ -552,7 +590,7 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
             with contextlib.suppress(Exception):
                 table_cursor.close()
     except sqlite3.Error:
-        return _target_supports_rowid_legacy(connection, target)
+        return False
 
     candidates = [
         row
@@ -566,10 +604,10 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
     if target_schema is not None:
         candidates = [row for row in candidates if row[0].casefold() == target_schema.casefold()]
         if not candidates:
-            return _target_supports_rowid_legacy(connection, target)
+            return False
         return len(candidates) == 1 and candidates[0][4] == 0
     if not candidates:
-        return _target_supports_rowid_legacy(connection, target)
+        return False
 
     schema_order = ["temp", "main"]
     if not any(row[0].casefold() in {"temp", "main"} for row in candidates):
@@ -594,80 +632,6 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
     return False
 
 
-def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, str]") -> bool:
-    target_schema, target_table = target
-    schema_order = [target_schema] if target_schema is not None else ["temp", "main"]
-    if target_schema is None:
-        try:
-            database_cursor = connection.execute("PRAGMA database_list")
-            try:
-                schema_order.extend(
-                    row[1]
-                    for row in database_cursor.fetchall()
-                    if len(row) >= SQLITE_DATABASE_LIST_MIN_COLUMNS
-                    and isinstance(row[1], str)
-                    and row[1] not in {"main", "temp"}
-                )
-            finally:
-                with contextlib.suppress(Exception):
-                    database_cursor.close()
-        except sqlite3.Error:
-            return False
-
-    for schema_name in schema_order:
-        if schema_name is None:
-            continue
-        quoted_schema = quote_identifier(schema_name)
-        schema_cursor = None
-        schema_row = None
-        try:
-            schema_cursor = connection.execute(
-                f"SELECT type FROM {quoted_schema}.sqlite_master WHERE name = ? COLLATE NOCASE", (target_table,)
-            )
-            schema_row = schema_cursor.fetchone()
-        except sqlite3.Error:
-            pass
-        finally:
-            if schema_cursor is not None:
-                with contextlib.suppress(Exception):
-                    schema_cursor.close()
-        if schema_row is None:
-            continue
-        if not schema_row or schema_row[0] != "table":
-            return False
-        qualified_target = f"{quoted_schema}.{quote_identifier(target_table)}"
-        table_info_cursor = None
-        try:
-            table_info_cursor = connection.execute(
-                f"PRAGMA {quoted_schema}.table_info({quote_identifier(target_table)})"
-            )
-            column_names = {
-                row[1].casefold()
-                for row in table_info_cursor.fetchall()
-                if len(row) >= SQLITE_TABLE_INFO_MIN_COLUMNS and isinstance(row[1], str)
-            }
-        except sqlite3.Error:
-            return False
-        finally:
-            if table_info_cursor is not None:
-                with contextlib.suppress(Exception):
-                    table_info_cursor.close()
-        hidden_alias = next((alias for alias in SQLITE_ROWID_ALIASES if alias not in column_names), None)
-        if hidden_alias is None:
-            return False
-        probe_cursor = None
-        try:
-            probe_cursor = connection.execute(f"SELECT {hidden_alias} FROM {qualified_target} LIMIT 0")
-        except sqlite3.Error:
-            return False
-        finally:
-            if probe_cursor is not None:
-                with contextlib.suppress(Exception):
-                    probe_cursor.close()
-        return True
-    return False
-
-
 def _create_aiosqlite_error(
     error: Any, code: "int | None", error_class: type[SQLSpecError], description: str
 ) -> SQLSpecError:
@@ -687,10 +651,6 @@ def _create_aiosqlite_error(
     exc = error_class(msg)
     exc.__cause__ = cast("BaseException", error)
     return exc
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
 
 
 driver_profile = build_profile()
