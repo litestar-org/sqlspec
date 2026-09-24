@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.builder import SQL
+from sqlspec.core import SQL
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
