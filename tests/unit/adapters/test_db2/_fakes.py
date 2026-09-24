@@ -9,11 +9,16 @@ The fakes reproduce the ``ibm_db_dbi`` 3.3 semantics the Db2 adapter depends on:
 - ``Connection.close()`` rolls back pending work before closing.
 - Cursor descriptions carry column names exactly as Db2 reports them (see ``db2_description``).
 - Errors are ``Db2Error`` subclasses whose text embeds the CLI diagnostic, SQLSTATE and SQLCODE.
+- ``AsyncConnection.connect()`` opens a sync connection and wraps it; ``AsyncConnection`` and
+  ``AsyncCursor`` coroutines delegate to the wrapped sync object, while ``conn_handler``,
+  ``description`` and ``rowcount`` stay plain properties.
 """
 
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
+
+from typing_extensions import Self
 
 from sqlspec.adapters.db2._typing import Db2Error
 from sqlspec.adapters.db2.core import default_statement_config
@@ -277,11 +282,132 @@ class FakeIbmDbModule:
         return True
 
 
+class FakeDb2AsyncCursor:
+    """Stand-in for ``ibm_db_dbi.AsyncCursor`` wrapping a scripted sync cursor."""
+
+    def __init__(self, cursor: FakeDb2Cursor) -> None:
+        self.sync_cursor = cursor
+
+    @property
+    def description(self) -> "Sequence[tuple[Any, ...]] | None":
+        """Return the wrapped cursor's description."""
+        return self.sync_cursor.description
+
+    @property
+    def rowcount(self) -> int:
+        """Return the wrapped cursor's rowcount."""
+        return self.sync_cursor.rowcount
+
+    async def execute(self, operation: str, parameters: object = None) -> FakeDb2Cursor:
+        """Execute through the wrapped cursor.
+
+        Returns:
+            The wrapped cursor, as the real driver returns its sync cursor.
+        """
+        return self.sync_cursor.execute(operation, parameters)
+
+    async def executemany(self, operation: str, seq_parameters: "Sequence[Any]") -> FakeDb2Cursor:
+        """Execute a batch through the wrapped cursor.
+
+        Returns:
+            The wrapped cursor.
+        """
+        return self.sync_cursor.executemany(operation, seq_parameters)
+
+    async def fetchone(self) -> Any:
+        """Return the next scripted row."""
+        return self.sync_cursor.fetchone()
+
+    async def fetchmany(self, size: int = 0) -> "list[Any]":
+        """Return up to ``size`` scripted rows."""
+        return self.sync_cursor.fetchmany(size)
+
+    async def fetchall(self) -> "list[Any]":
+        """Return the remaining scripted rows."""
+        return self.sync_cursor.fetchall()
+
+    async def close(self) -> None:
+        """Close the wrapped cursor."""
+        self.sync_cursor.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.close()
+
+
+class FakeDb2AsyncConnection:
+    """Stand-in for ``ibm_db_dbi.AsyncConnection`` wrapping a sync fake connection."""
+
+    def __init__(self, connection: "FakeDb2Connection | None" = None) -> None:
+        self.sync_connection = connection if connection is not None else FakeDb2Connection()
+
+    @property
+    def conn_handler(self) -> object:
+        """Return the wrapped connection's CLI handle."""
+        return self.sync_connection.conn_handler
+
+    @property
+    def dbms_name(self) -> str:
+        """Return the wrapped connection's DBMS name."""
+        return self.sync_connection.dbms_name
+
+    async def cursor(self) -> FakeDb2AsyncCursor:
+        """Open a cursor on the wrapped connection.
+
+        Returns:
+            The async cursor wrapper.
+        """
+        return FakeDb2AsyncCursor(self.sync_connection.cursor())
+
+    async def close(self) -> None:
+        """Close the wrapped connection."""
+        self.sync_connection.close()
+
+    async def commit(self) -> None:
+        """Commit on the wrapped connection."""
+        self.sync_connection.commit()
+
+    async def rollback(self) -> None:
+        """Roll back on the wrapped connection."""
+        self.sync_connection.rollback()
+
+    async def set_autocommit(self, is_on: bool) -> None:
+        """Switch the wrapped connection's autocommit mode."""
+        self.sync_connection.set_autocommit(is_on)
+
+
+class FakeAsyncConnectionFactory:
+    """Stand-in for the ``ibm_db_dbi.AsyncConnection`` class and its ``connect`` factory."""
+
+    def __init__(self, module: "FakeIbmDbDbiModule") -> None:
+        self._module = module
+
+    async def connect(
+        self,
+        dsn: str,
+        user: str = "",
+        password: str = "",
+        host: str = "",
+        database: str = "",
+        conn_options: "dict[int, int] | None" = None,
+    ) -> FakeDb2AsyncConnection:
+        """Open a sync fake connection through the module's ``connect`` and wrap it.
+
+        Returns:
+            The async connection wrapper.
+        """
+        return FakeDb2AsyncConnection(self._module.connect(dsn, user, password, host, database, conn_options))
+
+
 class FakeIbmDbDbiModule:
     """Stand-in for the ``ibm_db_dbi`` module.
 
     ``connect()`` returns the next connection from ``pending_connections`` or a new one, applying
     the autocommit mode from ``conn_options`` and registering it with the paired ``ibm_db`` fake.
+    Errors queued in ``connect_errors`` are raised, one per call, before a connection is opened.
+    ``AsyncConnection.connect()`` goes through the same path and wraps the result.
     """
 
     SQL_ATTR_AUTOCOMMIT = SQL_ATTR_AUTOCOMMIT
@@ -298,6 +424,8 @@ class FakeIbmDbDbiModule:
         self.ibm_db = ibm_db or FakeIbmDbModule()
         self.pending_connections: list[FakeDb2Connection] = []
         self.connect_calls: list[tuple[str, str, str, str, str, dict[int, int] | None]] = []
+        self.connect_errors: list[BaseException] = []
+        self.AsyncConnection = FakeAsyncConnectionFactory(self)
 
     def connect(
         self,
@@ -314,6 +442,8 @@ class FakeIbmDbDbiModule:
             The connection, with autocommit taken from ``conn_options`` (off by default).
         """
         self.connect_calls.append((dsn, user, password, host, database, conn_options))
+        if self.connect_errors:
+            raise self.connect_errors.pop(0)
         options = dict(conn_options) if conn_options is not None else {}
         options.setdefault(SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF)
         effective_dsn = dsn
