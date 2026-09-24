@@ -5,6 +5,7 @@ import pytest
 _FAMILY_ADAPTERS = {
     "bigquery": frozenset({"bigquery"}),
     "cockroach": frozenset({"cockroach_asyncpg", "cockroach_psycopg"}),
+    "db2": frozenset({"db2"}),
     "duckdb": frozenset({"duckdb"}),
     "mssql": frozenset({"arrow_odbc", "mssql_python", "pymssql"}),
     "mysql": frozenset({"aiomysql", "asyncmy", "mysqlconnector", "pymysql"}),

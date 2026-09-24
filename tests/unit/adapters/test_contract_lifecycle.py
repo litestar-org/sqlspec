@@ -18,6 +18,7 @@ _SESSION_CONTEXTS = (
     ("sqlspec.adapters.adbc._typing", "AdbcSessionContext"),
     ("sqlspec.adapters.arrow_odbc._typing", "ArrowOdbcSessionContext"),
     ("sqlspec.adapters.bigquery._typing", "BigQuerySessionContext"),
+    ("sqlspec.adapters.db2._typing", "Db2SyncSessionContext"),
 )
 
 POOLING_CASES = (
@@ -37,6 +38,8 @@ POOLING_CASES = (
     "asyncmy-async",
     "oracledb-sync",
     "oracledb-async",
+    "db2-sync",
+    "db2-async",
 )
 # mysqlconnector-async and bigquery-sync are NoPool configs: connection-hook only, no pooling.
 CONNECTION_HOOK_CASES = (*POOLING_CASES, "mysqlconnector-async", "bigquery-sync")

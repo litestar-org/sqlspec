@@ -38,7 +38,7 @@ _SUITE_MODULES = (
 )
 _SUITE_FAMILIES = {
     "case_metadata_contract": frozenset({"sqlite"}),
-    "events_queue_contract": frozenset({"duckdb", "mssql", "mysql", "oracle", "postgres", "sqlite"}),
+    "events_queue_contract": frozenset({"db2", "duckdb", "mssql", "mysql", "oracle", "postgres", "sqlite"}),
     "extra_assertions_proof_contract": frozenset({"sqlite"}),
     "listen_notify_contract": frozenset({"postgres"}),
     "oracle_lob_fetch_contract": frozenset({"oracle"}),

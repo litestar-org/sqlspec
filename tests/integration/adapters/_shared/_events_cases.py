@@ -8,6 +8,8 @@ from _pytest.mark.structures import Mark, MarkDecorator
 
 from tests.integration.adapters._shared._cases import (
     ARROW_ODBC_MARK,
+    DB2_MARK,
+    DB2_XDIST_MARK,
     DUCKDB_XDIST_MARK,
     MSSQL_MARK,
     MSSQL_XDIST_MARK,
@@ -88,6 +90,7 @@ SYNC_EVENTS_CASES = (
         marks=(ORACLE_XDIST_MARK,),
         force_poll_queue=True,
     ),
+    EventsCase("db2-sync", "events_config_db2_sync", "db2", "sync", marks=(DB2_MARK, DB2_XDIST_MARK)),
 )
 
 ASYNC_EVENTS_CASES = (
@@ -130,6 +133,9 @@ ASYNC_EVENTS_CASES = (
         "async",
         marks=(ORACLE_XDIST_MARK, pytest.mark.anyio),
         force_poll_queue=True,
+    ),
+    EventsCase(
+        "db2-async", "events_config_db2_async", "db2", "async", marks=(DB2_MARK, DB2_XDIST_MARK, pytest.mark.anyio)
     ),
 )
 

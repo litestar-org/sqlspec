@@ -8,6 +8,8 @@ from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 
 from tests.integration.adapters._shared._cases import (
     ADBC_MARK,
+    DB2_MARK,
+    DB2_XDIST_MARK,
     DUCKDB_XDIST_MARK,
     MSSQL_MARK,
     MSSQL_XDIST_MARK,
@@ -114,6 +116,7 @@ SYNC_MIGRATION_CASES = (
         supports_missing_schema_validation=True,
         marks=(MSSQL_MARK, MSSQL_XDIST_MARK),
     ),
+    MigrationCase("db2-sync", "migration_config_db2_sync", "db2", "sync", marks=(DB2_MARK, DB2_XDIST_MARK)),
 )
 
 ASYNC_MIGRATION_CASES = (
@@ -179,6 +182,9 @@ ASYNC_MIGRATION_CASES = (
         "async",
         uses_oracle_ddl=True,
         marks=(ORACLE_XDIST_MARK, pytest.mark.anyio),
+    ),
+    MigrationCase(
+        "db2-async", "migration_config_db2_async", "db2", "async", marks=(DB2_MARK, DB2_XDIST_MARK, pytest.mark.anyio)
     ),
 )
 

@@ -9,6 +9,7 @@ from _pytest.mark.structures import Mark, MarkDecorator, ParameterSet
 
 from sqlspec.config import DatabaseConfigProtocol
 from tests.integration.adapters._shared._schema import (
+    DB2_CONTRACT_TABLE,
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
     MSSQL_CONTRACT_TABLE,
@@ -129,6 +130,36 @@ MSSQL_MARK = pytest.mark.mssql
 ORACLE_XDIST_MARK = pytest.mark.xdist_group("oracle")
 BIGQUERY_MARK = pytest.mark.bigquery
 BIGQUERY_XDIST_MARK = pytest.mark.xdist_group("bigquery")
+DB2_MARK = pytest.mark.db2
+DB2_XDIST_MARK = pytest.mark.xdist_group("db2")
+
+
+def _db2_case(mode: Literal["sync", "async"], marks: tuple[Mark | MarkDecorator, ...]) -> DriverCase:
+    return DriverCase(
+        id=f"db2-{mode}",
+        fixture_name=f"contract_db2_{mode}_driver",
+        adapter="db2",
+        dialect="db2",
+        mode=mode,
+        marks=marks,
+        table=DB2_CONTRACT_TABLE,
+        supports_execute_many=True,
+        supports_savepoints=True,
+        supports_migrations=True,
+        supports_data_dictionary=True,
+        supports_data_dictionary_core=True,
+        supports_data_dictionary_constraints=True,
+        supports_schema_qualified_data_dictionary=True,
+        supports_for_update=True,
+        supports_merge=True,
+        supports_native_row_streaming=True,
+        supports_pooling=True,
+        supports_connection_hook=True,
+        supports_lowercase_columns=True,
+        config_factory_fixture=f"lifecycle_config_db2_{mode}",
+        invalid_sql_error_policy="database",
+    )
+
 
 SYNC_DRIVER_CASES = (
     DriverCase(
@@ -512,6 +543,7 @@ SYNC_DRIVER_CASES = (
         supports_native_row_streaming=True,
         invalid_sql_error_policy="database",
     ),
+    _db2_case("sync", (DB2_MARK, DB2_XDIST_MARK)),
     DriverCase(
         id="bigquery-sync",
         fixture_name="contract_bigquery_driver",
@@ -911,6 +943,7 @@ ASYNC_DRIVER_CASES = (
             "stream_cursor_cleanup:start_failure",
         ),
     ),
+    _db2_case("async", (DB2_MARK, DB2_XDIST_MARK, pytest.mark.anyio)),
 )
 
 DEFERRED_DRIVER_CASES = (

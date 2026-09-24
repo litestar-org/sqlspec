@@ -54,6 +54,7 @@ DRIVER_FEATURE_TYPED_DICTS: dict[str, tuple[str, str]] = {
     "bigquery": ("sqlspec.adapters.bigquery.config", "BigQueryDriverFeatures"),
     "cockroach_asyncpg": ("sqlspec.adapters.cockroach_asyncpg.config", "CockroachAsyncpgDriverFeatures"),
     "cockroach_psycopg": ("sqlspec.adapters.cockroach_psycopg.config", "CockroachPsycopgDriverFeatures"),
+    "db2": ("sqlspec.adapters.db2.config", "Db2DriverFeatures"),
     "duckdb": ("sqlspec.adapters.duckdb.config", "DuckDBDriverFeatures"),
     "mssql_python": ("sqlspec.adapters.mssql_python.config", "MssqlPythonDriverFeatures"),
     "mysqlconnector": ("sqlspec.adapters.mysqlconnector.config", "MysqlConnectorDriverFeatures"),

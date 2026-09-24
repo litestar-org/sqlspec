@@ -9,6 +9,8 @@ from tests.integration.adapters._shared._cases import (
     ADBC_MARK,
     ARROW_ODBC_MARK,
     COCKROACH_XDIST_MARK,
+    DB2_MARK,
+    DB2_XDIST_MARK,
     DUCKDB_XDIST_MARK,
     MSSQL_MARK,
     MSSQL_XDIST_MARK,
@@ -111,6 +113,8 @@ ADK_STORE_CASES = (
         marks=(MSSQL_MARK, MSSQL_XDIST_MARK, pytest.mark.anyio),
     ),
     AdkStoreCase("pymssql", "adk_store_pymssql", "pymssql", marks=(MSSQL_MARK, MSSQL_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase("db2-sync", "adk_store_db2_sync", "db2", marks=(DB2_MARK, DB2_XDIST_MARK, pytest.mark.anyio)),
+    AdkStoreCase("db2-async", "adk_store_db2_async", "db2", marks=(DB2_MARK, DB2_XDIST_MARK, pytest.mark.anyio)),
 )
 
 ADK_STORE_PARAMS = tuple(pytest.param(case, id=case.id, marks=case.marks) for case in ADK_STORE_CASES)
