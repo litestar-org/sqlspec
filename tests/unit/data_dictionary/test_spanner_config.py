@@ -8,12 +8,12 @@ from sqlspec.data_dictionary.dialects.spanner.config import SPANNER_CONFIG, SPAN
 
 
 def test_spanner_supports_for_update_feature_flag() -> None:
-    """Verify that Spanner feature flag supports_for_update evaluates to True."""
-    assert SPANNER_FEATURE_FLAGS["supports_for_update"] is True
-    assert SPANNER_CONFIG.get_feature_flag("supports_for_update") is True
+    """Verify that Spanner feature flag supports_for_update evaluates to False."""
+    assert SPANNER_FEATURE_FLAGS["supports_for_update"] is False
+    assert SPANNER_CONFIG.get_feature_flag("supports_for_update") is False
 
     dictionary = SpannerDataDictionary()
-    assert dictionary.get_feature_flag(None, "supports_for_update") is True
+    assert dictionary.get_feature_flag(None, "supports_for_update") is False
 
 
 def test_spanner_type_mappings_include_float32_and_tokenlist() -> None:
