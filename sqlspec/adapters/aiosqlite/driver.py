@@ -1,7 +1,7 @@
 """AIOSQLite driver implementation for async SQLite operations."""
 
 import asyncio
-import random
+import secrets
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
@@ -9,15 +9,16 @@ from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import (
     AiosqliteStreamSource,
-    _execute_and_resolve_metadata,
-    _execute_fetchall_with_metadata,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_and_resolve_metadata,
+    execute_fetchall_with_metadata,
+    execute_many_on_worker_thread,
+    execute_script_on_worker_thread,
     format_identifier,
-    normalize_execute_many_parameters,
     normalize_execute_parameters,
     resolve_rowcount,
     run_on_worker_thread,
@@ -106,7 +107,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
                 self.connection,
-                _execute_fetchall_with_metadata,
+                execute_fetchall_with_metadata,
                 self.connection,
                 sql,
                 normalized_parameters,
@@ -130,7 +131,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         affected_rows, last_inserted_id = await run_on_worker_thread(
             self.connection,
-            _execute_and_resolve_metadata,
+            execute_and_resolve_metadata,
             self.connection,
             sql,
             normalized_parameters,
@@ -147,11 +148,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self._invalidate_rowid_target_cache(statement.operation_type)
 
         try:
-            await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+            affected_rows = await run_on_worker_thread(
+                self.connection, execute_many_on_worker_thread, self.connection, sql, prepared_parameters
+            )
         finally:
             self._invalidate_rowid_target_cache(statement.operation_type)
-
-        affected_rows = resolve_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -161,18 +162,15 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
-        successful_count = 0
-        last_cursor = cursor
-
         try:
-            for stmt in statements:
-                await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
-                successful_count += 1
+            statement_count, successful_count = await run_on_worker_thread(
+                self.connection, execute_script_on_worker_thread, self.connection, statements, prepared_parameters
+            )
         finally:
             self._rowid_target_cache.clear()
 
         return self.create_execution_result(
-            last_cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
 
     async def execute_many(
@@ -194,16 +192,19 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             and self.observability.is_idle
             and self._can_use_execute_many_thin_path(statement, parameters, config)
         ):
+            cursor = None
             try:
                 cursor = await self.connection.executemany(statement, parameters)
+                rowcount = cursor.rowcount
+                affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+                operation = self._resolve_dml_operation_type(statement)
+                self._invalidate_rowid_target_cache(operation)
+                return DMLResult(operation, affected_rows)
             except (aiosqlite.Error, sqlite3.Error) as exc:
                 raise create_mapped_exception(exc) from exc
-
-            rowcount = cursor.rowcount
-            affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
-            operation = self._resolve_dml_operation_type(statement)
-            self._invalidate_rowid_target_cache(operation)
-            return DMLResult(operation, affected_rows)
+            finally:
+                if cursor is not None:
+                    await cursor.close()
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
     async def begin(self) -> None:
@@ -234,12 +235,14 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         """Create async context manager for AIOSQLite cursor."""
         return AiosqliteCursor(connection)
 
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "AsyncRowStream[dict[str, Any]] | None":
+    def dispatch_select_stream(
+        self, statement: "SQL", chunk_size: int, as_dict: bool = True
+    ) -> "AsyncRowStream[Any] | None":
         """Return a native aiosqlite row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return AsyncRowStream(AiosqliteStreamSource(self, sql, prepared_parameters, chunk_size))
+        return AsyncRowStream(AiosqliteStreamSource(self, sql, prepared_parameters, chunk_size, as_dict=as_dict))
 
     def handle_database_exceptions(self) -> "AiosqliteExceptionHandler":
         """Handle AIOSQLite-specific exceptions."""
@@ -273,37 +276,42 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
+        batch_size: int = 10000,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into SQLite using batched inserts."""
-
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        prepared_records = (
-            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-            if records and self._arrow_rows_need_preparation(arrow_table)
-            else records
-        )
+        columns = arrow_table.column_names
+        insert_sql = build_insert_statement(table, columns)
+        needs_prep = self._arrow_rows_need_preparation(arrow_table)
+
         owns_transaction = not self.connection.in_transaction
         try:
             if owns_transaction:
-                await self.connection.execute("BEGIN IMMEDIATE")
+                await self.begin()
             if overwrite:
                 statement = f"DELETE FROM {format_identifier(table)}"
                 async with self.with_cursor(self.connection) as cursor:
                     await cursor.execute(statement)
-            if records:
-                insert_sql = build_insert_statement(table, columns)
-                async with self.with_cursor(self.connection) as cursor:
-                    await cursor.executemany(insert_sql, cast("Any", prepared_records))
+            for batch in arrow_table.to_batches(max_chunksize=batch_size):
+                pydict = batch.to_pydict()
+                records = list(zip(*(pydict[col] for col in columns), strict=False))
+                if records:
+                    prepared_records = (
+                        self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                        if needs_prep
+                        else records
+                    )
+                    async with self.with_cursor(self.connection) as cursor:
+                        await cursor.executemany(insert_sql, cast("Any", prepared_records))
             if owns_transaction:
-                await self.connection.commit()
+                await self.commit()
         except (aiosqlite.Error, sqlite3.Error) as exc:
             if owns_transaction:
-                await self.connection.rollback()
+                await self.rollback()
             raise create_mapped_exception(exc) from exc
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -361,7 +369,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 if cached.operation_profile.returns_rows:
                     fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
                         self.connection,
-                        _execute_fetchall_with_metadata,
+                        execute_fetchall_with_metadata,
                         self.connection,
                         cached.compiled_sql,
                         normalized_parameters,
@@ -391,7 +399,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 else:
                     affected_rows, last_inserted_id = await run_on_worker_thread(
                         self.connection,
-                        _execute_and_resolve_metadata,
+                        execute_and_resolve_metadata,
                         self.connection,
                         cached.compiled_sql,
                         normalized_parameters,
@@ -545,7 +553,7 @@ async def _retry_begin_with_backoff(
         SQLSpecError: If every retry attempt fails.
     """
     for attempt in range(max_retries):
-        delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
+        delay = 0.01 * (2**attempt) + secrets.SystemRandom().uniform(0, 0.01)
         await asyncio.sleep(delay)
         try:
             await connection.execute("BEGIN IMMEDIATE")

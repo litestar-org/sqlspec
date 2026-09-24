@@ -1,6 +1,6 @@
 """SQLite driver implementation."""
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
@@ -43,6 +43,9 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
+
+T = TypeVar("T")
+_BATCH_SAMPLE_THRESHOLD: Final = 100
 
 
 class SqliteExceptionHandler(BaseSyncExceptionHandler):
@@ -219,15 +222,20 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    def begin(self) -> None:
+    def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
         """Begin a database transaction.
+
+        Args:
+            mode: Transaction lock mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
+                Defaults to configured driver feature or IMMEDIATE.
 
         Raises:
             SQLSpecError: If transaction cannot be started
         """
+        transaction_mode = mode or self.driver_features.get("default_transaction_mode", "IMMEDIATE")
         try:
             if not self.connection.in_transaction:
-                self.connection.execute("BEGIN")
+                self.connection.execute(f"BEGIN {transaction_mode}")
         except sqlite3.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -284,12 +292,14 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         return SqliteCursor(connection)
 
-    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
+    def dispatch_select_stream(
+        self, statement: "SQL", chunk_size: int, as_dict: bool = True
+    ) -> "SyncRowStream[Any] | None":
         """Return a native SQLite row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size))
+        return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size, as_dict=as_dict))
 
     def handle_database_exceptions(self) -> "SqliteExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
@@ -312,7 +322,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Execute a query and write Arrow-compatible output to storage (sync)."""
-
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
@@ -327,37 +336,42 @@ class SqliteDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
+        batch_size: int = 10000,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
-        """Load Arrow data into SQLite using batched inserts."""
-
+        """Load Arrow data into SQLite using chunked batched inserts."""
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        prepared_records = (
-            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-            if records and self._arrow_rows_need_preparation(arrow_table)
-            else records
-        )
+        columns = arrow_table.column_names
+        insert_sql = build_insert_statement(table, columns)
+        needs_prep = self._arrow_rows_need_preparation(arrow_table)
+
         owns_transaction = not self.connection.in_transaction
         try:
             if owns_transaction:
-                self.connection.execute("BEGIN IMMEDIATE")
+                self.begin("IMMEDIATE")
             if overwrite:
                 statement = f"DELETE FROM {format_identifier(table)}"
                 with self.with_cursor(self.connection) as cursor:
                     cursor.execute(statement)
-            if records:
-                insert_sql = build_insert_statement(table, columns)
-                with self.with_cursor(self.connection) as cursor:
-                    cursor.executemany(insert_sql, cast("Any", prepared_records))
+            for batch in arrow_table.to_batches(max_chunksize=batch_size):
+                pydict = batch.to_pydict()
+                records = list(zip(*(pydict[col] for col in columns), strict=False))
+                if records:
+                    prepared_records = (
+                        self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                        if needs_prep
+                        else records
+                    )
+                    with self.with_cursor(self.connection) as cursor:
+                        cursor.executemany(insert_sql, cast("Any", prepared_records))
             if owns_transaction:
-                self.connection.commit()
+                self.commit()
         except sqlite3.Error as exc:
             if owns_transaction:
-                self.connection.rollback()
+                self.rollback()
             raise create_mapped_exception(exc) from exc
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -430,14 +444,16 @@ class SqliteDriver(SyncDriverAdapterBase):
 
             fetched_data = cursor.fetchall()
             affected_rows = resolve_rowcount(cursor)
-            last_inserted_id = resolve_lastrowid(
-                self.connection,
-                cursor,
-                cached.operation_type,
-                affected_rows,
-                cached.processed_state.parsed_expression,
-                self._rowid_target_cache,
-            )
+            last_inserted_id = None
+            if cached.operation_type != "SELECT":
+                last_inserted_id = resolve_lastrowid(
+                    self.connection,
+                    cursor,
+                    cached.operation_type,
+                    affected_rows,
+                    cached.processed_state.parsed_expression,
+                    self._rowid_target_cache,
+                )
             description = cursor.description
             column_names = [col[0] for col in description] if description else []
             row_format = resolve_row_format(fetched_data)
@@ -458,7 +474,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
         msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover
+        raise AssertionError(msg)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
@@ -506,10 +522,16 @@ class SqliteDriver(SyncDriverAdapterBase):
         has_type_coercion = bool(coercion_map)
         fallback_items = type_coercion_fallbacks(coercion_map) if coercion_map else ()
 
-        # Common benchmark shape: list[tuple[value]]
+        total_rows = len(parameters)
+        if total_rows > _BATCH_SAMPLE_THRESHOLD:
+            sample_indices = (0, 1, total_rows // 4, total_rows // 2, (3 * total_rows) // 4, total_rows - 1)
+            eval_parameters = [parameters[i] for i in sample_indices]
+        else:
+            eval_parameters = parameters
+
         if row_len == 1:
             if has_type_coercion and coercion_map is not None:
-                for param_set in parameters:
+                for param_set in eval_parameters:
                     sequence = SqliteDriver._as_sequence_parameter_set(param_set)
                     if sequence is None or type(sequence) is not first_type:
                         return False
@@ -519,7 +541,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                         return False
                 return True
 
-            for param_set in parameters:
+            for param_set in eval_parameters:
                 sequence = SqliteDriver._as_sequence_parameter_set(param_set)
                 if sequence is None or type(sequence) is not first_type:
                     return False
@@ -530,7 +552,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             return True
 
         if has_type_coercion and coercion_map is not None:
-            for param_set in parameters:
+            for param_set in eval_parameters:
                 sequence = SqliteDriver._as_sequence_parameter_set(param_set)
                 if sequence is None or type(sequence) is not first_type:
                     return False
@@ -541,7 +563,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                         return False
             return True
 
-        for param_set in parameters:
+        for param_set in eval_parameters:
             sequence = SqliteDriver._as_sequence_parameter_set(param_set)
             if sequence is None or type(sequence) is not first_type:
                 return False
@@ -570,14 +592,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         if command_keyword == "DELETE":
             return "DELETE"
         return "COMMAND"
-
-    def _connection_in_transaction(self) -> bool:
-        """Check if connection is in transaction.
-
-        Returns:
-            True if connection is in an active transaction.
-        """
-        return bool(self.connection.in_transaction)
 
 
 register_driver_profile("sqlite", driver_profile)

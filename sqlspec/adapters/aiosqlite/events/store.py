@@ -4,7 +4,7 @@ from typing import Any
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, _apply_extension_pragmas, _extension_pragma_statements
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, apply_extension_pragmas, extension_pragma_statements
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
@@ -36,11 +36,11 @@ class AiosqliteEventQueueStore(BaseEventQueueStore[AiosqliteConfig]):
 
     def __init__(self, config: AiosqliteConfig) -> None:
         super().__init__(config)
-        self._pragma_statements = _extension_pragma_statements(config, "events")
+        self._pragma_statements = extension_pragma_statements(config, "events")
 
     async def prepare_schema_async(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before queue DDL."""
-        await _apply_extension_pragmas(driver.connection, self._pragma_statements)
+        await apply_extension_pragmas(driver.connection, self._pragma_statements)
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return SQLite-compatible column types for the event queue."""

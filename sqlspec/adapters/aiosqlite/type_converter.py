@@ -1,4 +1,3 @@
-# Keep in sync with sqlspec/adapters/sqlite/type_converter.py
 """SQLite custom type handlers for optional JSON and type conversion support.
 
 Provides registration functions for SQLite's adapter/converter system to enable
@@ -9,12 +8,12 @@ All functions are designed for mypyc compilation using functools.partial
 instead of lambdas for adapter registration.
 """
 
-import json
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -31,14 +30,13 @@ def json_adapter(value: Any, serializer: "Callable[[Any], str] | None" = None) -
 
     Args:
         value: Python dict or list to serialize.
-        serializer: Optional JSON serializer callable. Defaults to standard json.dumps.
+        serializer: Optional JSON serializer callable. Defaults to compiled to_json.
 
     Returns:
         JSON string representation.
     """
-    if serializer is None:
-        return json.dumps(value, ensure_ascii=False)
-    return serializer(value)
+    codec = serializer or to_json
+    return codec(value)
 
 
 def json_converter(value: bytes, deserializer: "Callable[[str], Any] | None" = None) -> Any:
@@ -46,14 +44,13 @@ def json_converter(value: bytes, deserializer: "Callable[[str], Any] | None" = N
 
     Args:
         value: UTF-8 encoded JSON bytes from SQLite.
-        deserializer: Optional JSON deserializer callable. Defaults to standard json.loads.
+        deserializer: Optional JSON deserializer callable. Defaults to compiled from_json.
 
     Returns:
         Deserialized Python object (dict or list).
     """
-    if deserializer is None:
-        return json.loads(value.decode("utf-8"))
-    return deserializer(value.decode("utf-8"))
+    codec = deserializer or from_json
+    return codec(value.decode("utf-8"))
 
 
 def register_type_handlers(
@@ -63,6 +60,9 @@ def register_type_handlers(
 
     This function registers handlers globally for the sqlite3 module. It should be
     called once during application initialization if custom type handling is needed.
+
+    Note that sqlite3.register_adapter is deprecated in Python 3.12+ in favor of
+    statement-level conversions.
 
     Args:
         json_serializer: Optional custom JSON serializer.
