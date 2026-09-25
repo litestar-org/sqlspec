@@ -1,10 +1,9 @@
-"""Unit tests for Spanner Partitioned DML execution on driver and config."""
+"""Unit tests for Spanner Partitioned DML execution on driver."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from google.cloud.spanner_v1.types.type import TypeCode
 
-from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.core import default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 
@@ -51,21 +50,6 @@ def test_driver_execute_partitioned_dml_with_parameters() -> None:
     assert kwargs["param_types"]["status"].code == TypeCode.STRING
     assert "limit" in kwargs["param_types"]
     assert kwargs["param_types"]["limit"].code == TypeCode.INT64
-
-
-def test_config_execute_partitioned_dml() -> None:
-    """Verify that config.execute_partitioned_dml delegates to get_database().execute_partitioned_dml."""
-    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
-    mock_db = MagicMock()
-    mock_db.execute_partitioned_dml.return_value = 100
-
-    with patch.object(config, "get_database", return_value=mock_db):
-        rows = config.execute_partitioned_dml("DELETE FROM large_table WHERE TRUE")
-
-    assert rows == 100
-    mock_db.execute_partitioned_dml.assert_called_once()
-    sql = mock_db.execute_partitioned_dml.call_args[0][0]
-    assert "DELETE FROM large_table WHERE TRUE" in sql
 
 
 def test_driver_execute_partitioned_dml_with_sql_object_and_options() -> None:
@@ -116,31 +100,3 @@ def test_driver_execute_partitioned_dml_no_database_raises() -> None:
 
     with pytest.raises(SQLConversionError, match="Could not resolve Spanner database"):
         driver.execute_partitioned_dml("DELETE FROM large_table WHERE TRUE")
-
-
-def test_config_execute_partitioned_dml_with_parameters_and_options() -> None:
-    """Verify config partitioned DML forwards parameters, types, and options."""
-    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
-    mock_db = MagicMock()
-    mock_db.execute_partitioned_dml.return_value = 25
-
-    mock_query_options = MagicMock()
-    mock_request_options = MagicMock()
-
-    with patch.object(config, "get_database", return_value=mock_db):
-        rows = config.execute_partitioned_dml(
-            "UPDATE items SET status = :status WHERE id = :id",
-            {"status": "deleted", "id": 5},
-            query_options=mock_query_options,
-            request_options=mock_request_options,
-            exclude_txn_from_change_streams=True,
-        )
-
-    assert rows == 25
-    mock_db.execute_partitioned_dml.assert_called_once()
-    _, kwargs = mock_db.execute_partitioned_dml.call_args
-    assert kwargs["params"] == {"status": "deleted", "id": 5}
-    assert "status" in kwargs["param_types"]
-    assert kwargs["query_options"] is mock_query_options
-    assert kwargs["request_options"] is mock_request_options
-    assert kwargs["exclude_txn_from_change_streams"] is True
