@@ -26,7 +26,9 @@ from psycopg.sql import Composed as PsycopgComposed
 from psycopg.sql import Identifier as PsycopgIdentifier
 from psycopg.types.json import Jsonb as PsycopgJsonb
 from psycopg_pool import AsyncConnectionPool as PsycopgAsyncConnectionPool
+from psycopg_pool import AsyncNullConnectionPool as PsycopgAsyncNullConnectionPool
 from psycopg_pool import ConnectionPool as PsycopgConnectionPool
+from psycopg_pool import NullConnectionPool as PsycopgNullConnectionPool
 from psycopg_pool.abc import AsyncConnectFailedCB as PsycopgAsyncConnectFailedCB
 from psycopg_pool.abc import AsyncConnectionCB as PsycopgAsyncConnectionCB
 from psycopg_pool.abc import ConnectFailedCB as PsycopgConnectFailedCB
@@ -65,6 +67,7 @@ __all__ = (
     "PsycopgAsyncConnectionCB",
     "PsycopgAsyncConnectionPool",
     "PsycopgAsyncCursor",
+    "PsycopgAsyncNullConnectionPool",
     "PsycopgAsyncRawCursor",
     "PsycopgAsyncRowFactory",
     "PsycopgAsyncSessionContext",
@@ -79,6 +82,7 @@ __all__ = (
     "PsycopgJsonb",
     "PsycopgNativeAsyncConnection",
     "PsycopgNativeAsyncCursor",
+    "PsycopgNullConnectionPool",
     "PsycopgPipelineDriver",
     "PsycopgProgrammingError",
     "PsycopgRowFactory",

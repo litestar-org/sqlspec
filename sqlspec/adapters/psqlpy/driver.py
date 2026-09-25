@@ -4,7 +4,11 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
+import contextlib
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
@@ -22,12 +26,23 @@ from sqlspec.adapters.psqlpy.core import (
     format_table_identifier,
     get_parameter_casts,
     prepare_parameters_with_casts,
+    records_to_arrow_table,
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
-from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.core import (
+    SQL,
+    StackResult,
+    StatementConfig,
+    create_arrow_result,
+    get_cache_config,
+    register_driver_profile,
+)
+from sqlspec.core.stack import StatementStack
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.schema import to_value_type
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -64,6 +79,7 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsqlpyDriver(AsyncDriverAdapterBase):
     """PostgreSQL driver implementation using psqlpy.
 
@@ -71,7 +87,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ("_data_dictionary", "_transaction_active")
+    _data_dictionary: PsqlpyDataDictionary | None
+    _transaction_active: bool
+    _json_columns_cache: dict[tuple[str | None, str], set[str]]
+
+    __slots__ = ("_data_dictionary", "_json_columns_cache", "_transaction_active")
     dialect = "postgres"
 
     def __init__(
@@ -86,8 +106,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: PsqlpyDataDictionary | None = None
+        self._data_dictionary = None
         self._transaction_active = False
+        self._json_columns_cache = {}
 
     async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
@@ -116,6 +137,18 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         if statement.operation_type in {"INSERT", "UPDATE", "DELETE"}:
+            if "returning" in sql.lower():
+                query_result = await cursor.fetch(sql, params)
+                dict_rows, column_names = collect_rows(query_result)
+                rows_affected = len(dict_rows)
+                return self.create_execution_result(
+                    cursor,
+                    selected_data=dict_rows,
+                    column_names=column_names,
+                    data_row_count=rows_affected,
+                    rowcount_override=rows_affected,
+                    is_select_result=statement.returns_rows(),
+                )
             count_sql = _dml_count_query(sql)
             if count_sql is not None:
                 count_result = await cursor.fetch(count_sql, params)
@@ -158,7 +191,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL script with statement splitting.
+        """Execute SQL script with statement splitting or batch execution.
 
         Args:
             cursor: Psqlpy connection object
@@ -170,6 +203,18 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
+
+        if not prepared_parameters and hasattr(cursor, "execute_batch"):
+            statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler:
+                await cursor.execute_batch(sql)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+            return self.create_execution_result(
+                cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
+            )
+
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -216,6 +261,24 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         finally:
             self._transaction_active = False
 
+    async def savepoint(self, name: str) -> None:
+        """Create a savepoint within the current transaction."""
+        validate_savepoint_name(name)
+        quoted_name = quote_identifier(name)
+        await self.connection.execute(f"SAVEPOINT {quoted_name}")
+
+    async def release_savepoint(self, name: str) -> None:
+        """Release a savepoint within the current transaction."""
+        validate_savepoint_name(name)
+        quoted_name = quote_identifier(name)
+        await self.connection.execute(f"RELEASE SAVEPOINT {quoted_name}")
+
+    async def rollback_savepoint(self, name: str) -> None:
+        """Rollback to a savepoint within the current transaction."""
+        validate_savepoint_name(name)
+        quoted_name = quote_identifier(name)
+        await self.connection.execute(f"ROLLBACK TO SAVEPOINT {quoted_name}")
+
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
         normalized_schema = normalize_identifier(schema, "postgres")
@@ -247,6 +310,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             Names of columns typed json or jsonb.
         """
+        cache_key = (schema_name, table_name)
+        if cache_key in self._json_columns_cache:
+            return self._json_columns_cache[cache_key]
+
         qualified = quote_identifier(table_name)
         if schema_name is not None:
             qualified = f"{quote_identifier(schema_name)}.{qualified}"
@@ -261,7 +328,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             [qualified],
         )
         data, _ = collect_rows(rows)
-        return {str(row["column_name"]) for row in data}
+        result = {str(row["column_name"]) for row in data}
+        self._json_columns_cache[cache_key] = result
+        return result
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
@@ -299,6 +368,173 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         """
         return PsqlpyExceptionHandler()
 
+    async def execute_stack(
+        self, stack: "StatementStack", *, continue_on_error: bool = False
+    ) -> "tuple[StackResult, ...]":
+        """Execute a StatementStack using psqlpy pipelining when available."""
+        if not isinstance(stack, StatementStack) or not stack or self.stack_native_disabled or continue_on_error:
+            return await super().execute_stack(stack, continue_on_error=continue_on_error)
+
+        queries: list[tuple[str, list[Any] | None]] = []
+        prepared_operations: list[tuple[Any, Any]] = []
+
+        for operation in stack.operations:
+            kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
+            config = kwargs.pop("statement_config", None) or self.statement_config
+            sql_statement = self.prepare_statement(
+                operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
+            )
+            if sql_statement.is_script or sql_statement.is_many:
+                return await super().execute_stack(stack, continue_on_error=continue_on_error)
+            sql, params = self._compiled_sql(sql_statement, config)
+            p_list = list(params) if isinstance(params, (list, tuple)) else None
+            queries.append((sql, p_list))
+            prepared_operations.append((operation, sql_statement))
+
+        transaction = self.connection.transaction()
+        needs_commit = False
+        if not self._connection_in_transaction():
+            await transaction.begin()
+            needs_commit = True
+
+        results: list[StackResult] = []
+        try:
+            query_results = await transaction.pipeline(queries)
+            if needs_commit:
+                await transaction.commit()
+            for (_op, stmt), q_res in zip(prepared_operations, query_results, strict=False):
+                rows, column_names = collect_rows(q_res)
+                exec_result = self.create_execution_result(
+                    self.connection,
+                    selected_data=rows,
+                    column_names=column_names,
+                    data_row_count=len(rows),
+                    is_select_result=stmt.returns_rows(),
+                )
+                sql_result = self.build_statement_result(stmt, exec_result)
+                results.append(StackResult(result=sql_result))
+        except Exception as exc:
+            if needs_commit:
+                with contextlib.suppress(Exception):
+                    await transaction.rollback()
+            msg = f"Pipelined stack execution failed: {exc}"
+            raise SQLSpecError(msg) from exc
+
+        return tuple(results)
+
+    async def select_to_arrow(
+        self,
+        statement: Any,
+        /,
+        *parameters: Any,
+        statement_config: "StatementConfig | None" = None,
+        return_format: str = "table",
+        native_only: bool = False,
+        batch_size: int | None = None,
+        arrow_schema: Any = None,
+        **kwargs: Any,
+    ) -> "ArrowResult":
+        """Execute a query and return results formatted as Apache Arrow."""
+        import pyarrow as pa
+
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        sql, prepared_parameters = self._compiled_sql(sql_statement, config)
+        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
+
+        start_time = perf_counter()
+        query_result: Any = None
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler, self.with_cursor(self.connection) as cursor:
+            query_result = await cursor.fetch(sql, params)
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+        execution_time = perf_counter() - start_time
+
+        records = query_result.records() if hasattr(query_result, "records") else query_result.result()
+        columns = list(records[0].keys()) if records and hasattr(records[0], "keys") else []
+
+        table = records_to_arrow_table(records, columns, schema=arrow_schema)
+
+        if return_format == "table":
+            data: Any = table
+        elif return_format == "batch":
+            batches = table.to_batches()
+            data = batches[0] if batches else pa.RecordBatch.from_arrays([], schema=table.schema)
+        elif return_format == "batches":
+            data = table.to_batches(max_chunksize=batch_size) if batch_size else table.to_batches()
+        elif return_format == "reader":
+            data = table.to_reader(max_chunksize=batch_size)
+        else:
+            data = table
+
+        return create_arrow_result(
+            statement=sql_statement,
+            data=data,
+            rows_affected=len(records),
+            execution_time=execution_time,
+            metadata={"columns": columns},
+        )
+
+    async def select_one_or_none(
+        self,
+        statement: Any,
+        /,
+        *parameters: Any,
+        schema_type: Any = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a query returning at most one row using fetch_row fast-path."""
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        sql, prepared_parameters = self._compiled_sql(sql_statement, config)
+        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
+
+        single_result: Any = None
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler, self.with_cursor(self.connection) as cursor:
+            single_result = await cursor.fetch_row(sql, params)
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+        if single_result is None:
+            return None
+        row_dict = single_result.result() if hasattr(single_result, "result") else dict(cast("Any", single_result))
+        if not row_dict:
+            return None
+        if schema_type is not None:
+            return self.to_schema(row_dict, schema_type=schema_type)
+        return row_dict
+
+    async def select_value(
+        self,
+        statement: Any,
+        /,
+        *parameters: Any,
+        value_type: Any = None,
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a query returning a scalar value using fetch_val fast-path."""
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        sql, prepared_parameters = self._compiled_sql(sql_statement, config)
+        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
+
+        val: Any = None
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler, self.with_cursor(self.connection) as cursor:
+            val = await cursor.fetch_val(sql, params)
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+        if val is None:
+            return None
+        if value_type is not None:
+            return to_value_type(val, value_type)
+        return val
+
     async def select_to_storage(
         self,
         statement: "SQL | str",
@@ -319,6 +555,72 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    async def load_from_records(
+        self,
+        table: str,
+        records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]",
+        *,
+        columns: "list[str] | None" = None,
+        overwrite: bool = False,
+        partitioner: "dict[str, object] | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Python records into PostgreSQL via psqlpy binary COPY."""
+        self._require_capability("arrow_import_enabled")
+        if overwrite:
+            qualified = format_table_identifier(table)
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                await cursor.execute(f"TRUNCATE TABLE {qualified}")
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+
+        if not records:
+            empty_payload: StorageTelemetry = {"destination": table, "rows_processed": 0, "bytes_processed": 0}
+            self._attach_partition_telemetry(empty_payload, partitioner)
+            return self._storage_job(empty_payload, telemetry)
+
+        schema_name, table_name = split_schema_and_table(table)
+        first_record = records[0]
+        from collections.abc import Mapping as MappingABC
+
+        if columns is None:
+            if isinstance(first_record, MappingABC):
+                resolved_columns = list(first_record.keys())
+            else:
+                msg = "columns must be provided when records are sequences"
+                raise SQLSpecError(msg)
+        else:
+            resolved_columns = columns
+
+        if isinstance(first_record, MappingABC):
+            row_tuples = [
+                tuple(r.get(col) for col in resolved_columns) for r in cast("Sequence[Mapping[str, Any]]", records)
+            ]
+        else:
+            row_tuples = [tuple(r) for r in cast("Sequence[Sequence[Any]]", records)]
+
+        json_columns = await self._resolve_json_columns(schema_name, table_name)
+        coerced_records = coerce_json_columns(row_tuples, resolved_columns, json_columns)
+
+        copy_kwargs: dict[str, Any] = {"columns": resolved_columns}
+        if schema_name:
+            copy_kwargs["schema_name"] = schema_name
+
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler, self.with_cursor(self.connection) as cursor:
+            await cursor.copy_records_to_table(table_name, coerced_records, **copy_kwargs)
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+        telemetry_payload: StorageTelemetry = {
+            "destination": table,
+            "rows_processed": len(records),
+            "bytes_processed": 0,
+        }
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 

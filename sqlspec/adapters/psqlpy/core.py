@@ -77,6 +77,7 @@ __all__ = (
     "get_parameter_casts",
     "is_postgres_extension_active",
     "prepare_parameters_with_casts",
+    "records_to_arrow_table",
     "resolve_postgres_extension_state",
     "resolve_runtime_statement_config",
     "split_schema_and_table",
@@ -91,6 +92,7 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
     "TIMESTAMP WITHOUT TIME ZONE",
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
+_VECTOR_CASTS: Final[frozenset[str]] = frozenset({"VECTOR", "HALFVEC", "SPARSEVEC"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: type[Any] | None = None
 try:
@@ -103,6 +105,34 @@ PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(
 _DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
 _DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
 _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
+_PSQLPY_ACCEPTED_POOL_KWARGS: Final[frozenset[str]] = frozenset({
+    "dsn",
+    "username",
+    "password",
+    "host",
+    "hosts",
+    "port",
+    "ports",
+    "db_name",
+    "target_session_attrs",
+    "options",
+    "application_name",
+    "connect_timeout_sec",
+    "connect_timeout_nanosec",
+    "tcp_user_timeout_sec",
+    "tcp_user_timeout_nanosec",
+    "keepalives",
+    "keepalives_idle_sec",
+    "keepalives_idle_nanosec",
+    "keepalives_interval_sec",
+    "keepalives_interval_nanosec",
+    "keepalives_retries",
+    "load_balance_hosts",
+    "max_db_pool_size",
+    "conn_recycling_method",
+    "ssl_mode",
+    "ca_file",
+})
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
@@ -149,7 +179,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         connection_config: Raw connection configuration mapping.
 
     Returns:
-        Dictionary with connection parameters.
+        Dictionary with sanitized connection parameters accepted by psqlpy.
     """
     config = {key: value for key, value in connection_config.items() if value is not None}
     dsn = (
@@ -171,7 +201,32 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     username = config.pop("username", None) or config.pop("user", None)
     if username is not None:
         config["username"] = username
-    return config
+    max_size = config.pop("max_size", None) or config.pop("max_db_pool_size", None)
+    if max_size is not None:
+        config["max_db_pool_size"] = max_size
+    timeout = (
+        config.pop("connect_timeout_sec", None) or config.pop("connect_timeout", None) or config.pop("timeout", None)
+    )
+    if timeout is not None:
+        config["connect_timeout_sec"] = int(timeout)
+
+    valid_config: dict[str, Any] = {}
+    extra_params: dict[str, Any] = {}
+    for key, value in config.items():
+        if key in _PSQLPY_ACCEPTED_POOL_KWARGS:
+            valid_config[key] = value
+        else:
+            extra_params[key] = value
+
+    if extra_params and "dsn" in valid_config:
+        dsn_val = str(valid_config["dsn"])
+        if "?" in dsn_val:
+            query_suffix = "&" + "&".join(f"{k}={v}" for k, v in extra_params.items())
+            valid_config["dsn"] = dsn_val + query_suffix
+        elif dsn_val.startswith(("postgresql://", "postgres://")):
+            query_suffix = "?" + "&".join(f"{k}={v}" for k, v in extra_params.items())
+            valid_config["dsn"] = dsn_val + query_suffix
+    return valid_config
 
 
 def apply_driver_features(
@@ -197,11 +252,12 @@ def apply_driver_features(
     return statement_config, features
 
 
-def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
+def collect_rows(query_result: Any | None, as_records: bool = True) -> "tuple[list[Any], list[str]]":
     """Collect psqlpy rows and column names.
 
     Args:
         query_result: Result returned from cursor.fetch().
+        as_records: Whether to return Record objects if available.
 
     Returns:
         Tuple of (rows, column_names).
@@ -209,10 +265,54 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     if not query_result:
         return [], []
 
+    if as_records and hasattr(query_result, "records"):
+        records = cast("list[Any]", query_result.records())
+        if not records:
+            return [], []
+        first = records[0]
+        column_names = list(first.keys()) if hasattr(first, "keys") else []
+        return records, column_names
+
     dict_rows = cast("list[dict[str, Any]]", query_result if isinstance(query_result, list) else query_result.result())
     if not dict_rows:
         return [], []
     return dict_rows, list(dict_rows[0])
+
+
+def records_to_arrow_table(records: list[Any], columns: list[str], schema: Any = None) -> Any:
+    """Construct a pyarrow Table from records and column names using columnar arrays.
+
+    Args:
+        records: List of records or row dictionaries.
+        columns: Column names corresponding to the records.
+        schema: Optional pyarrow schema.
+
+    Returns:
+        A pyarrow Table.
+    """
+    import pyarrow as pa
+
+    if not records:
+        if schema is not None:
+            return pa.Table.from_batches([], schema=schema)
+        return pa.Table.from_arrays([pa.array([]) for _ in columns], names=columns)
+
+    first = records[0]
+    is_dict = isinstance(first, dict)
+    if schema is not None:
+        arrays = [
+            pa.array(
+                [r.get(columns[col_idx]) if is_dict else r[col_idx] for r in records], type=schema.field(col_idx).type
+            )
+            for col_idx in range(len(columns))
+        ]
+        return pa.Table.from_arrays(arrays, schema=schema)
+
+    arrays = [
+        pa.array([r.get(columns[col_idx]) if is_dict else r[col_idx] for r in records])
+        for col_idx in range(len(columns))
+    ]
+    return pa.Table.from_arrays(arrays, names=columns)
 
 
 class PsqlpyStreamSource:
@@ -224,6 +324,13 @@ class PsqlpyStreamSource:
     left untouched.
     """
 
+    _chunk_size: int
+    _cursor: Any
+    _driver: Any
+    _parameters: Any
+    _sql: str
+    _transaction: Any
+
     __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
@@ -231,8 +338,8 @@ class PsqlpyStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._cursor: Any = None
-        self._transaction: Any = None
+        self._cursor = None
+        self._transaction = None
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -258,12 +365,14 @@ class PsqlpyStreamSource:
                 await transaction.rollback()
             raise
 
-    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+    async def fetch_chunk(self) -> "list[Any]":
         handler = self._driver.handle_database_exceptions()
         query_result = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if query_result is None:
             return []
+        if hasattr(query_result, "records"):
+            return cast("list[Any]", query_result.records())
         return cast("list[dict[str, Any]]", query_result.result())
 
     async def close(self, error: bool = False) -> None:
@@ -286,6 +395,7 @@ class PsqlpyStreamSource:
 
 
 def coerce_numeric_for_write(value: Any) -> Any:
+    """Coerce numerical values to Decimal for precise Postgres numeric writes."""
     if isinstance(value, float):
         return decimal.Decimal(str(value))
     if isinstance(value, decimal.Decimal):
@@ -598,6 +708,10 @@ def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable
         return _coerce_uuid_parameter(value)
     if upper_cast in _TIMESTAMP_CASTS:
         return _coerce_timestamp_parameter(value)
+    if upper_cast in _VECTOR_CASTS:
+        from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
+
+        return coerce_pgvector(value)
     return value
 
 
