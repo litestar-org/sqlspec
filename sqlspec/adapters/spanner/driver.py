@@ -297,52 +297,6 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             return database
         return None
 
-    def run_in_transaction(self, func: "Callable[[SpannerSyncDriver], Any]", *args: Any, **kwargs: Any) -> Any:
-        """Execute a unit of work inside a transaction, retrying on abort.
-
-        If the driver is already bound to a SpannerTransaction, the callable
-        is executed directly. Otherwise, work is delegated to the database
-        transaction retry runner.
-
-        Args:
-            func: Callback taking this driver or a transaction-bound driver.
-            *args: Positional arguments passed to the callback.
-            **kwargs: Keyword arguments passed to the callback.
-
-        Returns:
-            The return value of the callback.
-        """
-        if isinstance(self.connection, SpannerTransaction):
-            return func(self, *args, **kwargs)
-
-        database = self._get_database()
-        if database is None:
-            msg = "run_in_transaction requires an active database or SpannerTransaction context."
-            raise SQLConversionError(msg)
-
-        def _callback(spanner_transaction: Any, *cb_args: Any, **cb_kwargs: Any) -> Any:
-            driver = SpannerSyncDriver(
-                connection=spanner_transaction,
-                statement_config=self.statement_config,
-                driver_features=self.driver_features,
-            )
-            driver._config = self._config
-            call_args = cb_args or args
-            call_kwargs = cb_kwargs or kwargs
-            try:
-                return func(driver, *call_args, **call_kwargs)
-            except Exception as exc:
-                cause = getattr(exc, "__cause__", None)
-                from google.api_core import exceptions as api_exceptions
-
-                if isinstance(exc, api_exceptions.Aborted):
-                    raise
-                if cause is not None and isinstance(cause, api_exceptions.Aborted):
-                    raise cause from exc
-                raise
-
-        return database.run_in_transaction(_callback, *args, **kwargs)
-
     def execute_partitioned_dml(
         self,
         statement: "SQL | str",

@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.spanner._typing import SpannerDatabase as Database
-    from sqlspec.adapters.spanner.driver import SpannerSyncDriver
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
@@ -225,11 +224,9 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        def _job(driver: "SpannerSyncDriver") -> None:
+        with self._config.provide_session() as driver:
             for sql, params, _ in statements:
                 driver.execute(sql, params)
-
-        self._config.run_in_transaction(_job)
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
@@ -636,8 +633,9 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
-        return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
+        with self._config.provide_session() as driver:
+            result = driver.execute(sql, params)
+            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < @updated_before"
@@ -645,8 +643,9 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
-        return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
+        with self._config.provide_session() as driver:
+            result = driver.execute(sql, params)
+            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
     def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._user_state_table} WHERE update_time < @updated_before"
@@ -654,8 +653,9 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
-        return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
+        with self._config.provide_session() as driver:
+            result = driver.execute(sql, params)
+            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = @app_name LIMIT 1"
@@ -899,15 +899,14 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        def _job(driver: "SpannerSyncDriver") -> None:
+        with self._config.provide_session() as driver:
             for sql, params, _ in statements:
                 driver.execute(sql, params)
 
-        self._config.run_in_transaction(_job)
-
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        result = self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
-        return int(getattr(result, "rowcount", 0))
+        with self._config.provide_session() as driver:
+            result = driver.execute(sql, params)
+            return int(getattr(result, "rowcount", 0))
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {

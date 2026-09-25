@@ -9,9 +9,8 @@ from sqlspec.adapters.spanner._typing import SpannerConnection
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
 from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
-from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.config import SyncDatabaseConfig
-from sqlspec.core import SQL, TypeCoercionCapabilities
+from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
@@ -604,95 +603,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             timeout=timeout,
             **kwargs,
         )
-
-    def run_in_transaction(self, func: "Callable[[SpannerSyncDriver], Any]", *args: Any, **kwargs: Any) -> Any:
-        """Execute a unit of work inside a transaction, retrying on abort.
-
-        Args:
-            func: Callback taking a prepared SpannerSyncDriver and returning a result.
-            *args: Positional arguments passed to the callback.
-            **kwargs: Keyword arguments passed to the callback.
-
-        Returns:
-            The return value of the callback.
-        """
-        database = self.get_database()
-
-        def _callback(spanner_transaction: Any, *cb_args: Any, **cb_kwargs: Any) -> Any:
-            driver = SpannerSyncDriver(
-                connection=spanner_transaction,
-                statement_config=self.statement_config,
-                driver_features=self.driver_features,
-            )
-            prepared_driver = self._prepare_driver(driver)
-            call_args = cb_args or args
-            call_kwargs = cb_kwargs or kwargs
-            try:
-                return func(prepared_driver, *call_args, **call_kwargs)
-            except Exception as exc:
-                cause = getattr(exc, "__cause__", None)
-                from google.api_core import exceptions as api_exceptions
-
-                if isinstance(exc, api_exceptions.Aborted):
-                    raise
-                if cause is not None and isinstance(cause, api_exceptions.Aborted):
-                    raise cause from exc
-                raise
-
-        return cast("Any", database).run_in_transaction(_callback, *args, **kwargs)
-
-    def execute_partitioned_dml(
-        self,
-        statement: "SQL | str",
-        *parameters: Any,
-        query_options: Any = None,
-        request_options: Any = None,
-        exclude_txn_from_change_streams: bool = False,
-        **kwargs: Any,
-    ) -> int:
-        """Execute a Partitioned DML statement across database partitions.
-
-        Args:
-            statement: The SQL string or SQL object to execute.
-            *parameters: Positional parameters or parameter mapping.
-            query_options: Optional Spanner QueryOptions.
-            request_options: Optional Spanner RequestOptions.
-            exclude_txn_from_change_streams: Whether to exclude the transaction from change streams.
-            **kwargs: Additional keyword arguments or parameters.
-
-        Returns:
-            The number of affected rows.
-        """
-        database = self.get_database()
-        if isinstance(statement, SQL):
-            sql_statement = statement
-        else:
-            sql_statement = SQL(statement, *parameters, statement_config=self.statement_config, **kwargs)
-
-        sql, raw_params = sql_statement.compile()
-        params = raw_params if isinstance(raw_params, dict) else None
-        coerced_params = coerce_params_for_spanner(
-            params,
-            json_serializer=self.driver_features.get("json_serializer"),
-            enable_uuid_conversion=self.driver_features.get("enable_uuid_conversion", True),
-        )
-        param_types = infer_spanner_param_types(params)
-
-        effective_request_options = request_options or self.driver_features.get("request_options")
-        effective_query_options = query_options or self.driver_features.get("query_options")
-
-        call_kwargs: dict[str, Any] = {
-            "params": coerced_params,
-            "param_types": param_types,
-            "exclude_txn_from_change_streams": exclude_txn_from_change_streams,
-        }
-        if effective_query_options is not None:
-            call_kwargs["query_options"] = effective_query_options
-        if effective_request_options is not None:
-            call_kwargs["request_options"] = effective_request_options
-
-        result = cast("Any", database).execute_partitioned_dml(sql, **call_kwargs)
-        return int(result)
 
     def _session_driver_features(
         self,

@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.adapters.spanner.config import SpannerSyncConfig
-    from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 
     class _DatabaseProtocol(Protocol):
         def run_in_transaction(self, func: "Callable[[Transaction], Any]") -> Any: ...
@@ -163,7 +162,8 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
             if self._shard_count > 1:
                 update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
             params = self._build_params(key, new_expires)
-            self._config.run_in_transaction(lambda driver: driver.execute(update_sql, params))
+            with self._config.provide_session() as driver:
+                driver.execute(update_sql, params)
 
         return spanner_to_bytes(data)
 
@@ -186,25 +186,25 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         VALUES (@session_id, @data, @expires_at, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())
         """
 
-        def _job(driver: "SpannerSyncDriver") -> None:
+        with self._config.provide_session() as driver:
             result = driver.execute(update_sql, params)
             rows_affected = getattr(result, "rows_affected", None)
             has_rows = rows_affected > 0 if isinstance(rows_affected, int) else bool(getattr(result, "rowcount", None))
             if not has_rows:
                 driver.execute(insert_sql, params)
 
-        self._config.run_in_transaction(_job)
-
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id"
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         params = {"session_id": key}
-        self._config.run_in_transaction(lambda driver: driver.execute(sql, params))
+        with self._config.provide_session() as driver:
+            driver.execute(sql, params)
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE TRUE"
-        self._config.run_in_transaction(lambda driver: driver.execute(sql))
+        with self._config.provide_session() as driver:
+            driver.execute(sql)
 
     def _exists(self, key: str) -> bool:
         sql = f"""
@@ -239,11 +239,12 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         DELETE FROM {self._table_name}
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
-        result = self._config.run_in_transaction(lambda driver: driver.execute(sql))
-        rows_affected = getattr(result, "rows_affected", None)
-        if isinstance(rows_affected, int):
-            return rows_affected
-        return int(getattr(result, "rowcount", 0))
+        with self._config.provide_session() as driver:
+            result = driver.execute(sql)
+            rows_affected = getattr(result, "rows_affected", None)
+            if isinstance(rows_affected, int):
+                return rows_affected
+            return int(getattr(result, "rowcount", 0))
 
     def _create_table(self) -> None:
         database = self._config.get_database()
