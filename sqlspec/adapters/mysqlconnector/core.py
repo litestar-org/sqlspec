@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from mysql.connector.conversion import MySQLConverter
 
+from sqlspec.adapters import mysql_common
 from sqlspec.adapters.mysql_common import (
     _bool_to_int,
     build_insert_statement,
@@ -59,6 +60,14 @@ __all__ = (
     "resolve_row_plan",
     "resolve_rowcount",
 )
+
+_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common._MYSQL_ACCESS_ERROR_DISPATCH
+_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common._MYSQL_CONNECTION_ERROR_DISPATCH
+_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common._MYSQL_CONSTRAINT_ERROR_DISPATCH
+_MYSQL_MIGRATION_ERROR_CODES = mysql_common._MYSQL_MIGRATION_ERROR_CODES
+_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common._MYSQL_SQLSTATE_EXACT_DISPATCH
+_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common._MYSQL_SQLSTATE_PREFIX_DISPATCH
+_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common._MYSQL_TRANSACTION_ERROR_DISPATCH
 
 
 class SQLSpecMySQLConverter(MySQLConverter):
