@@ -6,7 +6,6 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import os
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 import asyncmy as _asyncmy
@@ -177,21 +176,21 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
     """
     raw: Any = connection
     missing = object()
-    previous = getattr(raw, "_read_query_result", missing)
+    previous = raw.__dict__.get("_read_query_result", missing)
 
     async def read_result(unbuffered: bool = False) -> None:
         setattr(raw, "_result", None)
         result = _AsyncmyLocalInfileResult(raw, filename)
         if unbuffered:
             try:
-                init_fn = cast("Callable[[], Awaitable[None]]", getattr(result, "init_unbuffered_query"))
+                init_fn = cast("Callable[[], Awaitable[None]]", result.init_unbuffered_query)
                 await init_fn()
             except BaseException:
                 setattr(result, "unbuffered_active", False)
                 setattr(result, "connection", None)
                 raise
         else:
-            read_fn = cast("Callable[[], Awaitable[None]]", getattr(result, "read"))
+            read_fn = cast("Callable[[], Awaitable[None]]", result.read)
             await read_fn()
         setattr(raw, "_result", result)
         setattr(raw, "_affected_rows", result.affected_rows)
@@ -208,8 +207,8 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
         raise
     finally:
         if previous is missing:
-            if hasattr(raw, "_read_query_result"):
-                delattr(raw, "_read_query_result")
+            if "_read_query_result" in raw.__dict__:
+                del raw._read_query_result
         else:
             setattr(raw, "_read_query_result", previous)
 
@@ -229,11 +228,12 @@ class _AsyncmyLocalInfileResult(_AsyncmyResult):
             msg = "MySQL requested an unexpected LOCAL INFILE payload."
             raise SQLSpecError(msg)
         sender = _LoadLocalFile(self._filename, self.connection)
-        send_data = cast("Callable[[], Awaitable[None]]", getattr(sender, "send_data"))
+        send_data = cast("Callable[[], Awaitable[None]]", sender.send_data)
         await send_data()
         packet = await self.connection.read_packet()
         if not packet.is_ok_packet():
             msg = "MySQL did not acknowledge the LOCAL INFILE payload."
             raise SQLSpecError(msg)
-        read_ok = cast("Callable[[Any], None]", getattr(self, "_read_ok_packet"))
-        read_ok(packet)
+        read_ok_fn: Callable[[Any], None] | None = getattr(self, "_read_ok_packet", None)
+        if read_ok_fn is not None:
+            read_ok_fn(packet)

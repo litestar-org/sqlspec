@@ -21,13 +21,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identifier
-from sqlspec.utils.type_guards import (
-    has_cursor_metadata,
-    has_lastrowid,
-    has_rowcount,
-    has_sqlstate,
-    has_type_code,
-)
+from sqlspec.utils.type_guards import has_cursor_metadata, has_lastrowid, has_rowcount, has_sqlstate, has_type_code
 
 if TYPE_CHECKING:
     from sqlspec.core.parameters import ParameterValidator
@@ -37,6 +31,7 @@ __all__ = (
     "MYSQL_CR_CONN_HOST_ERROR",
     "MYSQL_CR_SERVER_GONE_ERROR",
     "MYSQL_CR_SERVER_LOST",
+    "MYSQL_CR_SSL_CONNECTION_ERROR",
     "MYSQL_CR_UNKNOWN_HOST",
     "MYSQL_ER_ACCESS_DENIED",
     "MYSQL_ER_CHECK_CONSTRAINT_VIOLATED",
@@ -93,6 +88,7 @@ MYSQL_CR_CONN_HOST_ERROR: Final[int] = 2003
 MYSQL_CR_UNKNOWN_HOST: Final[int] = 2005
 MYSQL_CR_SERVER_GONE_ERROR: Final[int] = 2006
 MYSQL_CR_SERVER_LOST: Final[int] = 2013
+MYSQL_CR_SSL_CONNECTION_ERROR: Final[int] = 2026
 MYSQL_SYNTAX_ERROR_MIN: Final[int] = 1064
 MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE: Final[int] = 1100
 
@@ -136,6 +132,7 @@ _MYSQL_CONNECTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_UNKNOWN_HOST: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_SERVER_GONE_ERROR: (DatabaseConnectionError, "connection error"),
+    MYSQL_CR_SSL_CONNECTION_ERROR: (DatabaseConnectionError, "ssl connection error"),
 }
 
 
@@ -175,25 +172,32 @@ def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def build_load_data_statement(table: str, columns: "list[str]", placeholder: str = "%s") -> str:
+def build_load_data_statement(
+    table: str, columns: "list[str]", placeholder: str = "%s", *, escape_percent: bool = False
+) -> str:
     """Build native LOAD DATA SQL with a bound filename.
 
     Args:
         table: Destination table identifier.
         columns: Destination column names.
         placeholder: Filename placeholder parameter style.
+        escape_percent: Whether to escape literal percent characters in identifiers.
 
     Returns:
         SQL statement for LOCAL INFILE bulk load.
     """
-    table_sql = format_identifier(table).replace("%", "%%")
-    column_list = ", ".join(format_identifier(column).replace("%", "%%") for column in columns)
+    table_sql = format_identifier(table)
+    if escape_percent:
+        table_sql = table_sql.replace("%", "%%")
+    column_list = ", ".join(
+        format_identifier(column).replace("%", "%%") if escape_percent else format_identifier(column)
+        for column in columns
+    )
     return (
         f"LOAD DATA LOCAL INFILE {placeholder} INTO TABLE {table_sql} "
         "CHARACTER SET utf8mb4 FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
         f"LINES TERMINATED BY '\\n' ({column_list})"
     )
-
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:
@@ -371,11 +375,9 @@ def resolve_rowcount(cursor: Any) -> int:
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int | None" = None) -> int:
-    """Resolve executemany rowcount safely with fallback."""
-    if not has_rowcount(cursor):
-        return fallback_count or 0
-    rowcount = cursor.rowcount
-    if isinstance(rowcount, int) and rowcount >= 0:
+    """Resolve execute_many rowcount using cursor metadata with payload fallback."""
+    rowcount = resolve_rowcount(cursor)
+    if rowcount > 0:
         return rowcount
     if fallback_count is not None:
         return fallback_count
@@ -403,11 +405,7 @@ def _bool_to_int(value: bool) -> int:
 
 
 def _create_mysql_error(
-    error: Any,
-    sqlstate: str | None,
-    code: int | None,
-    error_class: type[SQLSpecError],
-    description: str,
+    error: Any, sqlstate: str | None, code: int | None, error_class: type[SQLSpecError], description: str
 ) -> SQLSpecError:
     """Create a MySQL error instance without raising it."""
     code_str = f"[{sqlstate or code}]" if sqlstate or code else ""
@@ -440,27 +438,42 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
+    if sqlstate_prefix == "23":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["23"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+
     dispatch = _MYSQL_ACCESS_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if sqlstate_prefix == "28":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["28"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
     dispatch = _MYSQL_TRANSACTION_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if sqlstate_prefix == "40":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["40"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
+    if sqlstate_prefix == "42":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["42"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if isinstance(error_code, int) and MYSQL_SYNTAX_ERROR_MIN <= error_code < MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE:
+        return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
+
+    if sqlstate_prefix == "08":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["08"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
     dispatch = _MYSQL_CONNECTION_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    if error_code is not None and MYSQL_SYNTAX_ERROR_MIN <= error_code < MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE:
-        return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
+    if sqlstate_prefix == "22":
+        dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH["22"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    if sqlstate_prefix is not None:
-        prefix_dispatch = _MYSQL_SQLSTATE_PREFIX_DISPATCH.get(sqlstate_prefix)
-        if prefix_dispatch is not None:
-            return _create_mysql_error(error, sqlstate, error_code, prefix_dispatch[0], prefix_dispatch[1])
-
-    return SQLSpecError(str(error))
+    return _create_mysql_error(error, sqlstate, error_code, SQLSpecError, "database error")
 
 
 def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
