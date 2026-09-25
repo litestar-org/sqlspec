@@ -198,7 +198,7 @@ def build_load_data_statement(
     if escape_percent:
         table_sql = table_sql.replace("%", "%%")
     column_list = ", ".join(
-        format_identifier(column).replace("%", "%%") if escape_percent else format_identifier(column)
+        quote_backtick_identifier(column).replace("%", "%%") if escape_percent else quote_backtick_identifier(column)
         for column in columns
     )
     return (
