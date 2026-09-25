@@ -7247,6 +7247,8 @@ def _data_dictionary_schema_for_case(case: DriverCase) -> str:
         return "public"
     if case.dialect == "tsql":
         return "dbo"
+    if case.dialect == "db2":
+        return "db2inst1"
     return ""
 
 

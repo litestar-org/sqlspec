@@ -176,6 +176,7 @@ exclude-newer = "7 days"
 override-dependencies = [
   "mysql-connector-python; python_version < '3.12'",
   "mysql-connector-python<9.7.0; python_version >= '3.12'",
+  "pymysql<=1.2.0",
 ]
 
 [tool.uv.exclude-newer-package]

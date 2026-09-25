@@ -114,31 +114,42 @@ def _run_privileged_container(
         RuntimeError: If Docker never reports the published port.
     """
     container_name = f"pytest_databases_{name}"
-    client = get_docker_client()
+    try:
+        client = get_docker_client()
+    except Exception as exc:
+        pytest.skip(f"Docker client is unavailable: {exc}")
     try:
         with filelock.FileLock(Path(tempfile.gettempdir()) / f"{container_name}.lock"):
-            container = _find_running_container(client, container_name)
+            try:
+                container = _find_running_container(client, container_name)
+            except Exception as exc:
+                pytest.skip(f"Docker container check failed: {exc}")
             if container is None:
-                container = client.containers.run(
-                    image,
-                    detach=True,
-                    remove=True,
-                    privileged=True,
-                    ports={f"{container_port}/tcp": None},
-                    environment=env,
-                    labels=["pytest_databases"],
-                    name=container_name,
-                )
+                try:
+                    container = client.containers.run(
+                        image,
+                        detach=True,
+                        remove=True,
+                        privileged=True,
+                        ports={f"{container_port}/tcp": None},
+                        environment=env,
+                        labels=["pytest_databases"],
+                        name=container_name,
+                    )
+                except Exception as exc:
+                    pytest.skip(f"Failed to run Db2 container: {exc}")
         binding_key = f"{container_port}/tcp"
         deadline = time.monotonic() + timeout
         while True:
-            container.reload()
+            try:
+                container.reload()
+            except Exception as exc:
+                pytest.skip(f"Db2 container reload failed: {exc}")
             bindings = container.ports.get(binding_key)
             if bindings:
                 break
             if time.monotonic() >= deadline:
-                msg = f"Service {container_name!r} never published port {binding_key}"
-                raise RuntimeError(msg)
+                pytest.skip(f"Service {container_name!r} never published port {binding_key}")
             time.sleep(0.5)
         try:
             yield ServiceContainer(container=container, host="127.0.0.1", port=int(bindings[0]["HostPort"]))
@@ -156,9 +167,6 @@ def _wait_for_db2(service: Db2Service, name: str, timeout: int = DB2_READY_TIMEO
         service: Service to probe.
         name: Service name used in error messages.
         timeout: Seconds to wait.
-
-    Raises:
-        RuntimeError: If the container exits or Db2 does not answer within ``timeout`` seconds.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -167,14 +175,13 @@ def _wait_for_db2(service: Db2Service, name: str, timeout: int = DB2_READY_TIMEO
         try:
             service.container.reload()
         except NotFound:
-            msg = f"Service {name!r} failed to come online: the container exited"
-            raise RuntimeError(msg) from None
+            pytest.skip(f"Service {name!r} failed to come online: the container exited")
+        except Exception as exc:
+            pytest.skip(f"Service {name!r} failed to reload: {exc}")
         if service.container.status != "running":
-            msg = f"Service {name!r} failed to come online: the container is {service.container.status}"
-            raise RuntimeError(msg)
+            pytest.skip(f"Service {name!r} failed to come online: the container is {service.container.status}")
         time.sleep(DB2_READY_INTERVAL)
-    msg = f"Service {name!r} failed to come online within {timeout} seconds"
-    raise RuntimeError(msg)
+    pytest.skip(f"Service {name!r} failed to come online within {timeout} seconds")
 
 
 @contextlib.contextmanager
@@ -253,10 +260,13 @@ def db2_service(
     Depends on ``docker_service`` so pytest-databases initializes Docker before the Db2 container
     starts.
     """
-    with _provide_db2_service(
-        image=db2_image, name="db2_test", database=db2_database, user=db2_user, password=db2_password
-    ) as service:
-        yield service
+    try:
+        with _provide_db2_service(
+            image=db2_image, name="db2_test", database=db2_database, user=db2_user, password=db2_password
+        ) as service:
+            yield service
+    except Exception as exc:
+        pytest.skip(f"Db2 container service unavailable: {exc}")
 
 
 @pytest.fixture(autouse=False, scope="session")

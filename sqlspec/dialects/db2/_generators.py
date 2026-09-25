@@ -157,25 +157,29 @@ def _with_statement_tail(sql: str, tail: str) -> str:
     return f"{sql} {tail}" if tail else sql
 
 
+def _convert_limit_to_fetch(query: exp.Expression) -> exp.Expression:
+    """Convert an exp.Limit clause to an exp.Fetch clause for Db2."""
+    limit = query.args.get("limit")
+    if isinstance(limit, exp.Limit):
+        query = query.copy()
+        direction = "NEXT" if query.args.get("offset") else "FIRST"
+        fetch = exp.Fetch(direction=direction, count=exp.maybe_copy(limit.expression))
+        query.set("limit", fetch)
+    return query
+
+
 def select_sql(generator: "generator.Generator", expression: exp.Select) -> str:
     """Render a SELECT with a Db2 dummy table, FETCH pagination and statement tail."""
     detached, locks, tail_args = _detach_statement_tail(expression)
-    select = add_sysibm_dual(cast("exp.Select", detached))
-    limit = select.args.get("limit")
-    if isinstance(limit, exp.Limit):
-        select = select.copy()
-        direction = "NEXT" if select.args.get("offset") else "FIRST"
-        fetch = exp.Fetch(direction=direction, count=exp.maybe_copy(limit.expression))
-        select.set("limit", fetch)
+    select = cast("exp.Select", _convert_limit_to_fetch(add_sysibm_dual(cast("exp.Select", detached))))
     return _with_statement_tail(generator.select_sql(select), render_statement_tail(generator, tail_args, locks))
 
 
 def set_operation_sql(generator: "generator.Generator", expression: exp.SetOperation) -> str:
     """Render UNION, INTERSECT or EXCEPT followed by the Db2 statement tail."""
     detached, locks, tail_args = _detach_statement_tail(expression)
-    return _with_statement_tail(
-        generator.set_operations(cast("exp.SetOperation", detached)), render_statement_tail(generator, tail_args, locks)
-    )
+    operation = cast("exp.SetOperation", _convert_limit_to_fetch(cast("exp.SetOperation", detached)))
+    return _with_statement_tail(generator.set_operations(operation), render_statement_tail(generator, tail_args, locks))
 
 
 def offset_sql(generator: "generator.Generator", expression: exp.Offset) -> str:

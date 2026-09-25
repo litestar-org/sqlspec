@@ -27,10 +27,12 @@ WITH dependency_tree (schema_name, table_name, level, path) AS (
         RTRIM(child.TABNAME) AS table_name,
         dt.level + 1 AS level,
         VARCHAR(dt.path || RTRIM(child.TABSCHEMA) || '.' || RTRIM(child.TABNAME) || '/', 2000) AS path
-    FROM SYSCAT.REFERENCES r
-    JOIN SYSCAT.TABLES child ON r.TABSCHEMA = child.TABSCHEMA AND r.TABNAME = child.TABNAME
-    JOIN dependency_tree dt ON r.REFTABSCHEMA = dt.schema_name AND r.REFTABNAME = dt.table_name
-    WHERE child.TYPE = 'T'
+    FROM SYSCAT.REFERENCES r, SYSCAT.TABLES child, dependency_tree dt
+    WHERE r.TABSCHEMA = child.TABSCHEMA
+      AND r.TABNAME = child.TABNAME
+      AND r.REFTABSCHEMA = dt.schema_name
+      AND r.REFTABNAME = dt.table_name
+      AND child.TYPE = 'T'
       AND child.TABSCHEMA NOT LIKE 'SYS%'
       AND child.TABSCHEMA NOT LIKE 'NULLID%'
       AND child.TABSCHEMA NOT LIKE 'SQLJ%'

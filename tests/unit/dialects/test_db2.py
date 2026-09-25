@@ -166,3 +166,11 @@ def test_interval_renders_labeled_duration() -> None:
     """Verify numeric and column intervals render as Db2 labeled durations."""
     result = transpile("SELECT a + INTERVAL 1 DAY, b - INTERVAL c HOUR FROM t", read="mysql", write="db2")[0]
     assert result == "SELECT a + 1 DAY, b - c HOUR FROM t"
+
+
+def test_set_operation_pagination() -> None:
+    """Verify set operations transpile LIMIT and OFFSET to FETCH clauses."""
+    result = transpile(
+        "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id LIMIT 3 OFFSET 2", read="postgres", write="db2"
+    )[0]
+    assert result == "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id OFFSET 2 ROWS FETCH NEXT 3 ROWS ONLY"

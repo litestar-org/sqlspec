@@ -190,7 +190,9 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
         **kwargs: Any,
     ) -> None:
         """Initialize Db2 configuration."""
-        normalized_connection_config = build_connection_config(connection_config or {})
+        if connection_config is None:
+            connection_config = {"database": "SAMPLE"}
+        normalized_connection_config = build_connection_config(connection_config)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
@@ -343,7 +345,9 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
         ``max_size`` and ``acquire_timeout`` are kept for the pool; every other key is validated
         and normalized like the sync configuration's connection parameters.
         """
-        raw_connection_config = dict(connection_config or {})
+        if connection_config is None:
+            connection_config = {"database": "SAMPLE"}
+        raw_connection_config = dict(connection_config)
         pool_options = {
             key: raw_connection_config.pop(key)
             for key in _ASYNC_POOL_KEYS
