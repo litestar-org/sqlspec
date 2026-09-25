@@ -4,13 +4,10 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
-import os
 import tempfile
 from collections.abc import Sized
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, cast
-
-import anyio
 
 from sqlspec.adapters.asyncmy._typing import (
     ASYNCMY_INSERT_VALUES_PATTERN,
@@ -396,10 +393,10 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     async def _load_from_arrow_via_local_infile(
         self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"
     ) -> None:
-        fd, filename = tempfile.mkstemp(prefix="sqlspec-asyncmy-", suffix=".tsv")
-        try:
-            with os.fdopen(fd, "wb") as payload:
+        with tempfile.TemporaryDirectory(prefix="sqlspec-asyncmy-") as directory:
+            with tempfile.NamedTemporaryFile(dir=directory, suffix=".tsv", delete=False) as payload:
                 payload.write(encode_records_for_local_infile(records))
+                filename = payload.name
             statement = build_load_data_statement(table, columns)
             exc_handler = self.handle_database_exceptions()
             async with exc_handler, self.with_cursor(self.connection) as cursor:
@@ -407,8 +404,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                     await cursor.execute(statement, {"sqlspec_infile_path": filename})
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from exc_handler.pending_exception.__cause__
-        finally:
-            await anyio.Path(filename).unlink(missing_ok=True)
 
     async def load_from_storage(
         self,

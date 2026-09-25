@@ -166,7 +166,15 @@ def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
             if isinstance(value, bool):
                 value = int(value)
             text = value if isinstance(value, str) else str(value)
-            text = text.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+            text = (
+                text
+                .replace("\\", "\\\\")
+                .replace("\x00", "\\0")
+                .replace("\t", "\\t")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\x1a", "\\Z")
+            )
             fields.append(text)
         lines.append("\t".join(fields))
     return ("\n".join(lines) + "\n").encode("utf-8")
