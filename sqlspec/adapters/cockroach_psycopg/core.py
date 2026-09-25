@@ -1,26 +1,31 @@
 """CockroachDB psycopg adapter compiled helpers."""
 
-import random
 import re
+import secrets
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
+from typing_extensions import LiteralString
 
 from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
 from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
+from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgPoolConfig
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
     "CockroachPsycopgRetryConfig",
     "apply_driver_features",
+    "as_query",
+    "build_connection_config",
     "build_native_export",
     "build_native_import",
     "build_statement_config",
@@ -33,14 +38,14 @@ __all__ = (
     "validate_follower_read_staleness",
 )
 
-# Retry configuration defaults (module-level for mypyc compatibility)
 _DEFAULT_MAX_RETRIES: Final[int] = 10
 _DEFAULT_BASE_DELAY_MS: Final[float] = 50.0
 _DEFAULT_MAX_DELAY_MS: Final[float] = 5000.0
 _DEFAULT_ENABLE_LOGGING: Final[bool] = True
+_MAX_EXCEPTION_CHAIN_DEPTH: Final[int] = 16
+_RNG: Final = secrets.SystemRandom()
 
 
-# Keep this in sync with cockroach_asyncpg.core.CockroachAsyncpgRetryConfig.
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CockroachPsycopgRetryConfig:
     """CockroachDB psycopg transaction retry configuration."""
@@ -70,6 +75,49 @@ class CockroachPsycopgRetryConfig:
         )
 
 
+def build_connection_config(
+    connection_config: "CockroachPsycopgPoolConfig | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Build normalized CockroachDB psycopg connection configuration, resolving aliases for libpq compatibility."""
+    config = normalize_connection_config(connection_config)
+    conninfo = (
+        config.pop("conninfo", None)
+        or config.pop("dsn", None)
+        or config.pop("url", None)
+        or config.pop("connection_string", None)
+    )
+    if conninfo is not None:
+        config["conninfo"] = conninfo
+    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
+    if dbname is not None:
+        config["dbname"] = dbname
+    user = config.pop("user", None) or config.pop("username", None)
+    if user is not None:
+        config["user"] = user
+
+    session_options: list[str] = []
+    if "gateway_region" in config:
+        session_options.append(f"-c gateway_region={config.pop('gateway_region')}")
+    if "default_transaction_use_follower_reads" in config:
+        val = config.pop("default_transaction_use_follower_reads")
+        val_str = "on" if val is True or str(val).lower() == "on" else "off"
+        session_options.append(f"-c default_transaction_use_follower_reads={val_str}")
+    if "results_buffer_size" in config:
+        session_options.append(f"-c results_buffer_size={config.pop('results_buffer_size')}")
+    if "statement_timeout" in config:
+        session_options.append(f"-c statement_timeout={config.pop('statement_timeout')}")
+    if "idle_in_transaction_session_timeout" in config:
+        session_options.append(
+            f"-c idle_in_transaction_session_timeout={config.pop('idle_in_transaction_session_timeout')}"
+        )
+    if session_options:
+        existing = config.get("options")
+        opt_str = " ".join(session_options)
+        config["options"] = f"{existing} {opt_str}" if existing else opt_str
+
+    return config
+
+
 def is_retryable_error(error: BaseException) -> bool:
     """Return True when the error should trigger a CockroachDB retry.
 
@@ -90,17 +138,17 @@ def is_retryable_error(error: BaseException) -> bool:
     Returns:
         True when the transaction should be retried.
     """
-    seen: set[int] = set()
+    depth = 0
     current: BaseException | None = error
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
+    while current is not None and depth < _MAX_EXCEPTION_CHAIN_DEPTH:
         if isinstance(current, SerializationConflictError):
             return True
         if has_sqlstate(current) and str(current.sqlstate) == "40001":
             return True
         if not isinstance(current, SQLSpecError):
             return False
-        current = cast("BaseException | None", cast("Any", current).__cause__)
+        current = cast("BaseException | None", getattr(current, "__cause__", None))
+        depth += 1
     return False
 
 
@@ -114,7 +162,19 @@ def calculate_backoff_seconds(attempt: int, config: "CockroachPsycopgRetryConfig
     capped_ms: float = min(config.base_delay_ms * (2**attempt), config.max_delay_ms)
     if capped_ms <= 0.0:
         return 0.0
-    return random.uniform(capped_ms / 2.0, capped_ms) / 1000.0  # noqa: S311
+    return _RNG.uniform(capped_ms / 2.0, capped_ms) / 1000.0
+
+
+def as_query(sql: object) -> LiteralString:
+    """Prepare a SQL string for psycopg query execution without byte encoding.
+
+    Args:
+        sql: The raw SQL query string or object.
+
+    Returns:
+        The SQL query string typed as a LiteralString for driver query dispatch.
+    """
+    return cast("LiteralString", sql)
 
 
 _STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")

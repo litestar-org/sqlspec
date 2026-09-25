@@ -73,6 +73,8 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     __slots__ = ()
 
+    _config: "PsqlpyConfig"
+
     def __init__(self, config: "PsqlpyConfig") -> None:
         super().__init__(config)
 
@@ -91,26 +93,38 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             if self._owner_id_column_name:
                 sql = f"""
                 INSERT INTO {self._session_table}
                 (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
                 VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING id, app_name, user_id, state, create_time, update_time
                 """
-                await conn.execute(sql, [session_id, app_name, user_id, owner_id, state])
+                single_result = await conn.fetch_row(sql, [session_id, app_name, user_id, owner_id, state])
             else:
                 sql = f"""
                 INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
                 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING id, app_name, user_id, state, create_time, update_time
                 """
-                await conn.execute(sql, [session_id, app_name, user_id, state])
+                single_result = await conn.fetch_row(sql, [session_id, app_name, user_id, state])
 
-        res = await self.get_session(app_name, user_id, session_id)
-        if res is None:
-            msg = "Failed to retrieve created session."
+        if not single_result:
+            msg = "Failed to fetch created session"
             raise RuntimeError(msg)
-        return res
+        row = single_result.result()
+        if not row:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return StoredSession(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -130,14 +144,14 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             """
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
-                result = await conn.fetch(sql, [app_name, user_id, session_id])
-                rows: list[dict[str, Any]] = result.result() if result else []
-
-                if not rows:
+            async with self._config.provide_connection() as conn:
+                single_result = await conn.fetch_row(sql, [app_name, user_id, session_id])
+                if not single_result:
+                    return None
+                row = single_result.result()
+                if not row:
                     return None
 
-                row = rows[0]
                 return StoredSession(
                     id=row["id"],
                     app_name=row["app_name"],
@@ -158,7 +172,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         WHERE app_name = $2 AND user_id = $3 AND id = $4
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, [state, app_name, user_id, session_id])
 
     async def list_sessions(
@@ -196,7 +210,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -219,7 +233,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         sql = f"DELETE FROM {self._session_table} WHERE app_name = $1 AND user_id = $2 AND id = $3"
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, [app_name, user_id, session_id])
 
     async def append_event(self, event_record: StoredEvent) -> None:
@@ -229,7 +243,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             await conn.execute(
                 sql,
                 [
@@ -280,7 +294,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             update_time = CURRENT_TIMESTAMP
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             try:
                 await conn.execute("BEGIN")
                 await conn.execute(
@@ -350,7 +364,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 result = await conn.fetch(sql, params)
                 rows: list[dict[str, Any]] = result.result() if result else []
 
@@ -382,7 +396,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             params = [before]
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 count_result = await conn.fetch(count_sql, params)
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
@@ -404,7 +418,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             params = [updated_before]
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 count_result = await conn.fetch(count_sql, params)
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
@@ -428,7 +442,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             params = [updated_before]
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 count_result = await conn.fetch(count_sql, params)
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
@@ -443,7 +457,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = $1"
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 result = await conn.fetch(sql, [app_name])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["state"] if rows else None
@@ -456,7 +470,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = $1 AND user_id = $2"
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 result = await conn.fetch(sql, [app_name, user_id])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["state"] if rows else None
@@ -474,7 +488,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             update_time = CURRENT_TIMESTAMP
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, [app_name, state])
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
@@ -486,14 +500,14 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
             update_time = CURRENT_TIMESTAMP
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, [app_name, user_id, state])
 
     async def get_metadata(self, key: str) -> "str | None":
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = $1"
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 result = await conn.fetch(sql, [key])
                 rows: list[dict[str, Any]] = result.result() if result else []
                 return rows[0]["value"] if rows else None
@@ -509,7 +523,7 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             await conn.execute(sql, [key, value])
 
     async def _sessions_table_ddl(self) -> str:
@@ -620,6 +634,8 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
     __slots__ = ()
 
+    _config: "PsqlpyConfig"
+
     def __init__(self, config: "PsqlpyConfig") -> None:
         """Initialize Psqlpy memory store."""
         super().__init__(config)
@@ -668,7 +684,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             ON CONFLICT (event_id) DO NOTHING
             """
 
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             for entry in entries:
                 if self._owner_id_column_name:
                     params = [
@@ -727,7 +743,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(query, app_name, user_id, effective_limit)
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit)
         except Exception as e:
@@ -743,7 +759,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         delete_sql = f"DELETE FROM {self._memory_table} WHERE session_id = $1"
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 count_result = await conn.fetch(count_sql, [session_id])
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
@@ -770,7 +786,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+            async with self._config.provide_connection() as conn:
                 count_result = await conn.fetch(count_sql, [])
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
@@ -849,7 +865,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY rank DESC, timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
@@ -883,7 +899,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         ORDER BY timestamp DESC
         LIMIT {p_lim}
         """
-        async with self._config.provide_connection() as conn:  # pyright: ignore[reportAttributeAccessIssue]
+        async with self._config.provide_connection() as conn:
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)

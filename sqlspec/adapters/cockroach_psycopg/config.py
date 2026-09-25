@@ -17,6 +17,7 @@ from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgConnectio
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_crdb as psycopg_crdb
 from sqlspec.adapters.cockroach_psycopg.core import (
     apply_driver_features,
+    build_connection_config,
     build_statement_config,
     validate_follower_read_staleness,
 )
@@ -37,10 +38,9 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -70,6 +70,11 @@ class CockroachPsycopgConnectionConfig(TypedDict):
     connect_timeout: NotRequired[int]
     options: NotRequired[str]
     application_name: NotRequired[str]
+    gateway_region: NotRequired[str]
+    default_transaction_use_follower_reads: NotRequired[bool]
+    results_buffer_size: NotRequired[int]
+    statement_timeout: NotRequired[int]
+    idle_in_transaction_session_timeout: NotRequired[int]
     sslmode: NotRequired[str]
     sslcert: NotRequired[str]
     sslkey: NotRequired[str]
@@ -140,33 +145,6 @@ class CockroachPsycopgDriverFeatures(TypedDict):
     on_connection_create: "NotRequired[Callable[..., Any]]"
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["poll_queue"]]
-
-
-def build_connection_config(
-    connection_config: "CockroachPsycopgPoolConfig | Mapping[str, Any] | None",
-) -> dict[str, Any]:
-    """Build normalized CockroachDB psycopg connection configuration, resolving aliases for libpq compatibility.
-
-    Maps connection string aliases (dsn, url, connection_string) to conninfo, database aliases
-    (database, db) to dbname, and user aliases (username) to user, while discarding redundant keys
-    that libpq rejects.
-    """
-    config = normalize_connection_config(connection_config)
-    conninfo = (
-        config.pop("conninfo", None)
-        or config.pop("dsn", None)
-        or config.pop("url", None)
-        or config.pop("connection_string", None)
-    )
-    if conninfo is not None:
-        config["conninfo"] = conninfo
-    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
-    if dbname is not None:
-        config["dbname"] = dbname
-    user = config.pop("user", None) or config.pop("username", None)
-    if user is not None:
-        config["user"] = user
-    return config
 
 
 class CockroachPsycopgSyncConnectionContext(SyncPoolConnectionContext):
@@ -277,7 +255,7 @@ class CockroachPsycopgSyncConfig(
             "name": all_config.pop("name", None),
             "timeout": all_config.pop("timeout", 30.0),
             "max_waiting": all_config.pop("max_waiting", 0),
-            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_lifetime": all_config.pop("max_lifetime", 1800.0),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
             "reconnect_failed": all_config.pop("reconnect_failed", None),
@@ -307,7 +285,6 @@ class CockroachPsycopgSyncConfig(
         if autocommit_setting is not None:
             conn.autocommit = autocommit_setting
 
-        # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             self._user_connection_hook(conn)
 
@@ -504,7 +481,7 @@ class CockroachPsycopgAsyncConfig(
             "name": all_config.pop("name", None),
             "timeout": all_config.pop("timeout", 30.0),
             "max_waiting": all_config.pop("max_waiting", 0),
-            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_lifetime": all_config.pop("max_lifetime", 1800.0),
             "max_idle": all_config.pop("max_idle", 600.0),
             "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
             "reconnect_failed": all_config.pop("reconnect_failed", None),
@@ -541,7 +518,6 @@ class CockroachPsycopgAsyncConfig(
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)
 
-        # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             await self._user_connection_hook(conn)
 

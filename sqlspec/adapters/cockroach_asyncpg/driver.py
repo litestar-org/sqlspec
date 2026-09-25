@@ -1,10 +1,11 @@
 """CockroachDB AsyncPG driver implementation."""
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from sqlspec.adapters.asyncpg.core import create_mapped_exception, driver_profile
-from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
+from sqlspec.adapters.asyncpg.driver import AsyncpgDriver, AsyncpgExceptionHandler
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgPostgresError, CockroachAsyncpgSessionContext
 from sqlspec.adapters.cockroach_asyncpg.core import (
     CockroachAsyncpgRetryConfig,
@@ -19,7 +20,6 @@ from sqlspec.adapters.cockroach_asyncpg.core import (
 )
 from sqlspec.adapters.cockroach_asyncpg.data_dictionary import CockroachAsyncpgDataDictionary
 from sqlspec.core import SQL, register_driver_profile
-from sqlspec.driver import BaseAsyncExceptionHandler
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_sqlstate
 
@@ -37,7 +37,7 @@ logger = get_logger("sqlspec.adapters.cockroach_asyncpg")
 _T = TypeVar("_T")
 
 
-class CockroachAsyncpgExceptionHandler(BaseAsyncExceptionHandler):
+class CockroachAsyncpgExceptionHandler(AsyncpgExceptionHandler):
     """Async context manager for CockroachDB AsyncPG exceptions."""
 
     __slots__ = ()
@@ -66,7 +66,6 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
         self._retry_config = CockroachAsyncpgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
-        # Data dictionary is lazily initialized in property; use parent slot
         self._data_dictionary = None
 
     async def select_to_storage(
@@ -216,61 +215,34 @@ class CockroachAsyncpgDriver(AsyncpgDriver):
             attempt += 1
 
     async def dispatch_execute(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        return await self._dispatch_execute_impl(cursor, statement)
+        opened_txn = False
+        if statement.returns_rows() and not self._connection_in_transaction() and self._follower_reads_enabled():
+            await self.begin()
+            opened_txn = True
+        try:
+            return await super().dispatch_execute(cursor, statement)
+        finally:
+            if opened_txn:
+                with contextlib.suppress(Exception):
+                    await self.commit()
 
-    async def dispatch_execute_many(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        return await self._dispatch_execute_many_impl(cursor, statement)
-
-    async def dispatch_execute_script(self, cursor: Any, statement: SQL) -> "ExecutionResult":
-        return await self._dispatch_execute_script_impl(cursor, statement)
-
-    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":  # type: ignore[override]
+    def handle_database_exceptions(self) -> "CockroachAsyncpgExceptionHandler":
         return CockroachAsyncpgExceptionHandler()
 
     @property
-    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":  # type: ignore[override]
+    def data_dictionary(self) -> "CockroachAsyncpgDataDictionary":
         if self._data_dictionary is None:
-            # Intentionally assign CockroachDB-specific data dictionary to parent slot
-            object.__setattr__(self, "_data_dictionary", CockroachAsyncpgDataDictionary())
+            self._data_dictionary = CockroachAsyncpgDataDictionary()
         return cast("CockroachAsyncpgDataDictionary", self._data_dictionary)
 
+    def _follower_reads_enabled(self) -> bool:
+        return bool(self.driver_features.get("enable_follower_reads", False) and self._follower_staleness)
+
     async def _apply_follower_reads(self) -> None:
-        if not self.driver_features.get("enable_follower_reads", False):
-            return
-        if not self._follower_staleness:
+        if not self._follower_reads_enabled() or not self._follower_staleness:
             return
         staleness = validate_follower_read_staleness(self._follower_staleness)
         await self.connection.execute(f"SET TRANSACTION AS OF SYSTEM TIME {staleness}")
-
-    async def _begin_follower_read_transaction(self) -> None:
-        """Open the transaction a follower read needs so the staleness clause can lead it.
-
-        A statement run outside a transaction gets its own implicit one, which
-        the clause could not precede, so a read opens a transaction here when the
-        caller has not already done so.
-        """
-        if not self.driver_features.get("enable_follower_reads", False):
-            return
-        if not self._follower_staleness:
-            return
-        if self._connection_in_transaction():
-            return
-        await self.begin()
-
-    async def _dispatch_execute_impl(self, cursor: "CockroachAsyncpgConnection", statement: SQL) -> "ExecutionResult":
-        if statement.returns_rows():
-            await self._begin_follower_read_transaction()
-        return await super().dispatch_execute(cursor, statement)
-
-    async def _dispatch_execute_many_impl(
-        self, cursor: "CockroachAsyncpgConnection", statement: SQL
-    ) -> "ExecutionResult":
-        return await AsyncpgDriver.dispatch_execute_many(self, cursor, statement)
-
-    async def _dispatch_execute_script_impl(
-        self, cursor: "CockroachAsyncpgConnection", statement: SQL
-    ) -> "ExecutionResult":
-        return await AsyncpgDriver.dispatch_execute_script(self, cursor, statement)
 
 
 register_driver_profile("cockroach_asyncpg", driver_profile)

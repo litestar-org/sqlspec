@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
+from sqlspec.adapters.cockroach_psycopg.core import as_query
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -67,7 +68,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (key,))
+                await cur.execute(as_query(sql), (key,))
                 row = await cur.fetchone()
 
             if row is None:
@@ -81,7 +82,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
                     SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE session_id = %s
                     """
-                    await conn.execute(update_sql.encode(), (new_expires_at, key))
+                    await conn.execute(as_query(update_sql), (new_expires_at, key))
                     await conn.commit()
 
             return bytes(row["data"])
@@ -102,7 +103,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            await conn.execute(sql.encode(), (key, data, expires_at))
+            await conn.execute(as_query(sql), (key, data, expires_at))
             await conn.commit()
 
     async def delete(self, key: str) -> None:
@@ -110,7 +111,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            await conn.execute(sql.encode(), (key,))
+            await conn.execute(as_query(sql), (key,))
             await conn.commit()
 
     async def delete_all(self) -> None:
@@ -118,7 +119,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            await conn.execute(sql.encode())
+            await conn.execute(as_query(sql))
             await conn.commit()
         self._log_delete_all()
 
@@ -131,7 +132,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode(), (key,))
+            await cur.execute(as_query(sql), (key,))
             row = await cur.fetchone()
             return row is not None
 
@@ -144,7 +145,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (key,))
+                await cur.execute(as_query(sql), (key,))
                 row = await cur.fetchone()
 
             if row is None or row["expires_at"] is None:
@@ -164,7 +165,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode())
+            await cur.execute(as_query(sql))
             await conn.commit()
             count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             if count > 0:
@@ -268,7 +269,7 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
 
         with self._config.provide_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (key,))
+                cur.execute(as_query(sql), (key,))
                 row = cur.fetchone()
 
             if row is None:
@@ -282,7 +283,7 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
                     SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE session_id = %s
                     """
-                    conn.execute(update_sql.encode(), (new_expires_at, key))
+                    conn.execute(as_query(update_sql), (new_expires_at, key))
                     conn.commit()
 
             return bytes(row["data"])
@@ -302,21 +303,21 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql.encode(), (key, data, expires_at))
+            conn.execute(as_query(sql), (key, data, expires_at))
             conn.commit()
 
     def _delete(self, key: str) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql.encode(), (key,))
+            conn.execute(as_query(sql), (key,))
             conn.commit()
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name}"
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql.encode())
+            conn.execute(as_query(sql))
             conn.commit()
         self._log_delete_all()
 
@@ -328,7 +329,7 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode(), (key,))
+            cur.execute(as_query(sql), (key,))
             row = cur.fetchone()
             return row is not None
 
@@ -340,7 +341,7 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
 
         with self._config.provide_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (key,))
+                cur.execute(as_query(sql), (key,))
                 row = cur.fetchone()
 
             if row is None or row["expires_at"] is None:
@@ -359,7 +360,7 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode())
+            cur.execute(as_query(sql))
             conn.commit()
             count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             if count > 0:
