@@ -296,7 +296,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
     def has_schema(self, schema: str) -> bool:
         """Return whether the specified schema exists."""
         with self.with_cursor(self.connection) as cursor:
-            _execute_cursor(cursor, "SELECT 1 FROM sys.schemas WHERE name = ?", (schema,), use_prepare=False)
+            _execute_cursor(cursor, "SELECT 1 FROM sys.schemas WHERE name = ?", (schema,))
             return cursor.fetchone() is not None
 
     def select_to_arrow(
@@ -554,24 +554,18 @@ def _quote_mssql_table(table: str) -> str:
 
 
 def _execute_cursor(cursor: MssqlPythonRawCursor, sql: str, parameters: Any, *, use_prepare: bool = True) -> None:
-    if use_prepare:
+    if use_prepare or parameters:
         if parameters is None:
             cursor.execute(sql)
         else:
             cursor.execute(sql, parameters)
         return
     try:
-        if parameters is None:
-            cursor.execute(sql, use_prepare=False)
-        else:
-            cursor.execute(sql, parameters, use_prepare=False)
+        cursor.execute(sql, use_prepare=False)
     except TypeError as exc:
         if "use_prepare" not in str(exc):
             raise
-        if parameters is None:
-            cursor.execute(sql)
-        else:
-            cursor.execute(sql, parameters)
+        cursor.execute(sql)
 
 
 def _cursor_rowcount(cursor: MssqlPythonRawCursor) -> int:

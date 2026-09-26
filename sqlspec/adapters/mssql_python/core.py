@@ -150,7 +150,7 @@ _extract_error_number = extract_error_number
 
 def create_mapped_exception(error: Exception, *, logger: Logger | None = None) -> SQLSpecError:
     """Map a mssql-python exception to SQLSpec's exception hierarchy."""
-    error_number = _extract_error_number(error)
+    error_number = extract_error_number(error)
     if error_number == _MSSQL_CONSTRAINT_547:
         message = str(error)
         if "check constraint" in message.lower():
