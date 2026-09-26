@@ -4,7 +4,8 @@ from typing import Any
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.config import AiosqliteConfig, apply_extension_pragmas, extension_pragma_statements
+from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
+from sqlspec.adapters.aiosqlite.core import apply_extension_pragmas, extension_pragma_statements
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 

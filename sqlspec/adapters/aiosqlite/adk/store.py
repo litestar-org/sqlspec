@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
-from sqlspec.adapters.aiosqlite.config import render_pragmas
+from sqlspec.adapters.aiosqlite.core import render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options

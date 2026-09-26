@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
 
-from sqlspec.adapters.sqlite.pool import SqliteConnectionPool, _end_transaction
+from sqlspec.adapters.sqlite.core import end_transaction
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite._typing import SqliteConnection
@@ -247,7 +248,7 @@ def test_pool_ends_autocommit_transactions_with_an_explicit_statement(commit: bo
     """The pool's own commit is a no-op in autocommit mode, exactly like the driver's."""
     connection = _AutocommitConnection()
 
-    _end_transaction(cast("Any", connection), commit=commit, supports_autocommit=True)
+    end_transaction(cast("Any", connection), commit=commit, supports_autocommit=True)
 
     assert connection.statements == [statement]
     assert connection.commit_calls == 0
@@ -259,7 +260,7 @@ def test_pool_uses_the_dbapi_methods_outside_autocommit_mode() -> None:
     connection = _AutocommitConnection()
     connection.autocommit = False
 
-    _end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
+    end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
 
     assert connection.statements == []
     assert connection.commit_calls == 1
@@ -269,7 +270,7 @@ def test_pool_skips_ending_a_transaction_that_is_not_open() -> None:
     connection = _AutocommitConnection()
     connection.in_transaction = False
 
-    _end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
+    end_transaction(cast("Any", connection), commit=True, supports_autocommit=True)
 
     assert connection.statements == []
     assert connection.commit_calls == 0
