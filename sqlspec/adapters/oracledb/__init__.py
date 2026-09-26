@@ -1,4 +1,3 @@
-from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,
@@ -6,7 +5,13 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
-from sqlspec.adapters.oracledb.core import build_connection_config, default_statement_config
+from sqlspec.adapters.oracledb.core import (
+    OracleBlob,
+    OracleClob,
+    OracleJson,
+    build_connection_config,
+    default_statement_config,
+)
 from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbAsyncDataDictionary,
     OracledbSyncDataDictionary,

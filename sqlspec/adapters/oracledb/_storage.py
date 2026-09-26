@@ -17,6 +17,8 @@ from sqlspec.utils.logging import get_logger
 
 logger = get_logger("sqlspec.adapters.oracledb.storage")
 
+__all__ = ("oracle_table_feature_report", "validate_oracle_identifier")
+
 ORACLE_DEFAULT_HASH_PARTITIONS = 16
 ORACLE_MIN_HASH_PARTITIONS = 2
 ORACLE_RANGE_INTERVALS = {
@@ -43,7 +45,7 @@ class _OracleStorageFeatureReport(TypedDict):
     clause: str
 
 
-def _oracle_table_feature_report(
+def oracle_table_feature_report(
     config: Any,
     extension_name: str,
     settings: Mapping[str, Any],
@@ -104,7 +106,7 @@ def _oracle_partition_clause(
     table_key = partitioning.get(f"{table_kind}_partition_key")
     configured_key = table_key if table_key is not None else partitioning.get("partition_key")
     if strategy == "hash":
-        partition_key = _validate_oracle_identifier(str(configured_key or hash_partition_key), "partition key")
+        partition_key = validate_oracle_identifier(str(configured_key or hash_partition_key), "partition key")
         partition_count = partitioning.get(
             "partition_count", partitioning.get("partitions", ORACLE_DEFAULT_HASH_PARTITIONS)
         )
@@ -113,7 +115,7 @@ def _oracle_partition_clause(
             raise ValueError(msg)
         return f"PARTITION BY HASH ({partition_key}) PARTITIONS {partition_count}"
     if strategy == "range":
-        partition_key = _validate_oracle_identifier(str(configured_key or range_partition_key), "partition key")
+        partition_key = validate_oracle_identifier(str(configured_key or range_partition_key), "partition key")
         interval = str(partitioning.get("interval") or "month").lower()
         interval_sql = ORACLE_RANGE_INTERVALS.get(interval)
         if interval_sql is None:
@@ -126,7 +128,7 @@ def _oracle_partition_clause(
     raise ValueError(msg)
 
 
-def _validate_oracle_identifier(value: str, field_name: str) -> str:
+def validate_oracle_identifier(value: str, field_name: str) -> str:
     if not value or not value.replace("_", "").isalnum() or value[0].isdigit():
         msg = f"Oracle {field_name} must be a simple SQL identifier"
         raise ValueError(msg)
