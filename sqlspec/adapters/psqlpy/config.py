@@ -302,25 +302,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
                 await self._user_connection_hook(connection)
             self._initialized_connection_ids.add(conn_id)
 
-    def get_pool_status(self) -> "dict[str, int] | None":
-        """Return connection pool status metrics if pool is active."""
-        pool = self.connection_instance
-        if pool is not None and hasattr(pool, "status"):
-            status = pool.status()
-            return {
-                "max_size": status.max_size,
-                "size": status.size,
-                "available": status.available,
-                "waiting": status.waiting,
-            }
-        return None
-
-    def resize_pool(self, new_max_size: int) -> None:
-        """Dynamically resize the active connection pool."""
-        pool = self.connection_instance
-        if pool is not None and hasattr(pool, "resize"):
-            pool.resize(new_max_size)
-
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
         from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool

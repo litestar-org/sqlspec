@@ -169,7 +169,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             result = await cursor.execute(sql, *params) if params else await cursor.execute(sql)
 
         if statement.operation_type in {"CREATE", "ALTER", "DROP", "TRUNCATE"}:
-            self.invalidate_prepared_statements()
+            self._invalidate_prepared_statements()
 
         affected_rows = parse_status(result)
 
@@ -217,7 +217,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             last_result = result
             successful_count += 1
 
-        self.invalidate_prepared_statements()
+        self._invalidate_prepared_statements()
 
         return self.create_execution_result(
             last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -294,14 +294,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
-        self.invalidate_prepared_statements()
+        self._invalidate_prepared_statements()
         normalized_schema = normalize_identifier(schema, "postgres")
         quoted_schema = quote_identifier(normalized_schema)
         await self.connection.execute(f'SET LOCAL search_path TO {quoted_schema}, "$user", public')
 
     async def set_migration_non_transactional_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for non-transactional migration SQL."""
-        self.invalidate_prepared_statements()
+        self._invalidate_prepared_statements()
         normalized_schema = normalize_identifier(schema, "postgres")
         quoted_schema = quote_identifier(normalized_schema)
         await self.connection.execute(f'SET search_path TO {quoted_schema}, "$user", public')
@@ -474,30 +474,6 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         }
         return self._storage_job(telemetry_payload)
 
-    async def copy_from_table(
-        self,
-        table: str,
-        output: Any,
-        *,
-        columns: "list[str] | None" = None,
-        schema_name: "str | None" = None,
-        format: str = "text",
-        delimiter: str = "\t",
-        null: str = "\\N",
-    ) -> None:
-        """Export table contents to output stream or file using PostgreSQL COPY TO STDOUT."""
-        table_name, resolved_schema, _ = self._copy_target(table)
-        schema = schema_name or resolved_schema
-        await self.connection.copy_from_table(
-            table_name,
-            output=output,
-            columns=columns,
-            schema_name=schema,
-            format=format,
-            delimiter=delimiter,
-            null=null,
-        )
-
     async def load_from_storage(
         self,
         table: str,
@@ -654,7 +630,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Check if connection is in transaction."""
         return bool(self.connection.is_in_transaction())
 
-    def invalidate_prepared_statements(self) -> None:
+    def _invalidate_prepared_statements(self) -> None:
         """Clear cached prepared statements."""
         self._prepared_statements.clear()
 

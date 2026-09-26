@@ -29,7 +29,6 @@ from sqlspec.adapters.psqlpy.core import (
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
-from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
@@ -248,24 +247,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
         finally:
             self._transaction_active = False
-
-    async def savepoint(self, name: str) -> None:
-        """Create a savepoint within the current transaction."""
-        validate_savepoint_name(name)
-        quoted_name = quote_identifier(name)
-        await self.connection.execute(f"SAVEPOINT {quoted_name}")
-
-    async def release_savepoint(self, name: str) -> None:
-        """Release a savepoint within the current transaction."""
-        validate_savepoint_name(name)
-        quoted_name = quote_identifier(name)
-        await self.connection.execute(f"RELEASE SAVEPOINT {quoted_name}")
-
-    async def rollback_savepoint(self, name: str) -> None:
-        """Rollback to a savepoint within the current transaction."""
-        validate_savepoint_name(name)
-        quoted_name = quote_identifier(name)
-        await self.connection.execute(f"ROLLBACK TO SAVEPOINT {quoted_name}")
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
