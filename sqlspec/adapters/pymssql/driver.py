@@ -44,7 +44,8 @@ from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat,
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.pymssql._typing import PymssqlQueryParams as QueryParams
+    from pymssql._pymssql import QueryParams
+
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import Statement, StatementFilter
     from sqlspec.typing import StatementParameters

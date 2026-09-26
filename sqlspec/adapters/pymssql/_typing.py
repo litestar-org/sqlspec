@@ -8,33 +8,21 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 import pymssql as pymssql_module
-from pymssql import Connection as _PymssqlConnection
-from pymssql import Cursor as _PymssqlRawCursor
+from pymssql import Connection as PymssqlConnection
+from pymssql import Cursor as PymssqlRawCursor
 from pymssql import Error as PymssqlError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
-
-    from pymssql._pymssql import QueryParams as PymssqlQueryParams
 
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import StatementConfig
-
-    PymssqlConnection: TypeAlias = _PymssqlConnection
-    PymssqlRawCursor: TypeAlias = _PymssqlRawCursor
-
-if not TYPE_CHECKING:
-    PymssqlQueryParams = Any
-    PymssqlConnection = _PymssqlConnection
-    PymssqlRawCursor = _PymssqlRawCursor
 
 __all__ = (
     "PymssqlConnection",
     "PymssqlCursor",
     "PymssqlError",
-    "PymssqlQueryParams",
     "PymssqlRawCursor",
     "PymssqlSessionContext",
     "pymssql_module",
