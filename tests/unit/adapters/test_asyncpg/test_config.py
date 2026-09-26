@@ -311,3 +311,10 @@ def test_asyncpg_config_normalizes_aliases() -> None:
     assert "conninfo" not in config.connection_config
     assert "dbname" not in config.connection_config
     assert "username" not in config.connection_config
+
+
+def test_asyncpg_pgbouncer_connection_config_sets_statement_cache_size_zero() -> None:
+    """Enabling pgbouncer in connection_config should pop pgbouncer and disable statement caching."""
+    config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost:5432/test", "pgbouncer": True})
+    assert "pgbouncer" not in config.connection_config
+    assert config.connection_config["statement_cache_size"] == 0

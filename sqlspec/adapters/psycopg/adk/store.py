@@ -8,7 +8,6 @@ from sqlspec.adapters.psycopg._typing import PsycopgJsonb as Jsonb
 from sqlspec.adapters.psycopg._typing import psycopg_dict_row as dict_row
 from sqlspec.adapters.psycopg._typing import psycopg_errors as errors
 from sqlspec.adapters.psycopg._typing import psycopg_sql as pg_sql
-from sqlspec.adapters.psycopg.core import pipeline_supported
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -415,50 +414,28 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        async with self._config.provide_connection() as conn:
+        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             try:
-                if pipeline_supported() and hasattr(conn, "pipeline"):
-                    async with conn.pipeline(), conn.cursor(row_factory=dict_row) as cur:
-                        await cur.execute(
-                            insert_query,
-                            (
-                                event_record["id"],
-                                event_record["app_name"],
-                                event_record["user_id"],
-                                event_record["session_id"],
-                                event_record["invocation_id"],
-                                event_record["timestamp"],
-                                jsonb_value,
-                            ),
-                        )
-                        await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                        if app_state is not None:
-                            await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                        if user_state is not None:
-                            await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
-                        row = await cur.fetchone()
-                else:
-                    async with conn.cursor(row_factory=dict_row) as cur:
-                        await cur.execute(
-                            insert_query,
-                            (
-                                event_record["id"],
-                                event_record["app_name"],
-                                event_record["user_id"],
-                                event_record["session_id"],
-                                event_record["invocation_id"],
-                                event_record["timestamp"],
-                                jsonb_value,
-                            ),
-                        )
-                        await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                        row = await cur.fetchone()
-                        if app_state is not None:
-                            await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                        if user_state is not None:
-                            await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
+                await cur.execute(
+                    insert_query,
+                    (
+                        event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["timestamp"],
+                        jsonb_value,
+                    ),
+                )
+                await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+                row = await cur.fetchone()
                 if row is None:
                     _raise_missing_session(session_id)
+                if app_state is not None:
+                    await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+                if user_state is not None:
+                    await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             except Exception:
                 await conn.rollback()
                 raise
@@ -927,50 +904,28 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        with self._config.provide_connection() as conn:
+        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             try:
-                if pipeline_supported() and hasattr(conn, "pipeline"):
-                    with conn.pipeline(), conn.cursor(row_factory=dict_row) as cur:
-                        cur.execute(
-                            insert_query,
-                            (
-                                event_record["id"],
-                                event_record["app_name"],
-                                event_record["user_id"],
-                                event_record["session_id"],
-                                event_record["invocation_id"],
-                                event_record["timestamp"],
-                                jsonb_value,
-                            ),
-                        )
-                        cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                        if app_state is not None:
-                            cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                        if user_state is not None:
-                            cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
-                        row = cur.fetchone()
-                else:
-                    with conn.cursor(row_factory=dict_row) as cur:
-                        cur.execute(
-                            insert_query,
-                            (
-                                event_record["id"],
-                                event_record["app_name"],
-                                event_record["user_id"],
-                                event_record["session_id"],
-                                event_record["invocation_id"],
-                                event_record["timestamp"],
-                                jsonb_value,
-                            ),
-                        )
-                        cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                        row = cur.fetchone()
-                        if app_state is not None:
-                            cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                        if user_state is not None:
-                            cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
+                cur.execute(
+                    insert_query,
+                    (
+                        event_record["id"],
+                        event_record["app_name"],
+                        event_record["user_id"],
+                        event_record["session_id"],
+                        event_record["invocation_id"],
+                        event_record["timestamp"],
+                        jsonb_value,
+                    ),
+                )
+                cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+                row = cur.fetchone()
                 if row is None:
                     _raise_missing_session(session_id)
+                if app_state is not None:
+                    cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+                if user_state is not None:
+                    cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
             except Exception:
                 conn.rollback()
                 raise

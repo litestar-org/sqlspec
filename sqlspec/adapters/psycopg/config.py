@@ -463,13 +463,15 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if autocommit_setting is not None:
             conn.autocommit = autocommit_setting
 
+        from psycopg.adapt import AdaptersMap
         from psycopg.types.json import set_json_dumps, set_json_loads
 
         serializer = self.driver_features.get("json_serializer", to_json)
         deserializer = self.driver_features.get("json_deserializer", from_json)
-        with suppress(Exception):
-            set_json_dumps(serializer, conn)
-            set_json_loads(deserializer, conn)
+        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
+            with suppress(Exception):
+                set_json_dumps(serializer, conn)
+                set_json_loads(deserializer, conn)
 
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
@@ -813,13 +815,15 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)
 
+        from psycopg.adapt import AdaptersMap
         from psycopg.types.json import set_json_dumps, set_json_loads
 
         serializer = self.driver_features.get("json_serializer", to_json)
         deserializer = self.driver_features.get("json_deserializer", from_json)
-        with suppress(Exception):
-            set_json_dumps(serializer, conn)
-            set_json_loads(deserializer, conn)
+        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
+            with suppress(Exception):
+                set_json_dumps(serializer, conn)
+                set_json_loads(deserializer, conn)
 
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()

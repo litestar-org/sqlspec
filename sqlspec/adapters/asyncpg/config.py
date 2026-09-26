@@ -581,6 +581,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         for key in _POOL_ONLY_CONFIG_KEYS:
             config.pop(key, None)
 
+        if self.driver_features.get("pgbouncer"):
+            config["statement_cache_size"] = 0
+
         if self.driver_features.get("enable_cloud_sql", False):
             self._setup_cloud_sql_connector(config)
         elif self.driver_features.get("enable_alloydb", False):
