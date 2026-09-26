@@ -1,9 +1,12 @@
 """mssql-python adapter core helpers."""
 
 import re
+from collections.abc import Callable, Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING, Any, Final
+from logging import Logger
+from typing import Any, Final
 
+from sqlspec.core import StatementConfig
 from sqlspec.core.parameters import ParameterStyle
 from sqlspec.core.parameters._registry import build_statement_config_from_profile
 from sqlspec.core.parameters._types import DriverParameterProfile
@@ -25,12 +28,6 @@ from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
-if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
-    from logging import Logger
-
-    from sqlspec.core import StatementConfig
-
 __all__ = (
     "MSSQL_PYTHON_VERSION",
     "apply_driver_features",
@@ -40,10 +37,11 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "extract_error_number",
     "materialize_tuple_rows",
 )
 
-_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)(?:,|\))")
+_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 _VERSION_PART_COUNT: Final[int] = 3
@@ -98,9 +96,58 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 }
 
 
-def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
+def extract_error_number(exc: BaseException | None) -> int | None:
+    """Extract numeric SQL Server error code using fast attribute/string parsing before regex fallback."""
+    if exc is None:
+        return None
+    for attr in ("number", "error_code", "errno"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and not isinstance(val, bool):
+            return val
+    ddbc_err = getattr(exc, "ddbc_error", None)
+    if isinstance(ddbc_err, str) and ddbc_err.startswith("("):
+        end_idx = ddbc_err.find(",")
+        if end_idx == -1:
+            end_idx = ddbc_err.find(")")
+        if end_idx != -1:
+            num_str = ddbc_err[1:end_idx].strip()
+            try:
+                return int(num_str)
+            except ValueError:
+                pass
+
+    if exc.args:
+        first_arg = exc.args[0]
+        if isinstance(first_arg, int) and not isinstance(first_arg, bool):
+            return first_arg
+        if isinstance(first_arg, str):
+            msg = first_arg
+            start_idx = msg.rfind("(")
+            if start_idx != -1:
+                end_idx = msg.find(",", start_idx)
+                if end_idx == -1:
+                    end_idx = msg.find(")", start_idx)
+                if end_idx != -1:
+                    num_str = msg[start_idx + 1 : end_idx].strip()
+                    try:
+                        return int(num_str)
+                    except ValueError:
+                        pass
+
+    matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
+    if not matches:
+        return None
+    last_match = matches[-1]
+    raw_num = last_match[0] or last_match[1] if isinstance(last_match, tuple) else last_match
+    try:
+        return int(raw_num)
+    except ValueError:
+        return None
+
+
+def create_mapped_exception(error: Exception, *, logger: Logger | None = None) -> SQLSpecError:
     """Map a mssql-python exception to SQLSpec's exception hierarchy."""
-    error_number = _extract_error_number(error)
+    error_number = extract_error_number(error)
     if error_number == _MSSQL_CONSTRAINT_547:
         message = str(error)
         if "check constraint" in message.lower():
@@ -130,22 +177,25 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
     return SQLSpecError(f"SQL Server database error. Original error: {error}")
 
 
-def materialize_tuple_rows(fetched: "Sequence[Any] | None") -> "list[tuple[Any, ...]]":
-    """Materialize mssql-python ``Row`` objects into plain tuples.
+def materialize_tuple_rows(fetched: Sequence[Any] | None) -> list[tuple[Any, ...]]:
+    """Materialize mssql-python Row objects into plain tuples.
 
-    ``mssql-python`` returns ``mssql_python.Row`` objects that are iterable and
-    indexable but are not ``tuple`` subclasses. The driver reports
-    ``row_format="tuple"``, so fetched rows are converted to real tuples to keep
-    that contract accurate when results are materialized.
+    Accesses row._values directly when available, bypassing Python's __iter__
+    protocol for significantly higher throughput on large result sets.
     """
     if not fetched:
         return []
+    first = fetched[0]
+    if isinstance(first, tuple):
+        return list(fetched) if not isinstance(fetched, list) else fetched
+    if hasattr(first, "_values"):
+        return [tuple(row._values) if not isinstance(row._values, tuple) else row._values for row in fetched]
     return [tuple(row) for row in fetched]
 
 
 def apply_driver_features(
-    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
-) -> "tuple[StatementConfig, dict[str, Any]]":
+    statement_config: StatementConfig, driver_features: Mapping[str, Any] | None
+) -> tuple[StatementConfig, dict[str, Any]]:
     """Merge mssql-python driver-feature defaults with caller overrides."""
     defaults: dict[str, Any] = {"use_pool": True, "json_serializer": to_json, "json_deserializer": from_json}
     defaults.update(driver_features or {})
@@ -155,7 +205,7 @@ def apply_driver_features(
 def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Build an ODBC connection string and mssql-python connect kwargs.
 
-    When both ``connection_string`` and discrete connection fields are provided,
+    When both connection_string and discrete connection fields are provided,
     discrete fields take precedence and override matching keys in the connection
     string. Key names are normalized case-insensitively to prevent duplicate
     keywords, satisfying mssql-python driver requirements.
@@ -241,7 +291,7 @@ def build_connection_config(params: dict[str, Any]) -> tuple[str, dict[str, Any]
     return ";".join(parts) + ";", connect_kwargs
 
 
-def build_profile() -> "DriverParameterProfile":
+def build_profile() -> DriverParameterProfile:
     """Create the mssql-python driver parameter profile."""
     return DriverParameterProfile(
         name="mssql_python",
@@ -260,14 +310,14 @@ def build_profile() -> "DriverParameterProfile":
     )
 
 
-def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = None) -> "StatementConfig":
+def build_statement_config(*, json_serializer: Callable[[Any], str] | None = None) -> StatementConfig:
     """Construct the mssql-python statement configuration."""
     return build_statement_config_from_profile(
         driver_profile, statement_overrides={"dialect": "tsql"}, json_serializer=json_serializer or to_json
     )
 
 
-def _constraint_exception_from_message(error: Exception) -> "SQLSpecError | None":
+def _constraint_exception_from_message(error: Exception) -> SQLSpecError | None:
     """Classify SQL Server constraint messages when a driver omits the native error number."""
     message = str(error)
     normalized = message.lower()
@@ -282,7 +332,7 @@ def _constraint_exception_from_message(error: Exception) -> "SQLSpecError | None
     return None
 
 
-def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
     """Return custom type coercions for mssql-python."""
     return {bool: _identity, int: _identity, float: _identity, bytes: _identity, **build_uuid_coercions(native=True)}
 
@@ -328,16 +378,6 @@ def _append_port(server: str, port: Any) -> str:
     if not port or "," in server or ":" in server:
         return server
     return f"{server},{port}"
-
-
-def _extract_error_number(exc: Exception) -> "int | None":
-    matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
-    if not matches:
-        return None
-    try:
-        return int(matches[-1])
-    except ValueError:
-        return None
 
 
 MSSQL_PYTHON_VERSION: Final[tuple[int, int, int]] = _parse_version()

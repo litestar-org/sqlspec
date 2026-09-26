@@ -1,16 +1,15 @@
 """mssql-python pool facade."""
 
+import contextlib
 import warnings
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable
+from typing import Any
 
-from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonConnection
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, mssql_python_module
 
 __all__ = ("MssqlPythonConnectionPool",)
 
-_POOLING_PARAMS: "tuple[int, int, bool] | None" = None
+_POOLING_PARAMS: tuple[int, int, bool] | None = None
 
 
 class MssqlPythonConnectionPool:
@@ -30,11 +29,11 @@ class MssqlPythonConnectionPool:
         self,
         *,
         connection_string: str,
-        connect_kwargs: "dict[str, Any] | None" = None,
+        connect_kwargs: dict[str, Any] | None = None,
         max_size: int = 100,
         idle_timeout: int = 600,
         enabled: bool = True,
-        on_connection_create: "Callable[[MssqlPythonConnection], None] | None" = None,
+        on_connection_create: Callable[[MssqlPythonConnection], None] | None = None,
     ) -> None:
         self.connection_string = connection_string
         self.connect_kwargs = connect_kwargs or {}
@@ -51,22 +50,28 @@ class MssqlPythonConnectionPool:
                 f"overwriting with {new_params}. Only one pool config per process is supported.",
                 stacklevel=2,
             )
-        MSSQL_PYTHON_MODULE.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
-        _POOLING_PARAMS = new_params
+        if _POOLING_PARAMS is None or new_params != _POOLING_PARAMS:
+            mssql_python_module.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
+            _POOLING_PARAMS = new_params
 
-    def acquire(self) -> "MssqlPythonConnection":
+    def acquire(self) -> MssqlPythonConnection:
         if self._closed:
             msg = "Cannot acquire a connection from a closed mssql-python pool."
             raise RuntimeError(msg)
-        connection = cast(
-            "MssqlPythonConnection", MSSQL_PYTHON_MODULE.connect(self.connection_string, **self.connect_kwargs)
-        )
+        connection = mssql_python_module.connect(self.connection_string, **self.connect_kwargs)
         if self.on_connection_create is not None:
             self.on_connection_create(connection)
         return connection
 
-    def release(self, connection: "MssqlPythonConnection") -> None:
+    def release(self, connection: MssqlPythonConnection) -> None:
         connection.close()
 
-    def close(self) -> None:
+    def close(self, *, close_driver_pooling: bool = False) -> None:
         self._closed = True
+        if close_driver_pooling:
+            global _POOLING_PARAMS
+            _POOLING_PARAMS = None
+            with contextlib.suppress(Exception):
+                ddbc = getattr(mssql_python_module, "ddbc_bindings", None)
+                if ddbc is not None and hasattr(ddbc, "close_pooling"):
+                    ddbc.close_pooling()

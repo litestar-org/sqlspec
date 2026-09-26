@@ -1,7 +1,7 @@
 """pymssql database configuration."""
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -11,14 +11,11 @@ from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandl
 from sqlspec.adapters.pymssql.migrations import PymssqlSyncMigrationTracker
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
-from sqlspec.core import TypeCoercionCapabilities
+from sqlspec.core import StatementConfig, TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
 from sqlspec.extensions.events import EventRuntimeHints
+from sqlspec.observability import ObservabilityConfig
 from sqlspec.utils.config_tools import normalize_connection_config
-
-if TYPE_CHECKING:
-    from sqlspec.core import StatementConfig
-    from sqlspec.observability import ObservabilityConfig
 
 __all__ = ("PymssqlConfig", "PymssqlConnectionParams", "PymssqlDriverFeatures", "PymssqlPoolParams", "PymssqlTimeout")
 
@@ -42,13 +39,14 @@ class PymssqlConnectionParams(TypedDict):
     conn_properties: NotRequired[str]
     autocommit: NotRequired[bool]
     tds_version: NotRequired[str]
+    encryption: NotRequired[Literal["default", "off", "request", "require"]]
     use_datetime2: NotRequired[bool]
     arraysize: NotRequired[int]
     conv: NotRequired[Mapping[int | type[Any], Callable[..., Any]]]
     read_only: NotRequired[bool]
     pool_recycle_seconds: NotRequired[int]
     health_check_interval: NotRequired[float]
-    extra: NotRequired["dict[str, Any]"]
+    extra: NotRequired[dict[str, Any]]
 
 
 class PymssqlPoolParams(PymssqlConnectionParams):
@@ -69,9 +67,9 @@ class PymssqlDriverFeatures(TypedDict):
     events_backend: Event channel backend selection.
     """
 
-    json_serializer: NotRequired["Callable[[Any], str]"]
-    json_deserializer: NotRequired["Callable[[str], Any]"]
-    on_connection_create: "NotRequired[Callable[[PymssqlConnection], None]]"
+    json_serializer: NotRequired[Callable[[Any], str]]
+    json_deserializer: NotRequired[Callable[[str], Any]]
+    on_connection_create: NotRequired[Callable[[PymssqlConnection], None]]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["poll_queue"]]
 
@@ -89,35 +87,37 @@ class _PymssqlSessionConnectionHandler(SyncPoolSessionFactory):
 class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool, PymssqlDriver]):
     """Configuration for pymssql synchronous connections."""
 
-    driver_type: "ClassVar[type[PymssqlDriver]]" = PymssqlDriver
-    connection_type: "ClassVar[type[PymssqlConnection]]" = cast("type[PymssqlConnection]", PymssqlConnection)
-    migration_tracker_type: "ClassVar[type[PymssqlSyncMigrationTracker]]" = PymssqlSyncMigrationTracker
-    supports_transactional_ddl: "ClassVar[bool]" = True
-    supports_migration_schemas: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = False
-    supports_native_arrow_import: "ClassVar[bool]" = False
-    supports_native_parquet_export: "ClassVar[bool]" = False
-    supports_native_parquet_import: "ClassVar[bool]" = False
-    supports_native_row_streaming: "ClassVar[bool]" = True
-    type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
+    __slots__ = ("_user_connection_hook",)
+
+    driver_type: ClassVar[type[PymssqlDriver]] = PymssqlDriver
+    connection_type: ClassVar[type[PymssqlConnection]] = cast("type[PymssqlConnection]", PymssqlConnection)
+    migration_tracker_type: ClassVar[type[PymssqlSyncMigrationTracker]] = PymssqlSyncMigrationTracker
+    supports_transactional_ddl: ClassVar[bool] = True
+    supports_migration_schemas: ClassVar[bool] = True
+    supports_native_arrow_export: ClassVar[bool] = False
+    supports_native_arrow_import: ClassVar[bool] = True
+    supports_native_parquet_export: ClassVar[bool] = False
+    supports_native_parquet_import: ClassVar[bool] = False
+    supports_native_row_streaming: ClassVar[bool] = True
+    type_coercion_capabilities: ClassVar[TypeCoercionCapabilities] = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
     )
-    _connection_context_class: "ClassVar[type[PymssqlConnectionContext]]" = PymssqlConnectionContext
-    _session_factory_class: "ClassVar[type[_PymssqlSessionConnectionHandler]]" = _PymssqlSessionConnectionHandler
-    _session_context_class: "ClassVar[type[PymssqlSessionContext]]" = PymssqlSessionContext
+    _connection_context_class: ClassVar[type[PymssqlConnectionContext]] = PymssqlConnectionContext
+    _session_factory_class: ClassVar[type[_PymssqlSessionConnectionHandler]] = _PymssqlSessionConnectionHandler
+    _session_context_class: ClassVar[type[PymssqlSessionContext]] = PymssqlSessionContext
     _default_statement_config = default_statement_config
 
     def __init__(
         self,
         *,
-        connection_config: "PymssqlPoolParams | dict[str, Any] | None" = None,
-        connection_instance: "PymssqlConnectionPool | None" = None,
-        migration_config: "dict[str, Any] | None" = None,
-        statement_config: "StatementConfig | None" = None,
-        driver_features: "PymssqlDriverFeatures | dict[str, Any] | None" = None,
-        bind_key: "str | None" = None,
-        extension_config: "ExtensionConfigs | None" = None,
-        observability_config: "ObservabilityConfig | None" = None,
+        connection_config: PymssqlPoolParams | dict[str, Any] | None = None,
+        connection_instance: PymssqlConnectionPool | None = None,
+        migration_config: dict[str, Any] | None = None,
+        statement_config: StatementConfig | None = None,
+        driver_features: PymssqlDriverFeatures | dict[str, Any] | None = None,
+        bind_key: str | None = None,
+        extension_config: ExtensionConfigs | None = None,
+        observability_config: ObservabilityConfig | None = None,
         **kwargs: Any,
     ) -> None:
         connection_config = build_connection_config(normalize_connection_config(connection_config))
@@ -142,7 +142,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             **kwargs,
         )
 
-    def _create_pool(self) -> "PymssqlConnectionPool":
+    def _create_pool(self) -> PymssqlConnectionPool:
         config = dict(self.connection_config)
         pool_recycle = config.pop("pool_recycle_seconds", 86400)
         health_check = config.pop("health_check_interval", 30.0)
@@ -158,7 +158,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             self.connection_instance.close()
             self.connection_instance = None
 
-    def create_connection(self) -> "PymssqlConnection":
+    def create_connection(self) -> PymssqlConnection:
         """Open a standalone connection owned by the caller.
 
         The connection carries the same parameters and creation hook the pool
@@ -170,7 +170,7 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
         """
         return self.provide_pool().new_connection()
 
-    def get_signature_namespace(self) -> "dict[str, Any]":
+    def get_signature_namespace(self) -> dict[str, Any]:
         namespace = super().get_signature_namespace()
         namespace.update({
             "PymssqlConfig": PymssqlConfig,
@@ -188,6 +188,6 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
         })
         return namespace
 
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+    def get_event_runtime_hints(self) -> EventRuntimeHints:
         """Return runtime hints for pymssql event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)

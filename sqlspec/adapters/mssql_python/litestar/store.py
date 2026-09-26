@@ -1,13 +1,12 @@
 """mssql-python Litestar Store implementation."""
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor
+from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
-
-if TYPE_CHECKING:
-    from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 
 __all__ = ("MssqlPythonStore",)
 
@@ -17,7 +16,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: "MssqlPythonConfig") -> None:
+    def __init__(self, config: MssqlPythonConfig) -> None:
         super().__init__(config)
 
     async def create_table(self) -> None:
@@ -28,11 +27,11 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+    async def get(self, key: str, renew_for: int | timedelta | None = None) -> bytes | None:
         """Get a session value by key."""
         return await async_(self._get)(key, renew_for)
 
-    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+    async def set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
         """Store a session value."""
         await async_(self._set)(key, value, expires_in)
 
@@ -48,7 +47,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         """Check if a session key exists and is not expired."""
         return await async_(self._exists)(key)
 
-    async def expires_in(self, key: str) -> "int | None":
+    async def expires_in(self, key: str) -> int | None:
         """Get the time in seconds until the session expires."""
         return await async_(self._expires_in)(key)
 
@@ -80,7 +79,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         END;
         """
 
-    def _drop_table_sql(self) -> "list[str]":
+    def _drop_table_sql(self) -> list[str]:
         """Get SQL Server DROP TABLE statements."""
         return [f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};"]
 
@@ -90,19 +89,16 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             driver.commit()
         self._log_table_created()
 
-    def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+    def _get(self, key: str, renew_for: int | timedelta | None = None) -> bytes | None:
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
         with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
+            with MssqlPythonCursor(conn) as cursor:
                 cursor.execute(sql, (key,))
                 row = cursor.fetchone()
-            finally:
-                cursor.close()
 
             if row is None:
                 return None
@@ -111,8 +107,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             if renew_for is not None and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
-                    update_cursor = conn.cursor()
-                    try:
+                    with MssqlPythonCursor(conn) as update_cursor:
                         update_cursor.execute(
                             f"""
                             UPDATE {self._table_name}
@@ -121,13 +116,11 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                             """,
                             (new_expires_at, key),
                         )
-                    finally:
-                        update_cursor.close()
                     conn.commit()
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
-    def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
+    def _set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         sql = f"""
@@ -143,30 +136,18 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             INSERT (session_id, data, expires_at)
             VALUES (src.session_id, src.data, src.expires_at);
         """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key, data, expires_at))
-            finally:
-                cursor.close()
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, (key, data, expires_at))
             conn.commit()
 
     def _delete(self, key: str) -> None:
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
-            finally:
-                cursor.close()
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
             conn.commit()
 
     def _delete_all(self) -> None:
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(f"TRUNCATE TABLE {self._table_name}")
-            finally:
-                cursor.close()
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(f"TRUNCATE TABLE {self._table_name}")
             conn.commit()
         self._log_delete_all()
 
@@ -177,22 +158,14 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key,))
-                return cursor.fetchone() is not None
-            finally:
-                cursor.close()
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, (key,))
+            return cursor.fetchone() is not None
 
-    def _expires_in(self, key: str) -> "int | None":
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,))
-                row = cursor.fetchone()
-            finally:
-                cursor.close()
+    def _expires_in(self, key: str) -> int | None:
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,))
+            row = cursor.fetchone()
 
         if row is None:
             return None
@@ -208,13 +181,9 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         WHERE expires_at IS NOT NULL
           AND expires_at < SYSUTCDATETIME()
         """
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql)
-                count = int(getattr(cursor, "rowcount", 0) or 0)
-            finally:
-                cursor.close()
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql)
+            count = int(getattr(cursor, "rowcount", 0) or 0)
             conn.commit()
         if count > 0:
             self._log_delete_expired(count)
@@ -235,7 +204,7 @@ def _row_value(row: object, key: str, index: int) -> Any:
     return getattr(row, key, None)
 
 
-def _normalize_utc(value: Any) -> "datetime | None":
+def _normalize_utc(value: Any) -> datetime | None:
     if value is None:
         return None
     if not isinstance(value, datetime):

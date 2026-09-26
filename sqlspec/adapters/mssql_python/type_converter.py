@@ -1,5 +1,6 @@
 """Type converters for mssql-python parameter binding."""
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
 
@@ -7,8 +8,6 @@ from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     import pyarrow as pa
 
 __all__ = ("MssqlPythonTypeConverter", "mssql_type_to_arrow")
@@ -42,6 +41,7 @@ _MSSQL_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, A
     "nvarchar": ("string", (), {}),
     "text": ("string", (), {}),
     "ntext": ("string", (), {}),
+    "json": ("string", (), {}),
 }
 
 
@@ -56,12 +56,12 @@ class MssqlPythonTypeConverter:
     __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(
-        self, json_serializer: "Callable[[Any], str]" = to_json, json_deserializer: "Callable[[str], Any]" = from_json
+        self, json_serializer: Callable[[Any], str] = to_json, json_deserializer: Callable[[str], Any] = from_json
     ) -> None:
         self._json_serializer = json_serializer
         self._json_deserializer = json_deserializer
 
-    def coerce_bind_value(self, value: "Any") -> "Any":
+    def coerce_bind_value(self, value: Any) -> Any:
         """Coerce Python values before mssql-python parameter binding."""
         if isinstance(value, (dict, list)):
             return self._json_serializer(value)
@@ -69,7 +69,7 @@ class MssqlPythonTypeConverter:
             return value
         return value
 
-    def coerce_read_value(self, value: "Any") -> "Any":
+    def coerce_read_value(self, value: Any) -> Any:
         """Coerce mssql-python result values after fetching."""
         return value
 
@@ -77,6 +77,11 @@ class MssqlPythonTypeConverter:
 def mssql_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: int | None = None) -> "pa.DataType":
     """Resolve a T-SQL type name to an Arrow data type."""
     normalized_type = sql_type.lower().split("(", 1)[0].strip()
+    if normalized_type == "vector":
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        return cast("pa.DataType", pa.list_(pa.float32()))
     if normalized_type in {"decimal", "numeric"} and precision is not None and scale is not None:
         return _arrow_type("decimal128", (precision, scale))
     spec = _MSSQL_ARROW_TYPE_SPECS.get(normalized_type)

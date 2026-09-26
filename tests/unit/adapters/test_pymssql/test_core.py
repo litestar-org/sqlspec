@@ -150,3 +150,55 @@ def test_normalize_execute_many_parameters_passes_through() -> None:
 
     rows: list[tuple[Any, ...]] = [(1,), (2,)]
     assert normalize_execute_many_parameters(rows) is rows
+
+
+def test_quote_tsql_identifier() -> None:
+    """quote_tsql_identifier wraps identifiers in brackets and escapes closing brackets."""
+    from sqlspec.adapters.pymssql.core import quote_tsql_identifier
+
+    assert quote_tsql_identifier("users") == "[users]"
+    assert quote_tsql_identifier("[users]") == "[users]"
+    assert quote_tsql_identifier("dbo.users") == "[dbo.users]"
+    assert quote_tsql_identifier("col]name") == "[col]]name]"
+
+
+def test_extract_error_number() -> None:
+    """extract_error_number detects error number from attribute, tuple, or regex."""
+    from sqlspec.adapters.pymssql.core import extract_error_number
+
+    class AttributeException(Exception):
+        number = 2627
+
+    assert extract_error_number(AttributeException("duplicate key")) == 2627
+    assert extract_error_number(Exception(1205, "Deadlock found")) == 1205
+    assert extract_error_number(Exception("Violation of UNIQUE KEY constraint (2627)")) == 2627
+    assert extract_error_number(Exception("Plain error")) is None
+
+
+def test_build_multi_row_insert() -> None:
+    """build_multi_row_insert generates a multi-row VALUES INSERT statement."""
+    from sqlspec.adapters.pymssql.core import build_multi_row_insert
+
+    sql = build_multi_row_insert("dbo.users", ["id", "name"], 3)
+    assert sql == "INSERT INTO [dbo].[users] ([id], [name]) VALUES (%s, %s), (%s, %s), (%s, %s)"
+
+
+def test_collect_rows_preserves_list_identity() -> None:
+    """collect_rows avoids copying when the input rows are already a list."""
+    from sqlspec.adapters.pymssql.core import collect_rows
+
+    input_rows = [(1, "Alice"), (2, "Bob")]
+    description = [("id",), ("name",)]
+    rows, column_names, row_format = collect_rows(input_rows, description)
+
+    assert rows is input_rows
+    assert column_names == ["id", "name"]
+    assert row_format == "tuple"
+
+
+def test_normalize_execute_parameters_preserves_tuples() -> None:
+    """normalize_execute_parameters passes tuples through directly."""
+    from sqlspec.adapters.pymssql.core import normalize_execute_parameters
+
+    params = (1, "Alice")
+    assert normalize_execute_parameters(params) is params

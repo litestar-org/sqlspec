@@ -7,12 +7,10 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import pymssql as _pymssql  # pyright: ignore[reportMissingTypeStubs]
-from pymssql import Connection as _PymssqlConnection  # pyright: ignore[reportMissingTypeStubs]
-from pymssql import Cursor as _PymssqlRawCursor  # pyright: ignore[reportMissingTypeStubs]
+import pymssql as pymssql_module
+from pymssql import Connection as _PymssqlConnection
+from pymssql import Cursor as _PymssqlRawCursor
 from pymssql import Error as PymssqlError
-
-PYMSSQL_MODULE = _pymssql
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -33,13 +31,13 @@ if not TYPE_CHECKING:
     PymssqlRawCursor = _PymssqlRawCursor
 
 __all__ = (
-    "PYMSSQL_MODULE",
     "PymssqlConnection",
     "PymssqlCursor",
     "PymssqlError",
     "PymssqlQueryParams",
     "PymssqlRawCursor",
     "PymssqlSessionContext",
+    "pymssql_module",
 )
 
 
@@ -103,6 +101,9 @@ class PymssqlSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        if exc_type is not None and self._driver is not None:
+            with contextlib.suppress(Exception):
+                self._driver.rollback()
         if self._connection is not None:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None

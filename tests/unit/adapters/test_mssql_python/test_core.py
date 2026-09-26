@@ -2,8 +2,8 @@
 
 import pytest
 
-from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE
-from sqlspec.adapters.mssql_python.core import build_connection_config, create_mapped_exception
+from sqlspec.adapters.mssql_python._typing import mssql_python_module
+from sqlspec.adapters.mssql_python.core import build_connection_config, create_mapped_exception, extract_error_number
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
@@ -65,7 +65,7 @@ def test_build_connection_config_no_duplicate_pwd() -> None:
 
 def test_create_mapped_exception_extracts_sql_server_error_number() -> None:
     """SQL Server native error numbers should map to specific SQLSpec exceptions."""
-    exc = MSSQL_PYTHON_MODULE.IntegrityError(
+    exc = mssql_python_module.IntegrityError(
         "23000",
         "[23000] [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]Violation of UNIQUE KEY constraint. (2627)",
     )
@@ -78,7 +78,7 @@ def test_create_mapped_exception_extracts_sql_server_error_number() -> None:
 
 def test_create_mapped_exception_falls_back_for_connection_errors() -> None:
     """Known connection error numbers should map to DatabaseConnectionError."""
-    exc = MSSQL_PYTHON_MODULE.OperationalError(
+    exc = mssql_python_module.OperationalError(
         "08001",
         "[08001] [Microsoft][ODBC Driver 18 for SQL Server]Named Pipes Provider: "
         "Could not open a connection to SQL Server (53)",
@@ -140,7 +140,7 @@ def test_create_mapped_exception_classifies_constraint_messages_without_error_nu
     message: str, expected_type: type[Exception]
 ) -> None:
     """Constraint messages remain classifiable when the driver omits SQL Server error numbers."""
-    mapped = create_mapped_exception(MSSQL_PYTHON_MODULE.IntegrityError("23000", message))
+    mapped = create_mapped_exception(mssql_python_module.IntegrityError("23000", message))
 
     assert isinstance(mapped, expected_type)
 
@@ -255,3 +255,24 @@ def test_parse_odbc_connection_string_edge_cases() -> None:
     assert parse_odbc_connection_string("Incomplete={no_close") == [("Incomplete", "{no_close")]
     assert parse_odbc_connection_string("Server=host;  ") == [("Server", "host")]
     assert parse_odbc_connection_string("DanglingToken") == []
+
+
+def test_extract_error_number_from_attribute() -> None:
+    """extract_error_number retrieves native integer attribute 'number'."""
+
+    class CustomError(Exception):
+        number = 2627
+
+    assert extract_error_number(CustomError("duplicate key")) == 2627
+
+
+def test_extract_error_number_from_args_tuple() -> None:
+    """extract_error_number extracts integer from exception args."""
+    assert extract_error_number(Exception(1205, "Deadlock found")) == 1205
+
+
+def test_extract_error_number_from_string_regex() -> None:
+    """extract_error_number parses error numbers formatted as (1205) or error 1205."""
+    assert extract_error_number(Exception("Transaction was deadlocked on lock resources (1205)")) == 1205
+    assert extract_error_number(Exception("Msg 4712, Level 16, State 1")) == 4712
+    assert extract_error_number(Exception("No numbers here")) is None

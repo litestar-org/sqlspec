@@ -7,7 +7,8 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlConnection
+from sqlspec.adapters.pymssql._typing import PymssqlConnection
+from sqlspec.adapters.pymssql._typing import pymssql_module as pymssql
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -19,7 +20,6 @@ __all__ = ("PymssqlConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "pymssql"
-pymssql = PYMSSQL_MODULE
 
 
 class PymssqlConnectionPool:

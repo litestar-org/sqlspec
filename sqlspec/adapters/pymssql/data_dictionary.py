@@ -1,6 +1,6 @@
 """pymssql data dictionary."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -44,11 +44,13 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import SQL
-    from sqlspec.data_dictionary._types import DialectConfig, MetadataCapabilityProfile
+    from sqlspec.data_dictionary import DialectConfig, MetadataCapabilityProfile
 
 __all__ = ("MssqlVersionInfo", "PymssqlSyncDataDictionary")
 
 logger = get_logger("sqlspec.adapters.pymssql.data_dictionary")
+
+MSSQL_VECTOR_MIN_MAJOR: Final[int] = 17
 
 
 class MssqlVersionInfo(VersionInfo):
@@ -74,8 +76,12 @@ class MssqlVersionInfo(VersionInfo):
         """Return whether this server supports the native JSON type."""
         return mssql_supports_native_json(self.major, is_azure_sql=self.is_azure_sql)
 
+    def supports_vector(self) -> bool:
+        """Return whether this server supports native VECTOR data types and functions."""
+        return self.is_azure_sql or self.major >= MSSQL_VECTOR_MIN_MAJOR
+
     @property
-    def version_tuple(self) -> "tuple[int, int, int]":
+    def version_tuple(self) -> tuple[int, int, int]:
         """Get version tuple using the MSSQL build number as the third component."""
         return (self.major, self.minor, self.build)
 
@@ -132,6 +138,8 @@ class _MssqlDataDictionaryMixin:
     def _get_optimal_type_from_version(self, version_info: MssqlVersionInfo | None, type_category: str) -> str:
         if type_category in {"json", "jsonb"} and version_info is not None and version_info.supports_native_json():
             return "JSON"
+        if type_category == "vector" and version_info is not None and version_info.supports_vector():
+            return "VECTOR"
         return self.get_dialect_config().get_optimal_type(type_category)
 
 
@@ -188,6 +196,8 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
     def get_feature_flag(self, driver: "PymssqlDriver", feature: str) -> bool:
         """Check whether SQL Server supports a feature."""
         version_info = self.get_version(driver)
+        if feature == "supports_vector":
+            return bool(version_info and version_info.supports_vector())
         return resolve_mssql_feature_flag(
             feature,
             major=version_info.major if version_info is not None else 0,
