@@ -282,7 +282,10 @@ class SpannerParamTypesProtocol(SupportsJsonTypeProtocol, Protocol):
 
     BOOL: Any
     INT64: Any
+    FLOAT32: Any
     FLOAT64: Any
+    NUMERIC: Any
+    INTERVAL: Any
     STRING: Any
     BYTES: Any
     TIMESTAMP: Any

@@ -224,6 +224,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "events_backend",
         "enable_batch_write_api",
+        "query_options",
     ),
     "sqlite": (
         "enable_custom_adapters",

@@ -17,7 +17,7 @@ Input conversion handles:
 """
 
 import base64
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from sqlspec.protocols import SpannerParamTypesProtocol
 
 __all__ = (
+    "SPANNER_FLOAT32",
+    "SPANNER_VECTOR",
     "bytes_to_spanner",
     "coerce_params_for_spanner",
     "infer_spanner_param_types",
@@ -41,6 +43,9 @@ __all__ = (
     "spanner_to_uuid",
     "uuid_to_spanner",
 )
+
+SPANNER_FLOAT32: str = "FLOAT32"
+SPANNER_VECTOR: str = "ARRAY<FLOAT32>"
 
 _UUID_TYPES: "tuple[type[Any], ...]" = (UUID,)
 _uuid_utils_uuid = import_optional_attr("uuid_utils", "UUID")
@@ -168,10 +173,18 @@ def coerce_params_for_spanner(
     coerced: dict[str, Any] = {}
     changed = False
     for key, value in params.items():
+        declared_type = None
         if type(value) is TypedParameter:
+            declared_type = value.original_type
             value = value.value
             changed = True
-        if isinstance(value, _UUID_TYPES):
+        if declared_type in ("ARRAY<FLOAT32>", "VECTOR", "vector") and isinstance(value, (list, tuple)):
+            coerced[key] = [float(x) for x in value]
+            changed = True
+        elif declared_type in ("FLOAT32", "float32") and value is not None:
+            coerced[key] = float(value)
+            changed = True
+        elif isinstance(value, _UUID_TYPES):
             if enable_uuid_conversion:
                 coerced[key] = str(value)
                 changed = True
@@ -202,7 +215,7 @@ def coerce_params_for_spanner(
     return coerced if changed else params
 
 
-_NULL_PARAM_TYPE_NAMES: "dict[type[Any], str]" = {
+_NULL_PARAM_TYPE_NAMES: "dict[type[Any] | str, str]" = {
     bool: "BOOL",
     int: "INT64",
     float: "FLOAT64",
@@ -211,8 +224,52 @@ _NULL_PARAM_TYPE_NAMES: "dict[type[Any], str]" = {
     datetime: "TIMESTAMP",
     date: "DATE",
     Decimal: "NUMERIC",
+    timedelta: "INTERVAL",
     UUID: "STRING",
+    dict: "JSON",
+    "FLOAT32": "FLOAT32",
+    "float32": "FLOAT32",
+    "FLOAT64": "FLOAT64",
+    "float64": "FLOAT64",
+    "INTERVAL": "INTERVAL",
+    "interval": "INTERVAL",
+    "JSON": "JSON",
+    "json": "JSON",
 }
+
+
+def _infer_sequence_param_type(value: Any, param_types: Any, json_type: Any) -> Any | None:
+    """Infer Spanner parameter type for sequence values.
+
+    Args:
+        value: Sequence value to inspect.
+        param_types: The Spanner param_types module.
+        json_type: The Spanner JSON param type.
+
+    Returns:
+        Spanner Array type, JSON type, or None if sequence is empty or unhandled.
+    """
+    if should_json_encode_sequence(value):
+        return json_type
+    sequence = list(value)
+    if not sequence:
+        return None
+    first = sequence[0]
+    if isinstance(first, int):
+        return param_types.Array(param_types.INT64)
+    if isinstance(first, str):
+        return param_types.Array(param_types.STRING)
+    if isinstance(first, float):
+        return param_types.Array(param_types.FLOAT64)
+    if isinstance(first, bool):
+        return param_types.Array(param_types.BOOL)
+    if isinstance(first, Decimal):
+        return param_types.Array(param_types.NUMERIC)
+    if isinstance(first, timedelta):
+        interval_type = getattr(param_types, "INTERVAL", None)
+        if interval_type is not None:
+            return param_types.Array(interval_type)
+    return None
 
 
 def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
@@ -232,17 +289,39 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
     types: dict[str, Any] = {}
     json_type = _json_param_type()
     for key, raw_value in params.items():
-        value = raw_value.value if type(raw_value) is TypedParameter else raw_value
+        is_typed = type(raw_value) is TypedParameter
+        value = raw_value.value if is_typed else raw_value
+        declared = raw_value.original_type if is_typed else None
         if value is None:
             null_type = _null_param_type(raw_value, param_types)
             if null_type is not None:
                 types[key] = null_type
-        elif isinstance(value, bool):
+            continue
+        if declared in ("FLOAT32", "float32"):
+            types[key] = getattr(param_types, "FLOAT32", getattr(param_types, "FLOAT64", None))
+            continue
+        if declared in ("ARRAY<FLOAT32>", "VECTOR", "vector"):
+            float32_type = getattr(param_types, "FLOAT32", getattr(param_types, "FLOAT64", None))
+            types[key] = param_types.Array(float32_type)
+            continue
+        if declared in ("FLOAT64", "float64"):
+            types[key] = param_types.FLOAT64
+            continue
+        if declared == "ARRAY<FLOAT64>":
+            types[key] = param_types.Array(param_types.FLOAT64)
+            continue
+        if isinstance(value, bool):
             types[key] = param_types.BOOL
         elif isinstance(value, int):
             types[key] = param_types.INT64
         elif isinstance(value, float):
             types[key] = param_types.FLOAT64
+        elif isinstance(value, Decimal):
+            types[key] = param_types.NUMERIC
+        elif isinstance(value, timedelta):
+            interval_type = getattr(param_types, "INTERVAL", None)
+            if interval_type is not None:
+                types[key] = interval_type
         elif isinstance(value, _STRING_PARAM_TYPES):
             types[key] = param_types.STRING
         elif isinstance(value, bytes):
@@ -254,21 +333,9 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
         elif isinstance(value, (dict, json_object_type)):
             types[key] = json_type
         elif isinstance(value, (list, tuple)):
-            if should_json_encode_sequence(value):
-                types[key] = json_type
-                continue
-            sequence = list(value)
-            if not sequence:
-                continue
-            first = sequence[0]
-            if isinstance(first, int):
-                types[key] = param_types.Array(param_types.INT64)
-            elif isinstance(first, str):
-                types[key] = param_types.Array(param_types.STRING)
-            elif isinstance(first, float):
-                types[key] = param_types.Array(param_types.FLOAT64)
-            elif isinstance(first, bool):
-                types[key] = param_types.Array(param_types.BOOL)
+            seq_type = _infer_sequence_param_type(value, param_types, json_type)
+            if seq_type is not None:
+                types[key] = seq_type
     return types
 
 
@@ -290,7 +357,18 @@ def _null_param_type(raw_value: Any, param_types: "SpannerParamTypesProtocol") -
     declared = raw_value.original_type if type(raw_value) is TypedParameter else None
     if declared is None:
         return None
+    if declared in ("ARRAY<FLOAT32>", "VECTOR", "vector"):
+        float32_type = getattr(param_types, "FLOAT32", getattr(param_types, "FLOAT64", None))
+        return param_types.Array(float32_type)
+    if declared == "ARRAY<FLOAT64>":
+        return param_types.Array(param_types.FLOAT64)
     resolver = _NULL_PARAM_TYPE_NAMES.get(declared)
+    if resolver == "FLOAT32":
+        return getattr(param_types, "FLOAT32", getattr(param_types, "FLOAT64", None))
+    if resolver == "INTERVAL":
+        return getattr(param_types, "INTERVAL", None)
+    if resolver == "JSON":
+        return _json_param_type()
     return getattr(param_types, resolver) if resolver is not None else None
 
 
