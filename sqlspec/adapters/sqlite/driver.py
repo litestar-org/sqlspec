@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
 from sqlspec.adapters.sqlite.core import (
@@ -19,27 +21,34 @@ from sqlspec.adapters.sqlite.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
-from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
-from sqlspec.core.result import DMLResult
-from sqlspec.driver import (
-    BaseSyncExceptionHandler,
-    SyncDriverAdapterBase,
-    SyncRowStream,
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.parameters._types import ParameterStyle, TypedParameter
+from sqlspec.core.result._base import ArrowResult, DMLResult
+from sqlspec.driver._common import (
+    CachedQuery,
+    ExecutionResult,
     parameter_value_needs_processing,
     type_coercion_fallbacks,
 )
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.sqlite._typing import SqliteConnection
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.core.compiler import OperationType
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import SQLResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
@@ -48,6 +57,7 @@ T = TypeVar("T")
 _BATCH_SAMPLE_THRESHOLD: Final = 100
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SqliteExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling SQLite database exceptions.
 
@@ -70,6 +80,7 @@ class SqliteExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SqliteDriver(SyncDriverAdapterBase):
     """SQLite driver implementation.
 
@@ -78,7 +89,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_rowid_target_cache")
-    dialect = "sqlite"
+    dialect: "DialectType | None" = "sqlite"
 
     def __init__(
         self,
@@ -359,7 +370,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                     cursor.execute(statement)
             for batch in arrow_table.to_batches(max_chunksize=batch_size):
                 pydict = batch.to_pydict()
-                records = list(zip(*(pydict[col] for col in columns), strict=False))
+                records = list(zip(*[pydict[col] for col in columns], strict=False))
                 if records:
                     prepared_records = (
                         self.prepare_driver_parameters(records, self.statement_config, is_many=True)
