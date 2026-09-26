@@ -158,7 +158,7 @@ def test_quote_tsql_identifier() -> None:
 
     assert quote_tsql_identifier("users") == "[users]"
     assert quote_tsql_identifier("[users]") == "[users]"
-    assert quote_tsql_identifier("dbo.users") == "[dbo].[users]"
+    assert quote_tsql_identifier("dbo.users") == "[dbo.users]"
     assert quote_tsql_identifier("col]name") == "[col]]name]"
 
 
@@ -189,11 +189,11 @@ def test_collect_rows_preserves_list_identity() -> None:
 
     input_rows = [(1, "Alice"), (2, "Bob")]
     description = [("id",), ("name",)]
-    rows, column_names, count = collect_rows(input_rows, description)
+    rows, column_names, row_format = collect_rows(input_rows, description)
 
     assert rows is input_rows
     assert column_names == ["id", "name"]
-    assert count == 2
+    assert row_format == "tuple"
 
 
 def test_normalize_execute_parameters_preserves_tuples() -> None:

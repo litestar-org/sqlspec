@@ -4,7 +4,8 @@ import contextlib
 from collections.abc import Iterable, Sequence, Sized
 from typing import TYPE_CHECKING, Any, cast
 
-import sqlglot.expressions as exp
+import sqlglot
+from sqlglot import exp
 
 from sqlspec.adapters.pymssql._typing import (
     PymssqlConnection,
@@ -142,6 +143,15 @@ class PymssqlDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config.replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
+        if driver_features is None or "storage_capabilities" not in driver_features:
+            driver_features = dict(driver_features) if driver_features else {}
+            driver_features["storage_capabilities"] = {
+                "arrow_export_enabled": False,
+                "arrow_import_enabled": True,
+                "parquet_export_enabled": False,
+                "parquet_import_enabled": False,
+                "partition_strategies": [],
+            }
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
@@ -190,6 +200,13 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
         )
+
+    def collect_rows(self, cursor: PymssqlRawCursor, fetched: list[Any]) -> tuple[list[Any], list[str], int]:
+        rows, column_names, _ = collect_rows(fetched, cursor.description or None, self._column_name_cache)
+        return rows, column_names, len(rows)
+
+    def resolve_rowcount(self, cursor: PymssqlRawCursor) -> int:
+        return resolve_rowcount(cursor)
 
     def begin(self) -> None:
         """Begin a transaction on the connection.
@@ -314,6 +331,9 @@ class PymssqlDriver(SyncDriverAdapterBase):
             )
             cached_statement, prepared_parameters = self._compiled_statement(prepared_statement, config)
             parsed_expression = cached_statement.expression
+            if parsed_expression is None and statement.lstrip().upper().startswith("INSERT"):
+                with contextlib.suppress(Exception):
+                    parsed_expression = sqlglot.parse_one(statement, read="tsql")
             if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
                 bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
                 if bulk_result is not None:
@@ -382,10 +402,11 @@ class PymssqlDriver(SyncDriverAdapterBase):
         row_list = list(rows) if not isinstance(rows, (list, tuple)) else rows
         if not row_list:
             return 0
+        formatted_table = format_identifier(table_name)
         handler = self.handle_database_exceptions()
         with handler:
             self.connection.bulk_copy(
-                table_name,
+                formatted_table,
                 row_list,
                 column_ids=list(column_ids) if column_ids is not None else None,
                 batch_size=batch_size,
@@ -468,7 +489,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
 
 def _is_plain_values_insert(expression: exp.Insert, expected_columns: int) -> bool:
-    values = expression.args.get("values")
+    values = expression.expression
     if not isinstance(values, exp.Values):
         return False
     rows = values.expressions

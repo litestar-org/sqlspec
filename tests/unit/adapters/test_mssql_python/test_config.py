@@ -357,7 +357,7 @@ def test_pool_close_calls_ddbc_close_pooling(monkeypatch: pytest.MonkeyPatch) ->
         def close_pooling() -> None:
             closed_pooling.append(True)
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.ddbc_bindings", FakeBindings)
+    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "ddbc_bindings", FakeBindings, raising=False)
     pool = MssqlPythonConnectionPool(connection_string="Server=localhost;")
     pool.close(close_driver_pooling=True)
     assert closed_pooling == [True]

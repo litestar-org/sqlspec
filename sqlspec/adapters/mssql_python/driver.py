@@ -2,7 +2,7 @@
 
 import contextlib
 from collections.abc import Iterable
-from typing import Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
@@ -20,13 +20,10 @@ from sqlspec.adapters.mssql_python.core import (
     materialize_tuple_rows,
 )
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
-from sqlspec.builder import QueryBuilder
 from sqlspec.core import (
     SQL,
     ArrowResult,
-    Statement,
     StatementConfig,
-    StatementFilter,
     build_arrow_result_from_reader,
     build_arrow_result_from_table,
     get_cache_config,
@@ -42,11 +39,15 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import split_qualified_identifier
+
+if TYPE_CHECKING:
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import Statement, StatementFilter
+    from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 __all__ = (
     "MssqlPythonBulkCopyResult",
@@ -300,11 +301,11 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
     def select_to_arrow(
         self,
-        statement: Statement | QueryBuilder,
+        statement: "Statement | QueryBuilder",
         /,
-        *parameters: StatementParameters | StatementFilter,
+        *parameters: "StatementParameters | StatementFilter",
         statement_config: StatementConfig | None = None,
-        return_format: ArrowReturnFormat = "table",
+        return_format: "ArrowReturnFormat" = "table",
         native_only: bool = False,
         batch_size: int | None = None,
         arrow_schema: Any = None,
@@ -441,16 +442,18 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             self._check_pending_exception(exc_handler)
 
         raw_result: Any = None
-        is_stream = hasattr(source, "__arrow_c_stream__")
+        is_table_source = isinstance(source, ArrowResult)
         is_reader = False
         try:
             import pyarrow as pa
 
+            is_table_source = is_table_source or isinstance(source, pa.Table)
             is_reader = isinstance(source, (pa.RecordBatchReader, pa.RecordBatch))
         except ImportError:
             pass
+        is_stream = not is_table_source and (is_reader or hasattr(source, "__arrow_c_stream__"))
 
-        if is_stream or is_reader:
+        if is_stream:
             cols = column_mappings
             source_schema = getattr(source, "schema", None)
             if cols is None and source_schema is not None:
@@ -551,10 +554,24 @@ def _quote_mssql_table(table: str) -> str:
 
 
 def _execute_cursor(cursor: MssqlPythonRawCursor, sql: str, parameters: Any, *, use_prepare: bool = True) -> None:
-    if parameters is None:
-        cursor.execute(sql, use_prepare=use_prepare)
-    else:
-        cursor.execute(sql, parameters, use_prepare=use_prepare)
+    if use_prepare:
+        if parameters is None:
+            cursor.execute(sql)
+        else:
+            cursor.execute(sql, parameters)
+        return
+    try:
+        if parameters is None:
+            cursor.execute(sql, use_prepare=False)
+        else:
+            cursor.execute(sql, parameters, use_prepare=False)
+    except TypeError as exc:
+        if "use_prepare" not in str(exc):
+            raise
+        if parameters is None:
+            cursor.execute(sql)
+        else:
+            cursor.execute(sql, parameters)
 
 
 def _cursor_rowcount(cursor: MssqlPythonRawCursor) -> int:
@@ -576,7 +593,7 @@ def _resolve_column_names(description: Any, cache: dict[int, tuple[Any, list[str
     return column_names
 
 
-def _cursor_arrow_reader(cursor: MssqlPythonRawCursor, arrow_kwargs: dict[str, int]) -> ArrowRecordBatchReader | None:
+def _cursor_arrow_reader(cursor: MssqlPythonRawCursor, arrow_kwargs: dict[str, int]) -> "ArrowRecordBatchReader | None":
     arrow_reader = getattr(cursor, "arrow_reader", None)
     if not callable(arrow_reader):
         return None
