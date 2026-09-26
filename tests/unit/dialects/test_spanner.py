@@ -193,3 +193,12 @@ def test_dedup_parsers_import_canonical_helpers() -> None:
     assert _parsers._ROW_DELETION_NAME is _generators._ROW_DELETION_NAME
     assert _parsers._INTERLEAVE_NAME is _generators._INTERLEAVE_NAME
     assert _parsers._INTERLEAVE_IN_NAME is _generators._INTERLEAVE_IN_NAME
+
+
+def test_brace_hint_inside_string_literal_preserved() -> None:
+    sql = "SELECT '@{FORCE_INDEX=Idx}' AS literal"
+    parsed = parse_one(sql, dialect="spanner")
+    assert parsed.args.get("hint") is None
+    rendered = parsed.sql(dialect="spanner")
+    assert rendered == "SELECT '@{FORCE_INDEX=Idx}' AS literal"
+    assert "/*@" not in rendered

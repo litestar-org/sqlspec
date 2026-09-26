@@ -97,6 +97,7 @@ def test_spanner_property_parser_registration_is_idempotent() -> None:
     assert BigQueryParser.PROPERTY_PARSERS is before[0]
     assert PostgresParser.PROPERTY_PARSERS is before[1]
     assert "INTERLEAVE" in before[0]
+    assert "INTERLEAVE" in before[1]
 
 
 def test_concurrent_first_use_registers_all_dialects() -> None:

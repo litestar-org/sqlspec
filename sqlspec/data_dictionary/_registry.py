@@ -28,8 +28,11 @@ DIALECT_MODE_ALIASES: dict[tuple[str, str], str] = {
     ("spanner", "google_sql"): "googlesql",
     ("spanner", "google-sql"): "googlesql",
     ("spanner", "google"): "googlesql",
+    ("spanner", "spanner_googlesql"): "googlesql",
     ("spanner", "postgres"): "postgresql",
     ("spanner", "pg"): "postgresql",
+    ("spanner", "spangres"): "postgresql",
+    ("spanner", "spanner_postgresql"): "postgresql",
 }
 
 
