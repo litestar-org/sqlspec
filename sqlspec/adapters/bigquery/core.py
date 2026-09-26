@@ -395,14 +395,7 @@ def run_query_job(
         copy_job_config(job_config, final_job_config)
     if create_session is not None:
         final_job_config.create_session = create_session
-    if session_id is not None:
-        bigquery = _load_bigquery_module()
-        conn_prop_cls = getattr(bigquery, "ConnectionProperty", None)
-        if conn_prop_cls is not None:
-            existing = list(getattr(final_job_config, "connection_properties", []) or [])
-            if not any(getattr(p, "key", None) == "session_id" for p in existing):
-                existing.append(conn_prop_cls(key="session_id", value=session_id))
-                final_job_config.connection_properties = existing
+    _apply_session_property(final_job_config, session_id)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
     query_kwargs: dict[str, Any] = {
@@ -1045,6 +1038,8 @@ def _create_struct_parameter(
             actual_field_val = field_val.value
         else:
             actual_field_val = field_val
+            if isinstance(actual_field_val, dict):
+                field_declared = dict
         f_type, f_arr_elem = _query_parameter_type(actual_field_val, field_declared)
         if f_type == "ARRAY" and f_arr_elem:
             fields.append(_create_array_parameter(field_name, actual_field_val, f_arr_elem))
@@ -1054,8 +1049,6 @@ def _create_struct_parameter(
             fields.append(_create_json_parameter(field_name, actual_field_val, json_serializer))
         elif f_type:
             fields.append(_create_scalar_parameter(field_name, actual_field_val, f_type))
-        elif isinstance(actual_field_val, dict):
-            fields.append(_create_struct_parameter(field_name, actual_field_val, json_serializer))
         else:
             fields.append(_create_scalar_parameter(field_name, str(actual_field_val), "STRING"))
     return cast("BigQueryParam", bigquery.StructQueryParameter(name, *fields))
@@ -1202,8 +1195,27 @@ def _copy_job_config_field(source_config: "QueryJobConfig", target_config: "Quer
         value = getattr(source_config, attr)
     except (AttributeError, TypeError):
         return
-    if value is not None:
-        setattr(target_config, attr, value)
+    if value is None or value in ({}, []):
+        return
+    if attr == "labels" and isinstance(value, dict):
+        existing_labels = getattr(target_config, "labels", None)
+        if isinstance(existing_labels, dict) and existing_labels:
+            setattr(target_config, attr, {**existing_labels, **value})
+            return
+    setattr(target_config, attr, value)
+
+
+def _apply_session_property(job_config: "QueryJobConfig", session_id: str | None) -> None:
+    if session_id is None:
+        return
+    bigquery = _load_bigquery_module()
+    conn_prop_cls = getattr(bigquery, "ConnectionProperty", None)
+    if conn_prop_cls is None:
+        return
+    existing = list(getattr(job_config, "connection_properties", []) or [])
+    if not any(getattr(p, "key", None) == "session_id" for p in existing):
+        existing.append(conn_prop_cls(key="session_id", value=session_id))
+        job_config.connection_properties = existing
 
 
 def _run_query_and_wait(
@@ -1229,14 +1241,7 @@ def _run_query_and_wait(
         copy_job_config(default_job_config, final_job_config)
     if job_config:
         copy_job_config(job_config, final_job_config)
-    if session_id is not None:
-        bigquery = _load_bigquery_module()
-        conn_prop_cls = getattr(bigquery, "ConnectionProperty", None)
-        if conn_prop_cls is not None:
-            existing = list(getattr(final_job_config, "connection_properties", []) or [])
-            if not any(getattr(p, "key", None) == "session_id" for p in existing):
-                existing.append(conn_prop_cls(key="session_id", value=session_id))
-                final_job_config.connection_properties = existing
+    _apply_session_property(final_job_config, session_id)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
     query_kwargs: dict[str, Any] = {"job_config": final_job_config, "retry": retry, "job_retry": job_retry}
