@@ -425,8 +425,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         """Collect aiomysql rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, AIOMYSQL_JSON_TYPE_CODES)
-        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-        rows, column_names, _row_format = collect_rows(fetched, row_plan, deserializer, logger=logger)
+        rows, column_names, _row_format = collect_rows(fetched, row_plan, self._json_deserializer, logger=logger)
         return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: Any) -> int:
