@@ -85,7 +85,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        """Synchronous implementation of create_tables."""
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
@@ -113,7 +112,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Returns:
             Created session record.
         """
-        """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
         state_json = to_json(state)
@@ -134,6 +132,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             params = (session_id, app_name, user_id, state_json, now_julian, now_julian)
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             conn.execute(sql, params)
             end_transaction(conn, commit=True)
 
@@ -177,6 +176,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 if update_sql:
                     conn.execute(update_sql, update_params)
                     end_transaction(conn, commit=True)
@@ -218,6 +218,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
             end_transaction(conn, commit=True)
 
@@ -254,6 +255,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -284,6 +286,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             conn.execute(sql, (app_name, user_id, session_id))
             end_transaction(conn, commit=True)
 
@@ -303,6 +306,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             conn.execute(
                 sql,
                 (
@@ -378,6 +382,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             try:
                 cursor = conn.execute(update_sql, (state_json, now_julian, app_name, user_id, session_id))
                 row = cursor.fetchone()
@@ -440,7 +445,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-        """Synchronous implementation of get_events."""
         if limit == 0:
             return []
 
@@ -463,6 +467,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -493,6 +498,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 end_transaction(conn, commit=True)
@@ -512,6 +518,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 end_transaction(conn, commit=True)
@@ -531,6 +538,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
                 end_transaction(conn, commit=True)
@@ -546,6 +554,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, (app_name,))
                 row = cursor.fetchone()
                 return from_json(row[0]) if row is not None and row[0] else None
@@ -564,6 +573,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, (app_name, user_id))
                 row = cursor.fetchone()
                 return from_json(row[0]) if row is not None and row[0] else None
@@ -583,6 +593,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
             end_transaction(conn, commit=True)
 
@@ -597,6 +608,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             conn.execute(sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
             end_transaction(conn, commit=True)
 
@@ -606,6 +618,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
         try:
             with self._config.provide_connection() as conn:
+                self._apply_pragmas(conn)
                 cursor = conn.execute(sql, (key,))
                 row = cursor.fetchone()
                 return str(row[0]) if row is not None else None
@@ -623,6 +636,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._apply_pragmas(conn)
             conn.execute(sql, (key, value))
             end_transaction(conn, commit=True)
 
@@ -632,6 +646,10 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Args:
             connection: SQLite connection.
         """
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA cache_size = -64000")
+        connection.execute("PRAGMA mmap_size = 30000000")
+        connection.execute("PRAGMA journal_size_limit = 67108864")
         for pragma_name, pragma_value in self._pragma_overrides:
             connection.execute(f"PRAGMA {pragma_name} = {pragma_value}")
 
@@ -765,7 +783,6 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         self._fts_options = _fts_options(config)
 
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
         """Create the memory table and indexes if they don't exist.
 
         Skips table creation if memory store is disabled.
@@ -782,7 +799,6 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
         """Bulk insert memory entries with deduplication.
 
         Uses INSERT OR IGNORE to skip duplicates based on event_id

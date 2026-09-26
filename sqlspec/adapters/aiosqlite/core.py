@@ -87,6 +87,8 @@ SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
 SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
+SQLITE_TABLE_INFO_MIN_COLUMNS = 2
+SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
 
 
 async def run_on_worker_thread(
@@ -590,7 +592,7 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
             with contextlib.suppress(Exception):
                 table_cursor.close()
     except sqlite3.Error:
-        return False
+        return _target_supports_rowid_legacy(connection, target)
 
     candidates = [
         row
@@ -604,10 +606,10 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
     if target_schema is not None:
         candidates = [row for row in candidates if row[0].casefold() == target_schema.casefold()]
         if not candidates:
-            return False
+            return _target_supports_rowid_legacy(connection, target)
         return len(candidates) == 1 and candidates[0][4] == 0
     if not candidates:
-        return False
+        return _target_supports_rowid_legacy(connection, target)
 
     schema_order = ["temp", "main"]
     if not any(row[0].casefold() in {"temp", "main"} for row in candidates):
@@ -629,6 +631,80 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
         for row in candidates:
             if row[0].casefold() == schema_name.casefold():
                 return bool(row[4] == 0)
+    return False
+
+
+def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, str]") -> bool:
+    target_schema, target_table = target
+    schema_order = [target_schema] if target_schema is not None else ["temp", "main"]
+    if target_schema is None:
+        try:
+            database_cursor = connection.execute("PRAGMA database_list")
+            try:
+                schema_order.extend(
+                    row[1]
+                    for row in database_cursor.fetchall()
+                    if len(row) >= SQLITE_DATABASE_LIST_MIN_COLUMNS
+                    and isinstance(row[1], str)
+                    and row[1] not in {"main", "temp"}
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    database_cursor.close()
+        except sqlite3.Error:
+            return False
+
+    for schema_name in schema_order:
+        if schema_name is None:
+            continue
+        quoted_schema = quote_identifier(schema_name)
+        schema_cursor = None
+        schema_row = None
+        try:
+            schema_cursor = connection.execute(
+                f"SELECT type FROM {quoted_schema}.sqlite_master WHERE name = ? COLLATE NOCASE", (target_table,)
+            )
+            schema_row = schema_cursor.fetchone()
+        except sqlite3.Error:
+            pass
+        finally:
+            if schema_cursor is not None:
+                with contextlib.suppress(Exception):
+                    schema_cursor.close()
+        if schema_row is None:
+            continue
+        if not schema_row or schema_row[0] != "table":
+            return False
+        qualified_target = f"{quoted_schema}.{quote_identifier(target_table)}"
+        table_info_cursor = None
+        try:
+            table_info_cursor = connection.execute(
+                f"PRAGMA {quoted_schema}.table_info({quote_identifier(target_table)})"
+            )
+            column_names = {
+                row[1].casefold()
+                for row in table_info_cursor.fetchall()
+                if len(row) >= SQLITE_TABLE_INFO_MIN_COLUMNS and isinstance(row[1], str)
+            }
+        except sqlite3.Error:
+            return False
+        finally:
+            if table_info_cursor is not None:
+                with contextlib.suppress(Exception):
+                    table_info_cursor.close()
+        hidden_alias = next((alias for alias in SQLITE_ROWID_ALIASES if alias not in column_names), None)
+        if hidden_alias is None:
+            return False
+        probe_cursor = None
+        try:
+            probe_cursor = connection.execute(f"SELECT {hidden_alias} FROM {qualified_target} LIMIT 0")
+        except sqlite3.Error:
+            return False
+        finally:
+            if probe_cursor is not None:
+                with contextlib.suppress(Exception):
+                    probe_cursor.close()
+        return True
     return False
 
 
