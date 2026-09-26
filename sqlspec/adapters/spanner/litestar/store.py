@@ -5,25 +5,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
-from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
+from sqlspec.adapters.spanner.type_converter import spanner_to_bytes
 from sqlspec.config import LitestarConfig
+from sqlspec.core import TypedParameter
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import Protocol
-
-    from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.adapters.spanner.config import SpannerSyncConfig
-
-    class _DatabaseProtocol(Protocol):
-        def run_in_transaction(self, func: "Callable[[Transaction], Any]") -> Any: ...
-
-        def update_ddl(self, ddl_statements: "list[str]") -> Any: ...
-
-        def list_tables(self) -> Any: ...
 
 
 __all__ = ("SpannerLitestarConfig", "SpannerSyncStore")
@@ -90,9 +79,6 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    def _database(self) -> "_DatabaseProtocol":
-        return cast("_DatabaseProtocol", self._config.get_database())
-
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "datetime | None":
         if dt is None:
             return None
@@ -110,22 +96,14 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
     def _build_params(
         self, key: str, expires_at: "datetime | None" = None, data: "bytes | None" = None
     ) -> "dict[str, Any]":
-        params: dict[str, Any] = {"session_id": key, "expires_at": self._datetime_to_timestamp(expires_at)}
+        ts = self._datetime_to_timestamp(expires_at)
+        params: dict[str, Any] = {
+            "session_id": key,
+            "expires_at": ts if ts is not None else TypedParameter(None, datetime),
+        }
         if data is not None:
-            params["data"] = bytes_to_spanner(data)
+            params["data"] = data
         return params
-
-    def _get_param_types(
-        self, session_id: bool = True, expires_at: bool = False, data: bool = False
-    ) -> "dict[str, Any]":
-        types: dict[str, Any] = {}
-        if session_id:
-            types["session_id"] = param_types.STRING
-        if expires_at:
-            types["expires_at"] = param_types.TIMESTAMP
-        if data:
-            types["data"] = param_types.BYTES
-        return types
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = f"""
@@ -149,7 +127,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         if result is None:
             return None
 
-        data = spanner_to_bytes(result.get("data"))
+        data = result.get("data")
         expires_at = self._timestamp_to_datetime(result.get("expires_at"))
 
         if renew_for is not None and expires_at is not None:
