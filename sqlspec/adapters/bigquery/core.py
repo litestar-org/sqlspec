@@ -6,7 +6,7 @@ import importlib
 import io
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast, get_args
 from urllib.parse import urlparse
 
 import sqlglot
@@ -57,7 +57,22 @@ if TYPE_CHECKING:
     BigQueryLoadFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv", "avro", "orc"]
 
 
+class BigQueryDryRunResult(TypedDict):
+    """Dry run query result metadata and cost estimates."""
+
+    total_bytes_processed: int
+    estimated_cost_usd: float
+    schema: list[dict[str, Any]]
+    referenced_tables: list[str]
+    statement_type: str
+
+
+COST_PER_TERABYTE_USD: float = 6.25
+
+
 __all__ = (
+    "COST_PER_TERABYTE_USD",
+    "BigQueryDryRunResult",
     "BigQueryStreamSource",
     "apply_driver_features",
     "build_arrow_write_stream_payload",
@@ -254,7 +269,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | 
             if _is_query_parameter(value):
                 bq_parameters.append(cast("BigQueryParam", value))
                 continue
-            declared_type: type[Any] | None = None
+            declared_type: type[Any] | str | None = None
             if type(value) is TypedParameter:
                 declared_type = value.original_type
                 actual_value = value.value
@@ -266,6 +281,8 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | 
 
             if param_type == "ARRAY" and array_element_type:
                 bq_parameters.append(_create_array_parameter(param_name_for_bq, actual_value, array_element_type))
+            elif param_type == "STRUCT" and isinstance(actual_value, dict):
+                bq_parameters.append(_create_struct_parameter(param_name_for_bq, actual_value, json_serializer))
             elif param_type == "JSON":
                 bq_parameters.append(_create_json_parameter(param_name_for_bq, actual_value, json_serializer))
             elif param_type:
@@ -339,6 +356,8 @@ def run_query_job(
     timestamp_precision: Any | None = None,
     job_id: str | None = None,
     job_id_prefix: str | None = None,
+    session_id: str | None = None,
+    create_session: bool | None = None,
 ) -> "QueryJob":
     """Execute a BigQuery query job with merged configuration.
 
@@ -361,6 +380,8 @@ def run_query_job(
         job_id: Explicit BigQuery job ID.
         job_id_prefix: Prefix used by BigQuery to generate a job ID when
             ``job_id`` is not provided.
+        session_id: Active BigQuery server-side session ID.
+        create_session: Whether to request session creation for multi-statement transactions.
 
     Returns:
         QueryJob object representing the executed job.
@@ -372,6 +393,9 @@ def run_query_job(
         copy_job_config(default_job_config, final_job_config)
     if job_config:
         copy_job_config(job_config, final_job_config)
+    if create_session is not None:
+        final_job_config.create_session = create_session
+    _apply_session_property(final_job_config, session_id)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
     query_kwargs: dict[str, Any] = {
@@ -630,6 +654,25 @@ def normalize_script_rowcount(previous: int, job: Any) -> int:
     Returns:
         Updated rowcount value.
     """
+    if job is None:
+        return previous
+    direct_count = getattr(job, "num_dml_affected_rows", None)
+    if direct_count is not None and isinstance(direct_count, int):
+        return direct_count
+    properties = getattr(job, "_properties", {})
+    if isinstance(properties, dict):
+        stats = properties.get("statistics", {})
+        query_stats = stats.get("query", {})
+        script_stats = query_stats.get("scriptStatistics", {})
+        exec_path = script_stats.get("executionPath", [])
+        if exec_path:
+            total_dml = sum(
+                int(entry.get("numDmlAffectedRows", 0) or 0)
+                for entry in exec_path
+                if isinstance(entry, dict) and entry.get("numDmlAffectedRows") is not None
+            )
+            if total_dml > 0:
+                return total_dml
     return build_dml_rowcount(job, previous)
 
 
@@ -968,6 +1011,49 @@ def _create_json_parameter(
     return cast("BigQueryParam", bigquery.ScalarQueryParameter(name, "JSON", normalized))
 
 
+def _create_struct_parameter(
+    name: str, value: "dict[str, Any]", json_serializer: "Callable[[Any], str] | None" = None
+) -> "BigQueryParam":
+    """Create BigQuery StructQueryParameter from Python dictionary.
+
+    Args:
+        name: Parameter name.
+        value: Dictionary representing the struct fields.
+        json_serializer: Optional serializer for embedded JSON values.
+
+    Returns:
+        StructQueryParameter instance.
+    """
+    bigquery = _load_bigquery_module()
+    fields: list[BigQueryParam] = []
+    for field_name, field_val in value.items():
+        if _is_query_parameter(field_val):
+            fields.append(field_val)
+            continue
+        field_declared: type[Any] | None = None
+        if type(field_val) is TypedParameter:
+            field_declared = field_val.original_type
+            actual_field_val = field_val.value
+        elif isinstance(field_val, Enum):
+            actual_field_val = field_val.value
+        else:
+            actual_field_val = field_val
+            if isinstance(actual_field_val, dict):
+                field_declared = dict
+        f_type, f_arr_elem = _query_parameter_type(actual_field_val, field_declared)
+        if f_type == "ARRAY" and f_arr_elem:
+            fields.append(_create_array_parameter(field_name, actual_field_val, f_arr_elem))
+        elif f_type == "STRUCT" and isinstance(actual_field_val, dict):
+            fields.append(_create_struct_parameter(field_name, actual_field_val, json_serializer))
+        elif f_type == "JSON":
+            fields.append(_create_json_parameter(field_name, actual_field_val, json_serializer))
+        elif f_type:
+            fields.append(_create_scalar_parameter(field_name, actual_field_val, f_type))
+        else:
+            fields.append(_create_scalar_parameter(field_name, str(actual_field_val), "STRING"))
+    return cast("BigQueryParam", bigquery.StructQueryParameter(name, *fields))
+
+
 def _create_scalar_parameter(name: str, value: Any, param_type: str) -> "BigQueryParam":
     """Create BigQuery scalar parameter.
 
@@ -1007,7 +1093,9 @@ def _load_bigquery_module() -> Any:
     return _BIGQUERY_MODULE
 
 
-def _query_parameter_type(value: Any, declared_type: "type[Any] | None" = None) -> "tuple[str | None, str | None]":
+def _query_parameter_type(
+    value: Any, declared_type: "type[Any] | str | None" = None
+) -> "tuple[str | None, str | None]":
     """Determine BigQuery parameter type from Python value.
 
     Args:
@@ -1030,11 +1118,29 @@ def _query_parameter_type(value: Any, declared_type: "type[Any] | None" = None) 
     if value_type is datetime.datetime:
         return ("TIMESTAMP" if value.tzinfo else "DATETIME", None)
 
+    if isinstance(value, dict):
+        if declared_type is not None and (
+            declared_type is dict or (isinstance(declared_type, type) and hasattr(declared_type, "__annotations__"))
+        ):
+            return ("STRUCT", None)
+        return ("JSON", None)
+
     if value_type in _BQ_TYPE_MAP:
         return _BQ_TYPE_MAP[value_type]
 
     if isinstance(value, (list, tuple)):
         if not value:
+            if declared_type is not None:
+                inner_type = None
+                args = get_args(declared_type)
+                if args:
+                    inner_type = args[0]
+                elif isinstance(declared_type, type) and declared_type not in (list, tuple):
+                    inner_type = declared_type
+                if inner_type is not None:
+                    elem_type, _ = _query_parameter_type(None, inner_type)
+                    if elem_type:
+                        return ("ARRAY", elem_type)
             msg = "Cannot determine BigQuery ARRAY type for empty sequence."
             raise SQLSpecError(msg)
         element_type, _ = _query_parameter_type(value[0])
@@ -1089,8 +1195,27 @@ def _copy_job_config_field(source_config: "QueryJobConfig", target_config: "Quer
         value = getattr(source_config, attr)
     except (AttributeError, TypeError):
         return
-    if value is not None:
-        setattr(target_config, attr, value)
+    if value is None or value in ({}, []):
+        return
+    if attr == "labels" and isinstance(value, dict):
+        existing_labels = getattr(target_config, "labels", None)
+        if isinstance(existing_labels, dict) and existing_labels:
+            setattr(target_config, attr, {**existing_labels, **value})
+            return
+    setattr(target_config, attr, value)
+
+
+def _apply_session_property(job_config: "QueryJobConfig", session_id: str | None) -> None:
+    if session_id is None:
+        return
+    bigquery = _load_bigquery_module()
+    conn_prop_cls = getattr(bigquery, "ConnectionProperty", None)
+    if conn_prop_cls is None:
+        return
+    existing = list(getattr(job_config, "connection_properties", []) or [])
+    if not any(getattr(p, "key", None) == "session_id" for p in existing):
+        existing.append(conn_prop_cls(key="session_id", value=session_id))
+        job_config.connection_properties = existing
 
 
 def _run_query_and_wait(
@@ -1099,12 +1224,14 @@ def _run_query_and_wait(
     parameters: Any,
     *,
     default_job_config: "QueryJobConfig | None",
+    job_config: "QueryJobConfig | None" = None,
     json_serializer: "Callable[[Any], str]",
     retry: "Retry | None" = None,
     wait_timeout: float | None = None,
     job_retry: "Retry | None" = None,
     page_size: int | None = None,
     max_results: int | None = None,
+    session_id: str | None = None,
 ) -> Any:
     """Execute a BigQuery query via query_and_wait and return the row iterator."""
     from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
@@ -1112,16 +1239,15 @@ def _run_query_and_wait(
     final_job_config = QueryJobConfig()
     if default_job_config:
         copy_job_config(default_job_config, final_job_config)
+    if job_config:
+        copy_job_config(job_config, final_job_config)
+    _apply_session_property(final_job_config, session_id)
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
-    query_kwargs: dict[str, Any] = {"job_config": final_job_config}
-    if retry is not None:
-        query_kwargs["retry"] = retry
-    if wait_timeout is not None:
-        query_kwargs["api_timeout"] = wait_timeout
-        query_kwargs["wait_timeout"] = wait_timeout
-    if job_retry is not None:
-        query_kwargs["job_retry"] = job_retry
+    query_kwargs: dict[str, Any] = {"job_config": final_job_config, "retry": retry, "job_retry": job_retry}
+    effective_timeout = wait_timeout if wait_timeout is not None else 30.0
+    query_kwargs["api_timeout"] = effective_timeout
+    query_kwargs["wait_timeout"] = effective_timeout
     if page_size is not None:
         query_kwargs["page_size"] = page_size
     if max_results is not None:

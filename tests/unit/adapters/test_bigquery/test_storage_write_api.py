@@ -106,7 +106,11 @@ def test_storage_write_api_orchestration(monkeypatch: pytest.MonkeyPatch) -> Non
     connection = _Connection()
     driver = BigQueryDriver(
         cast("Any", connection),
-        driver_features={"enable_storage_write_api": True, "storage_capabilities": CAPABILITIES},
+        driver_features={
+            "enable_storage_write_api": True,
+            "storage_write_stream_type": "PENDING",
+            "storage_capabilities": CAPABILITIES,
+        },
     )
 
     job = driver.load_from_arrow("dataset.table", pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}))
@@ -120,6 +124,28 @@ def test_storage_write_api_orchestration(monkeypatch: pytest.MonkeyPatch) -> Non
     assert client.append_request_batches[0][0].write_stream == "projects/proj/datasets/dataset/tables/table/streams/s1"
     assert client.finalize_calls == ["projects/proj/datasets/dataset/tables/table/streams/s1"]
     assert client.commit_calls
+    assert job.telemetry["rows_processed"] == 3
+
+
+def test_storage_write_api_uses_committed_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_write_client(monkeypatch)
+    connection = _Connection()
+    driver = BigQueryDriver(
+        cast("Any", connection),
+        driver_features={"enable_storage_write_api": True, "storage_capabilities": CAPABILITIES},
+    )
+
+    job = driver.load_from_arrow("dataset.table", pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}))
+
+    assert connection.load_file_calls == []
+    client = _FakeWriteClient.instances[0]
+    assert client.create_calls
+    parent, stream = client.create_calls[0]
+    assert parent == "projects/proj/datasets/dataset/tables/table"
+    assert stream.type_ == types.WriteStream.Type.COMMITTED
+    assert client.append_request_batches and client.append_request_batches[0]
+    assert client.finalize_calls == []
+    assert client.commit_calls == []
     assert job.telemetry["rows_processed"] == 3
 
 

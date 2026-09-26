@@ -5,7 +5,7 @@ from sqlspec.adapters.bigquery.config import (
     BigQueryDriverFeatures,
     build_connection_config,
 )
-from sqlspec.adapters.bigquery.core import default_statement_config
+from sqlspec.adapters.bigquery.core import BigQueryDryRunResult, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 
 __all__ = (
@@ -15,6 +15,7 @@ __all__ = (
     "BigQueryCursor",
     "BigQueryDriver",
     "BigQueryDriverFeatures",
+    "BigQueryDryRunResult",
     "BigQueryExceptionHandler",
     "build_connection_config",
     "default_statement_config",

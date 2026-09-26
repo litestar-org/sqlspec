@@ -214,9 +214,14 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return f" AND {qualified_column} IS NOT NULL"
 
     def _run_query(self, sql: str, parameters: "Iterable[Any] | None" = None) -> "list[dict[str, Any]]":
-
         client = self._config.create_connection()
         job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
+        if hasattr(client, "query_and_wait"):
+            row_iterator = client.query_and_wait(sql, job_config=job_config)
+            schema = getattr(row_iterator, "schema", None)
+            if not schema:
+                return []
+            return [dict(row) for row in row_iterator]
         job = client.query(sql, job_config=job_config)
         return [dict(row) for row in job.result()]
 
