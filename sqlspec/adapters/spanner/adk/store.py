@@ -11,6 +11,7 @@ from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.core import _unwrap_spanner_json_object
 from sqlspec.config import ADKConfig
+from sqlspec.core import TypedParameter
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
@@ -225,8 +226,8 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         with self._config.provide_session() as driver:
-            for sql, params, _ in statements:
-                driver.execute(sql, params)
+            for sql, params, types in statements:
+                driver.execute(sql, _prepare_spanner_write_params(params, types))
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
@@ -900,13 +901,13 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         with self._config.provide_session() as driver:
-            for sql, params, _ in statements:
-                driver.execute(sql, params)
+            for sql, params, types in statements:
+                driver.execute(sql, _prepare_spanner_write_params(params, types))
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         with self._config.provide_session() as driver:
-            result = driver.execute(sql, params)
-            return int(getattr(result, "rowcount", 0))
+            result = driver.execute(sql, _prepare_spanner_write_params(params, types))
+            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {
@@ -931,8 +932,11 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
         if raw is None:
             return None
         if isinstance(raw, str):
-            return from_json(raw)
-        return raw
+            try:
+                return from_json(raw)
+            except Exception:
+                return raw
+        return _unwrap_spanner_json_object(raw)
 
     def _create_tables(self) -> None:
         if not self._enabled:
@@ -1163,6 +1167,41 @@ CREATE TABLE {self._memory_table} (
             }
             for row in rows
         ]
+
+
+def _prepare_spanner_write_params(params: "dict[str, Any]", types: "dict[str, Any] | None") -> "dict[str, Any]":
+    """Prepare ADK write parameters for Spanner driver execution."""
+    if not types:
+        return params
+    json_type = _json_param_type()
+    changed = False
+    prepared: dict[str, Any] = {}
+    for key, value in params.items():
+        param_type = types.get(key)
+        if param_type == json_type:
+            if value is None:
+                prepared[key] = TypedParameter(None, dict)
+                changed = True
+            elif isinstance(value, (str, bytes)):
+                prepared[key] = _to_spanner_json_payload(value)
+                changed = True
+            else:
+                prepared[key] = value
+        elif value is None and param_type is not None:
+            if param_type == SPANNER_PARAM_TYPES.STRING:
+                prepared[key] = TypedParameter(None, str)
+                changed = True
+            elif param_type == SPANNER_PARAM_TYPES.TIMESTAMP:
+                prepared[key] = TypedParameter(None, datetime)
+                changed = True
+            elif param_type == SPANNER_PARAM_TYPES.INT64:
+                prepared[key] = TypedParameter(None, int)
+                changed = True
+            else:
+                prepared[key] = value
+        else:
+            prepared[key] = value
+    return prepared if changed else params
 
 
 def _to_spanner_json_payload(value: Any) -> Any:

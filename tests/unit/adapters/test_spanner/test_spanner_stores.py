@@ -75,3 +75,88 @@ def test_litestar_store_writes_route_through_provide_session() -> None:
     expired_count = store._delete_expired()
     assert config.provide_session.call_count == 4
     assert expired_count == 1
+
+
+def test_litestar_store_single_base64_roundtrip() -> None:
+    """Verify SpannerSyncStore passes raw bytes to driver.execute and decodes wire bytes once on _get."""
+    from sqlspec.adapters.spanner.type_converter import bytes_to_spanner
+    from sqlspec.core import TypedParameter
+
+    config = MagicMock(spec=SpannerSyncConfig)
+    config.extension_config = {"litestar": {"session_table": "sessions"}}
+    captured_params: list[dict[str, Any]] = []
+
+    mock_driver = MagicMock(spec=SpannerSyncDriver)
+    mock_result = MagicMock()
+    mock_result.rows_affected = 1
+
+    def mock_execute(_sql: Any, params: Any = None, *_a: Any, **_kw: Any) -> Any:
+        if isinstance(params, dict):
+            captured_params.append(params)
+        return mock_result
+
+    mock_driver.execute.side_effect = mock_execute
+    mock_driver.select_one_or_none.return_value = {"data": bytes_to_spanner(b"raw-payload"), "expires_at": None}
+    config.provide_session.side_effect = lambda *a, **kw: _context_manager_yielding(mock_driver)
+
+    store = SpannerSyncStore(config=config)
+    store._set("session_1", b"raw-payload", expires_in=None)
+
+    assert len(captured_params) == 1
+    assert captured_params[0]["data"] == b"raw-payload"
+    assert isinstance(captured_params[0]["expires_at"], TypedParameter)
+    assert captured_params[0]["expires_at"].value is None
+
+    fetched = store._get("session_1")
+    assert fetched == b"raw-payload"
+
+
+def test_adk_memory_store_write_and_decode_json() -> None:
+    """Verify SpannerSyncADKMemoryStore prepares JSON/null write params and unwraps JsonObject."""
+    from google.cloud.spanner_v1.data_types import JsonObject
+
+    from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
+    from sqlspec.adapters.spanner.adk import SpannerSyncADKMemoryStore
+    from sqlspec.core import TypedParameter
+
+    config = MagicMock(spec=SpannerSyncConfig)
+    config.extension_config = {"adk": {"enable_memory": True}}
+    captured_params: list[dict[str, Any]] = []
+
+    mock_driver = MagicMock(spec=SpannerSyncDriver)
+    mock_result = MagicMock()
+    mock_result.rows_affected = 5
+
+    def mock_execute(_sql: Any, params: Any = None, *_a: Any, **_kw: Any) -> Any:
+        if isinstance(params, dict):
+            captured_params.append(params)
+        return mock_result
+
+    mock_driver.execute.side_effect = mock_execute
+    config.provide_session.side_effect = lambda *a, **kw: _context_manager_yielding(mock_driver)
+
+    store = SpannerSyncADKMemoryStore(config=config)
+    store._run_write([
+        (
+            "INSERT INTO adk_memory VALUES (@content_json, @metadata_json, @owner_id)",
+            {"content_json": '{"text":"hi"}', "metadata_json": None, "owner_id": None},
+            {"content_json": param_types.JSON, "metadata_json": param_types.JSON, "owner_id": param_types.STRING},
+        )
+    ])
+
+    assert len(captured_params) == 1
+    assert captured_params[0]["content_json"] == {"text": "hi"}
+    assert isinstance(captured_params[0]["metadata_json"], TypedParameter)
+    assert captured_params[0]["metadata_json"].original_type is dict
+    assert isinstance(captured_params[0]["owner_id"], TypedParameter)
+    assert captured_params[0]["owner_id"].original_type is str
+
+    deleted = store._execute_update(
+        "DELETE FROM adk_memory WHERE session_id = @session_id",
+        {"session_id": "s1"},
+        {"session_id": param_types.STRING},
+    )
+    assert deleted == 5
+
+    decoded = store._decode_json(JsonObject({"k": "v"}))
+    assert decoded == {"k": "v"}

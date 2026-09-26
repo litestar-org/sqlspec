@@ -40,3 +40,11 @@ def test_null_timedelta_param_types() -> None:
     types = infer_spanner_param_types(params)
     assert "duration" in types
     assert types["duration"].code == TypeCode.INTERVAL
+
+
+def test_null_json_param_types() -> None:
+    """Verify that null TypedParameter with dict or JSON resolves to JSON."""
+    params = {"meta": TypedParameter(None, dict), "payload": TypedParameter(None, "JSON")}
+    types = infer_spanner_param_types(params)
+    assert types["meta"].code == TypeCode.JSON
+    assert types["payload"].code == TypeCode.JSON

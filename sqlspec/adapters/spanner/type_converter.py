@@ -226,12 +226,15 @@ _NULL_PARAM_TYPE_NAMES: "dict[type[Any] | str, str]" = {
     Decimal: "NUMERIC",
     timedelta: "INTERVAL",
     UUID: "STRING",
+    dict: "JSON",
     "FLOAT32": "FLOAT32",
     "float32": "FLOAT32",
     "FLOAT64": "FLOAT64",
     "float64": "FLOAT64",
     "INTERVAL": "INTERVAL",
     "interval": "INTERVAL",
+    "JSON": "JSON",
+    "json": "JSON",
 }
 
 
@@ -364,6 +367,8 @@ def _null_param_type(raw_value: Any, param_types: "SpannerParamTypesProtocol") -
         return getattr(param_types, "FLOAT32", getattr(param_types, "FLOAT64", None))
     if resolver == "INTERVAL":
         return getattr(param_types, "INTERVAL", None)
+    if resolver == "JSON":
+        return _json_param_type()
     return getattr(param_types, resolver) if resolver is not None else None
 
 
