@@ -303,14 +303,6 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         """Create a transaction savepoint retaining open cursors."""
         self.execute_script(f"SAVEPOINT {validate_savepoint_name(name)} ON ROLLBACK RETAIN CURSORS")
 
-    def release_savepoint(self, name: str) -> None:
-        """Release a transaction savepoint."""
-        self.execute_script(f"RELEASE SAVEPOINT {validate_savepoint_name(name)}")
-
-    def rollback_to_savepoint(self, name: str) -> None:
-        """Rollback to a named transaction savepoint."""
-        self.execute_script(f"ROLLBACK TO SAVEPOINT {validate_savepoint_name(name)}")
-
     def set_migration_session_schema(self, schema: str) -> None:
         """Switch the session's current schema, remembering the schema in effect on the first switch.
 

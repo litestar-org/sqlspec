@@ -157,7 +157,7 @@ def _with_statement_tail(sql: str, tail: str) -> str:
     return f"{sql} {tail}" if tail else sql
 
 
-def _convert_limit_to_fetch(query: exp.Expression) -> exp.Expression:
+def _convert_limit_to_fetch(query: exp.Expr) -> exp.Expr:
     """Convert an exp.Limit clause to an exp.Fetch clause for Db2."""
     limit = query.args.get("limit")
     if isinstance(limit, exp.Limit):
