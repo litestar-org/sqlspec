@@ -22,9 +22,6 @@ if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 
 __all__ = (
-    "SQLITE_DISK_CACHE_SIZE",
-    "SQLITE_JOURNAL_SIZE_LIMIT",
-    "SQLITE_MMAP_SIZE",
     "AiosqliteConnectTimeoutError",
     "AiosqliteConnectionPool",
     "AiosqlitePoolClosedError",
@@ -39,9 +36,6 @@ SQLITE_BUSY_TIMEOUT: Final = 5000
 SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS: Final = False
 SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
 SQLITE_MEMORY_CACHE_SIZE: Final = -16000
-SQLITE_DISK_CACHE_SIZE: Final = -64000
-SQLITE_MMAP_SIZE: Final = 268435456
-SQLITE_JOURNAL_SIZE_LIMIT: Final = 67108864
 SQLITE_WAL_SWITCH_ATTEMPTS: Final = 50
 SQLITE_WAL_SWITCH_DELAY: Final = 0.01
 
@@ -519,19 +513,8 @@ class AiosqliteConnectionPool:
                             f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}",
                         ])
                     else:
-                        cursor = await connection.execute("PRAGMA journal_mode")
-                        current_mode = await cursor.fetchone()
-                        await cursor.close()
-                        if not current_mode or str(current_mode[0]).upper() != "WAL":
-                            await _enable_wal(connection)
-                        pragma_lines.extend([
-                            "PRAGMA synchronous = NORMAL",
-                            "PRAGMA temp_store = MEMORY",
-                            f"PRAGMA mmap_size = {SQLITE_MMAP_SIZE}",
-                            f"PRAGMA cache_size = {SQLITE_DISK_CACHE_SIZE}",
-                            f"PRAGMA journal_size_limit = {SQLITE_JOURNAL_SIZE_LIMIT}",
-                            "PRAGMA threads = 4",
-                        ])
+                        await _enable_wal(connection)
+                        pragma_lines.append("PRAGMA synchronous = NORMAL")
 
                     pragma_lines.append(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
 

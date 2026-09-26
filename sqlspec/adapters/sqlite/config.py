@@ -62,10 +62,6 @@ class SqliteConnectionParams(TypedDict):
     health_check_interval: NotRequired[float]
     enable_optimizations: NotRequired[bool]
     enable_foreign_keys: NotRequired[bool]
-    busy_timeout: NotRequired[int]
-    cache_size: NotRequired[int]
-    mmap_size: NotRequired[int]
-    default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
     extra: NotRequired[dict[str, Any]]
 
 
@@ -350,18 +346,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         enable_foreign_keys = self.connection_config.get("enable_foreign_keys")
         if enable_foreign_keys is not None:
             pool_kwargs["enable_foreign_keys"] = enable_foreign_keys
-
-        busy_timeout = self.connection_config.get("busy_timeout")
-        if busy_timeout is not None:
-            pool_kwargs["busy_timeout"] = busy_timeout
-
-        cache_size = self.connection_config.get("cache_size")
-        if cache_size is not None:
-            pool_kwargs["cache_size"] = cache_size
-
-        mmap_size = self.connection_config.get("mmap_size")
-        if mmap_size is not None:
-            pool_kwargs["mmap_size"] = mmap_size
 
         pool = SqliteConnectionPool(
             connection_parameters=config_dict,

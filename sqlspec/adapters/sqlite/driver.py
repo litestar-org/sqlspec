@@ -227,15 +227,16 @@ class SqliteDriver(SyncDriverAdapterBase):
 
         Args:
             mode: Transaction lock mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
-                Defaults to configured driver feature or IMMEDIATE.
+                Defaults to configured driver feature or SQLite default (DEFERRED).
 
         Raises:
             SQLSpecError: If transaction cannot be started
         """
-        transaction_mode = mode or self.driver_features.get("default_transaction_mode", "IMMEDIATE")
+        transaction_mode = mode or self.driver_features.get("default_transaction_mode")
         try:
             if not self.connection.in_transaction:
-                self.connection.execute(f"BEGIN {transaction_mode}")
+                stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
+                self.connection.execute(stmt)
         except sqlite3.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -592,6 +593,14 @@ class SqliteDriver(SyncDriverAdapterBase):
         if command_keyword == "DELETE":
             return "DELETE"
         return "COMMAND"
+
+    def _connection_in_transaction(self) -> bool:
+        """Check if connection is in transaction.
+
+        Returns:
+            True if connection is in an active transaction.
+        """
+        return bool(self.connection.in_transaction)
 
 
 register_driver_profile("sqlite", driver_profile)

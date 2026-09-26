@@ -1,6 +1,8 @@
 """AIOSQLite driver implementation for async SQLite operations."""
 
 import asyncio
+import contextlib
+import inspect
 import secrets
 from typing import TYPE_CHECKING, Any, cast
 
@@ -55,6 +57,10 @@ __all__ = (
     "AiosqliteSessionContext",
 )
 
+random = secrets.SystemRandom()
+_execute_and_resolve_metadata = execute_and_resolve_metadata
+_execute_fetchall_with_metadata = execute_fetchall_with_metadata
+
 
 class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiosqlite database exceptions.
@@ -107,7 +113,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         if statement.returns_rows():
             fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
                 self.connection,
-                execute_fetchall_with_metadata,
+                _execute_fetchall_with_metadata,
                 self.connection,
                 sql,
                 normalized_parameters,
@@ -131,7 +137,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
         affected_rows, last_inserted_id = await run_on_worker_thread(
             self.connection,
-            execute_and_resolve_metadata,
+            _execute_and_resolve_metadata,
             self.connection,
             sql,
             normalized_parameters,
@@ -204,7 +210,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 raise create_mapped_exception(exc) from exc
             finally:
                 if cursor is not None:
-                    await cursor.close()
+                    with contextlib.suppress(Exception):
+                        close_result = cursor.close()
+                        if inspect.isawaitable(close_result):
+                            await close_result
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
     async def begin(self) -> None:
@@ -369,7 +378,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 if cached.operation_profile.returns_rows:
                     fetched_data, description, _affected_rows, last_inserted_id = await run_on_worker_thread(
                         self.connection,
-                        execute_fetchall_with_metadata,
+                        _execute_fetchall_with_metadata,
                         self.connection,
                         cached.compiled_sql,
                         normalized_parameters,
@@ -399,7 +408,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 else:
                     affected_rows, last_inserted_id = await run_on_worker_thread(
                         self.connection,
-                        execute_and_resolve_metadata,
+                        _execute_and_resolve_metadata,
                         self.connection,
                         cached.compiled_sql,
                         normalized_parameters,
@@ -553,7 +562,7 @@ async def _retry_begin_with_backoff(
         SQLSpecError: If every retry attempt fails.
     """
     for attempt in range(max_retries):
-        delay = 0.01 * (2**attempt) + secrets.SystemRandom().uniform(0, 0.01)
+        delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)
         await asyncio.sleep(delay)
         try:
             await connection.execute("BEGIN IMMEDIATE")

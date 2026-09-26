@@ -9,21 +9,14 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.adapters.sqlite.core import end_transaction
+from sqlspec.adapters.sqlite.core import end_transaction as _end_transaction
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-__all__ = (
-    "SQLITE_DISK_CACHE_SIZE",
-    "SQLITE_JOURNAL_SIZE_LIMIT",
-    "SQLITE_MMAP_SIZE",
-    "SqliteConnectionPool",
-    "_end_transaction",
-    "end_transaction",
-)
+__all__ = ("SqliteConnectionPool",)
 
 logger = get_logger(POOL_LOGGER_NAME)
 _ADAPTER_NAME = "sqlite"
@@ -31,9 +24,6 @@ SQLITE_BUSY_TIMEOUT: Final = 5000
 SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS: Final = False
 SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS: Final = True
 SQLITE_MEMORY_CACHE_SIZE: Final = -16000
-SQLITE_DISK_CACHE_SIZE: Final = -64000
-SQLITE_MMAP_SIZE: Final = 268435456
-SQLITE_JOURNAL_SIZE_LIMIT: Final = 67108864
 SQLITE_WAL_SWITCH_ATTEMPTS: Final = 50
 SQLITE_WAL_SWITCH_DELAY: Final = 0.01
 
@@ -55,9 +45,6 @@ def _enable_wal(connection: "SqliteConnection") -> None:
     for attempt in range(SQLITE_WAL_SWITCH_ATTEMPTS):
         if _attempt_wal_switch(connection, attempt):
             return
-
-
-_end_transaction = end_transaction
 
 
 class SqliteConnectionPool:
@@ -149,28 +136,17 @@ class SqliteConnectionPool:
         connection = sqlite3.connect(**self._connection_parameters)
 
         try:
-            busy_timeout = self._connection_parameters.get("busy_timeout", SQLITE_BUSY_TIMEOUT)
-            connection.execute(f"PRAGMA busy_timeout = {busy_timeout}")
-
             if self._enable_optimizations:
                 if self._is_memory_db:
                     connection.execute("PRAGMA journal_mode = MEMORY")
                     connection.execute("PRAGMA synchronous = OFF")
                     connection.execute("PRAGMA temp_store = MEMORY")
-                    cache_size = self._connection_parameters.get("cache_size", SQLITE_MEMORY_CACHE_SIZE)
-                    connection.execute(f"PRAGMA cache_size = {cache_size}")
+                    connection.execute(f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
                 else:
-                    current_mode = connection.execute("PRAGMA journal_mode").fetchone()
-                    current_mode_str = str(current_mode[0]).lower() if current_mode else ""
-                    if current_mode_str != "wal":
-                        _enable_wal(connection)
+                    _enable_wal(connection)
                     connection.execute("PRAGMA synchronous = NORMAL")
-                    cache_size = self._connection_parameters.get("cache_size", SQLITE_DISK_CACHE_SIZE)
-                    connection.execute(f"PRAGMA cache_size = {cache_size}")
-                    mmap_size = self._connection_parameters.get("mmap_size", SQLITE_MMAP_SIZE)
-                    connection.execute(f"PRAGMA mmap_size = {mmap_size}")
-                    connection.execute("PRAGMA temp_store = MEMORY")
-                    connection.execute(f"PRAGMA journal_size_limit = {SQLITE_JOURNAL_SIZE_LIMIT}")
+
+                connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
 
             if self._enable_foreign_keys:
                 connection.execute("PRAGMA foreign_keys = ON")
@@ -378,7 +354,7 @@ def _apply_runtime_setup(connection: SqliteConnection, runtime_setup: "dict[str,
             function_config["name"],
             function_config["narg"],
             function_config["func"],
-            deterministic=function_config.get("deterministic", True),
+            deterministic=function_config.get("deterministic", False),
         )
 
     for aggregate_config in runtime_setup.get("custom_aggregates", ()):
