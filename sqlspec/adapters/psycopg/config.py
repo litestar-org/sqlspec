@@ -16,7 +16,9 @@ from sqlspec.adapters.psycopg._typing import (
     PsycopgSyncSessionContext,
 )
 from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnectionPool as AsyncConnectionPool
+from sqlspec.adapters.psycopg._typing import PsycopgAsyncNullConnectionPool as AsyncNullConnectionPool
 from sqlspec.adapters.psycopg._typing import PsycopgConnectionPool as ConnectionPool
+from sqlspec.adapters.psycopg._typing import PsycopgNullConnectionPool as NullConnectionPool
 from sqlspec.adapters.psycopg.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.psycopg.driver import (
     PsycopgAsyncDriver,
@@ -43,6 +45,7 @@ from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyErro
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.typing import ALLOYDB_CONNECTOR_INSTALLED
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -139,6 +142,7 @@ class PsycopgPoolParams(PsycopgConnectionParams):
     close_returns: NotRequired[bool]
     reconnect_failed: NotRequired["ConnectFailedCB | AsyncConnectFailedCB | None"]
     kwargs: NotRequired["dict[str, Any]"]
+    null_pool: NotRequired[bool]
 
 
 class PsycopgDriverFeatures(TypedDict):
@@ -183,6 +187,7 @@ class PsycopgDriverFeatures(TypedDict):
     enable_alloydb_iam_auth: Enable AlloyDB IAM database authentication for sync connector connections.
      Defaults to False.
     alloydb_ip_type: AlloyDB connector IP type. Defaults to PRIVATE.
+    null_pool: Enable NullConnectionPool / AsyncNullConnectionPool for serverless / PgBouncer environments.
     """
 
     enable_pgvector: NotRequired[bool]
@@ -197,6 +202,7 @@ class PsycopgDriverFeatures(TypedDict):
     alloydb_instance_uri: NotRequired[str]
     enable_alloydb_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
+    null_pool: NotRequired[bool]
 
 
 def build_connection_config(connection_config: "PsycopgPoolParams | Mapping[str, Any] | None") -> dict[str, Any]:
@@ -422,10 +428,19 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             self._setup_alloydb_connector(all_config, pool_parameters)
             conninfo = None
 
+        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
+        pool_cls = NullConnectionPool if is_null_pool else ConnectionPool
+        if is_null_pool:
+            pool_parameters.pop("min_size", None)
+            pool_parameters.pop("max_size", None)
+            pool_parameters.pop("max_idle", None)
+            pool_parameters.pop("max_waiting", None)
+            pool_parameters.pop("num_workers", None)
+
         if conninfo:
-            pool = ConnectionPool(conninfo, kwargs=all_config, **pool_parameters)
+            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
         else:
-            pool = ConnectionPool("", kwargs=all_config, **pool_parameters)
+            pool = pool_cls("", kwargs=all_config, **pool_parameters)
 
         return pool
 
@@ -434,7 +449,16 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if autocommit_setting is not None:
             conn.autocommit = autocommit_setting
 
-        # Detect extensions on first connection, update dialect
+        from psycopg.adapt import AdaptersMap
+        from psycopg.types.json import set_json_dumps, set_json_loads
+
+        serializer = self.driver_features.get("json_serializer", to_json)
+        deserializer = self.driver_features.get("json_deserializer", from_json)
+        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
+            with suppress(Exception):
+                set_json_dumps(serializer, conn)
+                set_json_loads(deserializer, conn)
+
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)
@@ -738,10 +762,20 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         conninfo = all_config.pop("conninfo", None)
         kwargs = all_config.pop("kwargs", {})
         all_config.update(kwargs)
+
+        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
+        pool_cls = AsyncNullConnectionPool if is_null_pool else AsyncConnectionPool
+        if is_null_pool:
+            pool_parameters.pop("min_size", None)
+            pool_parameters.pop("max_size", None)
+            pool_parameters.pop("max_idle", None)
+            pool_parameters.pop("max_waiting", None)
+            pool_parameters.pop("num_workers", None)
+
         if conninfo:
-            pool = AsyncConnectionPool(conninfo, kwargs=all_config, **pool_parameters)
+            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
         else:
-            pool = AsyncConnectionPool("", kwargs=all_config, **pool_parameters)
+            pool = pool_cls("", kwargs=all_config, **pool_parameters)
 
         if open_pool is True:
             await pool.open()
@@ -753,7 +787,16 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if autocommit_setting is not None:
             await conn.set_autocommit(autocommit_setting)
 
-        # Detect extensions on first connection, update dialect
+        from psycopg.adapt import AdaptersMap
+        from psycopg.types.json import set_json_dumps, set_json_loads
+
+        serializer = self.driver_features.get("json_serializer", to_json)
+        deserializer = self.driver_features.get("json_deserializer", from_json)
+        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
+            with suppress(Exception):
+                set_json_dumps(serializer, conn)
+                set_json_loads(deserializer, conn)
+
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)

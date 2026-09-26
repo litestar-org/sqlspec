@@ -1,5 +1,6 @@
 """Psqlpy database configuration."""
 
+import sys
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
@@ -146,7 +147,12 @@ class _PsqlpySessionFactory(AsyncPoolSessionFactory):
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("PsqlpyConnection", await ctx.__aenter__())
-        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+        try:
+            await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+        except BaseException:
+            await ctx.__aexit__(*sys.exc_info())
+            self._ctx = None
+            raise
         return connection
 
     async def release_connection(self, _conn: "PsqlpyConnection", **kwargs: Any) -> None:
@@ -170,9 +176,15 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
             pool = await self._config.create_pool()
             self._config.connection_instance = pool
 
-        self._ctx = pool.acquire()
-        connection = await self._ctx.__aenter__()
-        await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+        ctx = pool.acquire()
+        self._ctx = ctx
+        connection = await ctx.__aenter__()
+        try:
+            await self._config._ensure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+        except BaseException:
+            await ctx.__aexit__(*sys.exc_info())
+            self._ctx = None
+            raise
         return connection  # type: ignore[no-any-return]
 
     async def __aexit__(
@@ -285,11 +297,10 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
 
         conn_id = id(connection)
-        if conn_id in self._initialized_connection_ids:
-            return
-        if self._user_connection_hook is not None:
-            await self._user_connection_hook(connection)
-        self._initialized_connection_ids.add(conn_id)
+        if conn_id not in self._initialized_connection_ids:
+            if self._user_connection_hook is not None:
+                await self._user_connection_hook(connection)
+            self._initialized_connection_ids.add(conn_id)
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
@@ -304,6 +315,7 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
 
         self.connection_instance.close()
         self.connection_instance = None
+        self._initialized_connection_ids.clear()
 
     async def create_connection(self) -> "PsqlpyConnection":
         """Create a single async connection (not from pool).

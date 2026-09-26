@@ -1,7 +1,7 @@
 """CockroachDB AsyncPG adapter helpers."""
 
-import random
 import re
+import secrets
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "CockroachAsyncpgRetryConfig",
+    "build_connection_config",
     "build_native_export",
     "build_native_import",
     "calculate_backoff_seconds",
@@ -29,11 +30,12 @@ __all__ = (
     "validate_follower_read_staleness",
 )
 
-# Retry configuration defaults (module-level for mypyc compatibility)
 _DEFAULT_MAX_RETRIES: Final[int] = 10
 _DEFAULT_BASE_DELAY_MS: Final[float] = 50.0
 _DEFAULT_MAX_DELAY_MS: Final[float] = 5000.0
 _DEFAULT_ENABLE_LOGGING: Final[bool] = True
+_MAX_EXCEPTION_CHAIN_DEPTH: Final[int] = 16
+_RNG: Final = secrets.SystemRandom()
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -65,6 +67,28 @@ class CockroachAsyncpgRetryConfig:
         )
 
 
+def build_connection_config(config: "dict[str, Any]") -> "dict[str, Any]":
+    """Prepare CockroachDB AsyncPG connection config, extracting multi-region server settings."""
+    from sqlspec.adapters.asyncpg.core import build_connection_config as asyncpg_build_connection_config
+
+    result = asyncpg_build_connection_config(config)
+    server_settings = dict(result.get("server_settings") or {})
+    if "application_name" in result:
+        server_settings.setdefault("application_name", str(result.pop("application_name")))
+    if "gateway_region" in result:
+        server_settings.setdefault("gateway_region", str(result.pop("gateway_region")))
+    if "default_transaction_use_follower_reads" in result:
+        val = result.pop("default_transaction_use_follower_reads")
+        server_settings.setdefault(
+            "default_transaction_use_follower_reads", "on" if val is True or str(val).lower() == "on" else "off"
+        )
+    if "results_buffer_size" in result:
+        server_settings.setdefault("results_buffer_size", str(result.pop("results_buffer_size")))
+    if server_settings:
+        result["server_settings"] = server_settings
+    return result
+
+
 def is_retryable_error(error: BaseException) -> bool:
     """Return True when the error should trigger a CockroachDB retry.
 
@@ -85,17 +109,17 @@ def is_retryable_error(error: BaseException) -> bool:
     Returns:
         True when the transaction should be retried.
     """
-    seen: set[int] = set()
+    depth = 0
     current: BaseException | None = error
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
+    while current is not None and depth < _MAX_EXCEPTION_CHAIN_DEPTH:
         if isinstance(current, SerializationConflictError):
             return True
         if has_sqlstate(current) and str(current.sqlstate) == "40001":
             return True
         if not isinstance(current, SQLSpecError):
             return False
-        current = cast("BaseException | None", cast("Any", current).__cause__)
+        current = cast("BaseException | None", getattr(current, "__cause__", None))
+        depth += 1
     return False
 
 
@@ -109,7 +133,7 @@ def calculate_backoff_seconds(attempt: int, config: "CockroachAsyncpgRetryConfig
     capped_ms: float = min(config.base_delay_ms * (2**attempt), config.max_delay_ms)
     if capped_ms <= 0.0:
         return 0.0
-    return random.uniform(capped_ms / 2.0, capped_ms) / 1000.0  # noqa: S311
+    return _RNG.uniform(capped_ms / 2.0, capped_ms) / 1000.0
 
 
 _STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")

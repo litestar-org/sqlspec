@@ -131,6 +131,10 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if found_user:
         config["user"] = user_val
 
+    pgbouncer = config.pop("pgbouncer", None)
+    if pgbouncer:
+        config.setdefault("statement_cache_size", 0)
+
     return config
 
 
@@ -297,10 +301,17 @@ def parse_status(status: Any) -> int:
     if not status or not isinstance(status, str):
         return 0
 
-    match = ASYNC_PG_STATUS_REGEX.match(status.strip())
+    stripped = status.strip()
+    last_space = stripped.rfind(" ")
+    if last_space != -1:
+        token = stripped[last_space + 1 :]
+        if token.isdigit():
+            return int(token)
+
+    match = ASYNC_PG_STATUS_REGEX.match(stripped)
     if match:
         groups = match.groups()
-        if len(groups) >= EXPECTED_REGEX_GROUPS:
+        if len(groups) >= EXPECTED_REGEX_GROUPS and groups[-1]:
             try:
                 return int(groups[-1])
             except (ValueError, IndexError):
@@ -456,7 +467,8 @@ class AsyncpgStreamSource:
         handler = self._driver.handle_database_exceptions()
         records = await self._driver._run_with_exception_handler(handler, self._cursor.fetch, self._chunk_size)
         self._driver._check_pending_exception(handler)
-        assert records is not None
+        if not records:
+            return []
         return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:
@@ -529,12 +541,20 @@ def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
     return str(encoded).encode("utf-8")
 
 
-def _decode_json_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+def _decode_json_payload(value: Any, decoder: "Callable[..., Any]") -> Any:
+    """Decode JSON binary or string payload with zero-copy decoding when possible."""
     if isinstance(value, str):
         return decoder(value)
     if isinstance(value, memoryview):
-        value = value.tobytes()
-    return decoder(bytes(value).decode("utf-8"))
+        raw_bytes = value.tobytes()
+    elif isinstance(value, (bytes, bytearray)):
+        raw_bytes = bytes(value)
+    else:
+        raw_bytes = bytes(value)
+    try:
+        return decoder(raw_bytes)
+    except (TypeError, UnicodeDecodeError):
+        return decoder(raw_bytes.decode("utf-8"))
 
 
 def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
@@ -544,15 +564,22 @@ def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
     return _JSONB_BINARY_VERSION + payload
 
 
-def _decode_jsonb_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
+def _decode_jsonb_payload(value: Any, decoder: "Callable[..., Any]") -> Any:
+    """Decode JSONB binary or string payload stripping version prefix when present."""
     if isinstance(value, str):
         return decoder(value)
     if isinstance(value, memoryview):
-        value = value.tobytes()
-    payload = bytes(value)
-    if payload.startswith(_JSONB_BINARY_VERSION):
-        payload = payload[1:]
-    return decoder(payload.decode("utf-8"))
+        raw_bytes = value.tobytes()
+    elif isinstance(value, (bytes, bytearray)):
+        raw_bytes = bytes(value)
+    else:
+        raw_bytes = bytes(value)
+    if raw_bytes.startswith(_JSONB_BINARY_VERSION):
+        raw_bytes = raw_bytes[1:]
+    try:
+        return decoder(raw_bytes)
+    except (TypeError, UnicodeDecodeError):
+        return decoder(raw_bytes.decode("utf-8"))
 
 
 def _create_postgres_error(

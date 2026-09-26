@@ -82,32 +82,34 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
+        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            new_expires_at = self._calculate_expires_at(renew_for)
+            sql = f"""
+            UPDATE {self._table_name}
+            SET expires_at = CASE WHEN expires_at IS NOT NULL THEN $1 ELSE expires_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE session_id = $2
+            AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            RETURNING data
+            """
+            async with self._config.provide_connection() as conn:
+                query_result = await conn.fetch(sql, [new_expires_at, key])
+                rows = query_result.result() if query_result else []
+                if not rows:
+                    return None
+                return bytes(rows[0]["data"])
+
         sql = f"""
-        SELECT data, expires_at FROM {self._table_name}
+        SELECT data FROM {self._table_name}
         WHERE session_id = $1
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
-
         async with self._config.provide_connection() as conn:
             query_result = await conn.fetch(sql, [key])
-            rows = query_result.result()
-
+            rows = query_result.result() if query_result else []
             if not rows:
                 return None
-
-            row = rows[0]
-
-            if renew_for is not None and row["expires_at"] is not None:
-                new_expires_at = self._calculate_expires_at(renew_for)
-                if new_expires_at is not None:
-                    update_sql = f"""
-                    UPDATE {self._table_name}
-                    SET expires_at = $1, updated_at = CURRENT_TIMESTAMP
-                    WHERE session_id = $2
-                    """
-                    await conn.execute(update_sql, [new_expires_at, key])
-
-            return bytes(row["data"])
+            return bytes(rows[0]["data"])
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.

@@ -6,6 +6,8 @@ and transaction management.
 
 from typing import TYPE_CHECKING, Any, cast
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
 from sqlspec.adapters.psqlpy.core import (
     _DML_COUNT_COLUMN,
@@ -27,7 +29,7 @@ from sqlspec.adapters.psqlpy.core import (
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -64,6 +66,7 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsqlpyDriver(AsyncDriverAdapterBase):
     """PostgreSQL driver implementation using psqlpy.
 
@@ -71,7 +74,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ("_data_dictionary", "_transaction_active")
+    _data_dictionary: PsqlpyDataDictionary | None
+    _transaction_active: bool
+    _json_columns_cache: dict[tuple[str | None, str], set[str]]
+
+    __slots__ = ("_data_dictionary", "_json_columns_cache", "_transaction_active")
     dialect = "postgres"
 
     def __init__(
@@ -86,8 +93,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary: PsqlpyDataDictionary | None = None
+        self._data_dictionary = None
         self._transaction_active = False
+        self._json_columns_cache = {}
 
     async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
@@ -116,6 +124,18 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         if statement.operation_type in {"INSERT", "UPDATE", "DELETE"}:
+            if "returning" in sql.lower():
+                query_result = await cursor.fetch(sql, params)
+                dict_rows, column_names = collect_rows(query_result)
+                rows_affected = len(dict_rows)
+                return self.create_execution_result(
+                    cursor,
+                    selected_data=dict_rows,
+                    column_names=column_names,
+                    data_row_count=rows_affected,
+                    rowcount_override=rows_affected,
+                    is_select_result=statement.returns_rows(),
+                )
             count_sql = _dml_count_query(sql)
             if count_sql is not None:
                 count_result = await cursor.fetch(count_sql, params)
@@ -158,7 +178,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL script with statement splitting.
+        """Execute SQL script with statement splitting or batch execution.
 
         Args:
             cursor: Psqlpy connection object
@@ -170,6 +190,18 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
+
+        if not prepared_parameters and hasattr(cursor, "execute_batch"):
+            statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler:
+                await cursor.execute_batch(sql)
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+            return self.create_execution_result(
+                cursor, statement_count=len(statements), successful_statements=len(statements), is_script_result=True
+            )
+
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -247,6 +279,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             Names of columns typed json or jsonb.
         """
+        cache_key = (schema_name, table_name)
+        if cache_key in self._json_columns_cache:
+            return self._json_columns_cache[cache_key]
+
         qualified = quote_identifier(table_name)
         if schema_name is not None:
             qualified = f"{quote_identifier(schema_name)}.{qualified}"
@@ -261,7 +297,9 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             [qualified],
         )
         data, _ = collect_rows(rows)
-        return {str(row["column_name"]) for row in data}
+        result = {str(row["column_name"]) for row in data}
+        self._json_columns_cache[cache_key] = result
+        return result
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
@@ -319,6 +357,84 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         telemetry_payload = await self._write_storage_result(
             arrow_result, destination, format_hint=format_hint, pipeline=async_pipeline
         )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    async def load_from_records(
+        self,
+        table: str,
+        records: "Sequence[Mapping[str, Any]] | Sequence[Sequence[Any]]",
+        *,
+        columns: "list[str] | None" = None,
+        overwrite: bool = False,
+        partitioner: "dict[str, object] | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Python records into PostgreSQL via psqlpy binary COPY."""
+        self._require_capability("arrow_import_enabled")
+        materialized = list(records)
+        if not materialized:
+            msg = "load_from_records requires at least one record."
+            raise ImproperConfigurationError(msg)
+
+        from collections.abc import Mapping as MappingABC
+
+        first_record = materialized[0]
+        if isinstance(first_record, MappingABC):
+            resolved_columns = columns if columns is not None else list(first_record.keys())
+            expected_keys = set(resolved_columns)
+            row_tuples: list[tuple[Any, ...]] = []
+            for record in materialized:
+                if not isinstance(record, MappingABC):
+                    msg = "load_from_records mapping records must all be mappings."
+                    raise ImproperConfigurationError(msg)
+                if set(record.keys()) != expected_keys:
+                    msg = "load_from_records mapping records must all share the same keys."
+                    raise ImproperConfigurationError(msg)
+                row_tuples.append(tuple(record[col] for col in resolved_columns))
+        else:
+            if columns is None:
+                msg = "load_from_records requires columns when records are positional sequences."
+                raise ImproperConfigurationError(msg)
+            resolved_columns = columns
+            row_tuples = []
+            for record in materialized:
+                if isinstance(record, MappingABC):
+                    msg = "load_from_records positional records must all have the same shape."
+                    raise ImproperConfigurationError(msg)
+                row = tuple(record)
+                if len(row) != len(resolved_columns):
+                    msg = "load_from_records positional records must match the number of columns."
+                    raise ImproperConfigurationError(msg)
+                row_tuples.append(row)
+
+        if overwrite:
+            qualified = format_table_identifier(table)
+            exc_handler = self.handle_database_exceptions()
+            async with exc_handler, self.with_cursor(self.connection) as cursor:
+                await cursor.execute(f"TRUNCATE TABLE {qualified}")
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+
+        schema_name, table_name = split_schema_and_table(table)
+        json_columns = await self._resolve_json_columns(schema_name, table_name)
+        coerced_records = coerce_json_columns(row_tuples, resolved_columns, json_columns)
+
+        copy_kwargs: dict[str, Any] = {"columns": resolved_columns}
+        if schema_name:
+            copy_kwargs["schema_name"] = schema_name
+
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler, self.with_cursor(self.connection) as cursor:
+            await cursor.copy_records_to_table(table_name, coerced_records, **copy_kwargs)
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+
+        telemetry_payload: StorageTelemetry = {
+            "destination": table,
+            "rows_processed": len(row_tuples),
+            "bytes_processed": 0,
+        }
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 

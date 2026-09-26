@@ -101,6 +101,7 @@ class AsyncpgConnectionConfig(TypedDict):
     connect_timeout: NotRequired[float]
     command_timeout: NotRequired[float]
     statement_cache_size: NotRequired[int]
+    pgbouncer: NotRequired[bool]
     max_cached_statement_lifetime: NotRequired[int]
     max_cacheable_statement_size: NotRequired[int]
     server_settings: NotRequired["dict[str, str]"]
@@ -191,6 +192,9 @@ class AsyncpgDriverFeatures(TypedDict):
      - "notify_queue": Durable queue plus a PostgreSQL notification wakeup hint
      - "poll_queue": Durable queue discovered by polling
      Defaults to "notify".
+    pgbouncer: Enable PgBouncer transaction-pooling compatibility mode.
+     Disables server-side prepared statement caching (statement_cache_size=0).
+    type_codecs: Optional list of custom type codec specifications to register.
     """
 
     json_serializer: NotRequired["Callable[[Any], str]"]
@@ -211,6 +215,8 @@ class AsyncpgDriverFeatures(TypedDict):
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
     connection_instance: NotRequired["AsyncpgPool"]
     on_connection_create: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
+    pgbouncer: NotRequired[bool]
+    type_codecs: NotRequired["list[dict[str, Any]]"]
 
 
 class _AsyncpgCloudSqlConnector:
@@ -334,6 +340,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self._user_connection_hook: Callable[[AsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
         )
+        self._custom_type_codecs: list[dict[str, Any]] = list(features_dict.pop("type_codecs", None) or [])
 
         super().__init__(
             connection_config=build_connection_config(normalize_connection_config(connection_config)),
@@ -457,6 +464,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
         }
 
+        if self.connection_config.get("pgbouncer") or self.driver_features.get("pgbouncer"):
+            config["statement_cache_size"] = 0
+
         if self.driver_features.get("enable_cloud_sql", False):
             self._setup_cloud_sql_connector(config)
         elif self.driver_features.get("enable_alloydb", False):
@@ -467,7 +477,7 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         return await asyncpg_create_pool(**config)
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:
-        """Initialize connection with JSON codecs, pgvector support, and user callback.
+        """Initialize connection with JSON codecs, pgvector support, custom codecs, and user callback.
 
         Args:
             connection: AsyncPG connection to initialize.
@@ -479,7 +489,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 decoder=self.driver_features.get("json_deserializer", from_json),
             )
 
-        # Detect extensions on first connection, update dialect
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)
@@ -500,7 +509,17 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         if self._pgvector_available:
             await register_pgvector_support(connection)
 
-        # Call user-provided callback after internal setup
+        for codec in self._custom_type_codecs:
+            codec_kwargs: dict[str, Any] = {
+                "schema": codec.get("schema", "public"),
+                "format": codec.get("format", "text"),
+            }
+            if codec.get("encoder") is not None:
+                codec_kwargs["encoder"] = codec["encoder"]
+            if codec.get("decoder") is not None:
+                codec_kwargs["decoder"] = codec["decoder"]
+            await connection.set_type_codec(codec["typename"], **codec_kwargs)
+
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
 
@@ -543,6 +562,9 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         }
         for key in _POOL_ONLY_CONFIG_KEYS:
             config.pop(key, None)
+
+        if self.driver_features.get("pgbouncer"):
+            config["statement_cache_size"] = 0
 
         if self.driver_features.get("enable_cloud_sql", False):
             self._setup_cloud_sql_connector(config)
