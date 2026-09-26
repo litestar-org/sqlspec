@@ -1,7 +1,9 @@
 """AIOSQLite adapter compiled helpers."""
 
 import contextlib
+import re
 import sys
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -33,7 +35,7 @@ from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_co
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core.compiler import OperationType
@@ -43,6 +45,7 @@ _T = TypeVar("_T")
 __all__ = (
     "AiosqliteStreamSource",
     "apply_driver_features",
+    "apply_extension_pragmas",
     "build_connection_config",
     "build_insert_statement",
     "build_profile",
@@ -51,12 +54,18 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_and_resolve_metadata",
     "execute_and_resolve_rowcount",
     "execute_fetchall_with_description",
+    "execute_fetchall_with_metadata",
+    "execute_many_on_worker_thread",
+    "execute_script_on_worker_thread",
+    "extension_pragma_statements",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "render_pragmas",
     "require_python_version",
     "resolve_lastrowid",
     "resolve_rowcount",
@@ -66,6 +75,14 @@ __all__ = (
 
 _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
+_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_EXTENSION_PRAGMA_PROFILE = (
+    "PRAGMA foreign_keys = ON",
+    "PRAGMA cache_size = -64000",
+    "PRAGMA mmap_size = 30000000",
+    "PRAGMA journal_size_limit = 67108864",
+)
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
@@ -91,10 +108,7 @@ async def run_on_worker_thread(
     connection: "AiosqliteConnection", function: "Callable[..., _T]", *args: Any, **kwargs: Any
 ) -> _T:
     """Execute a sqlite3 callable on the aiosqlite worker thread."""
-    execute = cast(
-        "Callable[..., Awaitable[_T]]",
-        connection._execute,  # pyright: ignore[reportPrivateUsage]
-    )
+    execute = cast("Callable[..., Awaitable[_T]]", connection._execute)
     return await execute(function, *args, **kwargs)
 
 
@@ -244,15 +258,16 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 
 
 class AiosqliteStreamSource:
-    """Compiled async chunk source streaming dict rows from an aiosqlite cursor via ``fetchmany``."""
+    """Compiled async chunk source streaming dict or tuple rows from an aiosqlite cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_as_dict", "_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, as_dict: bool = True) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._as_dict = as_dict
         self._cursor: Any = None
         self._column_names: list[str] | None = None
 
@@ -267,12 +282,16 @@ class AiosqliteStreamSource:
         self._cursor = cursor
         await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
 
-    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+    async def fetch_chunk(self) -> "list[Any]":
         handler = self._driver.handle_database_exceptions()
-        rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
+        rows: list[Any] = await self._driver._run_with_exception_handler(
+            handler, self._cursor.fetchmany, self._chunk_size
+        )
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
+        if not self._as_dict:
+            return rows
         if self._column_names is None:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
@@ -368,8 +387,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
-    # SQLITE_BUSY means another process has the database locked
-    # SQLITE_LOCKED means another connection has the table/rows locked
     if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
         return _create_aiosqlite_error(error, error_code, DeadlockError, "database busy")
     if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
@@ -377,13 +394,11 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if "locked" in error_msg or "busy" in error_msg:
         return _create_aiosqlite_error(error, error_code or 0, DeadlockError, "database locked")
 
-    # Query interruption (timeout-like behavior)
     if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_aiosqlite_error(error, error_code, OperationCancelledError, "query interrupted")
     if "interrupt" in error_msg:
         return _create_aiosqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
 
-    # Permission errors
     if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "permission denied")
     if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
@@ -439,7 +454,7 @@ def build_profile() -> "DriverParameterProfile":
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
-            bool: _bool_to_int,
+            bool: int,
             datetime: _TIME_TO_ISO,
             date: _TIME_TO_ISO,
             Decimal: _DECIMAL_TO_STRING,
@@ -482,6 +497,54 @@ def apply_driver_features(
     return statement_config, features
 
 
+def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
+    extension_config = cast("dict[str, Any]", config.extension_config)
+    settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
+    profile = settings.get("pragma_profile", False)
+    if not isinstance(profile, bool):
+        msg = f"extension_config['{extension_name}']['pragma_profile'] must be a boolean"
+        raise ImproperConfigurationError(msg)
+    statements: list[str] = list(_EXTENSION_PRAGMA_PROFILE) if profile else []
+    overrides = settings.get("pragma_overrides")
+    if overrides is None:
+        return tuple(statements)
+    if not isinstance(overrides, Mapping):
+        msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        statements.extend(f"PRAGMA {name} = {value}" for name, value in render_pragmas(overrides))
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace(
+            "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
+        )
+        raise ImproperConfigurationError(msg) from exc
+    return tuple(statements)
+
+
+async def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
+    for statement in statements:
+        await connection.execute(statement)
+
+
+def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+    rendered: list[tuple[str, str]] = []
+    for pragma_name, pragma_value in pragmas.items():
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
+            raise ImproperConfigurationError(msg)
+        if isinstance(pragma_value, bool):
+            rendered_value = "1" if pragma_value else "0"
+        elif isinstance(pragma_value, int):
+            rendered_value = str(pragma_value)
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+            rendered_value = pragma_value
+        else:
+            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
+            raise ImproperConfigurationError(msg)
+        rendered.append((pragma_name, rendered_value))
+    return rendered
+
+
 def _execute_fetchall_with_metadata(
     connection: "AiosqliteConnection",
     sql: str,
@@ -491,7 +554,7 @@ def _execute_fetchall_with_metadata(
     eligibility_cache: "dict[tuple[str | None, str], bool]",
 ) -> "tuple[list[Any], Any, int, int | None]":
     """Execute a query and return rows plus execution metadata on the worker thread."""
-    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    raw_connection = connection._conn
     cursor = cast("Any", raw_connection.execute(sql, normalize_execute_parameters(parameters)))
     try:
         fetched_data = cursor.fetchall()
@@ -514,7 +577,7 @@ def _execute_and_resolve_metadata(
     eligibility_cache: "dict[tuple[str | None, str], bool]",
 ) -> "tuple[int, int | None]":
     """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
-    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    raw_connection = connection._conn
     cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
     try:
         rowcount = (
@@ -526,6 +589,44 @@ def _execute_and_resolve_metadata(
     finally:
         with contextlib.suppress(Exception):
             cast("Any", cursor).close()
+
+
+def _execute_many_on_worker_thread(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
+    """Execute SQL with multiple parameter sets on the worker thread."""
+    raw_connection = connection._conn
+    cursor = raw_connection.cursor()
+    try:
+        cursor.executemany(sql, normalize_execute_many_parameters(parameters))
+        return (
+            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            cast("Any", cursor).close()
+
+
+def _execute_script_on_worker_thread(
+    connection: "AiosqliteConnection", statements: "Sequence[str]", parameters: Any
+) -> tuple[int, int]:
+    """Execute multi-statement SQL script on the worker thread."""
+    raw_connection = connection._conn
+    cursor = raw_connection.cursor()
+    normalized_params = normalize_execute_parameters(parameters)
+    successful_count = 0
+    try:
+        for stmt in statements:
+            cursor.execute(stmt, normalized_params)
+            successful_count += 1
+        return len(statements), successful_count
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
+
+
+execute_and_resolve_metadata = _execute_and_resolve_metadata
+execute_fetchall_with_metadata = _execute_fetchall_with_metadata
+execute_many_on_worker_thread = _execute_many_on_worker_thread
+execute_script_on_worker_thread = _execute_script_on_worker_thread
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
@@ -687,10 +788,6 @@ def _create_aiosqlite_error(
     exc = error_class(msg)
     exc.__cause__ = cast("BaseException", error)
     return exc
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
 
 
 driver_profile = build_profile()

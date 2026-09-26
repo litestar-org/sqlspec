@@ -4,7 +4,8 @@ from typing import Any
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite.config import SqliteConfig, _apply_extension_pragmas, _extension_pragma_statements
+from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.sqlite.core import apply_extension_pragmas, extension_pragma_statements
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 
@@ -36,11 +37,11 @@ class SqliteEventQueueStore(BaseEventQueueStore[SqliteConfig]):
 
     def __init__(self, config: SqliteConfig) -> None:
         super().__init__(config)
-        self._pragma_statements = _extension_pragma_statements(config, "events")
+        self._pragma_statements = extension_pragma_statements(config, "events")
 
     def prepare_schema_sync(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before queue DDL."""
-        _apply_extension_pragmas(driver.connection, self._pragma_statements)
+        apply_extension_pragmas(driver.connection, self._pragma_statements)
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return SQLite-compatible column types for the event queue."""

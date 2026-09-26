@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
-from sqlspec.adapters.aiosqlite.config import _render_pragmas
+from sqlspec.adapters.aiosqlite.core import render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -1036,7 +1036,7 @@ def _pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
         msg = "extension_config['adk']['pragma_overrides'] must be a mapping of PRAGMA names to values"
         raise ImproperConfigurationError(msg)
     try:
-        return _render_pragmas(pragma_overrides)
+        return render_pragmas(pragma_overrides)
     except ImproperConfigurationError as exc:
         msg = str(exc).replace("driver_features['pragmas']", "extension_config['adk']['pragma_overrides']")
         raise ImproperConfigurationError(msg) from exc

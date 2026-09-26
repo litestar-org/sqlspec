@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.config import _apply_extension_pragmas, _extension_pragma_statements
+from sqlspec.adapters.aiosqlite.core import apply_extension_pragmas, extension_pragma_statements
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
@@ -59,7 +59,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
             config: AiosqliteConfig instance.
         """
         super().__init__(config)
-        self._pragma_statements = _extension_pragma_statements(config, "litestar")
+        self._pragma_statements = extension_pragma_statements(config, "litestar")
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -68,14 +68,14 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
             return
         sql = self._table_ddl()
         async with self._config.provide_session() as driver:
-            await _apply_extension_pragmas(driver.connection, self._pragma_statements)
+            await apply_extension_pragmas(driver.connection, self._pragma_statements)
             await driver.execute_script(sql)
         self._log_table_created()
         await self.reconcile_schema(assume_existing=True)
 
     async def prepare_schema_async(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before migration DDL generation."""
-        await _apply_extension_pragmas(driver.connection, self._pragma_statements)
+        await apply_extension_pragmas(driver.connection, self._pragma_statements)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -90,7 +90,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = ?
-        AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+        AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
         async with self._config.provide_connection() as conn:
@@ -170,7 +170,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         sql = f"""
         SELECT 1 FROM {self._table_name}
         WHERE session_id = ?
-        AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+        AND (expires_at IS NULL OR expires_at > julianday('now'))
         """
 
         async with self._config.provide_connection() as conn, conn.execute(sql, (key,)) as cursor:
@@ -218,7 +218,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         Returns:
             Number of sessions deleted.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE julianday(expires_at) <= julianday('now')"
+        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= julianday('now')"
 
         async with self._config.provide_connection() as conn:
             cursor = await conn.execute(sql)

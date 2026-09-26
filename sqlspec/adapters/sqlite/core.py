@@ -1,6 +1,7 @@
 """SQLite adapter compiled helpers."""
 
 import contextlib
+import re
 import sys
 from collections.abc import Mapping
 from datetime import date, datetime
@@ -36,11 +37,14 @@ from sqlspec.utils.type_guards import has_sqlite_error
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from sqlspec.adapters.sqlite._typing import SqliteConnection
     from sqlspec.core.compiler import OperationType
 
 __all__ = (
+    "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "SqliteStreamSource",
     "apply_driver_features",
+    "apply_extension_pragmas",
     "build_connection_config",
     "build_insert_statement",
     "build_profile",
@@ -49,10 +53,13 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "end_transaction",
+    "extension_pragma_statements",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "render_pragmas",
     "require_python_version",
     "resolve_lastrowid",
     "resolve_rowcount",
@@ -77,6 +84,89 @@ SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
 SQLITE_TABLE_INFO_MIN_COLUMNS = 2
 SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
+_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_EXTENSION_PRAGMA_PROFILE = (
+    "PRAGMA foreign_keys = ON",
+    "PRAGMA cache_size = -64000",
+    "PRAGMA mmap_size = 30000000",
+    "PRAGMA journal_size_limit = 67108864",
+)
+
+
+def end_transaction(
+    connection: "SqliteConnection | Any",
+    *,
+    commit: bool,
+    supports_autocommit: bool = SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT,
+) -> None:
+    """End an open transaction on a connection.
+
+    Connection.commit and Connection.rollback are no-ops while the connection runs
+    in sqlite3's autocommit mode, so the statement is issued directly there.
+
+    Args:
+        connection: Connection whose transaction should end.
+        commit: Whether to commit rather than roll back.
+        supports_autocommit: Whether this runtime's sqlite3 exposes autocommit.
+    """
+    if not getattr(connection, "in_transaction", True):
+        return
+    if supports_autocommit and getattr(connection, "autocommit", None) is True:
+        connection.execute("COMMIT" if commit else "ROLLBACK")
+        return
+    if commit:
+        connection.commit()
+    else:
+        connection.rollback()
+
+
+def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
+    extension_config = cast("dict[str, Any]", config.extension_config)
+    settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
+    profile = settings.get("pragma_profile", False)
+    if not isinstance(profile, bool):
+        msg = f"extension_config['{extension_name}']['pragma_profile'] must be a boolean"
+        raise ImproperConfigurationError(msg)
+    statements: list[str] = list(_EXTENSION_PRAGMA_PROFILE) if profile else []
+    overrides = settings.get("pragma_overrides")
+    if overrides is None:
+        return tuple(statements)
+    if not isinstance(overrides, Mapping):
+        msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        statements.extend(f"PRAGMA {name} = {value}" for name, value in render_pragmas(overrides))
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace(
+            "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
+        )
+        raise ImproperConfigurationError(msg) from exc
+    return tuple(statements)
+
+
+def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
+    for statement in statements:
+        connection.execute(statement)
+
+
+def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+    rendered: list[tuple[str, str]] = []
+    for pragma_name, pragma_value in pragmas.items():
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
+            raise ImproperConfigurationError(msg)
+        if isinstance(pragma_value, bool):
+            rendered_value = "1" if pragma_value else "0"
+        elif isinstance(pragma_value, int):
+            rendered_value = str(pragma_value)
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+            rendered_value = pragma_value
+        else:
+            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
+            raise ImproperConfigurationError(msg)
+        rendered.append((pragma_name, rendered_value))
+    return rendered
 
 
 _TIME_TO_ISO = time_iso_convert
@@ -221,13 +311,14 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 class SqliteStreamSource:
     """Compiled chunk source streaming dict rows from a SQLite cursor via ``fetchmany``."""
 
-    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_as_dict", "_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, as_dict: bool = True) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._as_dict = as_dict
         self._cursor: Any = None
         self._column_names: list[str] | None = None
 
@@ -240,7 +331,7 @@ class SqliteStreamSource:
             cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._driver._check_pending_exception(handler)
 
-    def fetch_chunk(self) -> "list[dict[str, Any]]":
+    def fetch_chunk(self) -> "list[Any]":
         handler = self._driver.handle_database_exceptions()
         rows: list[Any] = []
         with handler:
@@ -248,6 +339,8 @@ class SqliteStreamSource:
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
+        if not self._as_dict:
+            return rows
         if self._column_names is None:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
@@ -294,13 +387,17 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         "path",
         "file",
     }
-    connection_parameters = {
-        key: value
-        for key, value in connection_config.items()
-        if key not in excluded_keys
-        and (value is not None or key == "isolation_level")
-        and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-    }
+
+    def _filter_params(mapping: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in mapping.items()
+            if key not in excluded_keys
+            and (value is not None or key == "isolation_level")
+            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
+        }
+
+    connection_parameters = _filter_params(connection_config)
 
     if "database" not in connection_parameters:
         database = (
@@ -314,13 +411,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
 
     extra = connection_config.get("extra")
     if isinstance(extra, Mapping):
-        connection_parameters.update({
-            key: value
-            for key, value in extra.items()
-            if key not in excluded_keys
-            and (value is not None or key == "isolation_level")
-            and (key != "autocommit" or SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT)
-        })
+        connection_parameters.update(_filter_params(extra))
 
     return connection_parameters
 
@@ -360,9 +451,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
-    # Check for busy/locked conditions first (deadlock-like scenarios in SQLite)
-    # SQLITE_BUSY means another process has the database locked
-    # SQLITE_LOCKED means another connection has the table/rows locked
     if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
         return _create_sqlite_error(error, error_code, DeadlockError, "database busy")
     if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
@@ -370,13 +458,11 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if "locked" in error_msg or "busy" in error_msg:
         return _create_sqlite_error(error, error_code or 0, DeadlockError, "database locked")
 
-    # Query interruption (timeout-like behavior)
     if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_sqlite_error(error, error_code, OperationCancelledError, "query interrupted")
     if "interrupt" in error_msg:
         return _create_sqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
 
-    # Permission errors
     if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_sqlite_error(error, error_code, PermissionDeniedError, "permission denied")
     if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
@@ -397,7 +483,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
             return _create_sqlite_error(error, None, SQLParsingError, "SQL syntax error")
         return _create_sqlite_error(error, None, SQLSpecError, "database error")
 
-    # Constraint violations (check extended error codes first)
     if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
         return _create_sqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
     if error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
@@ -407,17 +492,14 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
         return _create_sqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
 
-    # Connection/file errors
     if error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
         return _create_sqlite_error(error, error_code, DatabaseConnectionError, "connection error")
     if error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
         return _create_sqlite_error(error, error_code, OperationalError, "operational error")
 
-    # Data type errors
     if error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
         return _create_sqlite_error(error, error_code, DataError, "data error")
 
-    # SQL syntax errors
     if error_code == 1 or "syntax" in error_msg:
         return _create_sqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
 
@@ -440,7 +522,7 @@ def build_profile() -> "DriverParameterProfile":
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
-            bool: _bool_to_int,
+            bool: int,
             datetime: _TIME_TO_ISO,
             date: _TIME_TO_ISO,
             Decimal: _DECIMAL_TO_STRING,
@@ -642,10 +724,6 @@ def _create_sqlite_error(
     exc = error_class(msg)
     exc.__cause__ = cast("BaseException", error)
     return exc
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
 
 
 driver_profile = build_profile()

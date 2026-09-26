@@ -290,6 +290,7 @@ include = [
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
   "sqlspec/adapters/**/core.py",                   # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py",         # All adapters type converters
+  "sqlspec/adapters/sqlite/driver.py",             # SQLite synchronous driver
   "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers
   "sqlspec/adapters/oracledb/_json_handlers.py",   # Native JSON inputtypehandler / outputtypehandler chain
   "sqlspec/adapters/oracledb/_uuid_handlers.py",   # UUID ↔ RAW(16) inputtypehandler / outputtypehandler chain

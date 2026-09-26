@@ -234,8 +234,8 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "reason": "Async pool runtime compiles without adapter driver exception-handler subclasses.",
     },
     "sqlspec/adapters/sqlite/driver.py": {
-        "classification": "prove_separately",
-        "reason": "Native compiled driver construction segfaulted in installed-wheel SqliteConfig session smoke; keep interpreted pending driver layout work.",
+        "classification": "compile_now",
+        "reason": "Synchronous SQLite driver compiles cleanly and passes installed-wheel session smoke.",
     },
     "sqlspec/adapters/aiosqlite/driver.py": {
         "classification": "prove_separately",
