@@ -1,14 +1,13 @@
-# pyright: reportPrivateUsage=false
 """Tests for Oracle extension storage clause generation."""
 
 from types import SimpleNamespace
 
-from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report
+from sqlspec.adapters.oracledb._storage import oracle_table_feature_report
 
 
 def test_oracle_configured_clauses_are_emitted() -> None:
     """Every configured storage option reaches the table DDL."""
-    report = _oracle_table_feature_report(
+    report = oracle_table_feature_report(
         SimpleNamespace(),
         "events",
         {
@@ -30,7 +29,7 @@ def test_oracle_configured_clauses_are_emitted() -> None:
 
 def test_oracle_unconfigured_options_emit_nothing() -> None:
     """Nothing is added to the DDL when no storage options are configured."""
-    report = _oracle_table_feature_report(
+    report = oracle_table_feature_report(
         SimpleNamespace(),
         "events",
         {},
@@ -46,7 +45,7 @@ def test_oracle_unconfigured_options_emit_nothing() -> None:
 
 def test_oracle_range_partitioning_uses_interval() -> None:
     """Range partitioning emits an INTERVAL so the server creates partitions on demand."""
-    report = _oracle_table_feature_report(
+    report = oracle_table_feature_report(
         SimpleNamespace(),
         "events",
         {"partitioning": {"strategy": "range", "interval": "month"}},

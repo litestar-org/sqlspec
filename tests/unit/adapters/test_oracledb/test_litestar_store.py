@@ -1,9 +1,9 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for Oracle Litestar session store behavior."""
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.litestar import OracleSyncStore
 
@@ -31,9 +31,15 @@ class _FakeConnection:
     def __init__(self, cursor: _FakeCursor) -> None:
         self._cursor = cursor
         self.commits = 0
+        self.created_lobs: list[tuple[Any, bytes]] = []
 
     def cursor(self) -> _FakeCursor:
         return self._cursor
+
+    def createlob(self, lob_type: Any, data: bytes) -> tuple[Any, bytes]:
+        lob = (lob_type, data)
+        self.created_lobs.append(lob)
+        return lob
 
     def commit(self) -> None:
         self.commits += 1
@@ -115,3 +121,23 @@ def test_oracle_litestar_store_interval_partition_on_expires_at() -> None:
     assert "TABLESPACE session_data" in sql
     assert "PARTITION BY RANGE (expires_at)" in sql
     assert "NUMTOYMINTERVAL(1, ''MONTH'')" in sql
+
+
+def test_oracle_sync_store_set_large_blob_single_statement() -> None:
+    """set with >32KB payload should execute a single MERGE with a temporary BLOB locator."""
+    cursor = _FakeCursor()
+    connection = _FakeConnection(cursor)
+    store = OracleSyncStore(cast("Any", _FakeOracleConfig(connection)))
+
+    large_payload = b"x" * 65536
+    store._set("session-large", large_payload, expires_in=timedelta(seconds=60))
+
+    assert len(cursor.executed) == 1
+    sql, parameters = cursor.executed[0]
+    assert "MERGE INTO oracle_sessions t" in sql
+    assert parameters is not None
+    assert parameters["session_id"] == "session-large"
+    assert connection.created_lobs == [(DB_TYPE_BLOB, large_payload)]
+    assert parameters["data"] == (DB_TYPE_BLOB, large_payload)
+    assert parameters["expires_in_seconds"] == 60
+    assert connection.commits == 1

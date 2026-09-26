@@ -6,14 +6,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
-from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report, _validate_oracle_identifier
+from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
-from sqlspec.adapters.oracledb.data_dictionary import (
-    JSONStorageType,
-    OracleVersionInfo,
-    _storage_type_from_version,
-    storage_type_from_version,
-)
+from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -417,7 +412,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             await cursor.execute(sql, params)
             await conn.commit()
 
-        return await self.get_session(app_name, user_id, session_id)  # type: ignore[return-value]
+        result = await self.get_session(app_name, user_id, session_id)
+        if result is None:
+            msg = "Failed to fetch created session"
+            raise RuntimeError(msg)
+        return result
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -993,7 +992,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         - Oracle 12c+: BLOB with IS JSON constraint
         - Oracle 11g and earlier: plain BLOB
         """
-        return _storage_type_from_version(await self._get_version_info())
+        return storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
@@ -1047,12 +1046,12 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             return cast("dict[str, Any]", _coerce_decimal_values(data))
 
         if isinstance(data, bytes):
-            return from_json(data)  # type: ignore[no-any-return]
+            return cast("dict[str, Any]", from_json(data))
 
         if isinstance(data, str):
-            return from_json(data)  # type: ignore[no-any-return]
+            return cast("dict[str, Any]", from_json(data))
 
-        return from_json(str(data))  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", from_json(str(data)))
 
     async def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
         """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
@@ -1374,7 +1373,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
-        """Create a new session."""
         """Create a new session.
 
         Args:
@@ -1427,7 +1425,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        """Get session by ID."""
         """Get session by ID.
 
         Args:
@@ -1485,7 +1482,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             raise
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        """Update session state."""
         """Update session state.
 
         Args:
@@ -1575,7 +1571,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             raise
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
-        """Delete session and associated events."""
         """Delete session and all associated events (cascade).
 
         Args:
@@ -1595,7 +1590,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
-        """Synchronous implementation of append_event."""
         sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -1632,7 +1626,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update session + scoped state."""
-        """Atomically create an event and update session + scoped state."""
         insert_sql = f"""
         INSERT INTO {self._events_table} (
             id, app_name, user_id, session_id, invocation_id, timestamp, event_data
@@ -1728,7 +1721,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         after_timestamp: "datetime | None" = None,
         limit: "int | None" = None,
     ) -> "list[StoredEvent]":
-        """Get events for a session."""
         """List events for a session ordered by timestamp.
 
         Args:
@@ -1848,7 +1840,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        """Synchronous implementation of get_app_state."""
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name"
 
         try:
@@ -1865,7 +1856,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        """Synchronous implementation of get_user_state."""
         sql = f"""
         SELECT state
         FROM {self._user_state_table}
@@ -1886,7 +1876,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        """Synchronous implementation of upsert_app_state."""
         sql = f"""
         MERGE INTO {self._app_state_table} target
         USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
@@ -1905,7 +1894,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        """Synchronous implementation of upsert_user_state."""
         sql = f"""
         MERGE INTO {self._user_state_table} target
         USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
@@ -1924,7 +1912,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        """Synchronous implementation of get_metadata."""
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = :key"
 
         try:
@@ -1941,7 +1928,6 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        """Synchronous implementation of set_metadata."""
         sql = f"""
         MERGE INTO {self._metadata_table} target
         USING (SELECT :key AS key, :value AS value FROM DUAL) source
@@ -1997,7 +1983,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         - Oracle 12c+: BLOB with IS JSON constraint
         - Oracle 11g and earlier: plain BLOB
         """
-        return _storage_type_from_version(self._get_version_info())
+        return storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
@@ -2049,12 +2035,12 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             return cast("dict[str, Any]", _coerce_decimal_values(data))
 
         if isinstance(data, bytes):
-            return from_json(data)  # type: ignore[no-any-return]
+            return cast("dict[str, Any]", from_json(data))
 
         if isinstance(data, str):
-            return from_json(data)  # type: ignore[no-any-return]
+            return cast("dict[str, Any]", from_json(data))
 
-        return from_json(str(data))  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", from_json(str(data)))
 
     def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
         """Deserialize JSON payloads from Oracle JSON/BLOB/LOB values."""
@@ -2973,7 +2959,7 @@ def _configure_oracle_adk_session_tables(store: Any, config: Any) -> None:
         "_metadata_table": str(adk_config.get("metadata_table") or ORACLE_DEFAULT_METADATA_TABLE),
     }
     for attribute_name, table_name in table_names.items():
-        _validate_oracle_identifier(table_name, "table name")
+        validate_oracle_identifier(table_name, "table name")
         setattr(store, attribute_name, table_name)
 
 
@@ -3019,13 +3005,14 @@ def _oracle_text_value(value: Any) -> str:
 
 
 def _extract_json_value(data: Any) -> "dict[str, Any]":
+    """Extract and coerce a dictionary from a database JSON payload."""
     if isinstance(data, dict):
         return cast("dict[str, Any]", coerce_decimal_values(data))
     if isinstance(data, bytes):
-        return from_json(data)  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", from_json(data))
     if isinstance(data, str):
-        return from_json(data)  # type: ignore[no-any-return]
-    return from_json(str(data))  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", from_json(data))
+    return cast("dict[str, Any]", from_json(str(data)))
 
 
 def _event_data_column_ddl(storage_type: JSONStorageType) -> str:
@@ -3069,7 +3056,7 @@ def _adk_config(config: Any) -> OracleADKConfig:
 def _adk_table_feature_clause(
     config: Any, table_kind: str, *, in_memory: bool, hash_partition_key: str, range_partition_key: str
 ) -> str:
-    report = _oracle_table_feature_report(
+    report = oracle_table_feature_report(
         config,
         "adk",
         _adk_config(config),

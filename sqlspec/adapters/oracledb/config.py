@@ -1,5 +1,6 @@
 """OracleDB database configuration with direct field-based configuration."""
 
+import contextlib
 from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 from ssl import TLSVersion
@@ -7,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
+from sqlspec.adapters.oracledb._json_handlers import register_json_handlers
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -23,8 +24,13 @@ from sqlspec.adapters.oracledb._typing import OraclePoolGetMode as PoolGetMode
 from sqlspec.adapters.oracledb._typing import OraclePurity as Purity
 from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
-from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
-from sqlspec.adapters.oracledb.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers
+from sqlspec.adapters.oracledb.core import (
+    apply_driver_features,
+    build_connection_config,
+    client_is_thin_mode,
+    default_statement_config,
+)
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, resolve_oracle_connection_major
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
@@ -43,12 +49,14 @@ from sqlspec.driver import (
 )
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
 
+logger = get_logger("sqlspec.adapters.oracledb.config")
 
 __all__ = (
     "OracleAsyncConfig",
@@ -278,6 +286,20 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._conn = None
 
 
+def _ensure_thick_mode(*, lib_dir: "str | None" = None, config_dir: "str | None" = None) -> None:
+    """Initialize python-oracledb thick mode automatically if requested."""
+    if not client_is_thin_mode():
+        return
+    init_oracle_client = getattr(oracledb, "init_oracle_client", None)
+    if callable(init_oracle_client):
+        kwargs: dict[str, Any] = {}
+        if lib_dir is not None:
+            kwargs["lib_dir"] = lib_dir
+        if config_dir is not None:
+            kwargs["config_dir"] = config_dir
+        init_oracle_client(**kwargs)
+
+
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
@@ -407,6 +429,17 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Create the actual connection pool."""
         config = dict(self.connection_config)
 
+        thick_mode = config.pop("thick_mode", False)
+        lib_dir = config.pop("lib_dir", None)
+        config_dir = config.get("config_dir")
+        if thick_mode or lib_dir is not None or config.get("soda_metadata_cache"):
+            _ensure_thick_mode(lib_dir=lib_dir, config_dir=config_dir)
+
+        if config.get("soda_metadata_cache") and client_is_thin_mode():
+            logger.warning(
+                "soda_metadata_cache requires python-oracledb Thick mode; SODA operations are unsupported in Thin mode."
+            )
+
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
 
@@ -420,13 +453,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         vector case) internally. UUID registration remains gated for
         backwards compatibility with existing user configurations.
 
-        Caches ``connection._sqlspec_oracle_major`` so JSON parameter coercion
-        can pick the right binding path (``DB_TYPE_JSON`` on 21c+, a textual
-        ``BLOB IS JSON`` locator on 12c-20c, and ``DB_TYPE_CLOB`` before 12c)
-        without re-querying server metadata on every bind. Caches
-        ``connection._sqlspec_vector_return_format`` so the vector output
-        handler can dispatch to ``numpy`` / ``list`` / ``array`` without
-        re-reading driver-feature defaults on every fetch.
+        Caches major version and vector return format on the connection when
+        dynamic attributes are supported.
 
         Args:
             connection: Oracle connection to initialize.
@@ -439,14 +467,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
 
-        # Stash detected major version on the connection so the JSON input handler
-        # can pick the right binding path without per-bind metadata queries.
-        setattr(
-            connection, "_sqlspec_oracle_major", resolve_oracle_connection_major(connection, self._oracle_version_cache)
-        )
-        # Stash the vector-read format so the VECTOR output handler can
-        # dispatch without re-reading driver-feature defaults on every fetch.
-        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
+        conn_any = cast("Any", connection)
+        with contextlib.suppress(AttributeError):
+            conn_any._sqlspec_oracle_major = resolve_oracle_connection_major(connection, self._oracle_version_cache)
+        with contextlib.suppress(AttributeError):
+            conn_any._sqlspec_vector_return_format = self.driver_features.get("vector_return_format")
 
         if self._pool_session_callback is not None:
             self._pool_session_callback(connection, tag)
@@ -463,7 +488,10 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
         if self.connection_instance:
-            self.connection_instance.close()
+            try:
+                self.connection_instance.close(force=True)
+            except TypeError:
+                self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()
 
@@ -478,7 +506,6 @@ class _OracleAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
 
 
-# mypyc annotations are unnecessary here because adapter config modules stay interpreted.
 class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncConnectionPool", OracleAsyncDriver]):
     """Configuration for Oracle asynchronous database connections."""
 
@@ -608,6 +635,17 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
 
+        thick_mode = config.pop("thick_mode", False)
+        lib_dir = config.pop("lib_dir", None)
+        config_dir = config.get("config_dir")
+        if thick_mode or lib_dir is not None or config.get("soda_metadata_cache"):
+            _ensure_thick_mode(lib_dir=lib_dir, config_dir=config_dir)
+
+        if config.get("soda_metadata_cache") and client_is_thin_mode():
+            logger.warning(
+                "soda_metadata_cache requires python-oracledb Thick mode; SODA operations are unsupported in Thin mode."
+            )
+
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
 
@@ -618,12 +656,8 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         Registers vector, JSON, and UUID handlers. Vector and JSON registration
         is unconditional — both gate any optional dependencies (NumPy in the
-        vector case) internally. Caches ``connection._sqlspec_oracle_major`` so
-        the JSON input handler can pick the right binding path on every bind
-        without round-tripping server metadata. Caches
-        ``connection._sqlspec_vector_return_format`` so the vector output
-        handler dispatches to the user-selected return type without re-reading
-        driver-feature defaults on every fetch.
+        vector case) internally. Caches major version and vector return format
+        on the connection when dynamic attributes are supported.
 
         Args:
             connection: Oracle async connection to initialize.
@@ -636,14 +670,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
 
-        # Stash detected major version on the connection so the JSON input handler
-        # can pick the right binding path without per-bind metadata queries.
-        setattr(
-            connection, "_sqlspec_oracle_major", resolve_oracle_connection_major(connection, self._oracle_version_cache)
-        )
-        # Stash the vector-read format so the VECTOR output handler can
-        # dispatch without re-reading driver-feature defaults on every fetch.
-        setattr(connection, "_sqlspec_vector_return_format", self.driver_features.get("vector_return_format"))
+        conn_any = cast("Any", connection)
+        with contextlib.suppress(AttributeError):
+            conn_any._sqlspec_oracle_major = resolve_oracle_connection_major(connection, self._oracle_version_cache)
+        with contextlib.suppress(AttributeError):
+            conn_any._sqlspec_vector_return_format = self.driver_features.get("vector_return_format")
 
         if self._pool_session_callback is not None:
             session_callback_result = self._pool_session_callback(connection, tag)
@@ -664,6 +695,9 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if self.connection_instance:
-            await self.connection_instance.close()
+            try:
+                await self.connection_instance.close(force=True)
+            except TypeError:
+                await self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()
