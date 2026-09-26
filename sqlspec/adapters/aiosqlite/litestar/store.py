@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.config import apply_extension_pragmas, extension_pragma_statements
+from sqlspec.adapters.aiosqlite.core import apply_extension_pragmas, extension_pragma_statements
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.sqlite._typing import SqliteConnection
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.adapters.sqlite.core import end_transaction as _end_transaction
+from sqlspec.adapters.sqlite.core import end_transaction
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -273,11 +273,11 @@ class SqliteConnectionPool:
             yield connection
         except Exception:
             with contextlib.suppress(Exception):
-                _end_transaction(connection, commit=False)
+                end_transaction(connection, commit=False)
             raise
         else:
             with contextlib.suppress(Exception):
-                _end_transaction(connection, commit=True)
+                end_transaction(connection, commit=True)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""

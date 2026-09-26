@@ -1,9 +1,7 @@
 """SQLite database configuration with thread-local connections."""
 
-import re
-from collections.abc import Mapping
 from os import PathLike
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
 
 from typing_extensions import NotRequired
 
@@ -13,7 +11,12 @@ from sqlspec.adapters.sqlite._typing import (
     SqliteCursor,
     SqliteSessionContext,
 )
-from sqlspec.adapters.sqlite.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.sqlite.core import (
+    apply_driver_features,
+    build_connection_config,
+    default_statement_config,
+    render_pragmas,
+)
 from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
 from sqlspec.adapters.sqlite.type_converter import register_type_handlers
@@ -25,7 +28,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -38,9 +41,6 @@ __all__ = (
     "SqliteDriverFeatures",
     "SqliteFunctionConfig",
     "SqliteWindowFunctionConfig",
-    "apply_extension_pragmas",
-    "extension_pragma_statements",
-    "render_pragmas",
 )
 
 logger = get_logger("sqlspec.adapters.sqlite")
@@ -164,8 +164,6 @@ class SqliteDriverFeatures(TypedDict):
     extensions: "NotRequired[Sequence[str]]"
 
 
-_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
 _ROW_FACTORY_LITERALS = frozenset({"dict", "row", "tuple"})
 _RUNTIME_FEATURE_KEYS = (
     "authorizer_callback",
@@ -180,12 +178,6 @@ _RUNTIME_FEATURE_KEYS = (
     "row_factory",
     "text_factory",
     "trace_callback",
-)
-_EXTENSION_PRAGMA_PROFILE = (
-    "PRAGMA foreign_keys = ON",
-    "PRAGMA cache_size = -64000",
-    "PRAGMA mmap_size = 30000000",
-    "PRAGMA journal_size_limit = 67108864",
 )
 
 
@@ -374,59 +366,6 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
         """Close the connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
-
-
-def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
-    extension_config = cast("dict[str, Any]", config.extension_config)
-    settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
-    profile = settings.get("pragma_profile", False)
-    if not isinstance(profile, bool):
-        msg = f"extension_config['{extension_name}']['pragma_profile'] must be a boolean"
-        raise ImproperConfigurationError(msg)
-    statements: list[str] = list(_EXTENSION_PRAGMA_PROFILE) if profile else []
-    overrides = settings.get("pragma_overrides")
-    if overrides is None:
-        return tuple(statements)
-    if not isinstance(overrides, Mapping):
-        msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
-        raise ImproperConfigurationError(msg)
-    try:
-        statements.extend(f"PRAGMA {name} = {value}" for name, value in render_pragmas(overrides))
-    except ImproperConfigurationError as exc:
-        msg = str(exc).replace(
-            "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
-        )
-        raise ImproperConfigurationError(msg) from exc
-    return tuple(statements)
-
-
-def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
-    for statement in statements:
-        connection.execute(statement)
-
-
-def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
-    rendered: list[tuple[str, str]] = []
-    for pragma_name, pragma_value in pragmas.items():
-        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
-            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
-            raise ImproperConfigurationError(msg)
-        if isinstance(pragma_value, bool):
-            rendered_value = "1" if pragma_value else "0"
-        elif isinstance(pragma_value, int):
-            rendered_value = str(pragma_value)
-        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
-            rendered_value = pragma_value
-        else:
-            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
-            raise ImproperConfigurationError(msg)
-        rendered.append((pragma_name, rendered_value))
-    return rendered
-
-
-_extension_pragma_statements = extension_pragma_statements
-_apply_extension_pragmas = apply_extension_pragmas
-_render_pragmas = render_pragmas
 
 
 def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:

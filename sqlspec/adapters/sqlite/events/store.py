@@ -4,7 +4,8 @@ from typing import Any
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.sqlite.config import SqliteConfig, apply_extension_pragmas, extension_pragma_statements
+from sqlspec.adapters.sqlite.config import SqliteConfig
+from sqlspec.adapters.sqlite.core import apply_extension_pragmas, extension_pragma_statements
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 

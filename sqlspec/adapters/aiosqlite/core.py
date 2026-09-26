@@ -1,7 +1,9 @@
 """AIOSQLite adapter compiled helpers."""
 
 import contextlib
+import re
 import sys
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -33,7 +35,7 @@ from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_co
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core.compiler import OperationType
@@ -43,6 +45,7 @@ _T = TypeVar("_T")
 __all__ = (
     "AiosqliteStreamSource",
     "apply_driver_features",
+    "apply_extension_pragmas",
     "build_connection_config",
     "build_insert_statement",
     "build_profile",
@@ -57,10 +60,12 @@ __all__ = (
     "execute_fetchall_with_metadata",
     "execute_many_on_worker_thread",
     "execute_script_on_worker_thread",
+    "extension_pragma_statements",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "render_pragmas",
     "require_python_version",
     "resolve_lastrowid",
     "resolve_rowcount",
@@ -70,6 +75,14 @@ __all__ = (
 
 _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
+_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_EXTENSION_PRAGMA_PROFILE = (
+    "PRAGMA foreign_keys = ON",
+    "PRAGMA cache_size = -64000",
+    "PRAGMA mmap_size = 30000000",
+    "PRAGMA journal_size_limit = 67108864",
+)
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
@@ -482,6 +495,54 @@ def apply_driver_features(
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
+
+
+def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
+    extension_config = cast("dict[str, Any]", config.extension_config)
+    settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
+    profile = settings.get("pragma_profile", False)
+    if not isinstance(profile, bool):
+        msg = f"extension_config['{extension_name}']['pragma_profile'] must be a boolean"
+        raise ImproperConfigurationError(msg)
+    statements: list[str] = list(_EXTENSION_PRAGMA_PROFILE) if profile else []
+    overrides = settings.get("pragma_overrides")
+    if overrides is None:
+        return tuple(statements)
+    if not isinstance(overrides, Mapping):
+        msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        statements.extend(f"PRAGMA {name} = {value}" for name, value in render_pragmas(overrides))
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace(
+            "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
+        )
+        raise ImproperConfigurationError(msg) from exc
+    return tuple(statements)
+
+
+async def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
+    for statement in statements:
+        await connection.execute(statement)
+
+
+def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+    rendered: list[tuple[str, str]] = []
+    for pragma_name, pragma_value in pragmas.items():
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
+            raise ImproperConfigurationError(msg)
+        if isinstance(pragma_value, bool):
+            rendered_value = "1" if pragma_value else "0"
+        elif isinstance(pragma_value, int):
+            rendered_value = str(pragma_value)
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+            rendered_value = pragma_value
+        else:
+            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
+            raise ImproperConfigurationError(msg)
+        rendered.append((pragma_name, rendered_value))
+    return rendered
 
 
 def _execute_fetchall_with_metadata(
