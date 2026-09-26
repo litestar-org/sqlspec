@@ -4,7 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import google.cloud.bigquery as bigquery_module
 from google.api_core import exceptions as bigquery_exceptions
@@ -12,7 +12,8 @@ from google.api_core.client_info import ClientInfo as BigQueryClientInfo
 from google.api_core.client_options import ClientOptions as BigQueryClientOptions
 from google.api_core.retry import Retry as BigQueryRetry
 from google.auth.credentials import Credentials as BigQueryCredentials
-from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter, StructQueryParameter
+from google.cloud.bigquery import ArrayQueryParameter, QueryJob, ScalarQueryParameter, StructQueryParameter
+from google.cloud.bigquery import Client as BigQueryConnection
 from google.cloud.bigquery import LoadJobConfig as BigQueryLoadJobConfig
 from google.cloud.bigquery import QueryJob as BigQueryQueryJob
 from google.cloud.bigquery import QueryJobConfig as BigQueryQueryJobConfig
@@ -25,24 +26,15 @@ from sqlspec.typing import import_optional
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
 
     from google.cloud import bigquery_storage as bigquery_storage_read_module
 
     from sqlspec.adapters.bigquery.driver import BigQueryDriver
     from sqlspec.core import StatementConfig
 
-    BigQueryConnection: TypeAlias = Client
-    BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter | StructQueryParameter
-    BigQueryStorageWriteModule: Any
-    BigQueryStorageWriteTypes: Any
-
-if not TYPE_CHECKING:
-    BigQueryConnection = Client
-    BigQueryParam = ArrayQueryParameter | ScalarQueryParameter | StructQueryParameter
-    bigquery_storage_read_module = import_optional("google.cloud.bigquery_storage")
-    BigQueryStorageWriteModule = import_optional("google.cloud.bigquery_storage_v1")
-    BigQueryStorageWriteTypes = import_optional("google.cloud.bigquery_storage_v1.types")
+BigQueryParam: TypeAlias = ArrayQueryParameter | ScalarQueryParameter | StructQueryParameter
+BigQueryStorageWriteModule: Any = import_optional("google.cloud.bigquery_storage_v1")
+BigQueryStorageWriteTypes: Any = import_optional("google.cloud.bigquery_storage_v1.types")
 
 __all__ = (
     "BIGQUERY_DEFAULT_RETRY",
@@ -139,3 +131,11 @@ class BigQuerySessionContext:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve optional driver modules only when a consumer requests them."""
+    if name == "bigquery_storage_read_module":
+        return import_optional("google.cloud.bigquery_storage")
+    msg = f"module {__name__!r} has no attribute {name!r}"
+    raise AttributeError(msg)
