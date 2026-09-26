@@ -13,7 +13,6 @@ from sqlspec.adapters.duckdb.core import (
     _build_storage_read_sql,
     _DuckDBStreamSource,
     _resolve_native_storage_target,
-    _restore_uuid_columns,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -37,6 +36,7 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
+from sqlspec.utils.type_guards import resolve_row_format
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -144,18 +144,16 @@ class DuckDBDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            arrow_table = cursor.to_arrow_table()
-            data = arrow_table.to_pylist()
-            _restore_uuid_columns(data, cursor.description)
-            column_names = list(arrow_table.column_names)
-
+            fetched_data = cursor.fetchall()
+            data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+            row_format = resolve_row_format(data)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
-                data_row_count=len(data),
+                data_row_count=row_count,
                 is_select_result=True,
-                row_format="dict",
+                row_format=row_format,
             )
 
         row_count = resolve_rowcount(cursor)
@@ -179,7 +177,18 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         if prepared_parameters:
             parameter_sets = cast("list[Any]", prepared_parameters)
-            cursor.executemany(sql, parameter_sets)
+            if not self._transaction_active:
+                cursor.execute("BEGIN TRANSACTION")
+                try:
+                    cursor.executemany(sql, parameter_sets)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        cursor.execute("ROLLBACK")
+                    raise
+                else:
+                    cursor.execute("COMMIT")
+            else:
+                cursor.executemany(sql, parameter_sets)
 
             row_count = len(parameter_sets) if statement.is_modifying_operation() else resolve_rowcount(cursor)
         else:
@@ -644,12 +653,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         first_row = rows[0]
 
         if isinstance(first_row, dict):
-            keys = column_names or list(first_row.keys())
             if any(not isinstance(row, dict) for row in rows):
                 return None
             import pyarrow as pa
 
-            return pa.table({key: [row.get(key) for row in rows] for key in keys})
+            table = pa.Table.from_pylist(rows)
+            if column_names and [f.name for f in table.schema] != column_names:
+                return table.select(column_names)
+            return table
 
         if isinstance(first_row, (list, tuple)):
             values = list(first_row)
@@ -659,7 +670,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 return None
             import pyarrow as pa
 
-            return pa.table({name: [row[index] for row in rows] for index, name in enumerate(column_names)})
+            return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
 
         return None
 

@@ -257,7 +257,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         try:
             if not prepared_parameters:
-                cursor._rowcount = 0  # pyright: ignore[reportPrivateUsage]
                 row_count = 0
             elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
                 parameter_count = len(prepared_parameters)
@@ -557,6 +556,113 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         return arrow_result
 
+    def adbc_execute_partitions(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        **kwargs: Any,
+    ) -> "tuple[list[bytes], Any]":
+        """Execute a distributed query and retrieve partition descriptors.
+
+        Args:
+            statement: SQL statement or query builder.
+            *parameters: Query parameters.
+            statement_config: Optional statement configuration.
+            **kwargs: Extra arguments.
+
+        Returns:
+            Tuple of (partition_descriptors, schema).
+        """
+        config = statement_config or self.statement_config
+        prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        exc_handler = self.handle_database_exceptions()
+        partitions: list[bytes] = []
+        schema: Any = None
+        with self.with_cursor(self.connection) as cursor, exc_handler:
+            if cursor is None:
+                msg = "Failed to create cursor"
+                raise DatabaseConnectionError(msg)
+            sql, driver_params = self._compiled_sql(prepared_statement, config)
+            execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, driver_params)
+            partitions, schema = cursor.adbc_execute_partitions(sql, parameters=execute_parameters or ())
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+        return partitions, schema
+
+    def adbc_read_partition(
+        self, partition: bytes, *, return_format: "ArrowReturnFormat" = "table", batch_size: int | None = None
+    ) -> "ArrowResult":
+        """Read a partition descriptor into an ArrowResult.
+
+        Args:
+            partition: Opaque partition descriptor bytes.
+            return_format: Arrow return format ('table', 'reader', 'batches').
+            batch_size: Optional chunk size for batch streaming.
+
+        Returns:
+            ArrowResult containing partition data.
+        """
+        self._require_capability("arrow_export_enabled")
+        ensure_pyarrow()
+        exc_handler = self.handle_database_exceptions()
+        arrow_result: ArrowResult | None = None
+
+        if return_format in ("reader", "batches"):
+            cursor_manager = self.with_cursor(self.connection)
+            reader: Any = None
+            cursor_obj: Any = None
+            with exc_handler:
+                cursor_obj = cursor_manager.__enter__()
+                try:
+                    cursor_obj.adbc_read_partition(partition)
+                    fetch_record_batch = getattr(cursor_obj, "fetch_record_batch", None)
+                    if fetch_record_batch is None:
+                        arrow_table = cursor_obj.fetch_arrow_table()
+                        cursor_manager.__exit__(None, None, None)
+                        cursor_obj = None
+                        arrow_result = build_arrow_result_from_table(
+                            SQL(""), arrow_table, return_format=return_format, batch_size=batch_size
+                        )
+                    else:
+                        reader = fetch_record_batch()
+                except Exception:
+                    if cursor_obj is not None:
+                        cursor_manager.__exit__(None, None, None)
+                        cursor_obj = None
+                    raise
+
+            if exc_handler.pending_exception is not None:
+                raise exc_handler.pending_exception from None
+            if arrow_result is not None:
+                return arrow_result
+            if reader is None or cursor_obj is None:
+                msg = "ADBC did not return an Arrow reader for partition."
+                raise SQLSpecError(msg)
+            return build_arrow_result_from_reader(
+                SQL(""),
+                arrow_reader_with_deferred_close(reader, cursor_obj.close),
+                return_format=return_format,
+                batch_size=batch_size,
+            )
+
+        with self.with_cursor(self.connection) as cursor, exc_handler:
+            if cursor is None:
+                msg = "Failed to create cursor"
+                raise DatabaseConnectionError(msg)
+            cursor.adbc_read_partition(partition)
+            arrow_table = cursor.fetch_arrow_table()
+            arrow_result = build_arrow_result_from_table(
+                SQL(""), arrow_table, return_format=return_format, batch_size=batch_size
+            )
+
+        if exc_handler.pending_exception is not None:
+            raise exc_handler.pending_exception from None
+        if arrow_result is None:
+            msg = "Unreachable"
+            raise RuntimeError(msg)  # pragma: no cover
+        return arrow_result
+
     def select_to_storage(
         self,
         statement: "Statement | QueryBuilder | SQL | str",
@@ -618,9 +724,11 @@ class AdbcDriver(SyncDriverAdapterBase):
             return self._storage_job(telemetry_payload, telemetry)
 
         arrow_table = self._coerce_arrow_table(source_data)
+        batch_chunksize = int(self.driver_features.get("batch_size") or 65536)
+        reader = arrow_table.to_reader(max_chunksize=batch_chunksize)
         exc_handler = self.handle_database_exceptions()
         with self.with_cursor(self.connection) as cursor, exc_handler:
-            cursor.adbc_ingest(table, arrow_table, mode=ingest_mode)
+            cursor.adbc_ingest(table, reader, mode=ingest_mode)
 
         if exc_handler.pending_exception is not None:
             raise exc_handler.pending_exception from None

@@ -238,12 +238,20 @@ def test_duckdb_config_unchanged_by_flightsql_branch() -> None:
 
 
 def test_adbc_connection_params_include_current_driver_manager_keys() -> None:
-    """Typed config should include current driver-manager keys and the legacy alias."""
+    """Typed config should include current driver-manager keys and FlightSQL options."""
     annotations = get_type_hints(AdbcConnectionParams, include_extras=True)
 
     assert "entrypoint" in annotations
     assert "profile" in annotations
     assert "adbc_driver_manager_entrypoint" in annotations
+    assert "grpc_max_message_size" in annotations
+    assert "fetch_timeout" in annotations
+    assert "tls_root_certs" in annotations
+    assert "mtls_cert_chain" in annotations
+    assert "mtls_private_key" in annotations
+    assert "with_cookie_middleware" in annotations
+    assert "session_options" in annotations
+    assert "headers" in annotations
 
 
 def test_legacy_entrypoint_alias_normalizes_to_entrypoint() -> None:
