@@ -113,10 +113,9 @@ def test_litestar_store_single_base64_roundtrip() -> None:
 
 def test_adk_memory_store_write_and_decode_json() -> None:
     """Verify SpannerSyncADKMemoryStore prepares JSON/null write params and unwraps JsonObject."""
-    from google.cloud.spanner_v1.data_types import JsonObject
-
     from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
     from sqlspec.adapters.spanner.adk import SpannerSyncADKMemoryStore
+    from sqlspec.adapters.spanner.type_converter import spanner_json
     from sqlspec.core import TypedParameter
 
     config = MagicMock(spec=SpannerSyncConfig)
@@ -158,5 +157,5 @@ def test_adk_memory_store_write_and_decode_json() -> None:
     )
     assert deleted == 5
 
-    decoded = store._decode_json(JsonObject({"k": "v"}))
+    decoded = store._decode_json(spanner_json({"k": "v"}))
     assert decoded == {"k": "v"}
