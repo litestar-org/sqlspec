@@ -1,32 +1,23 @@
-# pyright: reportAttributeAccessIssue=false
 """arrow-odbc adapter type definitions and mypyc-excluded context managers."""
 
 from typing import TYPE_CHECKING, Any
 
-import arrow_odbc as _arrow_odbc  # pyright: ignore[reportMissingImports]
+from arrow_odbc import BatchReader as ArrowOdbcBatchReader
+from arrow_odbc import Connection as ArrowOdbcConnection
+from arrow_odbc import Connection as ArrowOdbcRawCursor
 from arrow_odbc import Error as ArrowOdbcError
-from arrow_odbc import (
-    TextEncoding,  # pyright: ignore[reportMissingImports]
-    enable_odbc_connection_pooling,  # pyright: ignore[reportMissingImports]
-)
-from arrow_odbc import connect as arrow_odbc_connect  # pyright: ignore[reportMissingImports]
+from arrow_odbc import TextEncoding, enable_odbc_connection_pooling
+from arrow_odbc import connect as arrow_odbc_connect
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
 
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
     from sqlspec.core import StatementConfig
 
-    ArrowOdbcConnection: TypeAlias = _arrow_odbc.Connection
-    ArrowOdbcRawCursor: TypeAlias = _arrow_odbc.Connection
-
-if not TYPE_CHECKING:
-    ArrowOdbcConnection = _arrow_odbc.Connection
-    ArrowOdbcRawCursor = _arrow_odbc.Connection
-
 __all__ = (
+    "ArrowOdbcBatchReader",
     "ArrowOdbcConnection",
     "ArrowOdbcCursor",
     "ArrowOdbcError",
