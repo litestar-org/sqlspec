@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlspec.adapters.pymssql._typing import PymssqlCursor
 from sqlspec.adapters.pymssql.config import PymssqlConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -94,8 +95,11 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
         WHERE session_id = %s
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
-        with self._config.provide_session() as driver:
-            row = driver.select_one_or_none(sql, (key,))
+        with self._config.provide_connection() as conn:
+            with PymssqlCursor(conn) as cursor:
+                cursor.execute(sql, (key,))
+                row = cursor.fetchone()
+
             if row is None:
                 return None
 
@@ -103,15 +107,16 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
             if renew_for is not None and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
-                    driver.execute(
-                        f"""
-                        UPDATE {self._table_name}
-                        SET expires_at = %s, updated_at = SYSUTCDATETIME()
-                        WHERE session_id = %s
-                        """,
-                        (new_expires_at, key),
-                    )
-                    driver.commit()
+                    with PymssqlCursor(conn) as update_cursor:
+                        update_cursor.execute(
+                            f"""
+                            UPDATE {self._table_name}
+                            SET expires_at = %s, updated_at = SYSUTCDATETIME()
+                            WHERE session_id = %s
+                            """,
+                            (new_expires_at, key),
+                        )
+                    conn.commit()
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
@@ -131,19 +136,19 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
             INSERT (session_id, data, expires_at)
             VALUES (src.session_id, src.data, src.expires_at);
         """
-        with self._config.provide_session() as driver:
-            driver.execute(sql, (key, data, expires_at))
-            driver.commit()
+        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+            cursor.execute(sql, (key, data, expires_at))
+            conn.commit()
 
     def _delete(self, key: str) -> None:
-        with self._config.provide_session() as driver:
-            driver.execute(f"DELETE FROM {self._table_name} WHERE session_id = %s", (key,))
-            driver.commit()
+        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+            cursor.execute(f"DELETE FROM {self._table_name} WHERE session_id = %s", (key,))
+            conn.commit()
 
     def _delete_all(self) -> None:
-        with self._config.provide_session() as driver:
-            driver.execute(f"TRUNCATE TABLE {self._table_name}")
-            driver.commit()
+        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+            cursor.execute(f"TRUNCATE TABLE {self._table_name}")
+            conn.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
@@ -153,12 +158,14 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
         WHERE session_id = %s
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
-        with self._config.provide_session() as driver:
-            return driver.select_one_or_none(sql, (key,)) is not None
+        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+            cursor.execute(sql, (key,))
+            return cursor.fetchone() is not None
 
     def _expires_in(self, key: str) -> int | None:
-        with self._config.provide_session() as driver:
-            row = driver.select_one_or_none(f"SELECT expires_at FROM {self._table_name} WHERE session_id = %s", (key,))
+        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+            cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = %s", (key,))
+            row = cursor.fetchone()
 
         if row is None:
             return None
@@ -174,10 +181,10 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
         WHERE expires_at IS NOT NULL
           AND expires_at < SYSUTCDATETIME()
         """
-        with self._config.provide_session() as driver:
-            res = driver.execute(sql)
-            driver.commit()
-            count = res.rows_affected
+        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+            cursor.execute(sql)
+            count = int(getattr(cursor, "rowcount", 0) or 0)
+            conn.commit()
         if count > 0:
             self._log_delete_expired(count)
         return count

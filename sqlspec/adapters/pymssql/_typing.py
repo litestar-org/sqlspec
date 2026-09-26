@@ -5,8 +5,6 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-from collections.abc import Callable
-from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 import pymssql as _pymssql
@@ -14,15 +12,17 @@ from pymssql import Connection as _PymssqlConnection
 from pymssql import Cursor as _PymssqlRawCursor
 from pymssql import Error as PymssqlError
 
-from sqlspec.adapters.pymssql.driver import PymssqlDriver
-from sqlspec.core import StatementConfig
-
 PYMSSQL_MODULE = _pymssql
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
 
     from pymssql._pymssql import QueryParams as PymssqlQueryParams
+
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+    from sqlspec.core import StatementConfig
 
     PymssqlConnection: TypeAlias = _PymssqlConnection
     PymssqlRawCursor: TypeAlias = _PymssqlRawCursor
@@ -48,11 +48,11 @@ class PymssqlCursor:
 
     __slots__ = ("connection", "cursor")
 
-    def __init__(self, connection: PymssqlConnection) -> None:
+    def __init__(self, connection: "PymssqlConnection") -> None:
         self.connection = connection
         self.cursor: PymssqlRawCursor | None = None
 
-    def __enter__(self) -> PymssqlRawCursor:
+    def __enter__(self) -> "PymssqlRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -77,11 +77,11 @@ class PymssqlSessionContext:
 
     def __init__(
         self,
-        acquire_connection: Callable[[], Any],
-        release_connection: Callable[..., Any],
-        statement_config: StatementConfig,
-        driver_features: dict[str, Any],
-        prepare_driver: Callable[[PymssqlDriver], PymssqlDriver],
+        acquire_connection: "Callable[[], Any]",
+        release_connection: "Callable[..., Any]",
+        statement_config: "StatementConfig",
+        driver_features: "dict[str, Any]",
+        prepare_driver: "Callable[[PymssqlDriver], PymssqlDriver]",
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
@@ -91,7 +91,7 @@ class PymssqlSessionContext:
         self._connection: Any = None
         self._driver: PymssqlDriver | None = None
 
-    def __enter__(self) -> PymssqlDriver:
+    def __enter__(self) -> "PymssqlDriver":
         from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
         self._connection = self._acquire_connection()
@@ -101,8 +101,8 @@ class PymssqlSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> bool | None:
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> "bool | None":
         if exc_type is not None and self._driver is not None:
             with contextlib.suppress(Exception):
                 self._driver.rollback()

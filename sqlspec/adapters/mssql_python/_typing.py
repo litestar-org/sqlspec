@@ -1,8 +1,6 @@
 """mssql-python adapter type definitions and mypyc-excluded context managers."""
 
 import contextlib
-from collections.abc import Callable
-from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 import mssql_python as _mssql_python
@@ -10,13 +8,15 @@ from mssql_python import Error as MssqlPythonError
 from mssql_python.connection import Connection, TokenProvider
 from mssql_python.cursor import Cursor
 
-from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
-from sqlspec.core import StatementConfig
-
 MSSQL_PYTHON_MODULE: Any = _mssql_python
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from types import TracebackType
     from typing import TypeAlias
+
+    from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
+    from sqlspec.core import StatementConfig
 
     MssqlPythonConnection: TypeAlias = Connection
     MssqlPythonRawCursor: TypeAlias = Cursor
@@ -41,11 +41,11 @@ class MssqlPythonCursor:
 
     __slots__ = ("connection", "cursor")
 
-    def __init__(self, connection: MssqlPythonConnection) -> None:
+    def __init__(self, connection: "MssqlPythonConnection") -> None:
         self.connection = connection
         self.cursor: MssqlPythonRawCursor | None = None
 
-    def __enter__(self) -> MssqlPythonRawCursor:
+    def __enter__(self) -> "MssqlPythonRawCursor":
         self.cursor = self.connection.cursor()
         return self.cursor
 
@@ -70,11 +70,11 @@ class MssqlPythonSessionContext:
 
     def __init__(
         self,
-        acquire_connection: Callable[[], MssqlPythonConnection],
-        release_connection: Callable[..., Any],
-        statement_config: StatementConfig,
-        driver_features: dict[str, Any],
-        prepare_driver: Callable[[MssqlPythonDriver], MssqlPythonDriver],
+        acquire_connection: "Callable[[], MssqlPythonConnection]",
+        release_connection: "Callable[..., Any]",
+        statement_config: "StatementConfig",
+        driver_features: "dict[str, Any]",
+        prepare_driver: "Callable[[MssqlPythonDriver], MssqlPythonDriver]",
     ) -> None:
         self._acquire_connection = acquire_connection
         self._release_connection = release_connection
@@ -84,7 +84,7 @@ class MssqlPythonSessionContext:
         self._connection: MssqlPythonConnection | None = None
         self._driver: MssqlPythonDriver | None = None
 
-    def __enter__(self) -> MssqlPythonDriver:
+    def __enter__(self) -> "MssqlPythonDriver":
         from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 
         self._connection = self._acquire_connection()
@@ -94,8 +94,8 @@ class MssqlPythonSessionContext:
         return self._prepare_driver(self._driver)
 
     def __exit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> bool | None:
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> "bool | None":
         if exc_type is not None and self._driver is not None:
             with contextlib.suppress(Exception):
                 self._driver.rollback()

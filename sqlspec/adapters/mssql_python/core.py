@@ -41,7 +41,7 @@ __all__ = (
     "materialize_tuple_rows",
 )
 
-_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)(?:,|\))")
+_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 _VERSION_PART_COUNT: Final[int] = 3
@@ -97,9 +97,13 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 
 
 def extract_error_number(exc: BaseException | None) -> int | None:
-    """Extract numeric SQL Server error code using fast string parsing before regex fallback."""
+    """Extract numeric SQL Server error code using fast attribute/string parsing before regex fallback."""
     if exc is None:
         return None
+    for attr in ("number", "error_code", "errno"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and not isinstance(val, bool):
+            return val
     ddbc_err = getattr(exc, "ddbc_error", None)
     if isinstance(ddbc_err, str) and ddbc_err.startswith("("):
         end_idx = ddbc_err.find(",")
@@ -112,25 +116,31 @@ def extract_error_number(exc: BaseException | None) -> int | None:
             except ValueError:
                 pass
 
-    if exc.args and isinstance(exc.args[0], str):
-        msg = exc.args[0]
-        start_idx = msg.rfind("(")
-        if start_idx != -1:
-            end_idx = msg.find(",", start_idx)
-            if end_idx == -1:
-                end_idx = msg.find(")", start_idx)
-            if end_idx != -1:
-                num_str = msg[start_idx + 1 : end_idx].strip()
-                try:
-                    return int(num_str)
-                except ValueError:
-                    pass
+    if exc.args:
+        first_arg = exc.args[0]
+        if isinstance(first_arg, int) and not isinstance(first_arg, bool):
+            return first_arg
+        if isinstance(first_arg, str):
+            msg = first_arg
+            start_idx = msg.rfind("(")
+            if start_idx != -1:
+                end_idx = msg.find(",", start_idx)
+                if end_idx == -1:
+                    end_idx = msg.find(")", start_idx)
+                if end_idx != -1:
+                    num_str = msg[start_idx + 1 : end_idx].strip()
+                    try:
+                        return int(num_str)
+                    except ValueError:
+                        pass
 
     matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
     if not matches:
         return None
+    last_match = matches[-1]
+    raw_num = last_match[0] or last_match[1] if isinstance(last_match, tuple) else last_match
     try:
-        return int(matches[-1])
+        return int(raw_num)
     except ValueError:
         return None
 

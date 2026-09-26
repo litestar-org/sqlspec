@@ -1,13 +1,14 @@
 """Type converters for mssql-python parameter binding."""
 
 from collections.abc import Callable
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from uuid import UUID
-
-import pyarrow as pa
 
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.serializers import from_json, to_json
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 __all__ = ("MssqlPythonTypeConverter", "mssql_type_to_arrow")
 
@@ -73,7 +74,7 @@ class MssqlPythonTypeConverter:
         return value
 
 
-def mssql_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: int | None = None) -> pa.DataType:
+def mssql_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: int | None = None) -> "pa.DataType":
     """Resolve a T-SQL type name to an Arrow data type."""
     normalized_type = sql_type.lower().split("(", 1)[0].strip()
     if normalized_type == "vector":
@@ -90,7 +91,7 @@ def mssql_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: i
     return _arrow_type(name, args, kwargs)
 
 
-def _arrow_type(name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> pa.DataType:
+def _arrow_type(name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> "pa.DataType":
     ensure_pyarrow()
     import pyarrow as pa
 

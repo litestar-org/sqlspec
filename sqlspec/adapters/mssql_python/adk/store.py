@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.mssql_python._typing import MssqlPythonError
+from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor, MssqlPythonError
 from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 from sqlspec.adapters.mssql_python.core import extract_error_number
 from sqlspec.config import ADKConfig
@@ -191,20 +191,21 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         OUTPUT inserted.id, inserted.app_name, inserted.user_id, inserted.state, inserted.create_time, inserted.update_time
         WHERE app_name = ? AND user_id = ? AND id = ?
         """
-        with self._config.provide_session() as driver:
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             try:
-                row = driver.select_one_or_none(update_sql, (to_json(state), app_name, user_id, session_id))
+                cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+                row = cursor.fetchone()
                 if row is None:
                     _raise_session_not_found(session_id)
-                driver.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
+                cursor.execute(_insert_event_sql(self._events_table), _event_insert_params(event_record))
                 if app_state is not None:
-                    driver.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state)))
+                    cursor.execute(self._upsert_app_state_sql(), (app_name, to_json(app_state)))
                 if user_state is not None:
-                    driver.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
+                    cursor.execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(user_state)))
             except Exception:
-                driver.rollback()
+                conn.rollback()
                 raise
-            driver.commit()
+            conn.commit()
         return _session_record_from_row(row)
 
     def get_events(
@@ -384,22 +385,24 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         return self._json_column_type
 
     def _execute_fetchone(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> Any | None:
-        with self._config.provide_session() as driver:
-            row = driver.select_one_or_none(sql, params)
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
             if commit:
-                driver.commit()
+                conn.commit()
             return row
 
     def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, params)
+            return list(cursor.fetchall())
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
-        with self._config.provide_session() as driver:
-            res = driver.execute(sql, params)
-            rowcount = res.rows_affected
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, params)
+            rowcount = _cursor_rowcount(cursor)
             if commit:
-                driver.commit()
+                conn.commit()
             return rowcount
 
 
@@ -451,7 +454,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         );
         """
         inserted = 0
-        with self._config.provide_session() as driver:
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             for entry in entries:
                 params: tuple[Any, ...] = (
                     entry["id"],
@@ -468,9 +471,9 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
                 )
                 if self._owner_id_column_name:
                     params = (*params, owner_id)
-                res = driver.execute(sql, (*params, entry["event_id"]))
-                inserted += res.rows_affected
-            driver.commit()
+                cursor.execute(sql, (*params, entry["event_id"]))
+                inserted += _cursor_rowcount(cursor)
+            conn.commit()
         return inserted
 
     def search_entries(
@@ -563,16 +566,22 @@ END;
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
 
     def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
-        with self._config.provide_session() as driver:
-            return driver.select(sql, params)
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, params)
+            return list(cursor.fetchall())
 
     def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
-        with self._config.provide_session() as driver:
-            res = driver.execute(sql, params)
-            rowcount = res.rows_affected
+        with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
+            cursor.execute(sql, params)
+            rowcount = _cursor_rowcount(cursor)
             if commit:
-                driver.commit()
+                conn.commit()
             return rowcount
+
+
+def _cursor_rowcount(cursor: Any) -> int:
+    rowcount = getattr(cursor, "rowcount", 0)
+    return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
 
 
 def _adk_config(config: Any) -> MssqlPythonADKConfig:
