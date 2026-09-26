@@ -3,12 +3,10 @@
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import mssql_python as _mssql_python
+import mssql_python as mssql_python_module
 from mssql_python import Error as MssqlPythonError
 from mssql_python.connection import Connection, TokenProvider
 from mssql_python.cursor import Cursor
-
-MSSQL_PYTHON_MODULE: Any = _mssql_python
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -26,13 +24,13 @@ if not TYPE_CHECKING:
     MssqlPythonRawCursor = Cursor
 
 __all__ = (
-    "MSSQL_PYTHON_MODULE",
     "MssqlPythonConnection",
     "MssqlPythonCursor",
     "MssqlPythonError",
     "MssqlPythonRawCursor",
     "MssqlPythonSessionContext",
     "TokenProvider",
+    "mssql_python_module",
 )
 
 

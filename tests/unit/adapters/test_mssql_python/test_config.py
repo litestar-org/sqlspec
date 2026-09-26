@@ -55,8 +55,8 @@ def test_connection_pool_configures_mssql_python_pooling(monkeypatch: pytest.Mon
         calls.append(("connect", (connection_string,), kwargs))
         return connection
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", fake_connect)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", fake_pooling)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.connect", fake_connect)
 
     pool = MssqlPythonConnectionPool(
         connection_string="Server=localhost;", connect_kwargs={"timeout": 5}, max_size=7, idle_timeout=30, enabled=True
@@ -79,7 +79,7 @@ def test_config_create_pool_splits_connection_and_pool_options(monkeypatch: pyte
     def fake_pooling(**kwargs: Any) -> None:
         pooling_calls.append(kwargs)
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", fake_pooling)
 
     config = MssqlPythonConfig(
         connection_config={
@@ -101,7 +101,7 @@ def test_config_create_pool_splits_connection_and_pool_options(monkeypatch: pyte
 def test_config_connection_string_with_discrete_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """MssqlPythonConfig should merge discrete database overrides over connection_string."""
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", lambda **kw: None)
 
     config = MssqlPythonConfig(
         connection_config={
@@ -161,7 +161,7 @@ def test_config_create_pool_normalizes_current_odbc_aliases(monkeypatch: pytest.
     def fake_pooling(**kwargs: Any) -> None:
         pooling_calls.append(kwargs)
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", fake_pooling)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", fake_pooling)
 
     config = MssqlPythonConfig(
         connection_config={
@@ -224,9 +224,9 @@ def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest
     seen: list[DummyConnection] = []
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
 
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: connection
+        "sqlspec.adapters.mssql_python.pool.mssql_python_module.connect", lambda *_args, **_kwargs: connection
     )
 
     config = MssqlPythonConfig(
@@ -242,9 +242,9 @@ def test_config_connection_hook_runs_for_session_connections(monkeypatch: pytest
 def test_second_pool_warns_on_different_params(monkeypatch: pytest.MonkeyPatch) -> None:
     """A second pool with different process-wide pooling params emits one warning."""
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
+        "sqlspec.adapters.mssql_python.pool.mssql_python_module.connect", lambda *_args, **_kwargs: DummyConnection()
     )
 
     MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
@@ -263,9 +263,9 @@ def test_second_pool_warns_on_different_params(monkeypatch: pytest.MonkeyPatch) 
 def test_second_pool_same_params_no_warn(monkeypatch: pytest.MonkeyPatch) -> None:
     """A second pool with identical process-wide pooling params emits no warning."""
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", lambda **_: None)
     monkeypatch.setattr(
-        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_args, **_kwargs: DummyConnection()
+        "sqlspec.adapters.mssql_python.pool.mssql_python_module.connect", lambda *_args, **_kwargs: DummyConnection()
     )
 
     MssqlPythonConnectionPool(connection_string="Server=srv1;", max_size=10, idle_timeout=60, enabled=True)
@@ -357,7 +357,7 @@ def test_pool_close_calls_ddbc_close_pooling(monkeypatch: pytest.MonkeyPatch) ->
         def close_pooling() -> None:
             closed_pooling.append(True)
 
-    monkeypatch.setattr(_mssql_pool.MSSQL_PYTHON_MODULE, "ddbc_bindings", FakeBindings, raising=False)
+    monkeypatch.setattr(_mssql_pool.mssql_python_module, "ddbc_bindings", FakeBindings, raising=False)
     pool = MssqlPythonConnectionPool(connection_string="Server=localhost;")
     pool.close(close_driver_pooling=True)
     assert closed_pooling == [True]
@@ -366,7 +366,7 @@ def test_pool_close_calls_ddbc_close_pooling(monkeypatch: pytest.MonkeyPatch) ->
 def test_pool_suppresses_warning_when_params_match(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pool reconfiguration should not warn if params are identical to previous."""
     monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", (10, 60, True))
-    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.mssql_python_module.pooling", lambda **kw: None)
 
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")

@@ -122,11 +122,11 @@ def test_pymssql_runtime_aliases_resolve_to_installed_classes() -> None:
     """pymssql public runtime aliases should expose installed pymssql classes."""
     pymssql = pytest.importorskip("pymssql")
     from sqlspec.adapters.pymssql import PymssqlConnection as PublicPymssqlConnection
-    from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlConnection, PymssqlRawCursor
+    from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor, pymssql_module
 
     namespace = PymssqlConfig().get_signature_namespace()
 
-    assert PYMSSQL_MODULE is pymssql
+    assert pymssql_module is pymssql
     assert PymssqlConnection is pymssql.Connection
     assert PublicPymssqlConnection is pymssql.Connection
     assert PymssqlRawCursor is pymssql.Cursor
