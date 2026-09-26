@@ -198,6 +198,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "alloydb_instance_uri",
         "enable_alloydb_iam_auth",
         "alloydb_ip_type",
+        "null_pool",
     ),
     "pymssql": ("json_serializer", "json_deserializer", "on_connection_create", "enable_events", "events_backend"),
     "pymysql": (

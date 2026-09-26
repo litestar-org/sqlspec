@@ -25,6 +25,8 @@ class _ExtensionQueryResult:
 
 
 class _ExtensionConnection:
+    __slots__ = ("_extension_names", "queries")
+
     def __init__(self, extension_names: set[str]) -> None:
         self._extension_names = extension_names
         self.queries: list[tuple[str, list[list[str]]]] = []
@@ -162,6 +164,30 @@ async def test_psqlpy_enable_pg_textsearch_detects_extension_and_promotes_dialec
     assert connection.queries[0][1] == [["pg_textsearch"]]
     assert config.pg_textsearch_available is True
     assert config.statement_config.dialect == "pg_textsearch"
+
+
+@pytest.mark.anyio
+async def test_psqlpy_ensure_connection_supports_slotted_connections_and_calls_hook_once() -> None:
+    """_ensure_connection should track connection IDs without setting attributes on slotted connections."""
+    hook_calls: list[object] = []
+
+    async def on_connection_create(conn: PsqlpyConnection) -> None:
+        hook_calls.append(conn)
+
+    config = PsqlpyConfig(
+        driver_features={
+            "enable_pgvector": False,
+            "enable_paradedb": False,
+            "enable_pg_textsearch": False,
+            "on_connection_create": on_connection_create,
+        }
+    )
+    connection = _ExtensionConnection(set())
+
+    await config._ensure_connection(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
+    await config._ensure_connection(cast("PsqlpyConnection", connection))  # pyright: ignore[reportPrivateUsage]
+
+    assert hook_calls == [connection]
 
 
 @pytest.mark.anyio
