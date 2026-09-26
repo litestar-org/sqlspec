@@ -229,6 +229,13 @@ def test_driver_profile_name_matches_registry_key() -> None:
     assert driver_profile.name == "asyncmy"
 
 
+def test_stmt_cache_size_is_opt_in_by_default() -> None:
+    """stmt_cache_size must remain opt-in so unbuffered cursors (SSCursor/SSDictCursor) work by default."""
+    config = AsyncmyConfig(connection_config={"host": "localhost"})
+
+    assert "stmt_cache_size" not in config.connection_config
+
+
 def test_stmt_cache_size_reaches_the_connection_kwargs() -> None:
     """A declared cache size must survive the pool/connection split."""
     config = AsyncmyConfig(connection_config={"host": "localhost", "stmt_cache_size": 64, "maxsize": 4})

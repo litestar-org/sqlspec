@@ -6,23 +6,19 @@ compilation to avoid ABI boundary issues.
 
 import contextlib
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-import asyncmy as _asyncmy  # pyright: ignore
-from asyncmy import Connection  # pyright: ignore
-from asyncmy import errors as _asyncmy_errors  # pyright: ignore
-from asyncmy.connection import LoadLocalFile as _LoadLocalFile  # pyright: ignore
-from asyncmy.connection import MySQLResult as _AsyncmyResult  # pyright: ignore
-from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
-from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
-from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
-from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
-from asyncmy.cursors import SSCursor as AsyncmySSCursor
-from asyncmy.errors import ProgrammingError as AsyncmyProgrammingError
-from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
-from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper  # pyright: ignore
+import asyncmy
+import asyncmy.constants
+import asyncmy.cursors
+import asyncmy.errors
+import asyncmy.pool
+from asyncmy.connection import LoadLocalFile, MySQLResult
+from asyncmy.protocol import LoadLocalPacketWrapper
 
 from sqlspec.exceptions import SQLSpecError
+
+ASYNCMY_INSERT_VALUES_PATTERN = asyncmy.cursors.RE_INSERT_VALUES
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -50,23 +46,27 @@ if TYPE_CHECKING:
         JSON: int
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
-    AsyncmyDictCursor: TypeAlias = _AsyncmyDictCursor
-    AsyncmyError: TypeAlias = _asyncmy_errors.Error
+    AsyncmyDictCursor: TypeAlias = asyncmy.cursors.DictCursor
+    AsyncmyError: TypeAlias = asyncmy.errors.Error
     AsyncmyFieldType: TypeAlias = AsyncmyFieldTypeProtocol
-    AsyncmyMySQLError: TypeAlias = _asyncmy_errors.MySQLError
+    AsyncmyMySQLError: TypeAlias = asyncmy.errors.MySQLError
     AsyncmyModule: TypeAlias = AsyncmyModuleProtocol
-    AsyncmyPool: TypeAlias = _AsyncmyPool
-    AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
+    AsyncmyPool: TypeAlias = asyncmy.pool.Pool
+    AsyncmyProgrammingError: TypeAlias = asyncmy.errors.ProgrammingError
+    AsyncmyRawCursor: TypeAlias = asyncmy.cursors.Cursor
+    AsyncmySSCursor: TypeAlias = asyncmy.cursors.SSCursor
 
 if not TYPE_CHECKING:
-    AsyncmyConnection = Connection
-    AsyncmyDictCursor = _AsyncmyDictCursor
-    AsyncmyError = _asyncmy_errors.Error
-    AsyncmyFieldType = _ASYNCMY_FIELD_TYPE
-    AsyncmyMySQLError = _asyncmy_errors.MySQLError
-    AsyncmyModule = _asyncmy
-    AsyncmyPool = _AsyncmyPool
-    AsyncmyRawCursor = _AsyncmyCursor
+    AsyncmyConnection = asyncmy.Connection
+    AsyncmyDictCursor = asyncmy.cursors.DictCursor
+    AsyncmyError = asyncmy.errors.Error
+    AsyncmyFieldType = asyncmy.constants.FIELD_TYPE
+    AsyncmyMySQLError = asyncmy.errors.MySQLError
+    AsyncmyModule = asyncmy
+    AsyncmyPool = asyncmy.pool.Pool
+    AsyncmyProgrammingError = asyncmy.errors.ProgrammingError
+    AsyncmyRawCursor = asyncmy.cursors.Cursor
+    AsyncmySSCursor = asyncmy.cursors.SSCursor
 
 __all__ = (
     "ASYNCMY_INSERT_VALUES_PATTERN",
@@ -179,38 +179,41 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
     previous = raw.__dict__.get("_read_query_result", missing)
 
     async def read_result(unbuffered: bool = False) -> None:
-        raw._result = None
+        setattr(raw, "_result", None)
         result = _AsyncmyLocalInfileResult(raw, filename)
         if unbuffered:
             try:
-                await result.init_unbuffered_query()  # type: ignore[no-untyped-call]
+                init_fn = cast("Callable[[], Awaitable[None]]", result.init_unbuffered_query)
+                await init_fn()
             except BaseException:
-                result.unbuffered_active = False
-                result.connection = None
+                setattr(result, "unbuffered_active", False)
+                setattr(result, "connection", None)
                 raise
         else:
-            await result.read()  # type: ignore[no-untyped-call]
-        raw._result = result
-        raw._affected_rows = result.affected_rows
+            read_fn = cast("Callable[[], Awaitable[None]]", result.read)
+            await read_fn()
+        setattr(raw, "_result", result)
+        setattr(raw, "_affected_rows", result.affected_rows)
         if result.server_status:
-            raw.server_status = result.server_status
+            setattr(raw, "server_status", result.server_status)
 
-    raw._read_query_result = read_result
+    setattr(raw, "_read_query_result", read_result)
     try:
         yield
     except BaseException:
         with contextlib.suppress(Exception):
             raw.close()
-        raw._connected = False
+        setattr(raw, "_connected", False)
         raise
     finally:
         if previous is missing:
-            del raw._read_query_result
+            if "_read_query_result" in raw.__dict__:
+                del raw._read_query_result
         else:
-            raw._read_query_result = previous
+            setattr(raw, "_read_query_result", previous)
 
 
-class _AsyncmyLocalInfileResult(_AsyncmyResult):
+class _AsyncmyLocalInfileResult(MySQLResult):
     """Normalize the upstream filename handoff while retaining its native sender."""
 
     __slots__ = ("_filename",)
@@ -220,13 +223,17 @@ class _AsyncmyLocalInfileResult(_AsyncmyResult):
         self._filename = filename
 
     async def _read_load_local_packet(self, first_packet: Any) -> None:
-        request = _LoadLocalPacketWrapper(first_packet).filename
+        request = LoadLocalPacketWrapper(first_packet).filename
         if not self.connection._local_infile or os.fsdecode(request) != self._filename:
             msg = "MySQL requested an unexpected LOCAL INFILE payload."
             raise SQLSpecError(msg)
-        await _LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
+        sender = LoadLocalFile(self._filename, self.connection)
+        send_data = cast("Callable[[], Awaitable[None]]", sender.send_data)
+        await send_data()
         packet = await self.connection.read_packet()
         if not packet.is_ok_packet():
             msg = "MySQL did not acknowledge the LOCAL INFILE payload."
             raise SQLSpecError(msg)
-        self._read_ok_packet(packet)  # type: ignore[attr-defined]
+        read_ok_fn: Callable[[Any], None] | None = getattr(self, "_read_ok_packet", None)
+        if read_ok_fn is not None:
+            read_ok_fn(packet)
