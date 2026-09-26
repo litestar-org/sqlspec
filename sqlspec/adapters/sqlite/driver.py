@@ -248,7 +248,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         no-ops, so a manually started transaction has to be ended with an
         explicit statement.
         """
-        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and self.connection.autocommit is True
+        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and getattr(self.connection, "autocommit", None) is True
 
     def commit(self) -> None:
         """Commit the current transaction.
