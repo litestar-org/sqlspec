@@ -3,11 +3,10 @@
 import contextlib
 import re
 from collections.abc import Iterable, Sized
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlspec.adapters.oracledb._json_handlers import is_json_payload
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
-from sqlspec.adapters.oracledb._storage import _oracle_table_feature_report, _validate_oracle_identifier
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
 from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
@@ -60,7 +59,6 @@ __all__ = (
     "DB_TYPE_BLOB",
     "DB_TYPE_CLOB",
     "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
-    "ORACLE_RETRIABLE_ERROR_CODES",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
     "OracleAsyncStreamSource",
     "OracleBlob",
@@ -76,7 +74,6 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "build_truncate_statement",
-    "client_is_thick_mode",
     "client_is_thin_mode",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
@@ -84,25 +81,18 @@ __all__ = (
     "coerce_many_parameters_sync",
     "collect_async_rows",
     "collect_sync_rows",
-    "connection_is_thick",
     "connection_is_thin",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
-    "is_oracle_retriable_error",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
-    "oracle_table_feature_report",
     "resolve_row_metadata",
     "resolve_rowcount",
     "supports_df_batches",
     "supports_direct_path_load",
-    "validate_oracle_identifier",
 )
-
-oracle_table_feature_report = _oracle_table_feature_report
-validate_oracle_identifier = _validate_oracle_identifier
 
 
 IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
@@ -147,33 +137,6 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     12545: (ConnectionTimeoutError, "connect failed"),
 }
 
-ORACLE_RETRIABLE_ERROR_CODES: Final[frozenset[int]] = frozenset({54, 60, 8177})
-
-
-def is_oracle_retriable_error(exc: BaseException) -> bool:
-    """Return whether an exception corresponds to a retriable Oracle concurrency error.
-
-    Matches ORA-00060 (deadlock), ORA-08177 (can't serialize access),
-    and ORA-00054 (resource busy NOWAIT).
-    """
-    current: BaseException | None = exc
-    while current is not None:
-        if isinstance(current, (DeadlockError, TransactionError)):
-            return True
-        args = getattr(current, "args", ())
-        if args:
-            first_arg = args[0]
-            code = getattr(first_arg, "code", None)
-            if isinstance(code, int) and code in ORACLE_RETRIABLE_ERROR_CODES:
-                return True
-            if isinstance(first_arg, int) and first_arg in ORACLE_RETRIABLE_ERROR_CODES:
-                return True
-        err_num = getattr(current, "error_number", None)
-        if isinstance(err_num, int) and err_num in ORACLE_RETRIABLE_ERROR_CODES:
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
 
 def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
     parts = [int(part) for part in version.split(".") if part.isdigit()]
@@ -195,22 +158,12 @@ def connection_is_thin(connection: object) -> bool:
     return bool(thin)
 
 
-def connection_is_thick(connection: object) -> bool:
-    """Return whether an Oracle connection is in Thick mode."""
-    return not connection_is_thin(connection)
-
-
 def client_is_thin_mode() -> bool:
     """Return whether python-oracledb is currently in Thin mode."""
     is_thin = getattr(oracledb_module, "is_thin_mode", None)
     if callable(is_thin):
         return bool(is_thin())
     return True
-
-
-def client_is_thick_mode() -> bool:
-    """Return whether python-oracledb is currently in Thick mode."""
-    return not client_is_thin_mode()
 
 
 def supports_direct_path_load(connection: object) -> bool:

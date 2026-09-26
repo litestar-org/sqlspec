@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 from typing_extensions import NotRequired, TypedDict
 
 from sqlspec import SQL
+from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
-from sqlspec.adapters.oracledb.core import oracle_table_feature_report as _oracle_table_feature_report
-from sqlspec.adapters.oracledb.core import validate_oracle_identifier as _validate_oracle_identifier
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
@@ -2960,7 +2959,7 @@ def _configure_oracle_adk_session_tables(store: Any, config: Any) -> None:
         "_metadata_table": str(adk_config.get("metadata_table") or ORACLE_DEFAULT_METADATA_TABLE),
     }
     for attribute_name, table_name in table_names.items():
-        _validate_oracle_identifier(table_name, "table name")
+        validate_oracle_identifier(table_name, "table name")
         setattr(store, attribute_name, table_name)
 
 
@@ -3057,7 +3056,7 @@ def _adk_config(config: Any) -> OracleADKConfig:
 def _adk_table_feature_clause(
     config: Any, table_kind: str, *, in_memory: bool, hash_partition_key: str, range_partition_key: str
 ) -> str:
-    report = _oracle_table_feature_report(
+    report = oracle_table_feature_report(
         config,
         "adk",
         _adk_config(config),

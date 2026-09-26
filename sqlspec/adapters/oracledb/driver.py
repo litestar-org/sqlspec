@@ -29,7 +29,6 @@ from sqlspec.adapters.oracledb.core import (
     coerce_many_parameters_sync,
     collect_async_rows,
     collect_sync_rows,
-    connection_is_thick,
     connection_is_thin,
     create_mapped_exception,
     default_statement_config,
@@ -520,16 +519,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
         finally:
             self._transaction_active = False
-
-    @property
-    def is_thin_mode(self) -> bool:
-        """Return whether the connection is operating in Thin mode."""
-        return connection_is_thin(self.connection)
-
-    @property
-    def is_thick_mode(self) -> bool:
-        """Return whether the connection is operating in Thick mode."""
-        return connection_is_thick(self.connection)
 
     def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""
@@ -1245,16 +1234,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             raise SQLSpecError(msg) from e
         finally:
             self._transaction_active = False
-
-    @property
-    def is_thin_mode(self) -> bool:
-        """Return whether the connection is operating in Thin mode."""
-        return connection_is_thin(self.connection)
-
-    @property
-    def is_thick_mode(self) -> bool:
-        """Return whether the connection is operating in Thick mode."""
-        return connection_is_thick(self.connection)
 
     async def release_savepoint(self, name: str) -> None:
         """Validate the savepoint name; Oracle releases savepoints when the transaction ends."""

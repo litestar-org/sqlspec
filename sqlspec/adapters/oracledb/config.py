@@ -28,7 +28,6 @@ from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers
 from sqlspec.adapters.oracledb.core import (
     apply_driver_features,
     build_connection_config,
-    client_is_thick_mode,
     client_is_thin_mode,
     default_statement_config,
 )
@@ -61,7 +60,6 @@ logger = get_logger("sqlspec.adapters.oracledb.config")
 
 __all__ = (
     "OracleAsyncConfig",
-    "OracleConfig",
     "OracleConnectionParams",
     "OracleDriverFeatures",
     "OraclePoolParams",
@@ -290,7 +288,7 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
 def _ensure_thick_mode(*, lib_dir: "str | None" = None, config_dir: "str | None" = None) -> None:
     """Initialize python-oracledb thick mode automatically if requested."""
-    if client_is_thick_mode():
+    if not client_is_thin_mode():
         return
     init_oracle_client = getattr(oracledb, "init_oracle_client", None)
     if callable(init_oracle_client):
@@ -426,16 +424,6 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         """Return polling defaults for Oracle table-backed event queues."""
 
         return EventRuntimeHints(select_for_update=True, skip_locked=True)
-
-    @property
-    def is_thin_mode(self) -> bool:
-        """Return whether python-oracledb is currently operating in Thin mode."""
-        return client_is_thin_mode()
-
-    @property
-    def is_thick_mode(self) -> bool:
-        """Return whether python-oracledb is currently operating in Thick mode."""
-        return client_is_thick_mode()
 
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create the actual connection pool."""
@@ -643,16 +631,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
 
         return EventRuntimeHints(select_for_update=True, skip_locked=True)
 
-    @property
-    def is_thin_mode(self) -> bool:
-        """Return whether python-oracledb is currently operating in Thin mode."""
-        return client_is_thin_mode()
-
-    @property
-    def is_thick_mode(self) -> bool:
-        """Return whether python-oracledb is currently operating in Thick mode."""
-        return client_is_thick_mode()
-
     async def _create_pool(self) -> "OracleAsyncConnectionPool":
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
@@ -723,6 +701,3 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
                 await self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()
-
-
-OracleConfig = OracleSyncConfig | OracleAsyncConfig

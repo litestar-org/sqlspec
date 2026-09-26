@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.oracledb._storage import oracle_table_feature_report
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
-from sqlspec.adapters.oracledb.core import oracle_table_feature_report as _oracle_table_feature_report
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -748,7 +748,7 @@ def _read_blob_sync(value: object) -> bytes:
 def _litestar_table_feature_clause(config: Any, in_memory: bool) -> str:
     extension_config = cast("dict[str, Any]", config.extension_config)
     settings = cast("dict[str, Any]", extension_config.get("litestar", {}))
-    report = _oracle_table_feature_report(
+    report = oracle_table_feature_report(
         config,
         "litestar",
         settings,

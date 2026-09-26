@@ -1,6 +1,5 @@
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
-    OracleConfig,
     OracleConnectionParams,
     OracleDriverFeatures,
     OraclePoolParams,
@@ -11,10 +10,6 @@ from sqlspec.adapters.oracledb.core import (
     OracleClob,
     OracleJson,
     build_connection_config,
-    client_is_thick_mode,
-    client_is_thin_mode,
-    connection_is_thick,
-    connection_is_thin,
     default_statement_config,
 )
 from sqlspec.adapters.oracledb.data_dictionary import (
@@ -36,7 +31,6 @@ __all__ = (
     "OracleAsyncExceptionHandler",
     "OracleBlob",
     "OracleClob",
-    "OracleConfig",
     "OracleConnectionParams",
     "OracleDriverFeatures",
     "OracleJson",
@@ -49,9 +43,5 @@ __all__ = (
     "OracledbAsyncDataDictionary",
     "OracledbSyncDataDictionary",
     "build_connection_config",
-    "client_is_thick_mode",
-    "client_is_thin_mode",
-    "connection_is_thick",
-    "connection_is_thin",
     "default_statement_config",
 )

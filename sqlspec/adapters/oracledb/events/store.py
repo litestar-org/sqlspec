@@ -22,9 +22,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import NotRequired, TypedDict
 
-from sqlspec.adapters.oracledb.core import oracle_table_feature_report as _oracle_table_feature_report
-from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType
-from sqlspec.adapters.oracledb.data_dictionary import storage_type_from_version as _storage_type_from_version
+from sqlspec.adapters.oracledb._storage import oracle_table_feature_report
+from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, storage_type_from_version
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -186,7 +185,7 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         """Resolve the JSON storage type from the configured override or server version."""
         if self._json_storage_override is not None:
             return self._json_storage_override
-        return _storage_type_from_version(self._get_version_info())
+        return storage_type_from_version(self._get_version_info())
 
     def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
@@ -209,7 +208,7 @@ class OracleSyncEventQueueStore(BaseEventQueueStore["OracleSyncConfig"]):
         return version_info
 
     def _table_feature_clause(self) -> str:
-        report = _oracle_table_feature_report(
+        report = oracle_table_feature_report(
             self._config,
             "events",
             self._extension_settings,
@@ -301,7 +300,7 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         """Resolve the JSON storage type from the configured override or server version."""
         if self._json_storage_override is not None:
             return self._json_storage_override
-        return _storage_type_from_version(await self._get_version_info())
+        return storage_type_from_version(await self._get_version_info())
 
     async def _get_version_info(self) -> "OracleVersionInfo | None":
         """Return the pool-scoped Oracle version through the data dictionary."""
@@ -324,7 +323,7 @@ class OracleAsyncEventQueueStore(BaseEventQueueStore["OracleAsyncConfig"]):
         return version_info
 
     def _table_feature_clause(self) -> str:
-        report = _oracle_table_feature_report(
+        report = oracle_table_feature_report(
             self._config,
             "events",
             self._extension_settings,
