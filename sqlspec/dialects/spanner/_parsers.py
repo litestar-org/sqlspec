@@ -19,7 +19,13 @@ from sqlglot.parsers.bigquery import BigQueryParser
 from sqlglot.parsers.postgres import PostgresParser
 from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.dialects.spanner._expressions import CosineDistance, DotProduct, EuclideanDistance, Search
+from sqlspec.dialects.spanner._expressions import (
+    CosineDistance,
+    DotProduct,
+    EuclideanDistance,
+    Search,
+    get_next_sequence_value,
+)
 from sqlspec.dialects.spanner._generators import (
     _INTERLEAVE_IN_NAME,
     _INTERLEAVE_NAME,
@@ -41,7 +47,7 @@ __all__ = (
 _PROPERTY_PARSERS_REGISTERED_ATTR: Final[str] = "_sqlspec_spanner_property_parsers"
 _SPANNER_DIALECT_NAMES: Final[frozenset[str]] = frozenset({"Spangres", "Spanner"})
 
-_INTERLEAVE_PATTERN: Final["re.Pattern[str]"] = re.compile(
+_INTERLEAVE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"""
     ,?\s*\bINTERLEAVE\s+IN\s+
     (?P<parent_keyword>PARENT\s+)?
@@ -53,7 +59,7 @@ _INTERLEAVE_PATTERN: Final["re.Pattern[str]"] = re.compile(
 )
 
 
-def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, in_parent: bool = True) -> exp.Property:
+def build_interleave_property(parent: exp.Expr, on_delete: str | None = None, in_parent: bool = True) -> exp.Property:
     """Build the canonical interleave property node."""
     if not in_parent:
         return exp.Property(this=exp.Literal.string(_INTERLEAVE_IN_NAME), value=exp.Tuple(expressions=[parent]))
@@ -63,7 +69,7 @@ def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, 
     return exp.Property(this=exp.Literal.string(_INTERLEAVE_NAME), value=exp.Tuple(expressions=values))
 
 
-def extract_interleave_property(sql: str) -> "tuple[str, exp.Property | None]":
+def extract_interleave_property(sql: str) -> tuple[str, exp.Property | None]:
     """Strip an INTERLEAVE clause out of raw DDL, returning the repaired SQL and property."""
     match = _INTERLEAVE_PATTERN.search(sql)
     if match is None:
@@ -102,7 +108,7 @@ def _is_spanner_parser(parser: Any) -> bool:
     return dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES
 
 
-def _parse_interleave(parser: Any) -> "exp.Property | None":
+def _parse_interleave(parser: Any) -> exp.Property | None:
     """Parse ``INTERLEAVE IN [PARENT] table [ON DELETE {CASCADE | NO ACTION}]``.
 
     The INTERLEAVE token is already consumed by sqlglot's property dispatch.
@@ -124,7 +130,7 @@ def _parse_interleave(parser: Any) -> "exp.Property | None":
     return build_interleave_property(parent, on_delete, in_parent=in_parent)
 
 
-def _parse_row_deletion_policy(parser: Any) -> "exp.Property | None":
+def _parse_row_deletion_policy(parser: Any) -> exp.Property | None:
     """Parse ``ROW DELETION POLICY (OLDER_THAN(column, INTERVAL n DAY))``.
 
     The ROW token is already consumed by sqlglot's property dispatch.
@@ -146,7 +152,7 @@ def _parse_row_deletion_policy(parser: Any) -> "exp.Property | None":
     return _build_row_deletion_property(column, interval)
 
 
-def _parse_ttl(parser: Any) -> "exp.Property | None":
+def _parse_ttl(parser: Any) -> exp.Property | None:
     """Parse ``TTL INTERVAL interval_spec ON column`` into the canonical policy node.
 
     The TTL token is already consumed by sqlglot's property dispatch.
@@ -189,13 +195,21 @@ def register_spanner_property_parsers() -> None:
 
 def _parse_get_next_sequence_value(parser: Any) -> exp.Anonymous:
     """Parse GET_NEXT_SEQUENCE_VALUE(SEQUENCE sequence_name)."""
-    parser._match_text_seq("SEQUENCE")
-    seq_name = parser._parse_id_var()
-    parser._match(TokenType.R_PAREN)
-    return exp.Anonymous(this="GET_NEXT_SEQUENCE_VALUE", expressions=[seq_name])
+    if _is_spanner_parser(parser):
+        parser._match_text_seq("SEQUENCE")
+        seq_name = cast("exp.Expr", parser._parse_id_var())
+        return get_next_sequence_value(seq_name)
+    return exp.Anonymous(this="GET_NEXT_SEQUENCE_VALUE", expressions=parser._parse_csv(parser._parse_lambda))
 
 
-def _parse_options_properties(parser: Any) -> "exp.Properties | None":
+def _build_search(args: list[Any], dialect: Any) -> exp.Expr:
+    """Build a Spanner Search node or fall back to Anonymous for BigQuery."""
+    if dialect is not None and type(dialect).__name__ == "Spanner":
+        return Search.from_arg_list(args)
+    return exp.Anonymous(this="SEARCH", expressions=args)
+
+
+def _parse_options_properties(parser: Any) -> exp.Properties | None:
     """Parse an OPTIONS (key = value, ...) property block."""
     if not parser._match_text_seq("OPTIONS"):
         return None
@@ -337,18 +351,25 @@ def attach_hints(expression: exp.Expr) -> None:
         for hc in hint_comments:
             comments.remove(hc)
             hint = parse_hint_expression(hc)
+            target_table: exp.Table | None = None
             if isinstance(node, exp.Table):
-                node.set("hints", [hint])
+                target_table = node
+            elif isinstance(node, exp.TableAlias) and isinstance(node.parent, exp.Table):
+                target_table = node.parent
+            if target_table is not None:
+                existing_hints = list(target_table.args.get("hints") or [])
+                existing_hints.append(hint)
+                target_table.set("hints", existing_hints)
             elif isinstance(node, (exp.Select, exp.Query)):
                 node.set("hint", hint)
 
 
-_original_bq_parse_create = BigQueryParser._parse_create
-_original_bq_parse_alter = BigQueryParser._parse_alter
-_original_bq_parse_drop = BigQueryParser._parse_drop
+_original_bq_statement_create: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.CREATE)
+_original_bq_statement_alter: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.ALTER)
+_original_bq_statement_drop: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.DROP)
 
 
-def _bq_parse_create(self: Any) -> "exp.Create | exp.Index | exp.Command":
+def _bq_parse_create(self: Any) -> exp.Create | exp.Index | exp.Command:
     """Parse Spanner CREATE statements including VECTOR INDEX, SEARCH INDEX, SEQUENCE, and CHANGE STREAM."""
     dialect = getattr(self, "dialect", None)
     if dialect is not None and type(dialect).__name__ == "Spanner":
@@ -360,10 +381,12 @@ def _bq_parse_create(self: Any) -> "exp.Create | exp.Index | exp.Command":
             return _parse_create_sequence(self)
         if self._match_text_seq("CHANGE", "STREAM"):
             return _parse_create_change_stream(self)
-    return cast("exp.Create | exp.Index | exp.Command", _original_bq_parse_create(self))
+    if _original_bq_statement_create is not None:
+        return cast("exp.Create | exp.Index | exp.Command", _original_bq_statement_create(self))
+    return cast("exp.Create | exp.Index | exp.Command", self._parse_create())
 
 
-def _bq_parse_alter(self: Any) -> "exp.Alter | exp.Command":
+def _bq_parse_alter(self: Any) -> exp.Alter | exp.Command:
     """Parse Spanner ALTER statements including SEQUENCE and CHANGE STREAM."""
     dialect = getattr(self, "dialect", None)
     if dialect is not None and type(dialect).__name__ == "Spanner":
@@ -371,33 +394,37 @@ def _bq_parse_alter(self: Any) -> "exp.Alter | exp.Command":
             return _parse_alter_sequence(self)
         if self._match_text_seq("CHANGE", "STREAM"):
             return _parse_alter_change_stream(self)
-    return _original_bq_parse_alter(self)
+    if _original_bq_statement_alter is not None:
+        return cast("exp.Alter | exp.Command", _original_bq_statement_alter(self))
+    return cast("exp.Alter | exp.Command", self._parse_alter())
 
 
-def _bq_parse_drop(self: Any, *args: Any, **kwargs: Any) -> "exp.Drop | exp.Command":
+def _bq_parse_drop(self: Any) -> exp.Drop | exp.Command:
     """Parse Spanner DROP statements including CHANGE STREAM."""
     dialect = getattr(self, "dialect", None)
     if dialect is not None and type(dialect).__name__ == "Spanner" and self._match_text_seq("CHANGE", "STREAM"):
         return _parse_drop_change_stream(self)
-    return _original_bq_parse_drop(self, *args, **kwargs)
+    if _original_bq_statement_drop is not None:
+        return cast("exp.Drop | exp.Command", _original_bq_statement_drop(self))
+    return cast("exp.Drop | exp.Command", self._parse_drop())
 
 
 BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = CosineDistance.from_arg_list
 BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = EuclideanDistance.from_arg_list
 BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = DotProduct.from_arg_list
-BigQueryParser.FUNCTIONS["SEARCH"] = Search.from_arg_list
+BigQueryParser.FUNCTIONS["SEARCH"] = _build_search
 
 BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
+
+BigQueryParser.STATEMENT_PARSERS[TokenType.CREATE] = _bq_parse_create
+BigQueryParser.STATEMENT_PARSERS[TokenType.ALTER] = _bq_parse_alter
+BigQueryParser.STATEMENT_PARSERS[TokenType.DROP] = _bq_parse_drop
 
 PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = CosineDistance.from_arg_list
 PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = EuclideanDistance.from_arg_list
 PostgresParser.FUNCTIONS["DOT_PRODUCT"] = DotProduct.from_arg_list
 
 PostgresParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
-
-setattr(BigQueryParser, "_parse_create", _bq_parse_create)
-setattr(BigQueryParser, "_parse_alter", _bq_parse_alter)
-setattr(BigQueryParser, "_parse_drop", _bq_parse_drop)
 
 register_spanner_property_parsers()
 

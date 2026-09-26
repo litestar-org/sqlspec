@@ -2,7 +2,14 @@
 
 from sqlglot import exp, parse_one
 
-from sqlspec.dialects.spanner._expressions import Search
+from sqlspec.dialects.spanner._expressions import (
+    Search,
+    score,
+    search_substring,
+    tokenize_fulltext,
+    tokenize_ngrams,
+    tokenize_substring,
+)
 
 
 def test_tokenlist_column_in_create_table() -> None:
@@ -56,6 +63,18 @@ def test_tokenize_functions() -> None:
     assert "TOKENIZE_FULLTEXT" in names
     assert "TOKENIZE_SUBSTRING" in names
     assert "TOKENIZE_NGRAMS" in names
+
+
+def test_fts_expression_builders() -> None:
+    """Verify FTS helper builders construct expected Anonymous expressions and render in Spanner and Spangres."""
+    col = exp.column("Tokens")
+    query = exp.Literal.string("rock")
+    assert search_substring(col, query).sql("spanner") == "SEARCH_SUBSTRING(Tokens, 'rock')"
+    assert score(col, query).sql("spanner") == "SCORE(Tokens, 'rock')"
+    assert tokenize_fulltext(col).sql("spanner") == "TOKENIZE_FULLTEXT(Tokens)"
+    assert tokenize_substring(col).sql("spanner") == "TOKENIZE_SUBSTRING(Tokens)"
+    assert tokenize_ngrams(col).sql("spanner") == "TOKENIZE_NGRAMS(Tokens)"
+    assert score(col, query).sql("spangres") == "SCORE(Tokens, 'rock')"
 
 
 def test_create_search_index_full_options() -> None:

@@ -2,7 +2,7 @@
 
 from sqlglot import exp, parse_one
 
-from sqlspec.dialects.spanner._expressions import CosineDistance, DotProduct, EuclideanDistance
+from sqlspec.dialects.spanner._expressions import CosineDistance, DotProduct, EuclideanDistance, approx_cosine_distance
 
 
 def test_cosine_distance_parsing_and_generation() -> None:
@@ -47,6 +47,13 @@ def test_approx_cosine_distance_with_options() -> None:
     assert col.this.upper() == "APPROX_COSINE_DISTANCE"
     rendered = parsed.sql(dialect="spanner")
     assert "APPROX_COSINE_DISTANCE(v1, v2, 100)" in rendered
+
+    v1 = exp.column("v1")
+    v2 = exp.column("v2")
+    assert approx_cosine_distance(v1, v2).sql("spanner") == "APPROX_COSINE_DISTANCE(v1, v2)"
+    assert (
+        approx_cosine_distance(v1, v2, exp.Literal.number(50)).sql("spangres") == "APPROX_COSINE_DISTANCE(v1, v2, 50)"
+    )
 
 
 def test_vector_transpile_spanner_to_spangres() -> None:

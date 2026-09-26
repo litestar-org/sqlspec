@@ -29,7 +29,7 @@ class Spangres(Postgres):
     Parser = SpangresParser
     Generator = SpangresGenerator
 
-    def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
+    def parse(self, sql: str, **opts: Any) -> list[exp.Expr | None]:
         """Parse Spangres SQL statements and attach hints."""
         expressions = super().parse(sql, **opts)
         if len(expressions) == 1 and isinstance(expressions[0], exp.Command):
@@ -46,7 +46,7 @@ class Spangres(Postgres):
                 attach_hints(expression)
         return expressions
 
-    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> "list[exp.Expr | None]":
+    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> list[exp.Expr | None]:
         """Parse into specific expression type with attached hints."""
         expressions = super().parse_into(expression_type, sql, **opts)
         for expression in expressions:

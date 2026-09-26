@@ -64,3 +64,14 @@ def test_regular_parameters_preserved() -> None:
     assert param is not None
     rendered = parsed.sql(dialect="spanner")
     assert "@singer_id" in rendered
+
+
+def test_aliased_table_hints_and_parse_into() -> None:
+    """Verify table hints on aliased tables and parse_into hint attachment."""
+    sql = "SELECT * FROM Albums AS a @{FORCE_INDEX=AlbumsBySinger}"
+    parsed = parse_one(sql, into=exp.Select, dialect="spanner")
+    table = parsed.find(exp.Table)
+    assert table is not None
+    assert table.args.get("hints") is not None
+    rendered = parsed.sql(dialect="spanner")
+    assert "@{FORCE_INDEX=AlbumsBySinger}" in rendered
