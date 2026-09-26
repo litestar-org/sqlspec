@@ -4,9 +4,9 @@ import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters import mysql_common
-from sqlspec.adapters.asyncmy._typing import AsyncmySSCursor as SSCursor
+from sqlspec.adapters.asyncmy._typing import AsyncmySSCursor
 from sqlspec.adapters.mysql_common import (
-    _bool_to_int,
+    bool_to_int,
     build_insert_statement,
     collect_rows,
     collect_stream_rows,
@@ -24,7 +24,6 @@ from sqlspec.adapters.mysql_common import (
     resolve_row_plan,
     resolve_rowcount,
 )
-from sqlspec.adapters.mysql_common import build_load_data_statement as _common_build_load_data_statement
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -58,18 +57,20 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common._MYSQL_ACCESS_ERROR_DISPATCH
-_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common._MYSQL_CONNECTION_ERROR_DISPATCH
-_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common._MYSQL_CONSTRAINT_ERROR_DISPATCH
-_MYSQL_MIGRATION_ERROR_CODES = mysql_common._MYSQL_MIGRATION_ERROR_CODES
-_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common._MYSQL_SQLSTATE_EXACT_DISPATCH
-_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common._MYSQL_SQLSTATE_PREFIX_DISPATCH
-_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common._MYSQL_TRANSACTION_ERROR_DISPATCH
+_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common.MYSQL_ACCESS_ERROR_DISPATCH
+_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common.MYSQL_CONNECTION_ERROR_DISPATCH
+_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common.MYSQL_CONSTRAINT_ERROR_DISPATCH
+_MYSQL_MIGRATION_ERROR_CODES = mysql_common.MYSQL_MIGRATION_ERROR_CODES
+_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common.MYSQL_SQLSTATE_EXACT_DISPATCH
+_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common.MYSQL_SQLSTATE_PREFIX_DISPATCH
+_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common.MYSQL_TRANSACTION_ERROR_DISPATCH
 
 
 def build_load_data_statement(table: str, columns: "list[str]") -> str:
     """Build native LOAD DATA SQL with a named bound filename for asyncmy."""
-    return _common_build_load_data_statement(table, columns, placeholder="%(sqlspec_infile_path)s", escape_percent=True)
+    return mysql_common.build_load_data_statement(
+        table, columns, placeholder="%(sqlspec_infile_path)s", escape_percent=True
+    )
 
 
 class AsyncmyStreamSource:
@@ -93,7 +94,7 @@ class AsyncmyStreamSource:
 
     async def _start(self) -> None:
 
-        cursor = self._driver.connection.cursor(SSCursor)
+        cursor = self._driver.connection.cursor(AsyncmySSCursor)
         self._cursor = cursor
         await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
@@ -123,7 +124,7 @@ class AsyncmyStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the AsyncMy driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="asyncmy",
         default_style=ParameterStyle.QMARK,

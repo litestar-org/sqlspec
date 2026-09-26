@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters import mysql_common
 from sqlspec.adapters.mysql_common import (
-    _bool_to_int,
+    bool_to_int,
     build_insert_statement,
     build_load_data_statement,
     collect_rows,
@@ -24,7 +24,7 @@ from sqlspec.adapters.mysql_common import (
     resolve_row_plan,
     resolve_rowcount,
 )
-from sqlspec.adapters.pymysql._typing import PyMysqlSSCursor as SSCursor
+from sqlspec.adapters.pymysql._typing import PyMysqlSSCursor
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -58,13 +58,13 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common._MYSQL_ACCESS_ERROR_DISPATCH
-_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common._MYSQL_CONNECTION_ERROR_DISPATCH
-_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common._MYSQL_CONSTRAINT_ERROR_DISPATCH
-_MYSQL_MIGRATION_ERROR_CODES = mysql_common._MYSQL_MIGRATION_ERROR_CODES
-_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common._MYSQL_SQLSTATE_EXACT_DISPATCH
-_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common._MYSQL_SQLSTATE_PREFIX_DISPATCH
-_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common._MYSQL_TRANSACTION_ERROR_DISPATCH
+_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common.MYSQL_ACCESS_ERROR_DISPATCH
+_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common.MYSQL_CONNECTION_ERROR_DISPATCH
+_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common.MYSQL_CONSTRAINT_ERROR_DISPATCH
+_MYSQL_MIGRATION_ERROR_CODES = mysql_common.MYSQL_MIGRATION_ERROR_CODES
+_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common.MYSQL_SQLSTATE_EXACT_DISPATCH
+_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common.MYSQL_SQLSTATE_PREFIX_DISPATCH
+_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common.MYSQL_TRANSACTION_ERROR_DISPATCH
 
 
 class PymysqlStreamSource:
@@ -84,7 +84,7 @@ class PymysqlStreamSource:
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
         with handler:
-            cursor = self._driver.connection.cursor(SSCursor)
+            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
             self._cursor = cursor
             cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
             self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
@@ -117,7 +117,7 @@ class PymysqlStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the PyMySQL driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="PyMySQL",
         default_style=ParameterStyle.QMARK,

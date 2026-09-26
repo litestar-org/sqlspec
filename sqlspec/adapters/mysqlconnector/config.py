@@ -244,7 +244,7 @@ class MysqlConnectorSyncConnectionContext(SyncPoolConnectionContext):
         self._connection: MysqlConnectorSyncConnection | None = None
 
     def __enter__(self) -> MysqlConnectorSyncConnection:
-        self._connection = self._config.acquire_sync_connection()
+        self._connection = self._config._acquire_sync_connection()
         return cast("MysqlConnectorSyncConnection", self._connection)
 
     def __exit__(
@@ -264,7 +264,7 @@ class _MysqlConnectorSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._connection: MysqlConnectorSyncConnection | None = None
 
     def acquire_connection(self) -> MysqlConnectorSyncConnection:
-        self._connection = self._config.acquire_sync_connection()
+        self._connection = self._config._acquire_sync_connection()
         return cast("MysqlConnectorSyncConnection", self._connection)
 
     def release_connection(self, _conn: MysqlConnectorSyncConnection, **kwargs: Any) -> None:
@@ -280,7 +280,7 @@ class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
     __slots__ = ()
 
     async def __aenter__(self) -> MysqlConnectorAsyncConnection:
-        self._connection = await self._config.acquire_async_connection()
+        self._connection = await self._config._acquire_async_connection()
         return cast("MysqlConnectorAsyncConnection", self._connection)
 
     async def __aexit__(
@@ -296,7 +296,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
 
     async def acquire_connection(self) -> MysqlConnectorAsyncConnection:
-        self._connection = await self._config.acquire_async_connection()
+        self._connection = await self._config._acquire_async_connection()
         return cast("MysqlConnectorAsyncConnection", self._connection)
 
     async def release_connection(self, _conn: MysqlConnectorAsyncConnection, **kwargs: Any) -> None:
@@ -382,7 +382,7 @@ class MysqlConnectorSyncConfig(
             self._user_connection_hook(connection)
             self._initialized_connections.add(connection)
 
-    def acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
+    def _acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
         """Acquire and initialize a sync mysql-connector connection."""
         pool = self.provide_pool()
         connection = cast("MysqlConnectorSyncConnection", pool.get_connection())
@@ -527,7 +527,7 @@ class MysqlConnectorAsyncConfig(
             await self._user_connection_hook(connection)
             self._initialized_connections.add(connection)
 
-    async def acquire_async_connection(self) -> MysqlConnectorAsyncConnection:
+    async def _acquire_async_connection(self) -> MysqlConnectorAsyncConnection:
         """Acquire and initialize an async mysql-connector connection from pool."""
         pool = await self.provide_pool()
         connection = cast("MysqlConnectorAsyncConnection", await pool.get_connection())

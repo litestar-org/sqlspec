@@ -7,25 +7,17 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import aiomysql as _aiomysql
-from aiomysql import Connection
-from aiomysql import Error as _AiomysqlError
-from aiomysql import MySQLError as _AiomysqlMySQLError
-from aiomysql import Pool as _AiomysqlPool
-from aiomysql import ProgrammingError as AiomysqlProgrammingError
-from aiomysql import SSCursor as AiomysqlSSCursor
-from aiomysql.cursors import RE_INSERT_VALUES as AIOMYSQL_INSERT_VALUES_PATTERN
-from aiomysql.cursors import Cursor as _AiomysqlCursor
-from aiomysql.cursors import DictCursor as _AiomysqlDictCursor
-from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
+import aiomysql
+import aiomysql.cursors
+import pymysql.constants
+import pymysql.err
+
+AIOMYSQL_INSERT_VALUES_PATTERN = aiomysql.cursors.RE_INSERT_VALUES
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
-
-    from pymysql.err import Error as _PymysqlError
-    from pymysql.err import MySQLError as _PymysqlMySQLError
 
     from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
     from sqlspec.core import StatementConfig
@@ -51,22 +43,26 @@ if TYPE_CHECKING:
 
     AiomysqlConnection: TypeAlias = AiomysqlConnectionProtocol
     AiomysqlModule: TypeAlias = AiomysqlModuleProtocol
-    AiomysqlRawCursor: TypeAlias = _AiomysqlCursor
-    AiomysqlDictCursor: TypeAlias = _AiomysqlDictCursor
+    AiomysqlRawCursor: TypeAlias = aiomysql.cursors.Cursor
+    AiomysqlDictCursor: TypeAlias = aiomysql.cursors.DictCursor
     AiomysqlFieldType: TypeAlias = AiomysqlFieldTypeProtocol
-    AiomysqlPool: TypeAlias = _AiomysqlPool
-    AiomysqlPymysqlError: TypeAlias = _PymysqlError
-    AiomysqlPymysqlMySQLError: TypeAlias = _PymysqlMySQLError
+    AiomysqlPool: TypeAlias = aiomysql.Pool
+    AiomysqlProgrammingError: TypeAlias = aiomysql.ProgrammingError
+    AiomysqlPymysqlError: TypeAlias = pymysql.err.Error
+    AiomysqlPymysqlMySQLError: TypeAlias = pymysql.err.MySQLError
+    AiomysqlSSCursor: TypeAlias = aiomysql.SSCursor
 
 if not TYPE_CHECKING:
-    AiomysqlConnection = Connection
-    AiomysqlModule = _aiomysql
-    AiomysqlRawCursor = _AiomysqlCursor
-    AiomysqlDictCursor = _AiomysqlDictCursor
-    AiomysqlFieldType = _PYMYSQL_FIELD_TYPE
-    AiomysqlPool = _AiomysqlPool
-    AiomysqlPymysqlError = _AiomysqlError
-    AiomysqlPymysqlMySQLError = _AiomysqlMySQLError
+    AiomysqlConnection = aiomysql.Connection
+    AiomysqlModule = aiomysql
+    AiomysqlRawCursor = aiomysql.cursors.Cursor
+    AiomysqlDictCursor = aiomysql.cursors.DictCursor
+    AiomysqlFieldType = pymysql.constants.FIELD_TYPE
+    AiomysqlPool = aiomysql.Pool
+    AiomysqlProgrammingError = aiomysql.ProgrammingError
+    AiomysqlPymysqlError = aiomysql.Error
+    AiomysqlPymysqlMySQLError = aiomysql.MySQLError
+    AiomysqlSSCursor = aiomysql.SSCursor
 
 __all__ = (
     "AIOMYSQL_INSERT_VALUES_PATTERN",
