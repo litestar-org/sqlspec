@@ -540,6 +540,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         sql, driver_params = self._compiled_sql(prepared_statement, config)
 
         job_config = BigQueryQueryJobConfig(dry_run=True, use_query_cache=False)
+        job: Any = None
         with self.handle_database_exceptions() as exc_handler:
             job = self._run_query_job(self.connection, sql, driver_params, job_config=job_config)
         self._check_pending_exception(exc_handler)
