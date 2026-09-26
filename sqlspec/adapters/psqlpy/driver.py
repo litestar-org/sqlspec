@@ -30,7 +30,7 @@ from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.driver._common import validate_savepoint_name
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -391,6 +391,42 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load Python records into PostgreSQL via psqlpy binary COPY."""
         self._require_capability("arrow_import_enabled")
+        materialized = list(records)
+        if not materialized:
+            msg = "load_from_records requires at least one record."
+            raise ImproperConfigurationError(msg)
+
+        from collections.abc import Mapping as MappingABC
+
+        first_record = materialized[0]
+        if isinstance(first_record, MappingABC):
+            resolved_columns = columns if columns is not None else list(first_record.keys())
+            expected_keys = set(resolved_columns)
+            row_tuples: list[tuple[Any, ...]] = []
+            for record in materialized:
+                if not isinstance(record, MappingABC):
+                    msg = "load_from_records mapping records must all be mappings."
+                    raise ImproperConfigurationError(msg)
+                if set(record.keys()) != expected_keys:
+                    msg = "load_from_records mapping records must all share the same keys."
+                    raise ImproperConfigurationError(msg)
+                row_tuples.append(tuple(record[col] for col in resolved_columns))
+        else:
+            if columns is None:
+                msg = "load_from_records requires columns when records are positional sequences."
+                raise ImproperConfigurationError(msg)
+            resolved_columns = columns
+            row_tuples = []
+            for record in materialized:
+                if isinstance(record, MappingABC):
+                    msg = "load_from_records positional records must all have the same shape."
+                    raise ImproperConfigurationError(msg)
+                row = tuple(record)
+                if len(row) != len(resolved_columns):
+                    msg = "load_from_records positional records must match the number of columns."
+                    raise ImproperConfigurationError(msg)
+                row_tuples.append(row)
+
         if overwrite:
             qualified = format_table_identifier(table)
             exc_handler = self.handle_database_exceptions()
@@ -399,31 +435,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
 
-        if not records:
-            empty_payload: StorageTelemetry = {"destination": table, "rows_processed": 0, "bytes_processed": 0}
-            self._attach_partition_telemetry(empty_payload, partitioner)
-            return self._storage_job(empty_payload, telemetry)
-
         schema_name, table_name = split_schema_and_table(table)
-        first_record = records[0]
-        from collections.abc import Mapping as MappingABC
-
-        if columns is None:
-            if isinstance(first_record, MappingABC):
-                resolved_columns = list(first_record.keys())
-            else:
-                msg = "columns must be provided when records are sequences"
-                raise SQLSpecError(msg)
-        else:
-            resolved_columns = columns
-
-        if isinstance(first_record, MappingABC):
-            row_tuples = [
-                tuple(r.get(col) for col in resolved_columns) for r in cast("Sequence[Mapping[str, Any]]", records)
-            ]
-        else:
-            row_tuples = [tuple(r) for r in cast("Sequence[Sequence[Any]]", records)]
-
         json_columns = await self._resolve_json_columns(schema_name, table_name)
         coerced_records = coerce_json_columns(row_tuples, resolved_columns, json_columns)
 
@@ -439,7 +451,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         telemetry_payload: StorageTelemetry = {
             "destination": table,
-            "rows_processed": len(records),
+            "rows_processed": len(row_tuples),
             "bytes_processed": 0,
         }
         self._attach_partition_telemetry(telemetry_payload, partitioner)
