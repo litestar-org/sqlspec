@@ -3,9 +3,9 @@
 import contextlib
 import warnings
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
-from sqlspec.adapters.mssql_python._typing import MSSQL_PYTHON_MODULE, MssqlPythonConnection
+from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, mssql_python_module
 
 __all__ = ("MssqlPythonConnectionPool",)
 
@@ -51,16 +51,14 @@ class MssqlPythonConnectionPool:
                 stacklevel=2,
             )
         if _POOLING_PARAMS is None or new_params != _POOLING_PARAMS:
-            MSSQL_PYTHON_MODULE.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
+            mssql_python_module.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
             _POOLING_PARAMS = new_params
 
     def acquire(self) -> MssqlPythonConnection:
         if self._closed:
             msg = "Cannot acquire a connection from a closed mssql-python pool."
             raise RuntimeError(msg)
-        connection = cast(
-            "MssqlPythonConnection", MSSQL_PYTHON_MODULE.connect(self.connection_string, **self.connect_kwargs)
-        )
+        connection = mssql_python_module.connect(self.connection_string, **self.connect_kwargs)
         if self.on_connection_create is not None:
             self.on_connection_create(connection)
         return connection
@@ -74,6 +72,6 @@ class MssqlPythonConnectionPool:
             global _POOLING_PARAMS
             _POOLING_PARAMS = None
             with contextlib.suppress(Exception):
-                ddbc = getattr(MSSQL_PYTHON_MODULE, "ddbc_bindings", None)
+                ddbc = getattr(mssql_python_module, "ddbc_bindings", None)
                 if ddbc is not None and hasattr(ddbc, "close_pooling"):
                     ddbc.close_pooling()

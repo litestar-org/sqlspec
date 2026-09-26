@@ -145,9 +145,6 @@ def extract_error_number(exc: BaseException | None) -> int | None:
         return None
 
 
-_extract_error_number = extract_error_number
-
-
 def create_mapped_exception(error: Exception, *, logger: Logger | None = None) -> SQLSpecError:
     """Map a mssql-python exception to SQLSpec's exception hierarchy."""
     error_number = extract_error_number(error)

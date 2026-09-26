@@ -307,10 +307,6 @@ def extract_error_number(exc: BaseException | None) -> int | None:
     return None
 
 
-_extract_error_number = extract_error_number
-_quote_bracket_identifier = quote_tsql_identifier
-
-
 driver_profile = build_profile()
 default_statement_config = build_statement_config()
 

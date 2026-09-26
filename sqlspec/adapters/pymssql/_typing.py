@@ -7,12 +7,10 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import pymssql as _pymssql
+import pymssql as pymssql_module
 from pymssql import Connection as _PymssqlConnection
 from pymssql import Cursor as _PymssqlRawCursor
 from pymssql import Error as PymssqlError
-
-PYMSSQL_MODULE = _pymssql
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -33,13 +31,13 @@ if not TYPE_CHECKING:
     PymssqlRawCursor = _PymssqlRawCursor
 
 __all__ = (
-    "PYMSSQL_MODULE",
     "PymssqlConnection",
     "PymssqlCursor",
     "PymssqlError",
     "PymssqlQueryParams",
     "PymssqlRawCursor",
     "PymssqlSessionContext",
+    "pymssql_module",
 )
 
 
