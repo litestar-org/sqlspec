@@ -182,7 +182,6 @@ def build_connection_config(
     config.setdefault("host", "localhost")
     config.setdefault("port", 3306)
     config.setdefault("charset", "utf8mb4")
-    config.setdefault("stmt_cache_size", 128)
     return config
 
 
