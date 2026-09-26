@@ -13,7 +13,7 @@ from sqlspec.adapters.bigquery._typing import (
 )
 from sqlspec.adapters.bigquery._typing import BigQueryLoadJobConfig as LoadJobConfig
 from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
-from sqlspec.adapters.bigquery.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.bigquery.core import BigQueryDryRunResult, apply_driver_features, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import TypeCoercionCapabilities
@@ -497,6 +497,7 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             "BigQueryCursor": BigQueryCursor,
             "BigQueryDriver": BigQueryDriver,
             "BigQueryDriverFeatures": BigQueryDriverFeatures,
+            "BigQueryDryRunResult": BigQueryDryRunResult,
             "BigQueryExceptionHandler": BigQueryExceptionHandler,
             "BigQuerySessionContext": BigQuerySessionContext,
         })

@@ -3,11 +3,12 @@
 import importlib
 from collections.abc import ItemsView, Iterable, Iterator, Mapping
 from contextlib import nullcontext
+from enum import Enum
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from google.cloud.bigquery import ArrayQueryParameter, QueryJobConfig, StructQueryParameter
+from google.cloud.bigquery import ArrayQueryParameter, QueryJobConfig, ScalarQueryParameter, StructQueryParameter
 
 from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams
 from sqlspec.adapters.bigquery.core import (
@@ -20,11 +21,13 @@ from sqlspec.adapters.bigquery.core import (
     copy_job_config,
     create_parameters,
     driver_profile,
+    normalize_script_rowcount,
     resolve_column_names,
     run_query_job,
 )
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
 from sqlspec.core import ParameterStyle, TypedParameter
+from sqlspec.exceptions import OperationalError
 from sqlspec.utils.serializers import to_json
 
 
@@ -678,3 +681,134 @@ def test_parameter_struct_and_empty_array_typed_parameter() -> None:
     assert arr_params[0].name == "ids"
     assert arr_params[0].array_type == "INT64"
     assert arr_params[0].values == []
+
+
+class _SampleStatus(Enum):
+    ACTIVE = "active"
+
+
+class _CustomMarker:
+    def __str__(self) -> str:
+        return "custom-marker"
+
+
+def test_struct_parameter_nested_and_varied_field_types() -> None:
+    """Verify _create_struct_parameter handles nested dicts, arrays, enums, prebuilt params, and JSON."""
+    struct_value = {
+        "nested": {"city": "Portland"},
+        "tags": ["a", "b"],
+        "status": _SampleStatus.ACTIVE,
+        "prebuilt": ScalarQueryParameter("prebuilt", "INT64", 7),
+        "json_payload": TypedParameter({"k": "v"}, object),
+        "fallback": _CustomMarker(),
+    }
+    params = create_parameters({"record": TypedParameter(struct_value, dict)}, to_json)
+    assert len(params) == 1
+    struct_param = params[0]
+    assert isinstance(struct_param, StructQueryParameter)
+
+
+def test_driver_dry_run_with_parameters_labels_and_table_formats() -> None:
+    """Verify dry_run converts query parameters, merges default labels, and formats table references."""
+    dry_run_job = SimpleNamespace(
+        total_bytes_processed=1024**4,
+        schema=[SimpleNamespace(name="id", field_type="INT64", mode="NULLABLE")],
+        referenced_tables=[SimpleNamespace(project="", dataset_id="analytics", table_id="users"), "raw_table_ref"],
+        statement_type="SELECT",
+    )
+    connection = _RecordingConnection()
+    connection.job = dry_run_job
+    setattr(connection, "default_query_job_config", QueryJobConfig(labels={"env": "staging"}))
+    driver = BigQueryDriver(cast(Any, connection))
+
+    res = driver.dry_run("SELECT id FROM analytics.users WHERE id = :id", {"id": 42})
+    assert res["referenced_tables"] == ["analytics.users", "raw_table_ref"]
+    _, kwargs = connection.queries[0]
+    job_config = kwargs["job_config"]
+    assert job_config.dry_run is True
+    assert job_config.use_query_cache is False
+    assert job_config.labels == {"env": "staging"}
+    assert len(job_config.query_parameters) == 1
+    assert isinstance(job_config.query_parameters[0], ScalarQueryParameter)
+    assert job_config.query_parameters[0].name == "id"
+    assert job_config.query_parameters[0].value == 42
+
+
+def test_normalize_script_rowcount_and_statement_count_fallbacks() -> None:
+    """Verify normalize_script_rowcount and _extract_script_statement_count fallback paths."""
+    assert normalize_script_rowcount(3, None) == 3
+
+    exec_path_job = SimpleNamespace(
+        num_dml_affected_rows=None,
+        statistics=None,
+        _properties={
+            "statistics": {
+                "query": {
+                    "scriptStatistics": {
+                        "executionPath": [{"numDmlAffectedRows": "2"}, {"numDmlAffectedRows": "4"}, "invalid"]
+                    }
+                }
+            }
+        },
+    )
+    assert normalize_script_rowcount(0, exec_path_job) == 6
+
+    driver = BigQueryDriver(cast(Any, _RecordingConnection()))
+    job_script_exec = SimpleNamespace(
+        _properties={}, script_statistics=SimpleNamespace(execution_path=[1, 2], child_job_ids=None)
+    )
+    assert driver._extract_script_statement_count(job_script_exec) == 2
+
+    job_child_ids = SimpleNamespace(
+        _properties={}, script_statistics=SimpleNamespace(execution_path=None, child_job_ids=["j1", "j2", "j3"])
+    )
+    assert driver._extract_script_statement_count(job_child_ids) == 3
+
+    job_nested_stats = SimpleNamespace(
+        _properties={},
+        script_statistics=None,
+        statistics=SimpleNamespace(
+            query=SimpleNamespace(script_statistics=SimpleNamespace(execution_path=[1, 2, 3, 4]))
+        ),
+    )
+    assert driver._extract_script_statement_count(job_nested_stats) == 4
+    assert driver._extract_script_statement_count(SimpleNamespace(_properties={})) == 1
+
+
+def test_script_execution_split_mode_and_transaction_double_begin() -> None:
+    """Verify split_script_statements mode and double begin error handling."""
+    connection = _RecordingConnection()
+    connection.job = SimpleNamespace(
+        statement_type="INSERT", num_dml_affected_rows=2, statistics=None, result=lambda **kwargs: None
+    )
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"split_script_statements": True})
+    res = driver.dispatch_execute_script(
+        cast(Any, connection), driver.prepare_statement("INSERT INTO t VALUES (1); INSERT INTO t VALUES (2);")
+    )
+    assert len(connection.queries) == 2
+    assert res.statement_count == 2
+    assert res.successful_statements == 2
+    assert res.rowcount_override == 2
+
+    driver.begin()
+    with pytest.raises(OperationalError, match="Transaction already in progress"):
+        driver.begin()
+    driver.rollback()
+
+
+def test_adk_store_run_query_empty_schema_and_fallback() -> None:
+    """Verify BigQueryADKStore._run_query handles empty schema and non-query_and_wait fallback."""
+    from sqlspec.adapters.bigquery.adk.store import BigQueryADKStore
+
+    empty_schema_client = SimpleNamespace(
+        query_and_wait=lambda sql, **kwargs: SimpleNamespace(schema=[], __iter__=lambda self: iter([]))
+    )
+    config = BigQueryConfig(connection_config={"project": "test-project", "dataset_id": "test_dataset"})
+    store = BigQueryADKStore(config)
+    store._config = cast(Any, SimpleNamespace(create_connection=lambda: empty_schema_client))
+    assert store._run_query("DELETE FROM test_table WHERE id = @id", [ScalarQueryParameter("id", "STRING", "1")]) == []
+
+    fallback_job = SimpleNamespace(result=lambda **kwargs: [{"id": "s1"}])
+    fallback_client = SimpleNamespace(query=lambda sql, **kwargs: fallback_job)
+    store._config = cast(Any, SimpleNamespace(create_connection=lambda: fallback_client))
+    assert store._run_query("SELECT id FROM test_table") == [{"id": "s1"}]

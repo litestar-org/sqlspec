@@ -78,7 +78,13 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
-__all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
+__all__ = (
+    "BigQueryCursor",
+    "BigQueryDriver",
+    "BigQueryDryRunResult",
+    "BigQueryExceptionHandler",
+    "BigQuerySessionContext",
+)
 
 logger = get_logger(__name__)
 _DATASET_TABLE_PARTS = 2
@@ -153,7 +159,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._literal_inliner = build_literal_inlining_transform(json_serializer=self._json_serializer)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
+        default_job_config = features.get("default_query_job_config")
+        if default_job_config is None:
+            conn_default = getattr(connection, "default_query_job_config", None)
+            if isinstance(conn_default, BigQueryQueryJobConfig):
+                default_job_config = conn_default
+        self._default_query_job_config: QueryJobConfig | None = default_job_config
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._job_result_kwargs_defaults = self._build_job_result_kwargs(features)
@@ -181,15 +192,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
             return False
         if _uses_local_bigquery_endpoint(self.connection):
             return False
-        config = job_config or self._default_query_job_config
-        if config is not None:
-            if getattr(config, "destination", None) is not None:
-                return False
-            if getattr(config, "dry_run", False):
-                return False
-            priority = getattr(config, "priority", None)
-            if priority and str(priority).upper() == "BATCH":
-                return False
+        for config in (self._default_query_job_config, job_config):
+            if config is not None:
+                if getattr(config, "destination", None) is not None:
+                    return False
+                if getattr(config, "dry_run", False):
+                    return False
+                if getattr(config, "create_session", False):
+                    return False
+        effective_priority = getattr(job_config, "priority", None) if job_config is not None else None
+        if effective_priority is None and self._default_query_job_config is not None:
+            effective_priority = getattr(self._default_query_job_config, "priority", None)
+        if effective_priority and str(effective_priority).upper() == "BATCH":
+            return False
         return "EXPORT DATA OPTIONS" not in sql.upper()
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
@@ -204,8 +219,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         """
         sql, parameters = self._compiled_sql(statement, self.statement_config)
         statement_job_config = getattr(statement, "job_config", None)
-        effective_job_config = statement_job_config or self._default_query_job_config
-        if self._can_use_query_and_wait(statement, job_config=effective_job_config, sql=sql):
+        if self._can_use_query_and_wait(statement, job_config=statement_job_config, sql=sql):
             row_iterator = _run_query_and_wait(
                 cursor,
                 sql,
@@ -311,10 +325,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
         affected_rows = build_dml_rowcount(cursor.job, len(prepared_parameters))
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
-    def _inline_script_parameters(self, sql: str, parameters: Any) -> str:
+    def _inline_script_parameters(self, sql: str, parameters: Any) -> "tuple[str, Any]":
         """Inline literal values into a multi-statement script for procedural SQL compatibility."""
         if not parameters:
-            return sql
+            return sql, parameters
         try:
             expressions = sqlglot.parse(sql, read="bigquery")
             inlined_parts: list[str] = []
@@ -323,10 +337,10 @@ class BigQueryDriver(SyncDriverAdapterBase):
                     transformed, _ = self._literal_inliner(expr.copy(), parameters, ParameterProfile.empty())
                     inlined_parts.append(str(transformed.sql(dialect="bigquery")))
             if inlined_parts:
-                return ";\n".join(inlined_parts) + ";"
+                return ";\n".join(inlined_parts) + ";", None
         except Exception as exc:
             logger.debug("Failed to inline script parameters: %s", exc)
-        return sql
+        return sql, parameters
 
     def _extract_script_statement_count(self, job: Any) -> int:
         """Extract total statement count executed by a BigQuery script job."""
@@ -401,8 +415,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             )
 
         if prepared_parameters:
-            sql = self._inline_script_parameters(sql, prepared_parameters)
-            prepared_parameters = None
+            sql, prepared_parameters = self._inline_script_parameters(sql, prepared_parameters)
 
         cursor.job = self._run_query_job(cursor, sql, prepared_parameters or {})
         cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
@@ -417,6 +430,19 @@ class BigQueryDriver(SyncDriverAdapterBase):
             is_script_result=True,
         )
 
+    def _execute_transaction_statement(self, sql: str, *, create_session: bool | None = None) -> None:
+        if not hasattr(self.connection, "query"):
+            return
+        with self.handle_database_exceptions() as exc_handler:
+            job = self._run_query_job(self.connection, sql, None, create_session=create_session)
+            if hasattr(job, "result"):
+                job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
+            if self._session_id is None:
+                session_info = getattr(job, "session_info", None)
+                if session_info is not None and getattr(session_info, "session_id", None):
+                    self._session_id = session_info.session_id
+        self._check_pending_exception(exc_handler)
+
     def begin(self) -> None:
         """Begin a multi-statement transaction inside a BigQuery session.
 
@@ -428,25 +454,26 @@ class BigQueryDriver(SyncDriverAdapterBase):
             raise OperationalError(msg)
 
         create_session = self._session_id is None
-        if hasattr(self.connection, "query"):
-            self._run_query_job(self.connection, "BEGIN TRANSACTION;", None, create_session=create_session)
+        self._execute_transaction_statement("BEGIN TRANSACTION;", create_session=create_session)
         self._in_transaction = True
 
     def commit(self) -> None:
         """Commit the active BigQuery multi-statement transaction."""
         if not self._in_transaction:
             return
-        if hasattr(self.connection, "query"):
-            self._run_query_job(self.connection, "COMMIT TRANSACTION;", None)
-        self._in_transaction = False
+        try:
+            self._execute_transaction_statement("COMMIT TRANSACTION;")
+        finally:
+            self._in_transaction = False
 
     def rollback(self) -> None:
         """Rollback the active BigQuery multi-statement transaction."""
         if not self._in_transaction:
             return
-        if hasattr(self.connection, "query"):
-            self._run_query_job(self.connection, "ROLLBACK TRANSACTION;", None)
-        self._in_transaction = False
+        try:
+            self._execute_transaction_statement("ROLLBACK TRANSACTION;")
+        finally:
+            self._in_transaction = False
 
     def create_savepoint(self, name: str) -> None:
         """Raise because BigQuery does not support savepoints.
@@ -513,12 +540,9 @@ class BigQueryDriver(SyncDriverAdapterBase):
         sql, driver_params = self._compiled_sql(prepared_statement, config)
 
         job_config = BigQueryQueryJobConfig(dry_run=True, use_query_cache=False)
-        if driver_params:
-            job_config.query_parameters = driver_params
-        if self._default_query_job_config is not None and getattr(self._default_query_job_config, "labels", None):
-            job_config.labels = dict(self._default_query_job_config.labels)
-
-        job = self.connection.query(sql, job_config=job_config)
+        with self.handle_database_exceptions() as exc_handler:
+            job = self._run_query_job(self.connection, sql, driver_params, job_config=job_config)
+        self._check_pending_exception(exc_handler)
 
         total_bytes = getattr(job, "total_bytes_processed", 0) or 0
         estimated_cost = (total_bytes / (1024**4)) * COST_PER_TERABYTE_USD
@@ -668,9 +692,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         with exc_handler:
             query_job = self._run_query_job(self.connection, sql, driver_params)
-            query_job.result(
-                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs()
-            )  # Wait for completion
+            query_job.result(job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs())
 
             arrow_table = query_job.to_arrow()
 
