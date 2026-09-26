@@ -8,11 +8,15 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 import aiomysql
-import aiomysql.cursors
 import pymysql.constants
-import pymysql.err
-
-AIOMYSQL_INSERT_VALUES_PATTERN = aiomysql.cursors.RE_INSERT_VALUES
+from aiomysql import Pool as AiomysqlPool
+from aiomysql import ProgrammingError as AiomysqlProgrammingError
+from aiomysql import SSCursor as AiomysqlSSCursor
+from aiomysql.cursors import RE_INSERT_VALUES as AIOMYSQL_INSERT_VALUES_PATTERN
+from aiomysql.cursors import Cursor as AiomysqlRawCursor
+from aiomysql.cursors import DictCursor as AiomysqlDictCursor
+from pymysql.err import Error as AiomysqlPymysqlError
+from pymysql.err import MySQLError as AiomysqlPymysqlMySQLError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -23,7 +27,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     class AiomysqlConnectionProtocol(Protocol):
-        async def cursor(self, cursor: "type[AiomysqlRawCursor] | None" = None) -> "AiomysqlRawCursor": ...
+        async def cursor(self, cursor: "type[AiomysqlRawCursor] | None" = None) -> AiomysqlRawCursor: ...
 
         async def commit(self) -> object: ...
 
@@ -34,7 +38,7 @@ if TYPE_CHECKING:
         def get_transaction_status(self) -> bool: ...
 
     class AiomysqlModuleProtocol(Protocol):
-        async def create_pool(self, **kwargs: Any) -> "AiomysqlPool": ...
+        async def create_pool(self, **kwargs: Any) -> AiomysqlPool: ...
 
         async def connect(self, **kwargs: Any) -> "AiomysqlConnection": ...
 
@@ -42,27 +46,13 @@ if TYPE_CHECKING:
         JSON: int
 
     AiomysqlConnection: TypeAlias = AiomysqlConnectionProtocol
-    AiomysqlModule: TypeAlias = AiomysqlModuleProtocol
-    AiomysqlRawCursor: TypeAlias = aiomysql.cursors.Cursor
-    AiomysqlDictCursor: TypeAlias = aiomysql.cursors.DictCursor
     AiomysqlFieldType: TypeAlias = AiomysqlFieldTypeProtocol
-    AiomysqlPool: TypeAlias = aiomysql.Pool
-    AiomysqlProgrammingError: TypeAlias = aiomysql.ProgrammingError
-    AiomysqlPymysqlError: TypeAlias = pymysql.err.Error
-    AiomysqlPymysqlMySQLError: TypeAlias = pymysql.err.MySQLError
-    AiomysqlSSCursor: TypeAlias = aiomysql.SSCursor
+    AiomysqlModule: TypeAlias = AiomysqlModuleProtocol
 
 if not TYPE_CHECKING:
     AiomysqlConnection = aiomysql.Connection
-    AiomysqlModule = aiomysql
-    AiomysqlRawCursor = aiomysql.cursors.Cursor
-    AiomysqlDictCursor = aiomysql.cursors.DictCursor
     AiomysqlFieldType = pymysql.constants.FIELD_TYPE
-    AiomysqlPool = aiomysql.Pool
-    AiomysqlProgrammingError = aiomysql.ProgrammingError
-    AiomysqlPymysqlError = aiomysql.Error
-    AiomysqlPymysqlMySQLError = aiomysql.MySQLError
-    AiomysqlSSCursor = aiomysql.SSCursor
+    AiomysqlModule = aiomysql
 
 __all__ = (
     "AIOMYSQL_INSERT_VALUES_PATTERN",

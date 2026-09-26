@@ -9,18 +9,21 @@ from typing import TYPE_CHECKING, Any
 
 import pymysql
 import pymysql.constants
-import pymysql.cursors
+from pymysql import MySQLError as PyMysqlMySQLError
+from pymysql.connections import Connection as PyMysqlConnection
+from pymysql.cursors import RE_INSERT_VALUES as PYMYSQL_INSERT_VALUES_PATTERN
+from pymysql.cursors import Cursor as PyMysqlRawCursor
+from pymysql.cursors import DictCursor as PyMysqlDictCursor
+from pymysql.cursors import SSCursor as PyMysqlSSCursor
 
 from sqlspec.typing import import_optional_attr
-
-PYMYSQL_INSERT_VALUES_PATTERN = pymysql.cursors.RE_INSERT_VALUES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
 
-    import google.cloud.sql.connector
+    from google.cloud.sql.connector import Connector as PyMysqlCloudSqlConnector
 
     from sqlspec.adapters.pymysql.driver import PyMysqlDriver
     from sqlspec.core import StatementConfig
@@ -31,24 +34,13 @@ if TYPE_CHECKING:
     class PyMysqlServerStatusProtocol(Protocol):
         SERVER_STATUS_IN_TRANS: int
 
-    PyMysqlCloudSqlConnector: TypeAlias = google.cloud.sql.connector.Connector
-    PyMysqlConnect: TypeAlias = type["PyMysqlConnection"]
-    PyMysqlConnection: TypeAlias = pymysql.connections.Connection
-    PyMysqlDictCursor: TypeAlias = pymysql.cursors.DictCursor
+    PyMysqlConnect: TypeAlias = type[PyMysqlConnection]
     PyMysqlFieldType: TypeAlias = PyMysqlFieldTypeProtocol
-    PyMysqlMySQLError: TypeAlias = pymysql.MySQLError
-    PyMysqlRawCursor: TypeAlias = pymysql.cursors.Cursor
-    PyMysqlSSCursor: TypeAlias = pymysql.cursors.SSCursor
     PyMysqlServerStatus: TypeAlias = PyMysqlServerStatusProtocol
 
 if not TYPE_CHECKING:
     PyMysqlConnect = pymysql.connect
-    PyMysqlConnection = pymysql.connections.Connection
-    PyMysqlDictCursor = pymysql.cursors.DictCursor
     PyMysqlFieldType = pymysql.constants.FIELD_TYPE
-    PyMysqlMySQLError = pymysql.MySQLError
-    PyMysqlRawCursor = pymysql.cursors.Cursor
-    PyMysqlSSCursor = pymysql.cursors.SSCursor
     PyMysqlServerStatus = pymysql.constants.SERVER_STATUS
 
 

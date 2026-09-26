@@ -8,14 +8,15 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 import mysql
-import mysql.connector
 import mysql.connector.aio
-import mysql.connector.aio.cursor
-import mysql.connector.aio.pooling
 import mysql.connector.constants
-import mysql.connector.cursor
-import mysql.connector.pooling
+from mysql.connector import Error as MysqlConnectorError
+from mysql.connector import MySQLConnection as MysqlConnectorSyncConnection
 from mysql.connector.abstracts import MySQLConnectionAbstract, MySQLCursorAbstract
+from mysql.connector.aio.cursor import MySQLCursor as MysqlConnectorAsyncRawCursor
+from mysql.connector.aio.pooling import MySQLConnectionPool as MysqlConnectorAsyncPool
+from mysql.connector.cursor import MySQLCursor as MysqlConnectorSyncRawCursor
+from mysql.connector.pooling import MySQLConnectionPool as MysqlConnectorConnectionPool
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -43,33 +44,21 @@ if TYPE_CHECKING:
         JSON: int
 
     class MysqlConnectorConnectorModuleProtocol(Protocol):
-        def connect(self, *args: Any, **kwargs: Any) -> "MysqlConnectorSyncConnection": ...
+        def connect(self, *args: Any, **kwargs: Any) -> MysqlConnectorSyncConnection: ...
 
     class MysqlConnectorMysqlModuleProtocol(Protocol):
         connector: "ClassVar[MysqlConnectorConnectorModuleProtocol]"
 
-    MysqlConnectorSyncConnection: TypeAlias = mysql.connector.MySQLConnection
     MysqlConnectorAio: TypeAlias = MysqlConnectorAioModuleProtocol
     MysqlConnectorAsyncConnection: TypeAlias = MysqlConnectorAsyncConnectionProtocol
-    MysqlConnectorSyncRawCursor: TypeAlias = mysql.connector.cursor.MySQLCursor
-    MysqlConnectorConnectionPool: TypeAlias = mysql.connector.pooling.MySQLConnectionPool
-    MysqlConnectorAsyncPool: TypeAlias = mysql.connector.aio.pooling.MySQLConnectionPool
-    MysqlConnectorError: TypeAlias = mysql.connector.Error
     MysqlConnectorFieldType: TypeAlias = MysqlConnectorFieldTypeProtocol
     MysqlConnectorMysqlModule: TypeAlias = MysqlConnectorMysqlModuleProtocol
-    MysqlConnectorAsyncRawCursor: TypeAlias = mysql.connector.aio.cursor.MySQLCursor
 
 if not TYPE_CHECKING:
     MysqlConnectorAio = mysql.connector.aio
-    MysqlConnectorSyncConnection = mysql.connector.MySQLConnection
     MysqlConnectorAsyncConnection = mysql.connector.aio.MySQLConnection
-    MysqlConnectorConnectionPool = mysql.connector.pooling.MySQLConnectionPool
-    MysqlConnectorAsyncPool = mysql.connector.aio.pooling.MySQLConnectionPool
-    MysqlConnectorError = mysql.connector.Error
     MysqlConnectorFieldType = mysql.connector.constants.FieldType
     MysqlConnectorMysqlModule = mysql
-    MysqlConnectorSyncRawCursor = mysql.connector.cursor.MySQLCursor
-    MysqlConnectorAsyncRawCursor = mysql.connector.aio.cursor.MySQLCursor
 
 __all__ = (
     "MySQLConnectionAbstract",

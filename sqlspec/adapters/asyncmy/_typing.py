@@ -10,15 +10,18 @@ from typing import TYPE_CHECKING, Any, cast
 
 import asyncmy
 import asyncmy.constants
-import asyncmy.cursors
-import asyncmy.errors
-import asyncmy.pool
+from asyncmy import Pool as AsyncmyPool
 from asyncmy.connection import LoadLocalFile, MySQLResult
+from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
+from asyncmy.cursors import Cursor as AsyncmyRawCursor
+from asyncmy.cursors import DictCursor as AsyncmyDictCursor
+from asyncmy.cursors import SSCursor as AsyncmySSCursor
+from asyncmy.errors import Error as AsyncmyError
+from asyncmy.errors import MySQLError as AsyncmyMySQLError
+from asyncmy.errors import ProgrammingError as AsyncmyProgrammingError
 from asyncmy.protocol import LoadLocalPacketWrapper
 
 from sqlspec.exceptions import SQLSpecError
-
-ASYNCMY_INSERT_VALUES_PATTERN = asyncmy.cursors.RE_INSERT_VALUES
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -29,7 +32,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     class AsyncmyConnectionProtocol(Protocol):
-        def cursor(self) -> "AsyncmyRawCursor": ...
+        def cursor(self) -> AsyncmyRawCursor: ...
 
         async def commit(self) -> object: ...
 
@@ -40,33 +43,19 @@ if TYPE_CHECKING:
     class AsyncmyModuleProtocol(Protocol):
         async def connect(self, *args: Any, **kwargs: Any) -> "AsyncmyConnection": ...
 
-        async def create_pool(self, **kwargs: Any) -> "AsyncmyPool": ...
+        async def create_pool(self, **kwargs: Any) -> AsyncmyPool: ...
 
     class AsyncmyFieldTypeProtocol(Protocol):
         JSON: int
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
-    AsyncmyDictCursor: TypeAlias = asyncmy.cursors.DictCursor
-    AsyncmyError: TypeAlias = asyncmy.errors.Error
     AsyncmyFieldType: TypeAlias = AsyncmyFieldTypeProtocol
-    AsyncmyMySQLError: TypeAlias = asyncmy.errors.MySQLError
     AsyncmyModule: TypeAlias = AsyncmyModuleProtocol
-    AsyncmyPool: TypeAlias = asyncmy.pool.Pool
-    AsyncmyProgrammingError: TypeAlias = asyncmy.errors.ProgrammingError
-    AsyncmyRawCursor: TypeAlias = asyncmy.cursors.Cursor
-    AsyncmySSCursor: TypeAlias = asyncmy.cursors.SSCursor
 
 if not TYPE_CHECKING:
     AsyncmyConnection = asyncmy.Connection
-    AsyncmyDictCursor = asyncmy.cursors.DictCursor
-    AsyncmyError = asyncmy.errors.Error
     AsyncmyFieldType = asyncmy.constants.FIELD_TYPE
-    AsyncmyMySQLError = asyncmy.errors.MySQLError
     AsyncmyModule = asyncmy
-    AsyncmyPool = asyncmy.pool.Pool
-    AsyncmyProgrammingError = asyncmy.errors.ProgrammingError
-    AsyncmyRawCursor = asyncmy.cursors.Cursor
-    AsyncmySSCursor = asyncmy.cursors.SSCursor
 
 __all__ = (
     "ASYNCMY_INSERT_VALUES_PATTERN",
