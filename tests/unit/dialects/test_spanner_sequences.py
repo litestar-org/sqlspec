@@ -63,3 +63,22 @@ def test_get_next_sequence_value() -> None:
     assert node.this.upper() == "GET_NEXT_SEQUENCE_VALUE"
     rendered = parsed.sql(dialect="spanner")
     assert "GET_NEXT_SEQUENCE_VALUE(SEQUENCE CustomerSequence)" in rendered
+
+
+def test_get_next_sequence_value_in_parenthesized_expressions() -> None:
+    """Verify GET_NEXT_SEQUENCE_VALUE(SEQUENCE name) parses inside VALUES (...) and DEFAULT (...)."""
+    insert_sql = "INSERT INTO Customers (CustomerId) VALUES (GET_NEXT_SEQUENCE_VALUE(SEQUENCE CustomerSequence))"
+    parsed_insert = parse_one(insert_sql, dialect="spanner")
+    assert "GET_NEXT_SEQUENCE_VALUE(SEQUENCE CustomerSequence)" in parsed_insert.sql(dialect="spanner")
+
+    create_sql = (
+        "CREATE TABLE Customers ("
+        "CustomerId INT64 DEFAULT (GET_NEXT_SEQUENCE_VALUE(SEQUENCE CustomerSequence))"
+        ") PRIMARY KEY (CustomerId)"
+    )
+    parsed_create = parse_one(create_sql, dialect="spanner")
+    assert "GET_NEXT_SEQUENCE_VALUE(SEQUENCE CustomerSequence)" in parsed_create.sql(dialect="spanner")
+
+    spangres_sql = "SELECT GET_NEXT_SEQUENCE_VALUE(SEQUENCE customer_seq)"
+    parsed_spangres = parse_one(spangres_sql, dialect="spangres")
+    assert "GET_NEXT_SEQUENCE_VALUE(SEQUENCE customer_seq)" in parsed_spangres.sql(dialect="spangres")

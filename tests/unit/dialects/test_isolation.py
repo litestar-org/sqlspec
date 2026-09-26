@@ -15,6 +15,13 @@ def test_bigquery_generation_isolated() -> None:
     assert rendered == "SELECT CAST(x AS FLOAT64) FROM t"
 
 
+def test_bigquery_search_with_kwargs_isolated() -> None:
+    """Verify that BigQuery SEARCH with named arguments is not truncated by Spanner Search."""
+    sql = "SELECT SEARCH(t, 'foo', json_scope => '$.a') FROM t"
+    rendered = parse_one(sql, dialect="bigquery").sql(dialect="bigquery")
+    assert rendered == "SELECT SEARCH(t, 'foo', json_scope => '$.a') FROM t"
+
+
 def test_postgres_generation_isolated() -> None:
     """Verify that Postgres generation is isolated from Spangres transforms."""
     sql = "SELECT 1"

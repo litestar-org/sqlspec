@@ -34,7 +34,7 @@ _INTERLEAVE_NAME = "INTERLEAVE_IN_PARENT"
 _INTERLEAVE_IN_NAME = "INTERLEAVE_IN"
 
 _SPANNER_PROPERTY_NAMES: Final[frozenset[str]] = frozenset({_INTERLEAVE_NAME, _INTERLEAVE_IN_NAME, _ROW_DELETION_NAME})
-_DAYS_PATTERN: Final["re.Pattern[str]"] = re.compile(r"^\s*(\d+)\s*days?\s*$", re.IGNORECASE)
+_DAYS_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\s*(\d+)\s*days?\s*$", re.IGNORECASE)
 
 _original_bq_property_sql = BigQueryGenerator.property_sql
 _original_bq_properties_sql = BigQueryGenerator.properties_sql
@@ -56,12 +56,12 @@ def _is_post_schema_spanner_property(expression: exp.Expr) -> bool:
     return expression.this.name.upper() in _SPANNER_PROPERTY_NAMES
 
 
-def _get_dialect_name(generator: Any) -> "str | None":
+def _get_dialect_name(generator: Any) -> str | None:
     dialect_class = getattr(generator.dialect, "__class__", None)
     return dialect_class.__name__ if dialect_class else None
 
 
-def _interval_days(expression: exp.Expr) -> "int | None":
+def _interval_days(expression: exp.Expr) -> int | None:
     """Extract a whole-day count from an interval expression when possible."""
     if isinstance(expression, exp.Interval):
         unit = expression.args.get("unit")
@@ -114,7 +114,7 @@ def _render_pg_interval_spec(generator: Any, expression: exp.Expr) -> str:
     return cast("str", generator.sql(expression))
 
 
-def _render_interleave_sql(generator: Any, expression: exp.Property) -> "str | None":
+def _render_interleave_sql(generator: Any, expression: exp.Property) -> str | None:
     """Render INTERLEAVE IN [PARENT] for either dialect, or None if not interleave."""
     if not isinstance(expression.this, exp.Literal):
         return None
@@ -137,7 +137,7 @@ def _render_interleave_sql(generator: Any, expression: exp.Property) -> "str | N
     return sql
 
 
-def _row_deletion_components(expression: exp.Property) -> "tuple[exp.Expr, exp.Expr] | None":
+def _row_deletion_components(expression: exp.Property) -> tuple[exp.Expr, exp.Expr] | None:
     if not isinstance(expression.this, exp.Literal) or expression.this.name.upper() != _ROW_DELETION_NAME:
         return None
     values = expression.args.get("value")
@@ -701,14 +701,10 @@ BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
 BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
 BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
 BigQueryGenerator.TRANSFORMS[exp.Anonymous] = _spanner_anonymous_transform
-BigQueryGenerator.TRANSFORMS[CosineDistance] = lambda s, e: (
-    f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-)
-BigQueryGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: (
-    f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-)
-BigQueryGenerator.TRANSFORMS[DotProduct] = lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-BigQueryGenerator.TRANSFORMS[Search] = lambda s, e: f"SEARCH({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+BigQueryGenerator.TRANSFORMS[CosineDistance] = lambda s, e: str(s.function_fallback_sql(e))
+BigQueryGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: str(s.function_fallback_sql(e))
+BigQueryGenerator.TRANSFORMS[DotProduct] = lambda s, e: str(s.function_fallback_sql(e))
+BigQueryGenerator.TRANSFORMS[Search] = lambda s, e: str(s.function_fallback_sql(e))
 
 PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
 PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
@@ -716,13 +712,9 @@ PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
 PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
 PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
 PostgresGenerator.TRANSFORMS[exp.Anonymous] = _spangres_anonymous_transform
-PostgresGenerator.TRANSFORMS[CosineDistance] = lambda s, e: (
-    f"COSINE_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-)
-PostgresGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: (
-    f"EUCLIDEAN_DISTANCE({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
-)
-PostgresGenerator.TRANSFORMS[DotProduct] = lambda s, e: f"DOT_PRODUCT({s.sql(e, 'this')}, {s.sql(e, 'expression')})"
+PostgresGenerator.TRANSFORMS[CosineDistance] = lambda s, e: str(s.function_fallback_sql(e))
+PostgresGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: str(s.function_fallback_sql(e))
+PostgresGenerator.TRANSFORMS[DotProduct] = lambda s, e: str(s.function_fallback_sql(e))
 
 invalidate_generator_dispatch(BigQueryGenerator, PostgresGenerator)
 

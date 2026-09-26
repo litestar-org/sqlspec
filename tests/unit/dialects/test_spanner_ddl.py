@@ -37,6 +37,17 @@ def test_create_change_stream_for_specific_tables() -> None:
     assert "Albums" in rendered
 
 
+def test_alter_change_stream() -> None:
+    """Verify ALTER CHANGE STREAM SET OPTIONS."""
+    sql = "ALTER CHANGE STREAM AllStream SET OPTIONS (retention_period = '36h')"
+    parsed = parse_one(sql, dialect="spanner")
+    assert not isinstance(parsed, exp.Command)
+    assert isinstance(parsed, exp.Alter)
+    assert parsed.args.get("kind") == "CHANGE STREAM"
+    rendered = parsed.sql(dialect="spanner")
+    assert "ALTER CHANGE STREAM AllStream SET OPTIONS (retention_period = '36h')" in rendered
+
+
 def test_drop_change_stream() -> None:
     """Verify DROP CHANGE STREAM."""
     sql = "DROP CHANGE STREAM AllStream"

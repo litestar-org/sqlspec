@@ -48,3 +48,14 @@ def test_transpile_table_hint_bidirectional() -> None:
 
     roundtrip_spanner = parse_one(spangres_sql, dialect="spangres").sql(dialect="spanner")
     assert "albums @{FORCE_INDEX=albums_idx}" in roundtrip_spanner
+
+
+def test_spangres_aliased_table_hint_and_parse_into() -> None:
+    """Verify table hints on aliased tables and parse_into hint attachment in Spangres."""
+    sql = "SELECT * FROM albums AS a /*@ FORCE_INDEX=albums_idx */"
+    parsed = parse_one(sql, into=exp.Select, dialect="spangres")
+    table = parsed.find(exp.Table)
+    assert table is not None
+    assert table.args.get("hints") is not None
+    rendered = parsed.sql(dialect="spangres")
+    assert "/*@ FORCE_INDEX=albums_idx */" in rendered

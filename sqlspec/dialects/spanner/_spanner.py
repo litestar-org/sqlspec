@@ -39,7 +39,7 @@ class Spanner(BigQuery):
     Parser = SpannerParser
     Generator = SpannerGenerator
 
-    def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
+    def parse(self, sql: str, **opts: Any) -> list[exp.Expr | None]:
         """Parse Spanner SQL statements, normalizing hints and repairing CREATE TABLE statements."""
         normalized_sql = re.sub(r"@\{([^}]+)\}", r"/*@ \1 */", sql)
         expressions = super().parse(normalized_sql, **opts)
@@ -57,7 +57,7 @@ class Spanner(BigQuery):
                 attach_hints(expression)
         return expressions
 
-    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> "list[exp.Expr | None]":
+    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> list[exp.Expr | None]:
         """Parse into specific expression type with normalized hints."""
         normalized_sql = re.sub(r"@\{([^}]+)\}", r"/*@ \1 */", sql)
         expressions = super().parse_into(expression_type, normalized_sql, **opts)
