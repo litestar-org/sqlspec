@@ -3,7 +3,8 @@
 from typing import TYPE_CHECKING, Any
 
 import asyncpg as cockroach_asyncpg_module
-from asyncpg import Pool, PostgresError
+from asyncpg import Pool
+from asyncpg import PostgresError as CockroachAsyncpgPostgresError
 from asyncpg import Record as CockroachAsyncpgRecord
 from asyncpg import connect as cockroach_asyncpg_connect
 from asyncpg import create_pool as cockroach_asyncpg_create_pool
@@ -20,12 +21,10 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     CockroachAsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
-    CockroachAsyncpgPostgresError: TypeAlias = PostgresError
     CockroachAsyncpgPool: TypeAlias = Pool[Record]
 
 if not TYPE_CHECKING:
     CockroachAsyncpgConnection = PoolConnectionProxy
-    CockroachAsyncpgPostgresError = PostgresError
     CockroachAsyncpgPool = Pool
 
 __all__ = (
