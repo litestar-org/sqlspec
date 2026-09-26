@@ -1,0 +1,667 @@
+"""In-memory stand-ins for ``ibm_db`` and ``ibm_db_dbi`` that follow the real driver's behavior.
+
+The fakes reproduce the ``ibm_db_dbi`` 3.3 semantics the Db2 adapter depends on:
+
+- ``connect()`` defaults ``SQL_ATTR_AUTOCOMMIT`` to ``SQL_AUTOCOMMIT_OFF`` and appends ``UID``/``PWD``
+  keywords to the DSN when credentials are passed separately.
+- Connections expose ``conn_handler`` and ``set_autocommit()`` but no autocommit getter; the mode is
+  read through ``ibm_db.autocommit(conn_handler)``.
+- ``Connection.close()`` rolls back pending work before closing.
+- Cursor descriptions carry column names exactly as Db2 reports them (see ``db2_description``).
+- Errors are ``Db2Error`` subclasses whose text embeds the CLI diagnostic, SQLSTATE and SQLCODE.
+- ``AsyncConnection.connect()`` opens a sync connection and wraps it; ``AsyncConnection`` and
+  ``AsyncCursor`` coroutines delegate to the wrapped sync object, while ``conn_handler``,
+  ``description`` and ``rowcount`` stay plain properties.
+"""
+
+import inspect
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
+from typing import Any
+
+from typing_extensions import Self
+
+import sqlspec.adapters.db2._typing as db2_typing
+import sqlspec.adapters.db2.config as db2_config
+import sqlspec.adapters.db2.driver as db2_driver
+import sqlspec.adapters.db2.migrations as db2_migrations
+from sqlspec.adapters.db2._typing import Db2Error
+from sqlspec.adapters.db2.core import default_statement_config
+from sqlspec.adapters.db2.driver import Db2SyncDriver
+
+SQL_ATTR_AUTOCOMMIT = 102
+SQL_AUTOCOMMIT_ON = 1
+SQL_AUTOCOMMIT_OFF = 0
+_READ_ONLY_KEYWORDS = ("SELECT", "WITH", "VALUES")
+
+
+class FakeDb2Error(Db2Error):  # type: ignore[misc]
+    """Base driver error rendered the way ``ibm_db_dbi.Error`` renders itself.
+
+    It derives from the adapter's ``Db2Error`` alias, so it is caught wherever a real
+    ``ibm_db_dbi.Error`` would be.
+    """
+
+    dbi_name = "Error"
+
+    def __init__(self, message: str) -> None:
+        self._message = message
+        super().__init__(message)
+
+    def __str__(self) -> str:
+        return f"ibm_db_dbi::{self.dbi_name}: {self._message}"
+
+
+class FakeDb2DatabaseError(FakeDb2Error):
+    """Stand-in for ``ibm_db_dbi.DatabaseError``."""
+
+    dbi_name = "DatabaseError"
+
+
+class FakeDb2IntegrityError(FakeDb2DatabaseError):
+    """Stand-in for ``ibm_db_dbi.IntegrityError``."""
+
+    dbi_name = "IntegrityError"
+
+
+class FakeDb2OperationalError(FakeDb2DatabaseError):
+    """Stand-in for ``ibm_db_dbi.OperationalError``."""
+
+    dbi_name = "OperationalError"
+
+
+class FakeDb2ProgrammingError(FakeDb2DatabaseError):
+    """Stand-in for ``ibm_db_dbi.ProgrammingError``."""
+
+    dbi_name = "ProgrammingError"
+
+
+class FakeDb2DataError(FakeDb2DatabaseError):
+    """Stand-in for ``ibm_db_dbi.DataError``."""
+
+    dbi_name = "DataError"
+
+
+class DiagnosticAttributeError(Exception):
+    """Non-driver exception that exposes Db2 diagnostics as attributes instead of message text."""
+
+    def __init__(self, message: str, sqlstate: str | None = None, error_code: "str | int | None" = None) -> None:
+        super().__init__(message)
+        self.sqlstate = sqlstate
+        self.error_code = error_code
+
+
+def db2_error(
+    sqlcode: int,
+    sqlstate: str,
+    text: str,
+    cls: "type[FakeDb2Error]" = FakeDb2ProgrammingError,
+    reason: "int | None" = None,
+) -> FakeDb2Error:
+    """Build a driver error carrying a CLI-formatted Db2 diagnostic.
+
+    Args:
+        sqlcode: Negative SQLCODE reported by Db2, e.g. ``-803``.
+        sqlstate: Five-character SQLSTATE, e.g. ``"23505"``.
+        text: Diagnostic text following the message identifier.
+        cls: Fake error class to instantiate.
+        reason: Optional reason code appended as ``Reason code "<n>".``.
+
+    Returns:
+        The error instance, ready to raise.
+    """
+    suffix = "C" if sqlcode == -1042 else "N"
+    reason_part = f'  Reason code "{reason}".' if reason is not None else ""
+    return cls(
+        f"[IBM][CLI Driver][DB2/LINUXX8664] SQL{abs(sqlcode):04d}{suffix}  {text}{reason_part} "
+        f"SQLSTATE={sqlstate} SQLCODE={sqlcode}"
+    )
+
+
+def db2_description(*names: str) -> "list[tuple[Any, ...]]":
+    """Build a cursor description the way Db2 reports column names.
+
+    Unquoted names fold to uppercase; names wrapped in double quotes keep their exact case.
+
+    Args:
+        *names: Column names as written in the SELECT list.
+
+    Returns:
+        Seven-item DB-API description tuples.
+    """
+    folded = [name[1:-1] if len(name) > 1 and name[0] == name[-1] == '"' else name.upper() for name in names]
+    return [(name, None, None, None, None, None, True) for name in folded]
+
+
+class FakeDb2Cursor:
+    """Scripted cursor that records every statement it receives."""
+
+    def __init__(
+        self,
+        rows: "Sequence[Any] | None" = None,
+        description: "Sequence[tuple[Any, ...]] | None" = None,
+        rowcount: int = -1,
+        error: "BaseException | None" = None,
+    ) -> None:
+        self.rows = list(rows) if rows is not None else []
+        self.description = description
+        self.rowcount = rowcount
+        self.error = error
+        self.executed: list[tuple[str, Any]] = []
+        self.closed = False
+        self.connection: FakeDb2Connection | None = None
+
+    def execute(self, sql: str, params: object = None) -> "FakeDb2Cursor":
+        """Record the statement, raise the scripted error, and track writes on the owning connection.
+
+        Returns:
+            The cursor itself.
+        """
+        self.executed.append((sql, params))
+        if self.error is not None:
+            raise self.error
+        self._track_write(sql, params)
+        return self
+
+    def executemany(self, sql: str, seq: "Sequence[Any]") -> "FakeDb2Cursor":
+        """Record a batch statement, raise the scripted error, and track writes on the owning connection.
+
+        Returns:
+            The cursor itself.
+        """
+        self.executed.append((sql, seq))
+        if self.error is not None:
+            raise self.error
+        self._track_write(sql, seq)
+        return self
+
+    def fetchone(self) -> Any:
+        """Return and consume the next scripted row, or ``None`` when exhausted."""
+        return self.rows.pop(0) if self.rows else None
+
+    def fetchmany(self, size: int = 1) -> "list[Any]":
+        """Return and consume up to ``size`` scripted rows."""
+        chunk = self.rows[:size]
+        self.rows = self.rows[size:]
+        return chunk
+
+    def fetchall(self) -> "list[Any]":
+        """Return the remaining scripted rows."""
+        return list(self.rows)
+
+    def close(self) -> None:
+        """Mark the cursor closed."""
+        self.closed = True
+
+    def _track_write(self, sql: str, params: object) -> None:
+        if self.connection is None or sql.lstrip().upper().startswith(_READ_ONLY_KEYWORDS):
+            return
+        target = self.connection.committed if self.connection.autocommit else self.connection.pending
+        target.append((sql, params))
+
+
+class FakeDb2Connection:
+    """Connection that follows ``ibm_db_dbi.Connection`` transaction semantics.
+
+    Writes executed while autocommit is off stay in ``pending`` until ``commit()`` moves them to
+    ``committed``; ``rollback()`` discards them. ``close()`` rolls back before closing.
+    """
+
+    def __init__(
+        self, cursors: "Sequence[FakeDb2Cursor] | Callable[[], FakeDb2Cursor] | None" = None, autocommit: bool = False
+    ) -> None:
+        self.conn_handler = object()
+        self.dbms_name = "DB2/LINUXX8664"
+        self.autocommit = autocommit
+        self.dsn: str | None = None
+        self.pending: list[tuple[str, object]] = []
+        self.committed: list[tuple[str, object]] = []
+        self.rollbacks = 0
+        self.commits = 0
+        self.closed = False
+        self.cursors: list[FakeDb2Cursor] = []
+        self._cursor_factory = cursors if callable(cursors) else None
+        self._scripted = list(cursors) if cursors is not None and not callable(cursors) else []
+
+    def cursor(self) -> FakeDb2Cursor:
+        """Return the next scripted cursor, falling back to an empty cursor.
+
+        Returns:
+            The cursor bound to this connection.
+        """
+        if self._cursor_factory is not None:
+            cursor = self._cursor_factory()
+        elif self._scripted:
+            cursor = self._scripted.pop(0)
+        else:
+            cursor = FakeDb2Cursor()
+        cursor.connection = self
+        self.cursors.append(cursor)
+        return cursor
+
+    def set_autocommit(self, is_on: bool) -> None:
+        """Switch the connection's autocommit mode."""
+        self.autocommit = bool(is_on)
+
+    def commit(self) -> None:
+        """Make pending writes durable."""
+        self.commits += 1
+        self.committed.extend(self.pending)
+        self.pending.clear()
+
+    def rollback(self) -> None:
+        """Discard pending writes."""
+        self.rollbacks += 1
+        self.pending.clear()
+
+    def close(self) -> None:
+        """Roll back pending writes, then close."""
+        self.rollback()
+        self.closed = True
+
+
+class FakeIbmDbModule:
+    """Stand-in for the ``ibm_db`` extension module's autocommit accessor."""
+
+    SQL_ATTR_AUTOCOMMIT = SQL_ATTR_AUTOCOMMIT
+    SQL_AUTOCOMMIT_ON = SQL_AUTOCOMMIT_ON
+    SQL_AUTOCOMMIT_OFF = SQL_AUTOCOMMIT_OFF
+
+    def __init__(self) -> None:
+        self.connections: dict[object, FakeDb2Connection] = {}
+
+    def register(self, connection: FakeDb2Connection) -> None:
+        """Associate a connection's ``conn_handler`` with the connection."""
+        self.connections[connection.conn_handler] = connection
+
+    def autocommit(self, handle: object, value: "int | None" = None) -> "int | bool":
+        """Read the autocommit mode, or set it when ``value`` is given.
+
+        Returns:
+            ``1``/``0`` for reads; ``True`` after a write.
+        """
+        connection = self.connections[handle]
+        if value is None:
+            return SQL_AUTOCOMMIT_ON if connection.autocommit else SQL_AUTOCOMMIT_OFF
+        connection.autocommit = value == SQL_AUTOCOMMIT_ON
+        return True
+
+
+class FakeDb2AsyncCursor:
+    """Stand-in for ``ibm_db_dbi.AsyncCursor`` wrapping a scripted sync cursor."""
+
+    def __init__(self, cursor: FakeDb2Cursor) -> None:
+        self.sync_cursor = cursor
+
+    @property
+    def description(self) -> "Sequence[tuple[Any, ...]] | None":
+        """Return the wrapped cursor's description."""
+        return self.sync_cursor.description
+
+    @property
+    def rowcount(self) -> int:
+        """Return the wrapped cursor's rowcount."""
+        return self.sync_cursor.rowcount
+
+    async def execute(self, operation: str, parameters: object = None) -> FakeDb2Cursor:
+        """Execute through the wrapped cursor.
+
+        Returns:
+            The wrapped cursor, as the real driver returns its sync cursor.
+        """
+        return self.sync_cursor.execute(operation, parameters)
+
+    async def executemany(self, operation: str, seq_parameters: "Sequence[Any]") -> FakeDb2Cursor:
+        """Execute a batch through the wrapped cursor.
+
+        Returns:
+            The wrapped cursor.
+        """
+        return self.sync_cursor.executemany(operation, seq_parameters)
+
+    async def fetchone(self) -> Any:
+        """Return the next scripted row."""
+        return self.sync_cursor.fetchone()
+
+    async def fetchmany(self, size: int = 0) -> "list[Any]":
+        """Return up to ``size`` scripted rows."""
+        return self.sync_cursor.fetchmany(size)
+
+    async def fetchall(self) -> "list[Any]":
+        """Return the remaining scripted rows."""
+        return self.sync_cursor.fetchall()
+
+    async def close(self) -> None:
+        """Close the wrapped cursor."""
+        self.sync_cursor.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.close()
+
+
+class FakeDb2AsyncConnection:
+    """Stand-in for ``ibm_db_dbi.AsyncConnection`` wrapping a sync fake connection."""
+
+    def __init__(self, connection: "FakeDb2Connection | None" = None) -> None:
+        self.sync_connection = connection if connection is not None else FakeDb2Connection()
+
+    @property
+    def conn_handler(self) -> object:
+        """Return the wrapped connection's CLI handle."""
+        return self.sync_connection.conn_handler
+
+    @property
+    def dbms_name(self) -> str:
+        """Return the wrapped connection's DBMS name."""
+        return self.sync_connection.dbms_name
+
+    async def cursor(self) -> FakeDb2AsyncCursor:
+        """Open a cursor on the wrapped connection.
+
+        Returns:
+            The async cursor wrapper.
+        """
+        return FakeDb2AsyncCursor(self.sync_connection.cursor())
+
+    async def close(self) -> None:
+        """Close the wrapped connection."""
+        self.sync_connection.close()
+
+    async def commit(self) -> None:
+        """Commit on the wrapped connection."""
+        self.sync_connection.commit()
+
+    async def rollback(self) -> None:
+        """Roll back on the wrapped connection."""
+        self.sync_connection.rollback()
+
+    async def set_autocommit(self, is_on: bool) -> None:
+        """Switch the wrapped connection's autocommit mode."""
+        self.sync_connection.set_autocommit(is_on)
+
+
+class FakeAsyncConnectionFactory:
+    """Stand-in for the ``ibm_db_dbi.AsyncConnection`` class and its ``connect`` factory."""
+
+    def __init__(self, module: "FakeIbmDbDbiModule") -> None:
+        self._module = module
+
+    async def connect(
+        self,
+        dsn: str,
+        user: str = "",
+        password: str = "",
+        host: str = "",
+        database: str = "",
+        conn_options: "dict[int, int] | None" = None,
+    ) -> FakeDb2AsyncConnection:
+        """Open a sync fake connection through the module's ``connect`` and wrap it.
+
+        Returns:
+            The async connection wrapper.
+        """
+        return FakeDb2AsyncConnection(self._module.connect(dsn, user, password, host, database, conn_options))
+
+
+class FakeIbmDbDbiModule:
+    """Stand-in for the ``ibm_db_dbi`` module.
+
+    ``connect()`` returns the next connection from ``pending_connections`` or a new one, applying
+    the autocommit mode from ``conn_options`` and registering it with the paired ``ibm_db`` fake.
+    Errors queued in ``connect_errors`` are raised, one per call, before a connection is opened.
+    ``AsyncConnection.connect()`` goes through the same path and wraps the result.
+    """
+
+    SQL_ATTR_AUTOCOMMIT = SQL_ATTR_AUTOCOMMIT
+    SQL_AUTOCOMMIT_ON = SQL_AUTOCOMMIT_ON
+    SQL_AUTOCOMMIT_OFF = SQL_AUTOCOMMIT_OFF
+    Error = FakeDb2Error
+    DatabaseError = FakeDb2DatabaseError
+    IntegrityError = FakeDb2IntegrityError
+    OperationalError = FakeDb2OperationalError
+    ProgrammingError = FakeDb2ProgrammingError
+    DataError = FakeDb2DataError
+
+    def __init__(self, ibm_db: "FakeIbmDbModule | None" = None) -> None:
+        self.ibm_db = ibm_db or FakeIbmDbModule()
+        self.pending_connections: list[FakeDb2Connection] = []
+        self.connect_calls: list[tuple[str, str, str, str, str, dict[int, int] | None]] = []
+        self.connect_errors: list[BaseException] = []
+        self.AsyncConnection = FakeAsyncConnectionFactory(self)
+
+    def connect(
+        self,
+        dsn: str,
+        user: str = "",
+        password: str = "",
+        host: str = "",
+        database: str = "",
+        conn_options: "dict[int, int] | None" = None,
+    ) -> FakeDb2Connection:
+        """Open a fake connection with the real driver's argument handling.
+
+        Returns:
+            The connection, with autocommit taken from ``conn_options`` (off by default).
+        """
+        self.connect_calls.append((dsn, user, password, host, database, conn_options))
+        if self.connect_errors:
+            raise self.connect_errors.pop(0)
+        options = dict(conn_options) if conn_options is not None else {}
+        options.setdefault(SQL_ATTR_AUTOCOMMIT, SQL_AUTOCOMMIT_OFF)
+        effective_dsn = dsn
+        if user and "UID=" not in effective_dsn:
+            effective_dsn = f"{effective_dsn}UID={user};"
+        if password and "PWD=" not in effective_dsn:
+            effective_dsn = f"{effective_dsn}PWD={password};"
+        connection = self.pending_connections.pop(0) if self.pending_connections else FakeDb2Connection()
+        connection.autocommit = options[SQL_ATTR_AUTOCOMMIT] == SQL_AUTOCOMMIT_ON
+        connection.dsn = effective_dsn
+        self.ibm_db.register(connection)
+        return connection
+
+
+class _FakeDb2SessionState:
+    """Scripted connection state shared by the sync and async session-config fakes.
+
+    Cursors are consumed in statement order; once the scripted cursors are exhausted every further
+    statement gets an empty cursor. ``executed`` lists every ``(sql, parameters)`` pair the driver
+    sent, across all sessions.
+    """
+
+    def __init__(
+        self, cursors: "Sequence[FakeDb2Cursor]" = (), extension_config: "dict[str, Any] | None" = None
+    ) -> None:
+        self.connection = FakeDb2Connection(list(cursors), autocommit=True)
+        self.extension_config: dict[str, Any] = extension_config or {}
+        self.statement_config = default_statement_config
+
+    @property
+    def executed(self) -> "list[tuple[str, Any]]":
+        """Return every statement and its parameters in execution order."""
+        return [call for cursor in self.connection.cursors for call in cursor.executed]
+
+
+class FakeDb2SessionConfig(_FakeDb2SessionState):
+    """Config stand-in whose sessions run a real ``Db2SyncDriver`` over one scripted fake connection."""
+
+    @contextmanager
+    def provide_session(self, **_: Any) -> "Iterator[Db2SyncDriver]":
+        """Yield a driver bound to the shared fake connection."""
+        yield Db2SyncDriver(self.connection, statement_config=default_statement_config)
+
+
+class FakeDb2AsyncSessionConfig(_FakeDb2SessionState):
+    """Config stand-in whose sessions run a real ``Db2AsyncDriver`` over one scripted fake connection.
+
+    The async driver works through ``FakeDb2AsyncConnection`` over the scripted sync connection, so
+    ``executed`` and ``connection`` report the same way as ``FakeDb2SessionConfig``.
+    """
+
+    @asynccontextmanager
+    async def provide_session(self, **_: Any) -> "AsyncIterator[Any]":
+        """Yield an async driver bound to the shared fake connection."""
+        yield db2_driver.Db2AsyncDriver(
+            FakeDb2AsyncConnection(self.connection), statement_config=default_statement_config
+        )
+
+
+class AsyncDriverDouble:
+    """Async driver stand-in that answers ``select`` calls through a sync driver.
+
+    Delegating to a real ``Db2SyncDriver`` over scripted fake cursors returns rows exactly as the
+    driver shapes them (lowercased keys) while the cursors record the SQL and parameters sent.
+    """
+
+    def __init__(self, delegate: Any) -> None:
+        self.delegate = delegate
+
+    async def select(self, *args: Any, **kwargs: Any) -> Any:
+        """Run ``select`` on the delegate.
+
+        Returns:
+            The delegate's rows.
+        """
+        return self.delegate.select(*args, **kwargs)
+
+    async def select_one_or_none(self, *args: Any, **kwargs: Any) -> Any:
+        """Run ``select_one_or_none`` on the delegate.
+
+        Returns:
+            The delegate's row or ``None``.
+        """
+        return self.delegate.select_one_or_none(*args, **kwargs)
+
+
+class DriverMode:
+    """Build sync or async Db2 driver objects over the same sync fakes and run them uniformly.
+
+    In ``async`` mode connections and cursors are wrapped in the ``ibm_db_dbi`` async fakes, so
+    the state tests assert on (executed SQL, pending and committed work, closed flags) lives on
+    the sync fakes in both modes.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.is_async = name == "async"
+
+    def connection(self, connection: FakeDb2Connection) -> Any:
+        """Return the connection object the driver of this mode expects."""
+        return FakeDb2AsyncConnection(connection) if self.is_async else connection
+
+    def cursor(self, cursor: FakeDb2Cursor) -> Any:
+        """Return the cursor object the driver of this mode expects."""
+        return FakeDb2AsyncCursor(cursor) if self.is_async else cursor
+
+    def driver(self, connection: FakeDb2Connection, **kwargs: Any) -> Any:
+        """Build a driver of this mode over the fake connection."""
+        driver_class = db2_driver.Db2AsyncDriver if self.is_async else Db2SyncDriver
+        return driver_class(self.connection(connection), **kwargs)
+
+    def config(self, **kwargs: Any) -> Any:
+        """Build the Db2 configuration of this mode."""
+        config_class = db2_config.Db2AsyncConfig if self.is_async else db2_config.Db2SyncConfig
+        return config_class(**kwargs)
+
+    def session_config(
+        self, cursors: "Sequence[FakeDb2Cursor]" = (), extension_config: "dict[str, Any] | None" = None
+    ) -> Any:
+        """Build the session-config fake of this mode over scripted cursors.
+
+        Returns:
+            A ``FakeDb2SessionConfig`` or ``FakeDb2AsyncSessionConfig``, typed loosely so it can
+            stand in for the matching ``Db2SyncConfig`` / ``Db2AsyncConfig``.
+        """
+        config_class = FakeDb2AsyncSessionConfig if self.is_async else FakeDb2SessionConfig
+        return config_class(cursors, extension_config=extension_config)
+
+    def tracker(self, *args: Any) -> Any:
+        """Build the Db2 migration tracker of this mode."""
+        tracker_class = (
+            db2_migrations.Db2AsyncMigrationTracker if self.is_async else db2_migrations.Db2SyncMigrationTracker
+        )
+        return tracker_class(*args)
+
+    def exception_handler(self) -> Any:
+        """Build the exception handler of this mode."""
+        return db2_driver.Db2AsyncExceptionHandler() if self.is_async else db2_driver.Db2SyncExceptionHandler()
+
+    def session_context(
+        self,
+        connection: FakeDb2Connection,
+        released: "list[tuple[object, object]]",
+        *,
+        statement_config: Any = default_statement_config,
+        **kwargs: Any,
+    ) -> Any:
+        """Build a session context of this mode that acquires ``connection`` and records releases.
+
+        Each release appends ``(sync fake connection, exc_type)`` to ``released``.
+        """
+        wrapped = self.connection(connection)
+
+        def record(conn: Any, **release_kwargs: Any) -> None:
+            released.append((getattr(conn, "sync_connection", conn), release_kwargs.get("exc_type")))
+
+        if self.is_async:
+
+            async def acquire_async() -> Any:
+                return wrapped
+
+            async def release_async(conn: Any, **release_kwargs: Any) -> None:
+                record(conn, **release_kwargs)
+
+            return db2_typing.Db2AsyncSessionContext(
+                acquire_connection=acquire_async,
+                release_connection=release_async,
+                statement_config=statement_config,
+                driver_features={},
+                prepare_driver=lambda driver: driver,
+                **kwargs,
+            )
+        return db2_typing.Db2SyncSessionContext(
+            acquire_connection=lambda: wrapped,
+            release_connection=record,
+            statement_config=statement_config,
+            driver_features={},
+            prepare_driver=lambda driver: driver,
+            **kwargs,
+        )
+
+    async def call(self, function: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
+        """Call ``function`` and await the result when it is awaitable.
+
+        Returns:
+            The (awaited) result.
+        """
+        result = function(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    @asynccontextmanager
+    async def enter(self, manager: Any) -> "AsyncIterator[Any]":
+        """Enter a sync or async context manager.
+
+        Yields:
+            The value the context manager produced.
+        """
+        if hasattr(manager, "__aenter__"):
+            async with manager as value:
+                yield value
+        else:
+            with manager as value:
+                yield value
+
+    async def collect(self, stream: Any) -> "list[Any]":
+        """Drain a sync or async row stream inside its context.
+
+        Returns:
+            Every streamed row.
+        """
+        async with self.enter(stream) as opened:
+            if self.is_async:
+                return [row async for row in opened]
+            return list(opened)

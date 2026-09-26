@@ -48,6 +48,9 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncDriver,
 )
 from sqlspec.adapters.cockroach_psycopg.adk import CockroachPsycopgAsyncADKStore, CockroachPsycopgSyncADKStore
+from sqlspec.adapters.db2 import Db2AsyncConfig, Db2AsyncDriver, Db2DriverFeatures, Db2SyncConfig, Db2SyncDriver
+from sqlspec.adapters.db2.adk import Db2AsyncADKStore, Db2SyncADKStore
+from sqlspec.adapters.db2.litestar import Db2AsyncStore, Db2SyncStore
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver, DuckDBDriverFeatures
 from sqlspec.adapters.duckdb.adk import DuckdbADKStore
 from sqlspec.adapters.duckdb.litestar import DuckdbStore
@@ -120,6 +123,7 @@ from tests.integration.adapters._shared._postgres_extension_cases import (
     PostgresExtensionCaseContext,
 )
 from tests.integration.adapters._shared._schema import (
+    DB2_CONTRACT_TABLE,
     DEFAULT_CONTRACT_TABLE,
     DUCKDB_CONTRACT_TABLE,
     MSSQL_CONTRACT_TABLE,
@@ -2314,3 +2318,195 @@ def driver_case(request: pytest.FixtureRequest) -> DriverCaseContext:
     """Resolve any driver contract case by fixture name for metadata-only contracts."""
     case = request.param
     return _resolve_driver_case(request, case)
+
+
+_DB2_CONTRACT_TABLE_EXISTS_SQL = (
+    "SELECT COUNT(*) FROM SYSCAT.TABLES WHERE TABSCHEMA = CURRENT SCHEMA AND TABNAME = 'CONTRACT_ITEMS'"
+)
+
+
+def _drop_db2_contract_table(driver: Db2SyncDriver) -> None:
+    if driver.select_value(_DB2_CONTRACT_TABLE_EXISTS_SQL):
+        driver.execute_script("DROP TABLE contract_items")
+    driver.commit()
+
+
+async def _drop_db2_contract_table_async(driver: Db2AsyncDriver) -> None:
+    if await driver.select_value(_DB2_CONTRACT_TABLE_EXISTS_SQL):
+        await driver.execute_script("DROP TABLE contract_items")
+    await driver.commit()
+
+
+@pytest.fixture
+def contract_db2_sync_driver(db2_sync_config: Db2SyncConfig) -> Generator[Db2SyncDriver, None, None]:
+    """Provide a fresh Db2 sync driver for contract tests."""
+    with db2_sync_config.provide_session() as driver:
+        _drop_db2_contract_table(driver)
+        driver.execute_script(DB2_CONTRACT_TABLE.create_sql)
+        driver.commit()
+        yield driver
+        driver.rollback()
+        _drop_db2_contract_table(driver)
+
+
+@pytest.fixture
+async def contract_db2_async_driver(db2_async_config: Db2AsyncConfig) -> "AsyncGenerator[Db2AsyncDriver, None]":
+    """Provide a fresh Db2 async driver for contract tests."""
+    async with db2_async_config.provide_session() as driver:
+        await _drop_db2_contract_table_async(driver)
+        await driver.execute_script(DB2_CONTRACT_TABLE.create_sql)
+        await driver.commit()
+        yield driver
+        await driver.rollback()
+        await _drop_db2_contract_table_async(driver)
+
+
+def _db2_config_options(
+    driver_features: "Db2DriverFeatures | None", connection_instance: object | None
+) -> "dict[str, Any]":
+    options: dict[str, Any] = {}
+    if driver_features is not None:
+        options["driver_features"] = driver_features
+    if connection_instance is not None:
+        options["connection_instance"] = connection_instance
+    return options
+
+
+@pytest.fixture
+def lifecycle_config_db2_sync(db2_connection_config: "dict[str, Any]") -> "Callable[..., Db2SyncConfig]":
+    """Build fresh Db2 sync configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "Db2DriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> Db2SyncConfig:
+        return Db2SyncConfig(
+            connection_config=dict(db2_connection_config), **_db2_config_options(driver_features, connection_instance)
+        )
+
+    return make
+
+
+@pytest.fixture
+def lifecycle_config_db2_async(db2_connection_config: "dict[str, Any]") -> "Callable[..., Db2AsyncConfig]":
+    """Build fresh Db2 async configs for the pooling/connection-hook lifecycle contracts."""
+
+    def make(
+        *,
+        pooled: bool = False,
+        driver_features: "Db2DriverFeatures | None" = None,
+        connection_instance: object | None = None,
+    ) -> Db2AsyncConfig:
+        return Db2AsyncConfig(
+            connection_config=dict(db2_connection_config), **_db2_config_options(driver_features, connection_instance)
+        )
+
+    return make
+
+
+@pytest.fixture
+async def contract_db2_sync_store(db2_connection_config: "dict[str, Any]") -> "AsyncGenerator[Db2SyncStore, None]":
+    """Provide a ready Db2 sync Litestar store for contract tests."""
+    config = Db2SyncConfig(connection_config=dict(db2_connection_config), extension_config=_STORE_EXTENSION_CONFIG)
+    store = Db2SyncStore(config)
+    await store.create_table()
+    try:
+        yield store
+        await store.delete_all()
+    finally:
+        config.close_pool()
+
+
+@pytest.fixture
+async def contract_db2_async_store(db2_connection_config: "dict[str, Any]") -> "AsyncGenerator[Db2AsyncStore, None]":
+    """Provide a ready Db2 async Litestar store for contract tests."""
+    config = Db2AsyncConfig(connection_config=dict(db2_connection_config), extension_config=_STORE_EXTENSION_CONFIG)
+    store = Db2AsyncStore(config)
+    await store.create_table()
+    try:
+        yield store
+        await store.delete_all()
+    finally:
+        await config.close_pool()
+
+
+@pytest.fixture
+def adk_store_db2_sync(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+    """Build a fresh Db2 sync ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        config = Db2SyncConfig(
+            connection_config=dict(db2_connection_config), extension_config=_adk_extension_config(uuid4().hex[:8])
+        )
+        return config, Db2SyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def adk_store_db2_async(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+    """Build a fresh Db2 async ADK store with isolated tables per call."""
+
+    def make() -> "tuple[Any, Any]":
+        config = Db2AsyncConfig(
+            connection_config=dict(db2_connection_config), extension_config=_adk_extension_config(uuid4().hex[:8])
+        )
+        return config, Db2AsyncADKStore(config)
+
+    return make
+
+
+@pytest.fixture
+def events_config_db2_sync(db2_connection_config: "dict[str, Any]", tmp_path: Path) -> Callable[..., Any]:
+    """Build Db2 sync event-channel configs for contract tests."""
+
+    def make(*, extension_config: "dict[str, Any]", suffix: str) -> Db2SyncConfig:
+        return Db2SyncConfig(
+            connection_config=dict(db2_connection_config),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def events_config_db2_async(db2_connection_config: "dict[str, Any]", tmp_path: Path) -> Callable[..., Any]:
+    """Build Db2 async event-channel configs for contract tests."""
+
+    def make(*, extension_config: "dict[str, Any]", suffix: str) -> Db2AsyncConfig:
+        return Db2AsyncConfig(
+            connection_config=dict(db2_connection_config),
+            migration_config=_events_migration_config(tmp_path, suffix),
+            extension_config=extension_config,
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_db2_sync(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+    """Build Db2 sync configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> Db2SyncConfig:
+        return Db2SyncConfig(
+            connection_config=dict(db2_connection_config),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_db2_async(db2_connection_config: "dict[str, Any]") -> Callable[..., Any]:
+    """Build Db2 async configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> Db2AsyncConfig:
+        return Db2AsyncConfig(
+            connection_config=dict(db2_connection_config),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make

@@ -35,6 +35,7 @@ pytest_plugins = [
     "pytest_databases.docker.gizmosql",
     "pytest_databases.docker.cockroachdb",
     "pytest_databases.docker.rustfs",
+    "tests.plugins.db2",
     "tests.integration.fixtures",
     "tests.integration.fixtures.adapter_cases",
     "tests.integration.fixtures.aiomysql_adk",

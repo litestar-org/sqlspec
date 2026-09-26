@@ -63,6 +63,8 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
     "aiosqlite-async",
     "asyncmy-async",
     "asyncpg-async",
+    "db2-async",
+    "db2-sync",
     "duckdb-sync",
     "mssql-python-sync",
     "mysqlconnector-async",

@@ -4,6 +4,12 @@ import base64
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.arrow_odbc.core import (
+    DB2_INDEX_EXISTS_SQL,
+    DB2_TABLE_EXISTS_SQL,
+    db2_timestamp_text,
+    split_db2_name,
+)
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -16,12 +22,20 @@ _MAX_INLINE_DATA_LENGTH = 3500
 
 
 class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
-    """SQL Server-backed session store using arrow-odbc sessions."""
+    """Session store using arrow-odbc sessions.
 
-    __slots__ = ()
+    SQL Server statements are used by default; a config whose dialect resolves
+    to ``db2`` uses Db2 statements with bound UTC times and catalog-probed DDL.
+    """
+
+    __slots__ = ("_sql",)
 
     def __init__(self, config: "ArrowOdbcConfig") -> None:
         super().__init__(config)
+        dialect = str(config.statement_config.dialect).lower()
+        self._sql: _TsqlSessionSql | _Db2SessionSql = (
+            _Db2SessionSql(self._table_name) if dialect == "db2" else _TsqlSessionSql(self._table_name)
+        )
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -61,7 +75,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 
     def _create_table(self) -> None:
         with self._config.provide_session() as driver:
-            driver.execute_script(self._table_ddl())
+            self._sql.create_table(driver)
             driver.commit()
         self._log_table_created()
 
@@ -81,14 +95,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
             if renew_for is not None and expires_at is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
                 if new_expires_at is not None:
-                    driver.execute(
-                        f"""
-                        UPDATE {self._table_name}
-                        SET expires_at = ?, updated_at = SYSUTCDATETIME()
-                        WHERE session_id = ?
-                        """,
-                        (_format_datetime(new_expires_at), key),
-                    )
+                    driver.execute(*self._sql.renew(key, new_expires_at))
                     driver.commit()
 
             data = _row_value(row, "data", 0)
@@ -105,22 +112,9 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
                 f"SELECT session_id FROM {self._table_name} WHERE session_id = ?", (key,)
             )
             if existing is None:
-                driver.execute(
-                    f"""
-                    INSERT INTO {self._table_name} (session_id, data, expires_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (key, inline_data, _format_datetime(expires_at)),
-                )
+                driver.execute(*self._sql.insert(key, inline_data, expires_at))
             else:
-                driver.execute(
-                    f"""
-                    UPDATE {self._table_name}
-                    SET data = ?, expires_at = ?, updated_at = SYSUTCDATETIME()
-                    WHERE session_id = ?
-                    """,
-                    (inline_data, _format_datetime(expires_at), key),
-                )
+                driver.execute(*self._sql.update(key, inline_data, expires_at))
             driver.execute(f"DELETE FROM {self._chunk_table_name} WHERE session_id = ?", (key,))
             if inline_data is None:
                 for index, chunk in enumerate(_chunk_text(data, _MAX_INLINE_DATA_LENGTH)):
@@ -146,15 +140,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 
     def _exists(self, key: str) -> bool:
         with self._config.provide_session() as driver:
-            row = driver.select_one_or_none(
-                f"""
-                SELECT 1 AS exists_flag
-                FROM {self._table_name}
-                WHERE session_id = ?
-                  AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
-                """,
-                (key,),
-            )
+            row = driver.select_one_or_none(*self._sql.exists(key))
             return row is not None
 
     def _expires_in(self, key: str) -> "int | None":
@@ -170,24 +156,10 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 
     def _delete_expired(self) -> int:
         with self._config.provide_session() as driver:
-            count = int(
-                driver.select_value(
-                    f"""
-                    SELECT COUNT(*) AS expired_count
-                    FROM {self._table_name}
-                    WHERE expires_at IS NOT NULL
-                      AND expires_at < SYSUTCDATETIME()
-                    """
-                )
-                or 0
-            )
-            driver.execute(
-                f"""
-                DELETE FROM {self._table_name}
-                WHERE expires_at IS NOT NULL
-                  AND expires_at < SYSUTCDATETIME()
-                """
-            )
+            count_sql, count_parameters = self._sql.count_expired()
+            count = int(driver.select_value(count_sql, *count_parameters) or 0)
+            delete_sql, delete_parameters = self._sql.delete_expired()
+            driver.execute(delete_sql, *delete_parameters)
             driver.commit()
         if count > 0:
             self._log_delete_expired(count)
@@ -210,6 +182,95 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         return "".join(str(_row_value(row, "data", 0) or "") for row in rows)
 
     def _table_ddl(self) -> str:
+        """Get the CREATE TABLE DDL for the configured dialect."""
+        return self._sql.table_ddl()
+
+    def _drop_table_sql(self) -> "list[str]":
+        """Get the DROP TABLE statements for the configured dialect."""
+        return self._sql.drop_statements()
+
+
+class _TsqlSessionSql:
+    """SQL Server statements for the session store."""
+
+    __slots__ = ("_chunk_table_name", "_table_name")
+
+    def __init__(self, table_name: str) -> None:
+        self._table_name = table_name
+        self._chunk_table_name = f"{table_name}_chunks"
+
+    def create_table(self, driver: Any) -> None:
+        """Create the session tables with the guarded T-SQL batch."""
+        driver.execute_script(self.table_ddl())
+
+    def renew(self, key: str, expires_at: "datetime") -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement extending a session's expiry."""
+        return (
+            f"""
+                        UPDATE {self._table_name}
+                        SET expires_at = ?, updated_at = SYSUTCDATETIME()
+                        WHERE session_id = ?
+                        """,
+            (_format_datetime(expires_at), key),
+        )
+
+    def insert(self, key: str, data: "str | None", expires_at: "datetime | None") -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement inserting a session row."""
+        return (
+            f"""
+                    INSERT INTO {self._table_name} (session_id, data, expires_at)
+                    VALUES (?, ?, ?)
+                    """,
+            (key, data, _format_datetime(expires_at)),
+        )
+
+    def update(self, key: str, data: "str | None", expires_at: "datetime | None") -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement replacing a session row's data and expiry."""
+        return (
+            f"""
+                    UPDATE {self._table_name}
+                    SET data = ?, expires_at = ?, updated_at = SYSUTCDATETIME()
+                    WHERE session_id = ?
+                    """,
+            (data, _format_datetime(expires_at), key),
+        )
+
+    def exists(self, key: str) -> "tuple[str, tuple[Any, ...]]":
+        """Get the query selecting an unexpired session."""
+        return (
+            f"""
+                SELECT 1 AS exists_flag
+                FROM {self._table_name}
+                WHERE session_id = ?
+                  AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
+                """,
+            (key,),
+        )
+
+    def count_expired(self) -> "tuple[str, tuple[Any, ...]]":
+        """Get the query counting expired sessions."""
+        return (
+            f"""
+                    SELECT COUNT(*) AS expired_count
+                    FROM {self._table_name}
+                    WHERE expires_at IS NOT NULL
+                      AND expires_at < SYSUTCDATETIME()
+                    """,
+            (),
+        )
+
+    def delete_expired(self) -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement deleting expired sessions."""
+        return (
+            f"""
+                DELETE FROM {self._table_name}
+                WHERE expires_at IS NOT NULL
+                  AND expires_at < SYSUTCDATETIME()
+                """,
+            (),
+        )
+
+    def table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
         return f"""
         IF NOT EXISTS (
@@ -250,12 +311,119 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         END;
         """
 
-    def _drop_table_sql(self) -> "list[str]":
+    def drop_statements(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         return [
             f"IF OBJECT_ID(N'dbo.{self._chunk_table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._chunk_table_name};",
             f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};",
         ]
+
+
+class _Db2SessionSql:
+    """Db2 statements for the session store: bound UTC times and catalog-probed DDL."""
+
+    __slots__ = ("_catalog_table", "_chunk_table_name", "_schema", "_table_name")
+
+    def __init__(self, table_name: str) -> None:
+        self._table_name = table_name
+        self._chunk_table_name = f"{table_name}_chunks"
+        self._schema, self._catalog_table = split_db2_name(table_name)
+
+    def _index_name(self) -> str:
+        return f"IX_{self._catalog_table}_EXP"
+
+    def _session_table_ddl(self) -> str:
+        return (
+            f"CREATE TABLE {self._table_name} ("
+            "session_id VARCHAR(255) NOT NULL PRIMARY KEY, "
+            f"data VARCHAR({_MAX_INLINE_DATA_LENGTH}), "
+            "expires_at TIMESTAMP, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, "
+            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP)"
+        )
+
+    def _index_ddl(self) -> str:
+        return f"CREATE INDEX {self._index_name()} ON {self._table_name}(expires_at)"
+
+    def _chunk_table_ddl(self) -> str:
+        return (
+            f"CREATE TABLE {self._chunk_table_name} ("
+            "session_id VARCHAR(255) NOT NULL, "
+            "chunk_index INTEGER NOT NULL, "
+            f"data VARCHAR({_MAX_INLINE_DATA_LENGTH}) NOT NULL, "
+            f"CONSTRAINT PK_{self._catalog_table}_CHUNKS PRIMARY KEY (session_id, chunk_index), "
+            f"CONSTRAINT FK_{self._catalog_table}_CHUNKS FOREIGN KEY (session_id) "
+            f"REFERENCES {self._table_name}(session_id) ON DELETE CASCADE)"
+        )
+
+    def table_ddl(self) -> str:
+        """Get the session table, expiry index and chunk table DDL as one script."""
+        return f"{self._session_table_ddl()};\n{self._index_ddl()};\n{self._chunk_table_ddl()}"
+
+    def drop_statements(self) -> "list[str]":
+        """Get Db2 DROP TABLE statements."""
+        return [f"DROP TABLE {self._chunk_table_name}", f"DROP TABLE {self._table_name}"]
+
+    def create_table(self, driver: Any) -> None:
+        """Create each session object the Db2 catalog does not list, one statement at a time."""
+        probes = (
+            (DB2_TABLE_EXISTS_SQL, self._catalog_table, self._session_table_ddl()),
+            (DB2_INDEX_EXISTS_SQL, self._index_name(), self._index_ddl()),
+            (DB2_TABLE_EXISTS_SQL, f"{self._catalog_table}_CHUNKS", self._chunk_table_ddl()),
+        )
+        for probe_sql, catalog_name, ddl in probes:
+            if driver.select_one_or_none(probe_sql, (self._schema, catalog_name)) is None:
+                driver.execute(ddl)
+
+    def renew(self, key: str, expires_at: "datetime") -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement extending a session's expiry."""
+        return (
+            f"UPDATE {self._table_name} SET expires_at = ?, updated_at = ? WHERE session_id = ?",
+            (db2_timestamp_text(expires_at), _db2_now(), key),
+        )
+
+    def insert(self, key: str, data: "str | None", expires_at: "datetime | None") -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement inserting a session row."""
+        now = _db2_now()
+        return (
+            (
+                f"INSERT INTO {self._table_name} (session_id, data, expires_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)"
+            ),
+            (key, data, db2_timestamp_text(expires_at), now, now),
+        )
+
+    def update(self, key: str, data: "str | None", expires_at: "datetime | None") -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement replacing a session row's data and expiry."""
+        return (
+            f"UPDATE {self._table_name} SET data = ?, expires_at = ?, updated_at = ? WHERE session_id = ?",
+            (data, db2_timestamp_text(expires_at), _db2_now(), key),
+        )
+
+    def exists(self, key: str) -> "tuple[str, tuple[Any, ...]]":
+        """Get the query selecting an unexpired session."""
+        return (
+            (
+                f"SELECT 1 AS exists_flag FROM {self._table_name} "
+                "WHERE session_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+            ),
+            (key, _db2_now()),
+        )
+
+    def count_expired(self) -> "tuple[str, tuple[Any, ...]]":
+        """Get the query counting expired sessions."""
+        return (
+            f"SELECT COUNT(*) AS expired_count FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (_db2_now(),),
+        )
+
+    def delete_expired(self) -> "tuple[str, tuple[Any, ...]]":
+        """Get the statement deleting expired sessions."""
+        return (f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at < ?", (_db2_now(),))
+
+
+def _db2_now() -> "str | None":
+    return db2_timestamp_text(datetime.now(timezone.utc))
 
 
 def _row_value(row: object, key: str, index: int) -> Any:

@@ -44,6 +44,7 @@ attrs = ["attrs", "cattrs"]
 bigquery = ["google-cloud-bigquery", "google-cloud-bigquery-storage", "google-cloud-storage"]
 cloud-sql = ["cloud-sql-python-connector"]
 cockroachdb = ["psycopg[binary,pool]", "asyncpg"]
+db2 = ["ibm_db>=3.3.0"]
 duckdb = ["duckdb", "pytz", "pyarrow"]
 fastapi = ["fastapi"]
 flask = ["flask"]
@@ -155,6 +156,7 @@ test = [
 sqlspec = "sqlspec.__main__:run_cli"
 
 [project.entry-points."sqlglot.dialects"]
+db2 = "sqlspec.dialects.db2:DB2"
 paradedb = "sqlspec.dialects.postgres:ParadeDB"
 pg_textsearch = "sqlspec.dialects.postgres:PGTextSearch"
 pgvector = "sqlspec.dialects.postgres:PGVector"
@@ -174,6 +176,7 @@ exclude-newer = "7 days"
 override-dependencies = [
   "mysql-connector-python; python_version < '3.12'",
   "mysql-connector-python<9.7.0; python_version >= '3.12'",
+  "pymysql<=1.2.0",
 ]
 
 [tool.uv.exclude-newer-package]
@@ -257,6 +260,9 @@ include = [
   "sqlspec/dialects/postgres/_operators.py",       # Postgres extension operator registry
   "sqlspec/dialects/spanner/_generators.py",       # Spanner custom dialect render hooks
   "sqlspec/dialects/spanner/_parsers.py",          # Spanner PROPERTY_PARSERS entries (explicit-arg dict dispatch)
+  "sqlspec/dialects/db2/_generators.py",           # Db2 custom dialect render hooks
+  "sqlspec/dialects/db2/_parsers.py",              # Db2 custom dialect parser hooks
+  "sqlspec/dialects/db2/_transforms.py",           # Db2 custom dialect transform helpers
   "sqlspec/storage/registry.py",                   # Safe storage registry/runtime routing
   "sqlspec/storage/errors.py",                     # Safe storage error normalization
   "sqlspec/storage/_paths.py",                     # Pure storage path handling
@@ -469,6 +475,7 @@ markers = [
   "arrow_odbc: marks tests using the arrow_odbc adapter",
   "asyncmy: marks tests using asyncmy",
   "asyncpg: marks tests using asyncpg",
+  "db2: marks tests using ibm_db",
   "duckdb_driver: marks tests using the duckdb driver",
   "google_bigquery: marks tests using google-cloud-bigquery",
   "google_spanner: marks tests using google-cloud-spanner",
@@ -530,6 +537,10 @@ module = [
   "prometheus_client.*",
   "fsspec",
   "fsspec.*",
+  "ibm_db",
+  "ibm_db.*",
+  "ibm_db_dbi",
+  "ibm_db_dbi.*",
   "sqlglot",
   "sqlglot.*",
 ]

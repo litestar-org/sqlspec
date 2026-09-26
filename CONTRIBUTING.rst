@@ -73,6 +73,8 @@ Writing and running tests
   - Review the `test placement guide <https://github.com/litestar-org/sqlspec/blob/main/tests/README.md>`_ for detailed fixture conventions.
 - **Integration Resources**:
   - Integration tests use ``pytest-databases`` fixtures to provision and manage database containers automatically.
+  - The IBM Db2 tests start the Db2 Community Edition 11.5.9 image as a privileged container, so Docker must allow
+    privileged containers. The first start downloads about 4 GB and takes several minutes.
 - **Coverage Requirements**:
   - The repository-wide coverage floor is temporarily 76%.
   - Every new commit must keep changed-code coverage at or above **90%**.

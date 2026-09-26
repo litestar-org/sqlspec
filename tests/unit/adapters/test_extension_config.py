@@ -9,6 +9,7 @@ from sqlspec.adapters.aiosqlite import AiosqliteConfig
 from sqlspec.adapters.asyncmy import AsyncmyConfig
 from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.bigquery import BigQueryConfig
+from sqlspec.adapters.db2 import Db2AsyncConfig, Db2SyncConfig
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.psqlpy import PsqlpyConfig
@@ -160,6 +161,8 @@ def test_extension_config_defaults_to_empty_dict() -> None:
         OracleAsyncConfig(connection_config={"user": "test", "password": "test"}),
         AdbcConfig(connection_config={"driver_name": "sqlite", "uri": "sqlite://:memory:"}),
         BigQueryConfig(connection_config={"project": "test"}),
+        Db2SyncConfig(connection_config={"database": "test"}),
+        Db2AsyncConfig(connection_config={"database": "test"}),
     ]
 
     for config in configs:
@@ -202,6 +205,8 @@ def test_extension_config_with_multiple_extensions() -> None:
         (OracleAsyncConfig, {"connection_config": {"user": "test", "password": "test"}}),
         (AdbcConfig, {"connection_config": {"driver_name": "sqlite", "uri": "sqlite://:memory:"}}),
         (BigQueryConfig, {"connection_config": {"project": "test"}}),
+        (Db2SyncConfig, {"connection_config": {"database": "test"}}),
+        (Db2AsyncConfig, {"connection_config": {"database": "test"}}),
     ],
 )
 def test_all_adapters_accept_extension_config(config_class: type, init_kwargs: dict) -> None:

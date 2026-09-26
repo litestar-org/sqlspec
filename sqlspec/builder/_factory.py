@@ -356,7 +356,7 @@ class SQLFactory:
         """Create an upsert builder (MERGE or INSERT ON CONFLICT).
 
         Automatically selects the appropriate builder based on database dialect:
-            - PostgreSQL 15+, Oracle, BigQuery: Returns MERGE builder
+            - PostgreSQL 15+, Oracle, BigQuery, Db2: Returns MERGE builder
             - SQLite, DuckDB, MySQL: Returns INSERT builder with ON CONFLICT support
 
         Args:
@@ -369,7 +369,7 @@ class SQLFactory:
         builder_dialect = _resolve_dialect(dialect, self.dialect)
         dialect_str = str(builder_dialect).lower() if builder_dialect else None
 
-        merge_supported = {"postgres", "postgresql", "oracle", "bigquery"}
+        merge_supported = {"postgres", "postgresql", "oracle", "bigquery", "db2"}
 
         if dialect_str in merge_supported:
             return self.merge(table, dialect=builder_dialect)

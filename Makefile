@@ -10,7 +10,7 @@ SHELL := /bin/bash
 .EXPORT_ALL_VARIABLES:
 MAKEFLAGS += --no-print-directory
 MYPY_WORKERS ?= 2
-ADAPTER_FAMILIES := bigquery cockroach duckdb gizmosql mssql mysql oracle postgres spanner sqlite
+ADAPTER_FAMILIES := bigquery cockroach db2 duckdb gizmosql mssql mysql oracle postgres spanner sqlite
 
 # -----------------------------------------------------------------------------
 # Display Formatting and Colors

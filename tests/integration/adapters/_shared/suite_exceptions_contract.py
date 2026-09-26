@@ -19,7 +19,7 @@ def test_sync_exception_contract(
     sync_capability_driver_case: DriverCaseContext, violation: ExceptionViolationCase
 ) -> None:
     """Sync drivers normalize constraint violations to shared sqlspec exceptions."""
-    assert_sync_exception_contract(sync_capability_driver_case.driver, violation)
+    assert_sync_exception_contract(sync_capability_driver_case.driver, sync_capability_driver_case.case, violation)
 
 
 @pytest.mark.parametrize("violation", EXCEPTION_VIOLATION_PARAMS)
@@ -30,4 +30,6 @@ async def test_async_exception_contract(
     async_capability_driver_case: DriverCaseContext, violation: ExceptionViolationCase
 ) -> None:
     """Async drivers normalize constraint violations to shared sqlspec exceptions."""
-    await assert_async_exception_contract(async_capability_driver_case.driver, violation)
+    await assert_async_exception_contract(
+        async_capability_driver_case.driver, async_capability_driver_case.case, violation
+    )

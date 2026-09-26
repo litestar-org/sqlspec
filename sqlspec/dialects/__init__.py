@@ -14,12 +14,14 @@ import importlib
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from sqlspec.dialects.db2 import DB2
     from sqlspec.dialects.postgres import ParadeDB, PGTextSearch, PGVector
     from sqlspec.dialects.spanner import Spangres, Spanner
 
-__all__ = ("PGTextSearch", "PGVector", "ParadeDB", "Spangres", "Spanner")
+__all__ = ("DB2", "PGTextSearch", "PGVector", "ParadeDB", "Spangres", "Spanner")
 
 _DIALECT_MODULES = {
+    "DB2": "sqlspec.dialects.db2",
     "PGTextSearch": "sqlspec.dialects.postgres",
     "PGVector": "sqlspec.dialects.postgres",
     "ParadeDB": "sqlspec.dialects.postgres",

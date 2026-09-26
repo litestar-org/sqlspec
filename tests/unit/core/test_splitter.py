@@ -51,6 +51,7 @@ def test_dialect_class_map_contains_expected_aliases() -> None:
         "sqlite": splitter_module.SQLiteDialectConfig,
         "duckdb": splitter_module.DuckDBDialectConfig,
         "bigquery": splitter_module.BigQueryDialectConfig,
+        "db2": splitter_module.Db2DialectConfig,
     }
 
 
@@ -233,3 +234,26 @@ def test_sqlserver_alias_dispatches_to_tsql_splitter() -> None:
     script = "SELECT 1;\nGO\nSELECT 2;"
 
     assert split_sql_script(script, dialect="sqlserver") == split_sql_script(script, dialect="tsql")
+
+
+def test_db2_script_splits_declare_global_temporary_table() -> None:
+    script = (
+        "DECLARE GLOBAL TEMPORARY TABLE session.t (a INT) ON COMMIT PRESERVE ROWS NOT LOGGED; "
+        "INSERT INTO session.t VALUES (1); SELECT a FROM session.t"
+    )
+    assert split_sql_script(script, dialect="db2", strip_trailing_terminator=True) == [
+        "DECLARE GLOBAL TEMPORARY TABLE session.t (a INT) ON COMMIT PRESERVE ROWS NOT LOGGED",
+        "INSERT INTO session.t VALUES (1)",
+        "SELECT a FROM session.t",
+    ]
+
+
+def test_db2_script_keeps_begin_atomic_block() -> None:
+    script = (
+        "CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW BEGIN ATOMIC UPDATE u SET c = c + 1; END; "
+        "SELECT 1 FROM SYSIBM.SYSDUMMY1"
+    )
+    statements = split_sql_script(script, dialect="db2", strip_trailing_terminator=True)
+    assert len(statements) == 2
+    assert statements[0].endswith("BEGIN ATOMIC UPDATE u SET c = c + 1; END;")
+    assert statements[1] == "SELECT 1 FROM SYSIBM.SYSDUMMY1"

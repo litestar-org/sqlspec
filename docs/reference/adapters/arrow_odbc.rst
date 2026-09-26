@@ -13,9 +13,86 @@ verifies native Arrow reads, Arrow reader/batch output, and Arrow bulk ingest
 for this adapter. Row-oriented ``execute_many()`` is intentionally unsupported;
 use ``load_from_arrow()`` for bulk writes.
 
-Extension support is SQL Server-backed. The adapter exports a table-backed
-events queue store, a Litestar session store, and Google ADK session/event and
-memory stores for SQL Server connections through Microsoft ODBC Driver 18.
+The adapter exports a table-backed events queue store, a Litestar session
+store, and Google ADK session/event and memory stores. They support SQL Server
+connections through Microsoft ODBC Driver 18 and IBM Db2 LUW connections through
+the IBM CLI/ODBC driver (see :ref:`arrow-odbc-db2`).
+
+.. _arrow-odbc-db2:
+
+IBM Db2
+=======
+
+arrow-odbc reads Db2 LUW 11.5 and later through the IBM CLI/ODBC driver. Db2 for
+z/OS and Db2 for IBM i are not supported. For row-oriented work, pooling, and
+async access use the :doc:`Db2 adapter <db2>`.
+
+**Dialect detection.** The adapter picks the SQL dialect from the ODBC driver
+name only: the ``Driver`` value of the connection string, or its ``DSN`` value
+when there is no ``Driver``. Names containing ``db2``, ``IBM Data Server Driver``,
+``clidriver``, or ``libdb2o`` select ``db2``. Database, host, and user names are
+never used. When the driver is reached through a DSN whose name does not say
+Db2, set ``driver_features={"dbms_name": "DB2"}``.
+
+**Connection keywords.** For Db2, ``host`` (or ``server``) and ``port`` render as
+the IBM CLI keywords ``Hostname`` and ``Port``, and ``Protocol=TCPIP`` is added
+when a host is set. SQL Server options such as ``encrypt``,
+``trust_server_certificate``, and ``trusted_connection`` raise
+``ImproperConfigurationError``.
+
+The ``ibm_db`` package (installed by ``sqlspec[db2]``) bundles the CLI driver, so
+no separate ODBC driver installation is needed; unixODBC must be present on Linux.
+Point ``Driver`` at the bundled ``libdb2o.so``:
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   import ibm_db
+   from arrow_odbc import TextEncoding
+
+   from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
+
+   package_dir = Path(ibm_db.__file__).resolve().parent
+   driver = next(package_dir.rglob("clidriver/lib/libdb2o.so"), package_dir / "clidriver/lib/libdb2o.so")
+
+   config = ArrowOdbcConfig(
+       connection_config={
+           "connection_string": f"Driver={driver};LongDataCompat=1;",
+           "host": "db2.example.com",
+           "port": 50000,
+           "database": "SAMPLE",
+           "uid": "db2inst1",
+           "pwd": "secret",
+           "autocommit": False,
+       },
+       driver_features={"payload_text_encoding": TextEncoding.UTF16},
+   )
+
+   print(config.statement_config.dialect)
+   # db2
+
+**Transactions.** Db2 has no ``BEGIN`` statement. ``begin()`` and
+``transaction()`` require a connection opened with autocommit off, so set
+``connection_config={"autocommit": False}`` for transactional work; on an
+autocommit connection they raise ``ImproperConfigurationError``. Savepoints use
+Db2 syntax.
+
+**Large objects.** Add ``LongDataCompat=1`` to the connection string so ``BLOB``
+columns arrive as binary rather than hexadecimal text and ``CLOB`` columns as
+text.
+
+**Text encoding.** For non-ASCII text, either set the ``DB2CODEPAGE=1208``
+environment variable before connecting or set
+``driver_features={"payload_text_encoding": TextEncoding.UTF16}`` (``TextEncoding``
+comes from the ``arrow_odbc`` package). Text parameters are
+always bound as text.
+
+**Results.** Implicitly uppercase column names are lowercased (disable with
+``driver_features={"enable_lowercase_column_names": False}``); quoted mixed-case
+names are kept. Timezone-aware datetime parameters are bound as UTC. Db2
+``TIMESTAMP(12)`` values are truncated to nanoseconds, and ``DECFLOAT``, ``XML``,
+and ``BOOLEAN`` columns arrive as UTF-8 text.
 
 Configuration
 =============

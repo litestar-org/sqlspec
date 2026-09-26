@@ -6,7 +6,7 @@ Provides abstract base classes and core functionality for SQL query builders.
 import re
 from abc import abstractmethod
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, NoReturn, cast
+from typing import Any, Final, NoReturn, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -28,7 +28,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import StatementFilter
 from sqlspec.core.hashing import _expression_cache_fingerprint
-from sqlspec.data_dictionary import get_dialect_config
+from sqlspec.data_dictionary import DialectConfig, get_dialect_config
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_expression_and_parameters, has_name, is_expression
@@ -38,6 +38,7 @@ __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
+_UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
 
 
 logger = get_logger(__name__)
@@ -639,12 +640,12 @@ class QueryBuilder:
         try:
             if isinstance(final_expression, exp.Expr):
                 normalized_expression = (
-                    self._unquote_oracle_identifiers(final_expression)
-                    if self._is_oracle_dialect(target_dialect)
+                    self._unquote_identifiers(final_expression)
+                    if self._folds_unquoted_to_upper(target_dialect)
                     else final_expression
                 )
                 identify = self._should_identify(target_dialect)
-                if normalized_expression.find(exp.Lock):
+                if normalized_expression.find(exp.Lock) and target_dialect != "db2":
                     register_lock_generator(target_dialect)
                 sql_string = normalized_expression.sql(dialect=target_dialect, pretty=True, identify=identify)
                 sql_string = self._strip_merge_target_quotes(sql_string)
@@ -658,6 +659,29 @@ class QueryBuilder:
 
     def _build_dialect(self, dialect: DialectType = None) -> str | None:
         return _normalize_dialect(dialect or self.dialect)
+
+    def _validate_dialect_lock(self, lock: exp.Lock, dialect: str, config: DialectConfig) -> None:
+        """Reject lock options the target dialect cannot express."""
+        if dialect in {"spanner", "spangres"} and (
+            not lock.args.get("update") or lock.args.get("wait") is not None or lock.expressions or lock.args.get("key")
+        ):
+            self._raise_builder_error(f"Dialect '{dialect}' supports only plain FOR UPDATE without lock modifiers.")
+        if lock.args.get("key") and dialect != "postgres":
+            self._raise_builder_error(f"Dialect '{dialect}' does not support PostgreSQL key lock modes.")
+        if dialect == "oracle" and not lock.args.get("update"):
+            self._raise_builder_error("Dialect 'oracle' does not support FOR SHARE.")
+        if dialect not in {"spanner", "spangres"} and config.get_feature_flag("supports_for_update") is False:
+            self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
+        if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
+            self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
+        if dialect == "db2":
+            wait = lock.args.get("wait")
+            if wait is True or isinstance(wait, exp.Literal):
+                self._raise_builder_error(
+                    "Dialect 'db2' does not support NOWAIT or WAIT; set CURRENT LOCK TIMEOUT on the session."
+                )
+            if lock.expressions:
+                self._raise_builder_error("Dialect 'db2' does not support FOR UPDATE OF table targets.")
 
     def _prepare_dialect_expression(
         self, expression: exp.Expr, dialect: str | None, source_dialect: DialectType = None
@@ -677,21 +701,7 @@ class QueryBuilder:
                 if not lock.args.get("update"):
                     lock.set("sqlspec_share_mode", True)
         for lock in expression.find_all(exp.Lock):
-            if dialect in {"spanner", "spangres"} and (
-                not lock.args.get("update")
-                or lock.args.get("wait") is not None
-                or lock.expressions
-                or lock.args.get("key")
-            ):
-                self._raise_builder_error(f"Dialect '{dialect}' supports only plain FOR UPDATE without lock modifiers.")
-            if lock.args.get("key") and dialect != "postgres":
-                self._raise_builder_error(f"Dialect '{dialect}' does not support PostgreSQL key lock modes.")
-            if dialect == "oracle" and not lock.args.get("update"):
-                self._raise_builder_error("Dialect 'oracle' does not support FOR SHARE.")
-            if dialect not in {"spanner", "spangres"} and config.get_feature_flag("supports_for_update") is False:
-                self._raise_builder_error(f"Dialect '{dialect}' does not support FOR UPDATE / row locking.")
-            if lock.args.get("wait") is False and config.get_feature_flag("supports_skip_locked") is False:
-                self._raise_builder_error(f"Dialect '{dialect}' does not support SKIP LOCKED.")
+            self._validate_dialect_lock(lock, dialect, config)
         if dialect == "spangres":
             self._validate_spangres_conflicts(expression)
         if config.get_feature_flag("supports_on_conflict") is not False or not expression.find(exp.OnConflict):
@@ -983,10 +993,10 @@ class QueryBuilder:
             statement_expression, resolved_dialect, dialect_override
         )
 
-        if statement_expression.find(exp.Lock):
+        if statement_expression.find(exp.Lock) and resolved_dialect != "db2":
             register_lock_generator(resolved_dialect)
-        if self._is_oracle_dialect(resolved_dialect):
-            statement_expression = self._unquote_oracle_identifiers(statement_expression)
+        if self._folds_unquoted_to_upper(resolved_dialect):
+            statement_expression = self._unquote_identifiers(statement_expression)
         return _BuilderCacheEntry(statement_expression, resolved_dialect)
 
     def _statement_from_cache_entry(self, cache_entry: "_BuilderCacheEntry", config: "StatementConfig | None") -> "SQL":
@@ -1076,15 +1086,18 @@ class QueryBuilder:
         """Set query parameters (public API)."""
         self._parameters = parameters.copy()
 
-    def _is_oracle_dialect(self, dialect: "DialectType | str | None") -> bool:
-        """Check if target dialect is Oracle."""
+    def _folds_unquoted_to_upper(self, dialect: "DialectType | str | None") -> bool:
+        """Check if the target dialect folds unquoted identifiers to uppercase."""
         if dialect is None:
             return False
-        return str(dialect).lower() == "oracle"
+        return str(dialect).lower() in _UPPER_FOLDING_DIALECTS
 
-    def _unquote_oracle_identifiers(self, expression: exp.Expr) -> exp.Expr:
-        """Remove identifier quoting to avoid Oracle case-sensitive lookup issues."""
-        # SQLGlot transform(copy=True) deep-copies internally. Copy once here, then mutate that copy.
+    def _unquote_identifiers(self, expression: exp.Expr) -> exp.Expr:
+        """Return a copy of the expression with identifier quoting removed.
+
+        Upper-folding dialects resolve quoted lowercase names case-sensitively, so quoting is
+        removed to keep lookups aligned with how unquoted DDL created the objects.
+        """
         return expression.copy().transform(_unquote_identifier, copy=False)
 
     def _strip_merge_target_quotes(self, sql_string: str) -> str:
@@ -1101,9 +1114,7 @@ class QueryBuilder:
         """Determine whether to quote identifiers for the given dialect."""
         if dialect is None:
             return True
-        dialect_name = str(dialect).lower()
-        # Oracle folds unquoted identifiers to uppercase; quoting lower-case breaks table lookup
-        return dialect_name != "oracle"
+        return str(dialect).lower() not in _UPPER_FOLDING_DIALECTS
 
     @property
     def with_ctes(self) -> "dict[str, exp.CTE]":

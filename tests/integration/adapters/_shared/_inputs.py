@@ -73,16 +73,24 @@ class ExplainCase:
 
 @dataclass(frozen=True)
 class ExceptionViolationCase:
-    """Constraint violation that should normalize to a shared sqlspec exception type."""
+    """Constraint violation that should normalize to a shared sqlspec exception type.
+
+    ``drop_tables`` lists the tables the case owns in drop order; ``create_script`` creates them.
+    """
 
     id: str
-    setup_script: str
+    create_script: str
+    drop_tables: tuple[str, ...]
     seed_statement: str | None
     seed_parameters: tuple[object, ...] | None
     trigger_statement: str
     trigger_parameters: tuple[object, ...]
     expected_exception: type[Exception]
-    teardown_script: str
+
+    @property
+    def teardown_script(self) -> str:
+        """Script dropping every owned table with ``DROP TABLE IF EXISTS``."""
+        return "".join(f"DROP TABLE IF EXISTS {table};\n" for table in self.drop_tables)
 
 
 def _raw_qmark_statement(table: str, dialect: "str | None" = None) -> str:
@@ -542,64 +550,50 @@ EXPLAIN_CASES = (
 EXCEPTION_VIOLATION_CASES = (
     ExceptionViolationCase(
         id="unique",
-        setup_script="""
-            DROP TABLE IF EXISTS contract_unique;
-            CREATE TABLE contract_unique (email VARCHAR(255) UNIQUE NOT NULL);
-        """,
+        create_script="CREATE TABLE contract_unique (email VARCHAR(255) UNIQUE NOT NULL);",
+        drop_tables=("contract_unique",),
         seed_statement="INSERT INTO contract_unique (email) VALUES (?)",
         seed_parameters=("duplicate@example.com",),
         trigger_statement="INSERT INTO contract_unique (email) VALUES (?)",
         trigger_parameters=("duplicate@example.com",),
         expected_exception=UniqueViolationError,
-        teardown_script="DROP TABLE IF EXISTS contract_unique",
     ),
     ExceptionViolationCase(
         id="not-null",
-        setup_script="""
-            DROP TABLE IF EXISTS contract_not_null;
-            CREATE TABLE contract_not_null (label VARCHAR(255), required_field VARCHAR(255) NOT NULL);
-        """,
+        create_script="CREATE TABLE contract_not_null (label VARCHAR(255), required_field VARCHAR(255) NOT NULL);",
+        drop_tables=("contract_not_null",),
         seed_statement=None,
         seed_parameters=None,
         trigger_statement="INSERT INTO contract_not_null (label) VALUES (?)",
         trigger_parameters=("missing-required",),
         expected_exception=NotNullViolationError,
-        teardown_script="DROP TABLE IF EXISTS contract_not_null",
     ),
     ExceptionViolationCase(
         id="check",
-        setup_script="""
-            DROP TABLE IF EXISTS contract_check;
-            CREATE TABLE contract_check (age INTEGER CHECK (age >= 18));
-        """,
+        create_script="CREATE TABLE contract_check (age INTEGER CHECK (age >= 18));",
+        drop_tables=("contract_check",),
         seed_statement=None,
         seed_parameters=None,
         trigger_statement="INSERT INTO contract_check (age) VALUES (?)",
         trigger_parameters=(5,),
         expected_exception=CheckViolationError,
-        teardown_script="DROP TABLE IF EXISTS contract_check",
     ),
     ExceptionViolationCase(
         id="foreign-key",
-        setup_script="""
-            DROP TABLE IF EXISTS contract_fk_child;
-            DROP TABLE IF EXISTS contract_fk_parent;
-            CREATE TABLE contract_fk_parent (id INTEGER PRIMARY KEY, name VARCHAR(255));
+        create_script="""
+            CREATE TABLE contract_fk_parent (id INTEGER NOT NULL PRIMARY KEY, name VARCHAR(255));
             CREATE TABLE contract_fk_child (
-                child_id INTEGER PRIMARY KEY,
+                child_id INTEGER NOT NULL PRIMARY KEY,
                 parent_id INTEGER NOT NULL,
                 FOREIGN KEY (parent_id) REFERENCES contract_fk_parent(id)
             );
         """,
+        drop_tables=("contract_fk_child", "contract_fk_parent"),
         seed_statement=None,
         seed_parameters=None,
         trigger_statement="INSERT INTO contract_fk_child (child_id, parent_id) VALUES (?, ?)",
         trigger_parameters=(1, 999),
         expected_exception=ForeignKeyViolationError,
-        teardown_script="""
-            DROP TABLE IF EXISTS contract_fk_child;
-            DROP TABLE IF EXISTS contract_fk_parent;
-        """,
     ),
 )
 

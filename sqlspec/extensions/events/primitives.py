@@ -8,18 +8,27 @@ from sqlspec.extensions.events._payload import parse_event_timestamp
 __all__ = ("claim_verified", "lock_clause", "row_limit_clause", "select_limit_prefix")
 
 
-def lock_clause(*, select_for_update: bool, skip_locked: bool) -> str:
+def lock_clause(*, select_for_update: bool, skip_locked: bool, dialect: str | None = None) -> str:
     """Render the row locking clause for candidate selection.
+
+    Db2 (dialect name ``db2``) locks through the isolation clause
+    ``WITH RS USE AND KEEP UPDATE LOCKS``, which is valid on a read-only cursor and so composes
+    with ``ORDER BY`` and ``FETCH FIRST``; the selected row stays update-locked until commit.
 
     Args:
         select_for_update: Whether to lock selected rows with FOR UPDATE.
         skip_locked: Whether to skip already locked rows when locking is enabled.
+        dialect: Optional SQL dialect identifier.
 
     Returns:
         Locking clause SQL fragment with leading space, or empty string.
     """
     if not select_for_update:
         return ""
+    if dialect and dialect.lower() == "db2":
+        if skip_locked:
+            return " WITH RS USE AND KEEP UPDATE LOCKS SKIP LOCKED DATA"
+        return " WITH RS USE AND KEEP UPDATE LOCKS"
     if skip_locked:
         return " FOR UPDATE SKIP LOCKED"
     return " FOR UPDATE"
@@ -38,7 +47,7 @@ def row_limit_clause(dialect: str, n: int) -> str:
     normalized = dialect.lower()
     if normalized in {"mssql", "tsql"} or "sql server" in normalized:
         return ""
-    if "oracle" in normalized:
+    if "oracle" in normalized or normalized == "db2":
         return f" FETCH FIRST {n} ROWS ONLY"
     return f" LIMIT {n}"
 

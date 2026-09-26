@@ -69,6 +69,7 @@ ADAPTER_CORE_MODULES = (
     "sqlspec.adapters.asyncmy.core",
     "sqlspec.adapters.asyncpg.core",
     "sqlspec.adapters.bigquery.core",
+    "sqlspec.adapters.db2.core",
     "sqlspec.adapters.duckdb.core",
     "sqlspec.adapters.mssql_python.core",
     "sqlspec.adapters.mysqlconnector.core",
@@ -107,6 +108,8 @@ BRIDGE_CURSOR_CLOSE_METHODS = (
     ("sqlspec/adapters/aiomysql/_typing.py", "AiomysqlCursor", "__aexit__"),
     ("sqlspec/adapters/aiosqlite/_typing.py", "AiosqliteCursor", "__aexit__"),
     ("sqlspec/adapters/asyncmy/_typing.py", "AsyncmyCursor", "__aexit__"),
+    ("sqlspec/adapters/db2/_typing.py", "Db2SyncCursor", "__exit__"),
+    ("sqlspec/adapters/db2/_typing.py", "Db2AsyncCursor", "__aexit__"),
     ("sqlspec/adapters/mssql_python/_typing.py", "MssqlPythonCursor", "__exit__"),
     ("sqlspec/adapters/mysqlconnector/_typing.py", "MysqlConnectorSyncCursor", "__exit__"),
     ("sqlspec/adapters/mysqlconnector/_typing.py", "MysqlConnectorAsyncCursor", "__aexit__"),
@@ -656,6 +659,7 @@ ADAPTER_CONFIG_MODULES = (
     "sqlspec.adapters.bigquery.config",
     "sqlspec.adapters.cockroach_asyncpg.config",
     "sqlspec.adapters.cockroach_psycopg.config",
+    "sqlspec.adapters.db2.config",
     "sqlspec.adapters.duckdb.config",
     "sqlspec.adapters.mssql_python.config",
     "sqlspec.adapters.mysqlconnector.config",
@@ -686,7 +690,7 @@ def test_every_config_declares_type_coercion_capabilities() -> None:
             ):
                 concrete_configs.append(obj)
 
-    assert len(concrete_configs) == 23
+    assert len(concrete_configs) == 25
 
     for config_cls in concrete_configs:
         assert "type_coercion_capabilities" in config_cls.__dict__, (

@@ -1,8 +1,10 @@
-"""arrow-odbc event queue store with T-SQL-specific DDL."""
+"""arrow-odbc event queue store with T-SQL and Db2 DDL."""
 
 import re
+from typing import Final
 
 from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
+from sqlspec.adapters.arrow_odbc.core import split_db2_name
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -10,12 +12,29 @@ __all__ = ("ArrowOdbcEventQueueStore",)
 
 _NVARCHAR_MAX_THRESHOLD = 4000
 _QUALIFIED_IDENTIFIER_MIN_PARTS = 2
+_DB2_EVENT_TABLE_DDL: Final[str] = (
+    "CREATE TABLE {table} (event_id VARCHAR(64) NOT NULL PRIMARY KEY, channel VARCHAR(128) NOT NULL, "
+    "payload_json CLOB NOT NULL, metadata_json CLOB, status VARCHAR(32) NOT NULL DEFAULT 'pending', "
+    "available_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, lease_expires_at TIMESTAMP, "
+    "attempts INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, "
+    "acknowledged_at TIMESTAMP)"
+)
 
 
 class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
-    """Event queue DDL for arrow-odbc SQL Server configs."""
+    """Event queue DDL for arrow-odbc configs.
 
-    __slots__ = ()
+    SQL Server DDL with ``OBJECT_ID`` guards is used by default. A config whose
+    dialect resolves to ``db2`` gets plain Db2 ``CREATE TABLE``/``CREATE INDEX``
+    statements; the events migration checks the catalog for the table and the
+    index before running them.
+    """
+
+    __slots__ = ("_db2",)
+
+    def __init__(self, config: ArrowOdbcConfig) -> None:
+        super().__init__(config)
+        self._db2 = str(config.statement_config.dialect).lower() == "db2"
 
     def _column_types(self) -> tuple[str, str, str]:
         return "NVARCHAR(MAX)", "NVARCHAR(MAX)", "DATETIME2(6)"
@@ -31,7 +50,23 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
     def _timestamp_default(self) -> str:
         return "SYSUTCDATETIME()"
 
+    def _table_ddl(self) -> str:
+        if self._db2:
+            return _DB2_EVENT_TABLE_DDL.format(table=self.table_name)
+        return super()._table_ddl()
+
+    def _index_existence_target(self) -> "tuple[str | None, str] | None":
+        """Return the upper-folded catalog schema and table checked for the Db2 queue index.
+
+        SQL Server guards its index DDL itself, so no external check is needed there.
+        """
+        if self._db2:
+            return split_db2_name(self.table_name)
+        return None
+
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
+        if self._db2:
+            return statement
         if object_type == "table":
             match = re.search(r"CREATE TABLE\s+(\S+)", statement, re.IGNORECASE)
             if match:
@@ -46,6 +81,8 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
         return statement
 
     def _wrap_drop_statement(self, statement: str) -> str:
+        if self._db2:
+            return statement
         match = re.search(r"DROP TABLE\s+(\S+)", statement, re.IGNORECASE)
         if match:
             table_name = match.group(1)

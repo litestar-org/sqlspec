@@ -5,7 +5,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import sqlglot
 
+import sqlspec.dialects.db2  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from sqlspec.adapters.db2 import Db2SyncConfig
+from sqlspec.extensions.events import SyncTableEventQueue
 from sqlspec.extensions.events.primitives import claim_verified, lock_clause, row_limit_clause, select_limit_prefix
 
 
@@ -105,3 +109,36 @@ assert module.lock_clause(select_for_update=True, skip_locked=True) == " FOR UPD
 assert "primitives" in dir(events)
 """
     subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize(
+    ("dialect", "skip_locked", "expected"),
+    [
+        ("db2", True, " WITH RS USE AND KEEP UPDATE LOCKS SKIP LOCKED DATA"),
+        ("db2", False, " WITH RS USE AND KEEP UPDATE LOCKS"),
+        ("postgres", True, " FOR UPDATE SKIP LOCKED"),
+        ("db2_custom", True, " FOR UPDATE SKIP LOCKED"),
+    ],
+    ids=["db2-skip", "db2", "postgres", "db2_custom"],
+)
+def test_lock_clause_db2_isolation_form(dialect: str, skip_locked: bool, expected: str) -> None:
+    """Db2 locks with the read-only-cursor isolation clause, matched by exact dialect name only."""
+    assert lock_clause(select_for_update=True, skip_locked=skip_locked, dialect=dialect) == expected
+
+
+@pytest.mark.parametrize(("dialect", "expected"), [("db2", " FETCH FIRST 1 ROWS ONLY"), ("db2_custom", " LIMIT 1")])
+def test_row_limit_clause_db2_exact_match(dialect: str, expected: str) -> None:
+    """Db2 limits with FETCH FIRST; other dialect names containing db2 keep the default."""
+    assert row_limit_clause(dialect, 1) == expected
+
+
+def test_db2_locking_candidate_select_round_trips() -> None:
+    """The Db2 locking candidate select parses as Db2 and keeps its lock tail when rendered."""
+    config = Db2SyncConfig(connection_config={"database": "SAMPLE"})
+    queue = SyncTableEventQueue(config, select_for_update=True, skip_locked=True)
+    statement = queue._select_statement
+
+    rendered = sqlglot.parse_one(statement, read="db2").sql(dialect="db2")
+
+    assert statement.endswith(" FETCH FIRST 1 ROWS ONLY WITH RS USE AND KEEP UPDATE LOCKS SKIP LOCKED DATA")
+    assert rendered.endswith("FETCH FIRST 1 ROWS ONLY WITH RS USE AND KEEP UPDATE LOCKS SKIP LOCKED DATA")

@@ -3,10 +3,11 @@
 import contextlib
 import re
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlglot import Dialect
+from sqlglot import Dialect, exp
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
@@ -14,6 +15,7 @@ from sqlspec.adapters.arrow_odbc.core import (
     build_statement_config,
     create_mapped_exception,
     driver_profile,
+    normalize_column_names,
     resolve_dialect_from_dbms_name,
 )
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
@@ -71,7 +73,7 @@ class ArrowOdbcStreamSource:
         handler = self._driver.handle_database_exceptions()
         with handler:
             reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
-            self._reader = iter(_to_pyarrow_reader(reader))
+            self._reader = iter(self._driver._normalize_reader(_to_pyarrow_reader(reader)))
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -101,9 +103,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     __slots__ = (
         "_chunk_size_val",
+        "_connection_autocommit",
         "_data_dictionary",
         "_dbms_name",
         "_dialect",
+        "_lowercase_column_names",
         "_max_batch_bytes",
         "_max_binary_size_val",
         "_max_text_size_val",
@@ -121,7 +125,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         features = dict(driver_features or {})
-        self._dbms_name = self._resolve_dbms_name(connection, features)
+        self._dbms_name = self._resolve_dbms_name(features)
         self._dialect = resolve_dialect_from_dbms_name(self._dbms_name)
         statement_dialect = _statement_dialect_for(self._dialect)
         if statement_config is None:
@@ -139,6 +143,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._query_timeout_sec_val: int | None = features.get("query_timeout_sec")
         self._payload_text_encoding: Any = features.get("payload_text_encoding")
         self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
+        self._connection_autocommit: bool = bool(features.get("connection_autocommit", True))
+        self._lowercase_column_names: bool = bool(features.get("enable_lowercase_column_names", self._dialect == "db2"))
         self.dialect = statement_dialect
         self._data_dictionary: ArrowOdbcDataDictionary | None = None
         self._transaction_active = False
@@ -153,11 +159,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
-        parameters = _odbc_parameters(prepared_parameters)
+        parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
 
         if statement.returns_rows():
             reader = self._read_arrow_batches(sql, parameters, self._chunk_size())
-            table = _reader_to_table(reader)
+            table = self._normalize_table(_reader_to_table(reader))
             rows = table.to_pylist()
             column_names = table.column_names
             return self.create_execution_result(
@@ -184,7 +190,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 cursor, rowcount_override=-1, statement_count=1, successful_statements=1, is_script_result=True
             )
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        parameters = _odbc_parameters(prepared_parameters)
+        parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
         successful_count = 0
         for stmt in statements:
             cursor.execute(query=stmt, parameters=parameters)
@@ -200,7 +206,11 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
             sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
-        return SyncRowStream(ArrowOdbcStreamSource(self, sql, _odbc_parameters(prepared_parameters), chunk_size))
+        return SyncRowStream(
+            ArrowOdbcStreamSource(
+                self, sql, _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"), chunk_size
+            )
+        )
 
     def collect_rows(self, cursor: "ArrowOdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         return fetched, [], len(fetched)
@@ -209,6 +219,23 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return 0
 
     def begin(self) -> None:
+        """Begin an explicit transaction.
+
+        SQL Server starts one with ``BEGIN TRANSACTION``. Db2 has no begin
+        statement: a connection opened with autocommit off is always inside a
+        unit of work, so only the boundary is recorded, and an autocommit
+        connection is refused because each statement would commit on its own.
+
+        Raises:
+            ImproperConfigurationError: If the Db2 connection was opened with autocommit on.
+            SQLSpecError: If the begin statement fails.
+        """
+        if self._dialect == "db2":
+            if self._connection_autocommit:
+                msg = "Db2 transactions through arrow-odbc require connection_config={'autocommit': False}"
+                raise ImproperConfigurationError(msg)
+            self._transaction_active = True
+            return
         try:
             self.connection.execute("BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN")
         except Exception as exc:
@@ -250,6 +277,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         if self._dialect == "mssql":
             self.execute_script(f"SAVE TRANSACTION {safe_name}")
             return
+        if self._dialect == "db2":
+            self.execute_script(f"SAVEPOINT {safe_name} ON ROLLBACK RETAIN CURSORS")
+            return
         self.execute_script(f"SAVEPOINT {safe_name}")
 
     def release_savepoint(self, name: str) -> None:
@@ -290,9 +320,13 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
         exc_handler = self.handle_database_exceptions()
         with exc_handler, self.with_cursor(self.connection):
-            reader = self._read_arrow_batches(sql, _odbc_parameters(prepared_parameters), resolved_batch_size)
+            reader = self._read_arrow_batches(
+                sql,
+                _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"),
+                resolved_batch_size,
+            )
             if return_format in {"reader", "batches"}:
-                arrow_reader = _to_pyarrow_reader(reader)
+                arrow_reader = self._normalize_reader(_to_pyarrow_reader(reader))
                 return build_arrow_result_from_reader(
                     prepared_statement,
                     arrow_reader,
@@ -300,7 +334,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                     batch_size=resolved_batch_size,
                     arrow_schema=arrow_schema,
                 )
-            table = _reader_to_table(reader)
+            table = self._normalize_table(_reader_to_table(reader))
         self._check_pending_exception(exc_handler)
 
         if table is None:
@@ -350,7 +384,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         if overwrite:
-            self.execute(f"DELETE FROM {_quote_odbc_table(table)}")
+            target = _db2_table_reference(table) if self._dialect == "db2" else _quote_odbc_table(table)
+            self.execute(f"DELETE FROM {target}")
         self.bulk_insert_arrow(table, arrow_table)
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -398,11 +433,30 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     def _chunk_size(self) -> int:
         return self._chunk_size_val
 
+    def _normalize_table(self, table: Any) -> Any:
+        """Rename implicit-uppercase columns of an Arrow table when lowercasing is enabled."""
+        names = normalize_column_names(table.column_names, self._lowercase_column_names)
+        if names == table.column_names:
+            return table
+        return table.rename_columns(names)
+
+    def _normalize_reader(self, reader: "ArrowRecordBatchReader") -> "ArrowRecordBatchReader":
+        """Wrap a record batch reader so its schema and batches carry normalized column names."""
+        import pyarrow as pa
+
+        schema = reader.schema
+        names = normalize_column_names(schema.names, self._lowercase_column_names)
+        if names == schema.names:
+            return reader
+        renamed = schema
+        for index, name in enumerate(names):
+            renamed = renamed.set(index, renamed.field(index).with_name(name))
+        return pa.RecordBatchReader.from_batches(
+            renamed, (pa.RecordBatch.from_arrays(batch.columns, schema=renamed) for batch in reader)
+        )
+
     @staticmethod
-    def _resolve_dbms_name(connection: "ArrowOdbcConnection", features: "dict[str, Any]") -> str | None:
-        dbms_name = getattr(connection, "dbms_name", None)
-        if dbms_name:
-            return str(dbms_name)
+    def _resolve_dbms_name(features: "dict[str, Any]") -> str | None:
         dbms_name = features.get("dbms_name")
         if dbms_name:
             return str(dbms_name)
@@ -416,12 +470,32 @@ def _quote_odbc_table(table: str) -> str:
     return ".".join(quote_identifier(part) for part in split_qualified_identifier(table))
 
 
+def _db2_table_reference(table: str) -> str:
+    """Render a table name the way Db2 resolves the bulk-insert target.
+
+    Unquoted parts that are plain identifiers stay unquoted so Db2 folds them
+    to uppercase; quoted parts and anything else are double-quoted verbatim.
+
+    Args:
+        table: Table name, optionally schema-qualified and quoted.
+
+    Returns:
+        The table reference for use in a Db2 statement.
+    """
+    rendered: list[str] = []
+    for part in exp.to_table(table, dialect="db2").parts:
+        plain = isinstance(part, exp.Identifier) and not part.quoted
+        rendered.append(part.name if plain and _DB2_PLAIN_IDENTIFIER.match(part.name) else quote_identifier(part.name))
+    return ".".join(rendered)
+
+
 def _statement_dialect_for(dialect: str) -> str:
     if dialect == "mssql":
         return "tsql"
     return dialect
 
 
+_DB2_PLAIN_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MSSQL_OFFSET_FETCH_PATTERN = re.compile(
     r"OFFSET\s+\?\s+ROWS\s+FETCH\s+(?P<fetch_keyword>NEXT|FIRST)\s+\?\s+ROWS\s+ONLY", re.IGNORECASE
 )
@@ -476,21 +550,34 @@ def _pagination_int(value: object) -> int:
     return integer
 
 
-def _unwrap_parameter(value: Any) -> Any:
+def _unwrap_parameter(value: Any, naive_utc_datetimes: bool = False) -> Any:
     wrapped = getattr(value, "value", value)
-    return None if wrapped is None else str(wrapped)
+    if wrapped is None:
+        return None
+    if naive_utc_datetimes and isinstance(wrapped, datetime) and wrapped.tzinfo is not None:
+        wrapped = wrapped.astimezone(timezone.utc).replace(tzinfo=None)
+    return str(wrapped)
 
 
-def _odbc_parameters(parameters: Any) -> "list[str | None] | None":
+def _odbc_parameters(parameters: Any, *, naive_utc_datetimes: bool = False) -> "list[str | None] | None":
+    """Render statement parameters as the text values arrow-odbc binds.
+
+    Args:
+        parameters: Compiled statement parameters.
+        naive_utc_datetimes: Convert timezone-aware datetimes to naive UTC before rendering.
+
+    Returns:
+        The text parameters, or ``None`` when the statement has none.
+    """
     if parameters is None:
         return None
     if isinstance(parameters, Mapping):
-        return [_unwrap_parameter(value) for value in parameters.values()]
+        return [_unwrap_parameter(value, naive_utc_datetimes) for value in parameters.values()]
     if isinstance(parameters, (list, tuple)):
         if not parameters:
             return None
-        return [_unwrap_parameter(value) for value in parameters]
-    return [_unwrap_parameter(parameters)]
+        return [_unwrap_parameter(value, naive_utc_datetimes) for value in parameters]
+    return [_unwrap_parameter(parameters, naive_utc_datetimes)]
 
 
 def _reader_to_table(reader: Any) -> Any:

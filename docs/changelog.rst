@@ -9,6 +9,29 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+----------
+
+**Added:**
+
+* Added an IBM Db2 adapter for Db2 LUW 11.5 and later with sync
+  (``Db2SyncConfig``) and async (``Db2AsyncConfig``) configurations built on
+  ``ibm_db``. It includes connection pooling, catalog reflection, migrations,
+  and Litestar session, events queue, and Google ADK stores. See
+  :doc:`reference/adapters/db2`.
+* Added a ``db2`` SQL dialect. It renders Db2 paging, special registers,
+  labeled durations, isolation and lock clauses, and Db2 data types, and
+  translates builder row locks to Db2 lock clauses.
+* The arrow-odbc adapter supports IBM Db2 through the IBM CLI/ODBC driver,
+  including Db2 connection keywords, transactions, lowercase result columns,
+  and its Litestar session, events queue, and Google ADK stores.
+
+**Fixed:**
+
+* Builder upserts emit ``MERGE`` for the ``db2`` dialect.
+* The arrow-odbc adapter detects the SQL dialect from the ODBC driver name
+  only, so database, host, or user names no longer select the wrong dialect.
+
 v0.64.0 - Startup performance, connection normalization, and adapter lifecycle hardening
 -----------------------------------------------------------------------------------------
 

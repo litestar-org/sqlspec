@@ -16,8 +16,6 @@ _CAPS: dict[str, Any] = {
 
 
 class _FakeConn:
-    dbms_name = "Microsoft SQL Server"
-
     def __init__(self) -> None:
         self.execute_calls: list[str] = []
         self.bulk_calls: list[tuple[str, int]] = []
@@ -30,7 +28,9 @@ class _FakeConn:
 
 
 def _driver(conn: "_FakeConn") -> ArrowOdbcDriver:
-    return ArrowOdbcDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    return ArrowOdbcDriver(
+        cast("Any", conn), driver_features={"storage_capabilities": _CAPS, "dbms_name": "Microsoft SQL Server"}
+    )
 
 
 def test_load_from_arrow_uses_bulk_insert() -> None:
