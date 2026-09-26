@@ -392,20 +392,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 database=cast("str | None", database),
             )
 
-    def get_pool_stats(self) -> "dict[str, Any] | None":
-        """Return connection pool statistics if available."""
-        pool = self.connection_instance
-        if pool is not None and hasattr(pool, "get_stats"):
-            return cast("dict[str, Any]", pool.get_stats())
-        return None
-
-    def pop_pool_stats(self) -> "dict[str, Any] | None":
-        """Return and reset connection pool statistics if available."""
-        pool = self.connection_instance
-        if pool is not None and hasattr(pool, "pop_stats"):
-            return cast("dict[str, Any]", pool.pop_stats())
-        return None
-
     def _create_pool(self) -> "ConnectionPool":
         """Create the actual connection pool."""
         all_config = dict(self.connection_config)
@@ -744,20 +730,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             extension_config=extension_config,
             **kwargs,
         )
-
-    def get_pool_stats(self) -> "dict[str, Any] | None":
-        """Return connection pool statistics if available."""
-        pool = self.connection_instance
-        if pool is not None and hasattr(pool, "get_stats"):
-            return cast("dict[str, Any]", pool.get_stats())
-        return None
-
-    def pop_pool_stats(self) -> "dict[str, Any] | None":
-        """Return and reset connection pool statistics if available."""
-        pool = self.connection_instance
-        if pool is not None and hasattr(pool, "pop_stats"):
-            return cast("dict[str, Any]", pool.pop_stats())
-        return None
 
     async def _create_pool(self) -> "AsyncConnectionPool":
         """Create the actual async connection pool."""

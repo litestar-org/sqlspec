@@ -458,24 +458,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         config["connect"] = _AsyncpgAlloydbConnector(self, user, password, database)
 
-    def register_type_codec(
-        self,
-        typename: str,
-        *,
-        schema: str = "public",
-        encoder: "Callable[..., Any] | None" = None,
-        decoder: "Callable[..., Any] | None" = None,
-        format: str = "text",
-    ) -> None:
-        """Register a custom type codec to be applied to all connections."""
-        self._custom_type_codecs.append({
-            "typename": typename,
-            "schema": schema,
-            "encoder": encoder,
-            "decoder": decoder,
-            "format": format,
-        })
-
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
         config = {
