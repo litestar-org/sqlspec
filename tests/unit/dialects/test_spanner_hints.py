@@ -1,6 +1,8 @@
 """Unit tests for Cloud Spanner GoogleSQL hints."""
 
-from sqlglot import exp, parse_one
+from sqlglot import Dialect, exp, parse_one
+
+from sqlspec.dialects.spanner._parsers import normalize_spanner_tokens
 
 
 def test_single_statement_hint() -> None:
@@ -75,3 +77,23 @@ def test_aliased_table_hints_and_parse_into() -> None:
     assert table.args.get("hints") is not None
     rendered = parsed.sql(dialect="spanner")
     assert "@{FORCE_INDEX=AlbumsBySinger}" in rendered
+
+
+def test_brace_hint_inside_string_literal_preserved() -> None:
+    """Verify @{...} inside string literals is not converted into a hint comment."""
+    sql = "SELECT '@{FORCE_INDEX=Idx}' AS literal"
+    parsed = parse_one(sql, dialect="spanner")
+    assert parsed.args.get("hint") is None
+    rendered = parsed.sql(dialect="spanner")
+    assert rendered == "SELECT '@{FORCE_INDEX=Idx}' AS literal"
+    assert "/*@" not in rendered
+
+
+def test_normalize_spanner_tokens_without_sql_fallback() -> None:
+    """Verify token-level normalization reconstructs hints when sql text is omitted."""
+    raw_tokens = Dialect.get_or_raise("bigquery").tokenize(
+        "@{LOCK_SCANNED_RANGES=exclusive, OPTIMIZER_VERSION=6} SELECT 1"
+    )
+    normalized = normalize_spanner_tokens(raw_tokens)
+    assert len(normalized) == 2
+    assert normalized[0].comments == ["@ LOCK_SCANNED_RANGES=exclusive, OPTIMIZER_VERSION=6"]
