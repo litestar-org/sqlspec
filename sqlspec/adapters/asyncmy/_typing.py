@@ -8,21 +8,17 @@ import contextlib
 import os
 from typing import TYPE_CHECKING, Any, cast
 
-import asyncmy as _asyncmy
-from asyncmy import Connection
-from asyncmy import errors as _asyncmy_errors
-from asyncmy.connection import LoadLocalFile as _LoadLocalFile
-from asyncmy.connection import MySQLResult as _AsyncmyResult
-from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
-from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
-from asyncmy.cursors import Cursor as _AsyncmyCursor
-from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
-from asyncmy.cursors import SSCursor as AsyncmySSCursor
-from asyncmy.errors import ProgrammingError as AsyncmyProgrammingError
-from asyncmy.pool import Pool as _AsyncmyPool
-from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
+import asyncmy
+import asyncmy.constants
+import asyncmy.cursors
+import asyncmy.errors
+import asyncmy.pool
+from asyncmy.connection import LoadLocalFile, MySQLResult
+from asyncmy.protocol import LoadLocalPacketWrapper
 
 from sqlspec.exceptions import SQLSpecError
+
+ASYNCMY_INSERT_VALUES_PATTERN = asyncmy.cursors.RE_INSERT_VALUES
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterator
@@ -50,23 +46,27 @@ if TYPE_CHECKING:
         JSON: int
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
-    AsyncmyDictCursor: TypeAlias = _AsyncmyDictCursor
-    AsyncmyError: TypeAlias = _asyncmy_errors.Error
+    AsyncmyDictCursor: TypeAlias = asyncmy.cursors.DictCursor
+    AsyncmyError: TypeAlias = asyncmy.errors.Error
     AsyncmyFieldType: TypeAlias = AsyncmyFieldTypeProtocol
-    AsyncmyMySQLError: TypeAlias = _asyncmy_errors.MySQLError
+    AsyncmyMySQLError: TypeAlias = asyncmy.errors.MySQLError
     AsyncmyModule: TypeAlias = AsyncmyModuleProtocol
-    AsyncmyPool: TypeAlias = _AsyncmyPool
-    AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
+    AsyncmyPool: TypeAlias = asyncmy.pool.Pool
+    AsyncmyProgrammingError: TypeAlias = asyncmy.errors.ProgrammingError
+    AsyncmyRawCursor: TypeAlias = asyncmy.cursors.Cursor
+    AsyncmySSCursor: TypeAlias = asyncmy.cursors.SSCursor
 
 if not TYPE_CHECKING:
-    AsyncmyConnection = Connection
-    AsyncmyDictCursor = _AsyncmyDictCursor
-    AsyncmyError = _asyncmy_errors.Error
-    AsyncmyFieldType = _ASYNCMY_FIELD_TYPE
-    AsyncmyMySQLError = _asyncmy_errors.MySQLError
-    AsyncmyModule = _asyncmy
-    AsyncmyPool = _AsyncmyPool
-    AsyncmyRawCursor = _AsyncmyCursor
+    AsyncmyConnection = asyncmy.Connection
+    AsyncmyDictCursor = asyncmy.cursors.DictCursor
+    AsyncmyError = asyncmy.errors.Error
+    AsyncmyFieldType = asyncmy.constants.FIELD_TYPE
+    AsyncmyMySQLError = asyncmy.errors.MySQLError
+    AsyncmyModule = asyncmy
+    AsyncmyPool = asyncmy.pool.Pool
+    AsyncmyProgrammingError = asyncmy.errors.ProgrammingError
+    AsyncmyRawCursor = asyncmy.cursors.Cursor
+    AsyncmySSCursor = asyncmy.cursors.SSCursor
 
 __all__ = (
     "ASYNCMY_INSERT_VALUES_PATTERN",
@@ -213,7 +213,7 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
             setattr(raw, "_read_query_result", previous)
 
 
-class _AsyncmyLocalInfileResult(_AsyncmyResult):
+class _AsyncmyLocalInfileResult(MySQLResult):
     """Normalize the upstream filename handoff while retaining its native sender."""
 
     __slots__ = ("_filename",)
@@ -223,11 +223,11 @@ class _AsyncmyLocalInfileResult(_AsyncmyResult):
         self._filename = filename
 
     async def _read_load_local_packet(self, first_packet: Any) -> None:
-        request = _LoadLocalPacketWrapper(first_packet).filename
+        request = LoadLocalPacketWrapper(first_packet).filename
         if not self.connection._local_infile or os.fsdecode(request) != self._filename:
             msg = "MySQL requested an unexpected LOCAL INFILE payload."
             raise SQLSpecError(msg)
-        sender = _LoadLocalFile(self._filename, self.connection)
+        sender = LoadLocalFile(self._filename, self.connection)
         send_data = cast("Callable[[], Awaitable[None]]", sender.send_data)
         await send_data()
         packet = await self.connection.read_packet()

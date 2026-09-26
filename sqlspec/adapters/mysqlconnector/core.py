@@ -7,7 +7,7 @@ from mysql.connector.conversion import MySQLConverter
 
 from sqlspec.adapters import mysql_common
 from sqlspec.adapters.mysql_common import (
-    _bool_to_int,
+    bool_to_int,
     build_insert_statement,
     build_load_data_statement,
     collect_rows,
@@ -61,13 +61,13 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common._MYSQL_ACCESS_ERROR_DISPATCH
-_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common._MYSQL_CONNECTION_ERROR_DISPATCH
-_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common._MYSQL_CONSTRAINT_ERROR_DISPATCH
-_MYSQL_MIGRATION_ERROR_CODES = mysql_common._MYSQL_MIGRATION_ERROR_CODES
-_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common._MYSQL_SQLSTATE_EXACT_DISPATCH
-_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common._MYSQL_SQLSTATE_PREFIX_DISPATCH
-_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common._MYSQL_TRANSACTION_ERROR_DISPATCH
+_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common.MYSQL_ACCESS_ERROR_DISPATCH
+_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common.MYSQL_CONNECTION_ERROR_DISPATCH
+_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common.MYSQL_CONSTRAINT_ERROR_DISPATCH
+_MYSQL_MIGRATION_ERROR_CODES = mysql_common.MYSQL_MIGRATION_ERROR_CODES
+_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common.MYSQL_SQLSTATE_EXACT_DISPATCH
+_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common.MYSQL_SQLSTATE_PREFIX_DISPATCH
+_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common.MYSQL_TRANSACTION_ERROR_DISPATCH
 
 
 class SQLSpecMySQLConverter(MySQLConverter):
@@ -235,7 +235,7 @@ class MysqlConnectorAsyncStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the mysql-connector driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="mysql-connector",
         default_style=ParameterStyle.QMARK,

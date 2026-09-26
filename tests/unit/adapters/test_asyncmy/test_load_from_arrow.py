@@ -234,7 +234,7 @@ async def test_local_infile_native_handoff_and_hook_restoration(
     failure = asyncio.CancelledError() if outcome == "cancelled" else OSError("native sender failed")
     send = AsyncMock(side_effect=failure if outcome in {"sender_error", "cancelled"} else None)
     sender = Mock(return_value=SimpleNamespace(send_data=send))
-    monkeypatch.setattr(native, "_LoadLocalFile", sender)
+    monkeypatch.setattr(native, "LoadLocalFile", sender)
     result_type = native._AsyncmyLocalInfileResult
     results: list[Any] = []
 

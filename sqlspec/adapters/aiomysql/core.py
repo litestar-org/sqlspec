@@ -4,9 +4,9 @@ import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters import mysql_common
-from sqlspec.adapters.aiomysql._typing import AiomysqlSSCursor as SSCursor
+from sqlspec.adapters.aiomysql._typing import AiomysqlSSCursor
 from sqlspec.adapters.mysql_common import (
-    _bool_to_int,
+    bool_to_int,
     build_insert_statement,
     build_load_data_statement,
     collect_rows,
@@ -58,13 +58,13 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common._MYSQL_ACCESS_ERROR_DISPATCH
-_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common._MYSQL_CONNECTION_ERROR_DISPATCH
-_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common._MYSQL_CONSTRAINT_ERROR_DISPATCH
-_MYSQL_MIGRATION_ERROR_CODES = mysql_common._MYSQL_MIGRATION_ERROR_CODES
-_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common._MYSQL_SQLSTATE_EXACT_DISPATCH
-_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common._MYSQL_SQLSTATE_PREFIX_DISPATCH
-_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common._MYSQL_TRANSACTION_ERROR_DISPATCH
+_MYSQL_ACCESS_ERROR_DISPATCH = mysql_common.MYSQL_ACCESS_ERROR_DISPATCH
+_MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common.MYSQL_CONNECTION_ERROR_DISPATCH
+_MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common.MYSQL_CONSTRAINT_ERROR_DISPATCH
+_MYSQL_MIGRATION_ERROR_CODES = mysql_common.MYSQL_MIGRATION_ERROR_CODES
+_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common.MYSQL_SQLSTATE_EXACT_DISPATCH
+_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common.MYSQL_SQLSTATE_PREFIX_DISPATCH
+_MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common.MYSQL_TRANSACTION_ERROR_DISPATCH
 
 
 class AiomysqlStreamSource:
@@ -87,7 +87,7 @@ class AiomysqlStreamSource:
         self._driver._check_pending_exception(handler)
 
     async def _start(self) -> None:
-        cursor = await self._driver.connection.cursor(SSCursor)
+        cursor = await self._driver.connection.cursor(AiomysqlSSCursor)
         self._cursor = cursor
         await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
@@ -117,7 +117,7 @@ class AiomysqlStreamSource:
 
 def build_profile() -> "DriverParameterProfile":
     """Create the aiomysql driver parameter profile."""
-    coercions: dict[type, Callable[[Any], Any]] = {bool: _bool_to_int, **build_uuid_coercions()}
+    coercions: dict[type, Callable[[Any], Any]] = {bool: bool_to_int, **build_uuid_coercions()}
     return DriverParameterProfile(
         name="aiomysql",
         default_style=ParameterStyle.QMARK,

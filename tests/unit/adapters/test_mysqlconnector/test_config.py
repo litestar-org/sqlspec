@@ -43,7 +43,7 @@ def test_async_config_uses_connector_python_host_default_and_disables_local_infi
 
 
 def test_acquire_sync_connection_lazily_creates_pool_once(monkeypatch: "pytest.MonkeyPatch") -> None:
-    """acquire_sync_connection routes through the SQLSpec pool (created once) and never leaks pool kwargs into connect()."""
+    """_acquire_sync_connection routes through the SQLSpec pool (created once) and never leaks pool kwargs into connect()."""
     from sqlspec.adapters.mysqlconnector import config as cfg_module
 
     created_pools: list[Any] = []
@@ -68,8 +68,8 @@ def test_acquire_sync_connection_lazily_creates_pool_once(monkeypatch: "pytest.M
         connection_config={"pool_name": "sqlspec", "pool_size": 3, "pool_reset_session": True}
     )
 
-    first = config.acquire_sync_connection()
-    second = config.acquire_sync_connection()
+    first = config._acquire_sync_connection()
+    second = config._acquire_sync_connection()
 
     assert len(created_pools) == 1
     assert config.connection_instance is created_pools[0]
