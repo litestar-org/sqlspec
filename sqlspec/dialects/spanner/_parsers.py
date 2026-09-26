@@ -12,7 +12,7 @@ generators, so either dialect can re-render them.
 """
 
 import re
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
 from sqlglot.parsers.bigquery import BigQueryParser
@@ -33,6 +33,9 @@ from sqlspec.dialects.spanner._generators import (
     _normalize_interval_expression,
 )
 
+if TYPE_CHECKING:
+    from sqlglot.tokenizer_core import Token
+
 __all__ = (
     "SpangresParser",
     "SpannerParser",
@@ -40,6 +43,7 @@ __all__ = (
     "attach_hints",
     "build_interleave_property",
     "extract_interleave_property",
+    "normalize_spanner_tokens",
     "parse_hint_expression",
     "register_spanner_property_parsers",
 )
@@ -321,6 +325,75 @@ def _parse_drop_change_stream(parser: Any) -> exp.Drop:
     """Parse DROP CHANGE STREAM name."""
     name = parser._parse_id_var()
     return exp.Drop(this=name, kind="CHANGE STREAM")
+
+
+def _closing_brace_index(tokens: "list[Token]", start: int) -> int:
+    """Return the index of the matching closing brace token, or -1 if unclosed."""
+    depth = 1
+    for position in range(start, len(tokens)):
+        token_type = tokens[position].token_type
+        if token_type == TokenType.L_BRACE:
+            depth += 1
+        elif token_type == TokenType.R_BRACE:
+            depth -= 1
+            if depth == 0:
+                return position
+    return -1
+
+
+def normalize_spanner_tokens(tokens: "list[Token]", sql: str = "") -> "list[Token]":
+    """Convert Spanner GoogleSQL ``@{...}`` hint token sequences into token comments.
+
+    Token-level normalization ensures ``@{...}`` inside string literals or SQL
+    comments is left untouched while statement, table, and join hints attach to
+    the appropriate token's ``comments`` list for ``attach_hints`` to consume.
+
+    Args:
+        tokens: Tokens produced by the base BigQuery tokenizer.
+        sql: Original SQL text used to extract raw hint body substrings.
+
+    Returns:
+        Normalized token list with ``@{...}`` sequences folded into comments.
+    """
+    result: list[Token] = []
+    pending_comments: list[str] = []
+    index = 0
+    total = len(tokens)
+    while index < total:
+        token = tokens[index]
+        if (
+            token.token_type == TokenType.PARAMETER
+            and token.text == "@"
+            and index + 1 < total
+            and tokens[index + 1].token_type == TokenType.L_BRACE
+            and (not sql or token.end + 1 == tokens[index + 1].start)
+        ):
+            l_brace = tokens[index + 1]
+            end_idx = _closing_brace_index(tokens, index + 2)
+            if end_idx >= 0:
+                r_brace = tokens[end_idx]
+                if sql and r_brace.start > l_brace.end:
+                    hint_body = sql[l_brace.end + 1 : r_brace.start].strip()
+                else:
+                    hint_body = "".join(
+                        ", " if part.token_type == TokenType.COMMA else part.text
+                        for part in tokens[index + 2 : end_idx]
+                    ).strip()
+                collected_comments = [comment for part in tokens[index : end_idx + 1] for comment in part.comments]
+                if hint_body:
+                    collected_comments.append(f"@ {hint_body}")
+                if result and result[-1].token_type not in {TokenType.SEMICOLON, TokenType.L_PAREN}:
+                    result[-1].comments.extend(collected_comments)
+                else:
+                    pending_comments.extend(collected_comments)
+                index = end_idx + 1
+                continue
+        if pending_comments:
+            token.comments = [*pending_comments, *token.comments]
+            pending_comments = []
+        result.append(token)
+        index += 1
+    return result
 
 
 def parse_hint_expression(raw_hint: str) -> exp.Hint:
