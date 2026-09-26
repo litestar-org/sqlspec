@@ -5,33 +5,28 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-import sqlite3
 import sqlite3 as sqlite_module
-from typing import TYPE_CHECKING, Any
+from sqlite3 import Connection as SqliteConnection
+from sqlite3 import Cursor as SqliteRawCursor
+from sqlite3 import Error as SqliteError
+from sqlite3 import OperationalError as SqliteOperationalError
+from typing import TYPE_CHECKING, Any, TypeAlias
 
-_SqliteConnection = sqlite3.Connection
+SqliteConnectionFactory: TypeAlias = type[SqliteConnection]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
 
     from sqlspec.adapters.sqlite.driver import SqliteDriver
     from sqlspec.core import StatementConfig
-
-    SqliteConnection: TypeAlias = _SqliteConnection
-    SqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
-    SqliteRawCursor: TypeAlias = sqlite3.Cursor
-
-if not TYPE_CHECKING:
-    SqliteConnection = _SqliteConnection
-    SqliteConnectionFactory = type[sqlite3.Connection]
-    SqliteRawCursor = sqlite3.Cursor
 
 __all__ = (
     "SqliteConnection",
     "SqliteConnectionFactory",
     "SqliteCursor",
+    "SqliteError",
+    "SqliteOperationalError",
     "SqliteRawCursor",
     "SqliteSessionContext",
     "sqlite_module",

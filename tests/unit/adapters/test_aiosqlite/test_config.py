@@ -21,7 +21,7 @@ class CustomConnection(sqlite3.Connection):
 
 def _annotation_contains(annotation: object, expected: object) -> bool:
     """Return whether an annotation tree contains the expected object."""
-    if annotation is expected:
+    if annotation is expected or annotation == expected:
         return True
     return any(_annotation_contains(arg, expected) for arg in get_args(annotation))
 
