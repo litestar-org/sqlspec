@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb.core import OracleBlob
+from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.core import oracle_table_feature_report as _oracle_table_feature_report
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -181,7 +181,6 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         """
         data = self._value_to_bytes(value)
         expires_in_seconds = _oracle_expiry_seconds(expires_in)
-        bind_data = OracleBlob(data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
 
         sql = f"""
         MERGE INTO {self._table_name} t
@@ -211,6 +210,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
+            bind_data: Any = await conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
             cursor = conn.cursor()
             await cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
             await conn.commit()
@@ -599,7 +599,6 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of set."""
         data = self._value_to_bytes(value)
         expires_in_seconds = _oracle_expiry_seconds(expires_in)
-        bind_data = OracleBlob(data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
 
         sql = f"""
         MERGE INTO {self._table_name} t
@@ -628,6 +627,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            bind_data: Any = conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
             cursor = conn.cursor()
             cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
             conn.commit()

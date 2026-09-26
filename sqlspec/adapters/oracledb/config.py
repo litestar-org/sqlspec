@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.oracledb._json_handlers import register_json_handlers  # pyright: ignore[reportPrivateUsage]
+from sqlspec.adapters.oracledb._json_handlers import register_json_handlers
 from sqlspec.adapters.oracledb._typing import (
     OracleAsyncConnection,
     OracleAsyncConnectionPool,
@@ -24,7 +24,7 @@ from sqlspec.adapters.oracledb._typing import OraclePoolGetMode as PoolGetMode
 from sqlspec.adapters.oracledb._typing import OraclePurity as Purity
 from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
-from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers  # pyright: ignore[reportPrivateUsage]
+from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers
 from sqlspec.adapters.oracledb.core import (
     apply_driver_features,
     build_connection_config,
@@ -465,8 +465,8 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         vector case) internally. UUID registration remains gated for
         backwards compatibility with existing user configurations.
 
-        Caches major version and vector return format in connection metadata
-        registry to support C-extension connection objects without dynamic attributes.
+        Caches major version and vector return format on the connection when
+        dynamic attributes are supported.
 
         Args:
             connection: Oracle connection to initialize.
@@ -479,10 +479,11 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
 
+        conn_any = cast("Any", connection)
         with contextlib.suppress(AttributeError):
-            connection._sqlspec_oracle_major = resolve_oracle_connection_major(connection, self._oracle_version_cache)
+            conn_any._sqlspec_oracle_major = resolve_oracle_connection_major(connection, self._oracle_version_cache)
         with contextlib.suppress(AttributeError):
-            connection._sqlspec_vector_return_format = self.driver_features.get("vector_return_format")
+            conn_any._sqlspec_vector_return_format = self.driver_features.get("vector_return_format")
 
         if self._pool_session_callback is not None:
             self._pool_session_callback(connection, tag)
@@ -678,7 +679,7 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         Registers vector, JSON, and UUID handlers. Vector and JSON registration
         is unconditional — both gate any optional dependencies (NumPy in the
         vector case) internally. Caches major version and vector return format
-        in the external connection metadata registry.
+        on the connection when dynamic attributes are supported.
 
         Args:
             connection: Oracle async connection to initialize.
@@ -691,10 +692,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
         if self.driver_features.get("enable_uuid_binary", False):
             register_uuid_handlers(connection)
 
+        conn_any = cast("Any", connection)
         with contextlib.suppress(AttributeError):
-            connection._sqlspec_oracle_major = resolve_oracle_connection_major(connection, self._oracle_version_cache)
+            conn_any._sqlspec_oracle_major = resolve_oracle_connection_major(connection, self._oracle_version_cache)
         with contextlib.suppress(AttributeError):
-            connection._sqlspec_vector_return_format = self.driver_features.get("vector_return_format")
+            conn_any._sqlspec_vector_return_format = self.driver_features.get("vector_return_format")
 
         if self._pool_session_callback is not None:
             session_callback_result = self._pool_session_callback(connection, tag)
