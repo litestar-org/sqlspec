@@ -15,22 +15,15 @@ class _Db2UnavailableError(Exception):
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
 
-    from ibm_db_dbi import AsyncConnection as _Db2AsyncConnection
-    from ibm_db_dbi import AsyncCursor as _Db2AsyncCursor
-    from ibm_db_dbi import Connection as _Db2Connection
-    from ibm_db_dbi import Cursor as _Db2Cursor
-    from ibm_db_dbi import Error as _Db2Error
+    from ibm_db_dbi import AsyncConnection as Db2AsyncConnection
+    from ibm_db_dbi import AsyncCursor as Db2AsyncRawCursor
+    from ibm_db_dbi import Connection as Db2SyncConnection
+    from ibm_db_dbi import Cursor as Db2RawCursor
+    from ibm_db_dbi import Error as Db2Error
 
     from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
     from sqlspec.core import StatementConfig
-
-    Db2SyncConnection: TypeAlias = _Db2Connection
-    Db2RawCursor: TypeAlias = _Db2Cursor
-    Db2AsyncConnection: TypeAlias = _Db2AsyncConnection
-    Db2AsyncRawCursor: TypeAlias = _Db2AsyncCursor
-    Db2Error: TypeAlias = _Db2Error
 
 if not TYPE_CHECKING:
     Db2SyncConnection = import_optional_attr("ibm_db_dbi", "Connection") or Any

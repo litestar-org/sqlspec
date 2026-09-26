@@ -15,7 +15,7 @@ from sqlspec.adapters.db2.config import (
     Db2SyncConfig,
     Db2SyncConnectionContext,
 )
-from sqlspec.adapters.db2.core import build_dsn_string, parse_db2_dsn
+from sqlspec.adapters.db2.core import _parse_db2_dsn, build_dsn_string
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
@@ -35,7 +35,7 @@ def test_parse_db2_dsn_cli_format() -> None:
     """Known CLI keywords map to canonical connection keys."""
     dsn = "DATABASE=mytestdb;HOSTNAME=127.0.0.1;PORT=50000;PROTOCOL=TCPIP;UID=db2admin;PWD=secretpass;"
 
-    parsed = parse_db2_dsn(dsn)
+    parsed = _parse_db2_dsn(dsn)
 
     assert parsed == {
         "database": "mytestdb",
@@ -49,7 +49,7 @@ def test_parse_db2_dsn_cli_format() -> None:
 
 def test_url_dsn_parsing() -> None:
     """URL DSNs decode credentials and map query keywords like keyword DSNs."""
-    parsed = parse_db2_dsn("db2://u:p%3Bx@h:50001/d?Security=SSL&ClientApplName=svc&autocommit=false")
+    parsed = _parse_db2_dsn("db2://u:p%3Bx@h:50001/d?Security=SSL&ClientApplName=svc&autocommit=false")
 
     assert parsed["user"] == "u"
     assert parsed["password"] == "p;x"
@@ -63,7 +63,7 @@ def test_url_dsn_parsing() -> None:
 
 def test_braced_dsn_value_parses() -> None:
     """A braced DSN value keeps its semicolons."""
-    parsed = parse_db2_dsn("PWD={a;b};DATABASE=d")
+    parsed = _parse_db2_dsn("PWD={a;b};DATABASE=d")
 
     assert parsed["password"] == "a;b"
     assert parsed["database"] == "d"

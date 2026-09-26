@@ -44,10 +44,8 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "extract_sqlstate",
-    "normalize_column_names",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
-    "parse_db2_dsn",
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
@@ -348,7 +346,7 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":
+def _normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":
     """Lowercase column names that Db2 folded to uppercase.
 
     Names made only of uppercase letters, digits and underscores (and not starting with a digit)
@@ -385,12 +383,12 @@ def resolve_column_names(
     if not description:
         return []
     if column_name_cache is None:
-        return normalize_column_names([str(desc[0]) for desc in description], lowercase)
+        return _normalize_column_names([str(desc[0]) for desc in description], lowercase)
     cache_key = id(description)
     cached = column_name_cache.get(cache_key)
     if cached is not None and cached[0] is description:
         return cached[1]
-    names = normalize_column_names([str(desc[0]) for desc in description], lowercase)
+    names = _normalize_column_names([str(desc[0]) for desc in description], lowercase)
     column_name_cache[cache_key] = (description, names)
     return names
 
@@ -566,7 +564,7 @@ def _assign_dsn_value(params: dict[str, Any], extra: dict[str, Any], keyword: st
         params[key] = value
 
 
-def parse_db2_dsn(dsn: str) -> dict[str, Any]:
+def _parse_db2_dsn(dsn: str) -> dict[str, Any]:
     """Parse a Db2 CLI connection string or ``db2://`` URL into canonical connection keys.
 
     Supported forms:
@@ -673,7 +671,7 @@ def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, A
         if not isinstance(dsn, str):
             msg = "Db2 connection parameter 'dsn' must be a string"
             raise ImproperConfigurationError(msg)
-        dsn_params = parse_db2_dsn(dsn)
+        dsn_params = _parse_db2_dsn(dsn)
         dsn_extra = dsn_params.pop("extra", {})
         for key, value in dsn_params.items():
             config.setdefault(key, value)
