@@ -135,6 +135,26 @@ def test_payload_text_encoding_is_omitted_when_unset() -> None:
     assert "payload_text_encoding" not in connection.read_kwargs[0]
 
 
+def test_falliable_allocations_reaches_read_arrow_batches() -> None:
+    """falliable_allocations feature should be forwarded to read_arrow_batches."""
+    connection = _RecordingConnection()
+    driver = ArrowOdbcDriver(connection=cast("Any", connection), driver_features={"falliable_allocations": False})
+
+    driver._read_arrow_batches("SELECT 1", None, 100)  # pyright: ignore[reportPrivateUsage]
+
+    assert connection.read_kwargs[0]["falliable_allocations"] is False
+
+
+def test_falliable_allocations_is_omitted_when_unset_on_direct_driver() -> None:
+    """Leaving falliable_allocations unset on a direct driver leaves kwargs clean."""
+    connection = _RecordingConnection()
+    driver = ArrowOdbcDriver(connection=cast("Any", connection))
+
+    driver._read_arrow_batches("SELECT 1", None, 100)  # pyright: ignore[reportPrivateUsage]
+
+    assert "falliable_allocations" not in connection.read_kwargs[0]
+
+
 def test_driver_pooling_is_enabled_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """The upstream switch is process-global and must be called exactly once."""
     calls: list[str] = []

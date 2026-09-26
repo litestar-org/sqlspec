@@ -101,6 +101,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         "_data_dictionary",
         "_dbms_name",
         "_dialect",
+        "_falliable_allocations_val",
         "_max_batch_bytes",
         "_max_binary_size_val",
         "_max_text_size_val",
@@ -130,6 +131,9 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
         self._chunk_size_val: int = int(features.get("chunk_size") or features.get("max_batch_size") or 65_536)
+        self._falliable_allocations_val: bool | None = (
+            bool(features["falliable_allocations"]) if "falliable_allocations" in features else None
+        )
         self._max_batch_bytes: int | None = features.get("max_bytes_per_batch")
         self._max_binary_size_val: int | None = features.get("max_binary_size")
         self._max_text_size_val: int | None = features.get("max_text_size")
@@ -409,6 +413,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         }
         if schema is not None:
             kwargs["schema"] = schema
+        if self._falliable_allocations_val is not None:
+            kwargs["falliable_allocations"] = self._falliable_allocations_val
         if self._query_timeout_sec_val is not None:
             kwargs["query_timeout_sec"] = self._query_timeout_sec_val
         if self._payload_text_encoding is not None:

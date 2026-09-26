@@ -182,7 +182,8 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 try:
                     cursor.executemany(sql, parameter_sets)
                 except Exception:
-                    cursor.execute("ROLLBACK")
+                    with contextlib.suppress(Exception):
+                        cursor.execute("ROLLBACK")
                     raise
                 else:
                     cursor.execute("COMMIT")
