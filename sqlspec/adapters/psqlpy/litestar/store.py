@@ -86,19 +86,18 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
             new_expires_at = self._calculate_expires_at(renew_for)
             sql = f"""
             UPDATE {self._table_name}
-            SET expires_at = $1, updated_at = CURRENT_TIMESTAMP
+            SET expires_at = CASE WHEN expires_at IS NOT NULL THEN $1 ELSE expires_at END,
+                updated_at = CURRENT_TIMESTAMP
             WHERE session_id = $2
             AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             RETURNING data
             """
             async with self._config.provide_connection() as conn:
-                single_result = await conn.fetch_row(sql, [new_expires_at, key])
-                if not single_result:
+                query_result = await conn.fetch(sql, [new_expires_at, key])
+                rows = query_result.result() if query_result else []
+                if not rows:
                     return None
-                row = single_result.result()
-                if not row:
-                    return None
-                return bytes(row["data"])
+                return bytes(rows[0]["data"])
 
         sql = f"""
         SELECT data FROM {self._table_name}
@@ -106,13 +105,11 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
         async with self._config.provide_connection() as conn:
-            single_result = await conn.fetch_row(sql, [key])
-            if not single_result:
+            query_result = await conn.fetch(sql, [key])
+            rows = query_result.result() if query_result else []
+            if not rows:
                 return None
-            row = single_result.result()
-            if not row:
-                return None
-            return bytes(row["data"])
+            return bytes(rows[0]["data"])
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.

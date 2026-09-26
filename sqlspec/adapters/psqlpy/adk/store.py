@@ -101,22 +101,20 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
                 VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 RETURNING id, app_name, user_id, state, create_time, update_time
                 """
-                single_result = await conn.fetch_row(sql, [session_id, app_name, user_id, owner_id, state])
+                result = await conn.fetch(sql, [session_id, app_name, user_id, owner_id, state])
             else:
                 sql = f"""
                 INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
                 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 RETURNING id, app_name, user_id, state, create_time, update_time
                 """
-                single_result = await conn.fetch_row(sql, [session_id, app_name, user_id, state])
+                result = await conn.fetch(sql, [session_id, app_name, user_id, state])
 
-        if not single_result:
+        rows: list[dict[str, Any]] = result.result() if result else []
+        if not rows:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
-        row = single_result.result()
-        if not row:
-            msg = "Failed to fetch created session"
-            raise RuntimeError(msg)
+        row = rows[0]
         return StoredSession(
             id=row["id"],
             app_name=row["app_name"],
@@ -145,13 +143,13 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                single_result = await conn.fetch_row(sql, [app_name, user_id, session_id])
-                if not single_result:
-                    return None
-                row = single_result.result()
-                if not row:
+                result = await conn.fetch(sql, [app_name, user_id, session_id])
+                rows: list[dict[str, Any]] = result.result() if result else []
+
+                if not rows:
                     return None
 
+                row = rows[0]
                 return StoredSession(
                     id=row["id"],
                     app_name=row["app_name"],

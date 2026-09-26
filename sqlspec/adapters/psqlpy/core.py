@@ -77,7 +77,6 @@ __all__ = (
     "get_parameter_casts",
     "is_postgres_extension_active",
     "prepare_parameters_with_casts",
-    "records_to_arrow_table",
     "resolve_postgres_extension_state",
     "resolve_runtime_statement_config",
     "split_schema_and_table",
@@ -252,67 +251,23 @@ def apply_driver_features(
     return statement_config, features
 
 
-def collect_rows(query_result: Any | None, as_records: bool = True) -> "tuple[list[Any], list[str]]":
+def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[str]]":
     """Collect psqlpy rows and column names.
 
     Args:
         query_result: Result returned from cursor.fetch().
-        as_records: Whether to return Record objects if available.
 
     Returns:
         Tuple of (rows, column_names).
     """
-    if not query_result:
-        return [], []
-
-    if as_records and hasattr(query_result, "records"):
-        records = cast("list[Any]", query_result.records())
-        if not records:
-            return [], []
-        first = records[0]
-        column_names = list(first.keys()) if hasattr(first, "keys") else []
-        return records, column_names
-
-    dict_rows = cast("list[dict[str, Any]]", query_result if isinstance(query_result, list) else query_result.result())
+    dict_rows: list[dict[str, Any]] = (
+        cast("list[dict[str, Any]]", query_result if isinstance(query_result, list) else query_result.result())
+        if query_result
+        else []
+    )
     if not dict_rows:
         return [], []
     return dict_rows, list(dict_rows[0])
-
-
-def records_to_arrow_table(records: list[Any], columns: list[str], schema: Any = None) -> Any:
-    """Construct a pyarrow Table from records and column names using columnar arrays.
-
-    Args:
-        records: List of records or row dictionaries.
-        columns: Column names corresponding to the records.
-        schema: Optional pyarrow schema.
-
-    Returns:
-        A pyarrow Table.
-    """
-    import pyarrow as pa
-
-    if not records:
-        if schema is not None:
-            return pa.Table.from_batches([], schema=schema)
-        return pa.Table.from_arrays([pa.array([]) for _ in columns], names=columns)
-
-    first = records[0]
-    is_dict = isinstance(first, dict)
-    if schema is not None:
-        arrays = [
-            pa.array(
-                [r.get(columns[col_idx]) if is_dict else r[col_idx] for r in records], type=schema.field(col_idx).type
-            )
-            for col_idx in range(len(columns))
-        ]
-        return pa.Table.from_arrays(arrays, schema=schema)
-
-    arrays = [
-        pa.array([r.get(columns[col_idx]) if is_dict else r[col_idx] for r in records])
-        for col_idx in range(len(columns))
-    ]
-    return pa.Table.from_arrays(arrays, names=columns)
 
 
 class PsqlpyStreamSource:
@@ -365,14 +320,12 @@ class PsqlpyStreamSource:
                 await transaction.rollback()
             raise
 
-    async def fetch_chunk(self) -> "list[Any]":
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         query_result = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if query_result is None:
             return []
-        if hasattr(query_result, "records"):
-            return cast("list[Any]", query_result.records())
         return cast("list[dict[str, Any]]", query_result.result())
 
     async def close(self, error: bool = False) -> None:

@@ -4,8 +4,6 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
-import contextlib
-from time import perf_counter
 from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
@@ -26,23 +24,13 @@ from sqlspec.adapters.psqlpy.core import (
     format_table_identifier,
     get_parameter_casts,
     prepare_parameters_with_casts,
-    records_to_arrow_table,
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
-from sqlspec.core import (
-    SQL,
-    StackResult,
-    StatementConfig,
-    create_arrow_result,
-    get_cache_config,
-    register_driver_profile,
-)
-from sqlspec.core.stack import StatementStack
+from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.driver._common import validate_savepoint_name
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.schema import to_value_type
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
@@ -367,173 +355,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Exception handler context manager
         """
         return PsqlpyExceptionHandler()
-
-    async def execute_stack(
-        self, stack: "StatementStack", *, continue_on_error: bool = False
-    ) -> "tuple[StackResult, ...]":
-        """Execute a StatementStack using psqlpy pipelining when available."""
-        if not isinstance(stack, StatementStack) or not stack or self.stack_native_disabled or continue_on_error:
-            return await super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        queries: list[tuple[str, list[Any] | None]] = []
-        prepared_operations: list[tuple[Any, Any]] = []
-
-        for operation in stack.operations:
-            kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else {}
-            config = kwargs.pop("statement_config", None) or self.statement_config
-            sql_statement = self.prepare_statement(
-                operation.statement, operation.arguments, statement_config=config, kwargs=kwargs
-            )
-            if sql_statement.is_script or sql_statement.is_many:
-                return await super().execute_stack(stack, continue_on_error=continue_on_error)
-            sql, params = self._compiled_sql(sql_statement, config)
-            p_list = list(params) if isinstance(params, (list, tuple)) else None
-            queries.append((sql, p_list))
-            prepared_operations.append((operation, sql_statement))
-
-        transaction = self.connection.transaction()
-        needs_commit = False
-        if not self._connection_in_transaction():
-            await transaction.begin()
-            needs_commit = True
-
-        results: list[StackResult] = []
-        try:
-            query_results = await transaction.pipeline(queries)
-            if needs_commit:
-                await transaction.commit()
-            for (_op, stmt), q_res in zip(prepared_operations, query_results, strict=False):
-                rows, column_names = collect_rows(q_res)
-                exec_result = self.create_execution_result(
-                    self.connection,
-                    selected_data=rows,
-                    column_names=column_names,
-                    data_row_count=len(rows),
-                    is_select_result=stmt.returns_rows(),
-                )
-                sql_result = self.build_statement_result(stmt, exec_result)
-                results.append(StackResult(result=sql_result))
-        except Exception as exc:
-            if needs_commit:
-                with contextlib.suppress(Exception):
-                    await transaction.rollback()
-            msg = f"Pipelined stack execution failed: {exc}"
-            raise SQLSpecError(msg) from exc
-
-        return tuple(results)
-
-    async def select_to_arrow(
-        self,
-        statement: Any,
-        /,
-        *parameters: Any,
-        statement_config: "StatementConfig | None" = None,
-        return_format: str = "table",
-        native_only: bool = False,
-        batch_size: int | None = None,
-        arrow_schema: Any = None,
-        **kwargs: Any,
-    ) -> "ArrowResult":
-        """Execute a query and return results formatted as Apache Arrow."""
-        import pyarrow as pa
-
-        config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        sql, prepared_parameters = self._compiled_sql(sql_statement, config)
-        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
-
-        start_time = perf_counter()
-        query_result: Any = None
-        exc_handler = self.handle_database_exceptions()
-        async with exc_handler, self.with_cursor(self.connection) as cursor:
-            query_result = await cursor.fetch(sql, params)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
-        execution_time = perf_counter() - start_time
-
-        records = query_result.records() if hasattr(query_result, "records") else query_result.result()
-        columns = list(records[0].keys()) if records and hasattr(records[0], "keys") else []
-
-        table = records_to_arrow_table(records, columns, schema=arrow_schema)
-
-        if return_format == "table":
-            data: Any = table
-        elif return_format == "batch":
-            batches = table.to_batches()
-            data = batches[0] if batches else pa.RecordBatch.from_arrays([], schema=table.schema)
-        elif return_format == "batches":
-            data = table.to_batches(max_chunksize=batch_size) if batch_size else table.to_batches()
-        elif return_format == "reader":
-            data = table.to_reader(max_chunksize=batch_size)
-        else:
-            data = table
-
-        return create_arrow_result(
-            statement=sql_statement,
-            data=data,
-            rows_affected=len(records),
-            execution_time=execution_time,
-            metadata={"columns": columns},
-        )
-
-    async def select_one_or_none(
-        self,
-        statement: Any,
-        /,
-        *parameters: Any,
-        schema_type: Any = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Execute a query returning at most one row using fetch_row fast-path."""
-        config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        sql, prepared_parameters = self._compiled_sql(sql_statement, config)
-        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
-
-        single_result: Any = None
-        exc_handler = self.handle_database_exceptions()
-        async with exc_handler, self.with_cursor(self.connection) as cursor:
-            single_result = await cursor.fetch_row(sql, params)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
-
-        if single_result is None:
-            return None
-        row_dict = single_result.result() if hasattr(single_result, "result") else dict(cast("Any", single_result))
-        if not row_dict:
-            return None
-        if schema_type is not None:
-            return self.to_schema(row_dict, schema_type=schema_type)
-        return row_dict
-
-    async def select_value(
-        self,
-        statement: Any,
-        /,
-        *parameters: Any,
-        value_type: Any = None,
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Execute a query returning a scalar value using fetch_val fast-path."""
-        config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        sql, prepared_parameters = self._compiled_sql(sql_statement, config)
-        params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
-
-        val: Any = None
-        exc_handler = self.handle_database_exceptions()
-        async with exc_handler, self.with_cursor(self.connection) as cursor:
-            val = await cursor.fetch_val(sql, params)
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
-
-        if val is None:
-            return None
-        if value_type is not None:
-            return to_value_type(val, value_type)
-        return val
 
     async def select_to_storage(
         self,

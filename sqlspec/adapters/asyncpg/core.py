@@ -4,7 +4,7 @@ import contextlib
 import datetime
 import re
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -130,6 +130,10 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
                 found_user = True
     if found_user:
         config["user"] = user_val
+
+    pgbouncer = config.pop("pgbouncer", None)
+    if pgbouncer:
+        config.setdefault("statement_cache_size", 0)
 
     return config
 
@@ -459,13 +463,13 @@ class AsyncpgStreamSource:
             self._transaction = None
             raise
 
-    async def fetch_chunk(self) -> "list[Any]":
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         records = await self._driver._run_with_exception_handler(handler, self._cursor.fetch, self._chunk_size)
         self._driver._check_pending_exception(handler)
-        if records is None:
+        if not records:
             return []
-        return cast("list[Any]", records)
+        return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:
         self._cursor = None
