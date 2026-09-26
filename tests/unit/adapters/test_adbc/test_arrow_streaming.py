@@ -40,6 +40,13 @@ class _AdbcStreamingCursor:
         self.ingest_calls.append((table, source, mode))
         return 3
 
+    def adbc_execute_partitions(self, sql: str, parameters: object = None) -> tuple[list[bytes], pa.Schema]:
+        self.executed.append((sql, parameters))
+        return [b"part-0"], pa.schema([("x", pa.int64())])
+
+    def adbc_read_partition(self, partition: bytes) -> None:
+        self.executed.append(("READ_PARTITION", partition))
+
     def close(self) -> None:
         self.closed = True
 
@@ -98,3 +105,24 @@ def test_load_from_arrow_passes_record_batch_reader_to_adbc_ingest() -> None:
     assert mode == "create_append"
     assert job.telemetry["rows_processed"] == 3
     assert job.telemetry["destination"] == "target_table"
+
+
+def test_adbc_execute_and_read_partition_reader_defers_cursor_close() -> None:
+    connection = _AdbcStreamingConnection()
+    driver = AdbcDriver(
+        cast("AdbcConnection", connection),
+        dialect="sqlite",
+        driver_features={"storage_capabilities": _STORAGE_CAPABILITIES},
+    )
+
+    partitions, schema = driver.adbc_execute_partitions("SELECT 1 AS x")
+    assert partitions == [b"part-0"]
+    assert schema == pa.schema([("x", pa.int64())])
+    assert connection.cursor_obj.closed is True
+
+    connection.cursor_obj.closed = False
+    result = driver.adbc_read_partition(partitions[0], return_format="reader")
+    assert isinstance(result.data, pa.RecordBatchReader)
+    assert connection.cursor_obj.closed is False
+    assert result.data.read_all().to_pydict() == {"x": [1, 2, 3]}
+    assert connection.cursor_obj.closed is True

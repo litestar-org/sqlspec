@@ -694,7 +694,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     sqlstate = sqlstate_attr if sqlstate_attr is not None else None
 
     if sqlstate:
-        # Use centralized SQLSTATE mapping for specific codes
         if sqlstate == "23505":
             return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
         if sqlstate == "23503":
@@ -704,7 +703,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         if sqlstate == "23514":
             return _create_adbc_error(error, CheckViolationError, "check constraint violation")
 
-        # Deadlock and serialization errors
         if sqlstate == "40P01":
             return _create_adbc_error(error, DeadlockError, "deadlock detected")
         if sqlstate == "40001":
@@ -714,25 +712,20 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
             return _create_adbc_error(error, termination_class, "query terminated")
 
-        # Permission errors
         if sqlstate == "42501":
             return _create_adbc_error(error, PermissionDeniedError, "insufficient privilege")
         if sqlstate == "28000":
             return _create_adbc_error(error, PermissionDeniedError, "invalid authorization")
 
-        # Use centralized mapping for SQLSTATE class prefixes
         exc_class = map_sqlstate_to_exception(sqlstate)
         if exc_class is not None and exc_class is not SQLSpecError:
             description = _get_sqlstate_description(sqlstate)
             return _create_adbc_error(error, exc_class, description)
 
-        # Fallback for unmapped SQLSTATE codes
         return _create_adbc_error(error, SQLSpecError, "database error")
 
-    # Message-based fallback when no SQLSTATE is available
     error_msg = str(error).lower()
 
-    # Constraint violations
     if "unique" in error_msg or "duplicate" in error_msg:
         return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
     if "foreign key" in error_msg:
@@ -744,7 +737,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if "constraint" in error_msg:
         return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
 
-    # Deadlock/lock patterns
     if "deadlock" in error_msg:
         return _create_adbc_error(error, DeadlockError, "deadlock detected")
     if "serialization" in error_msg or "concurrent update" in error_msg:
@@ -753,15 +745,12 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if message_class := _classify_timeout_or_cancellation(error_msg):
         return _create_adbc_error(error, message_class, "query terminated")
 
-    # Permission patterns
     if "permission" in error_msg or "denied" in error_msg or "unauthorized" in error_msg:
         return _create_adbc_error(error, PermissionDeniedError, "permission denied")
 
-    # Syntax errors
     if "syntax" in error_msg:
         return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
 
-    # Connection errors
     if "connection" in error_msg or "connect" in error_msg:
         return _create_adbc_error(error, DatabaseConnectionError, "connection error")
 

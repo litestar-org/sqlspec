@@ -76,8 +76,16 @@ class AdbcConnectionParams(TypedDict):
     role: NotRequired[str]
     authorization_header: NotRequired[str]
     grpc_options: NotRequired[dict[str, Any]]
+    grpc_max_message_size: NotRequired[int]
+    fetch_timeout: NotRequired[float]
     gizmosql_backend: NotRequired[str]
     tls_skip_verify: NotRequired[bool]
+    tls_root_certs: NotRequired[str]
+    mtls_cert_chain: NotRequired[str]
+    mtls_private_key: NotRequired[str]
+    with_cookie_middleware: NotRequired[bool]
+    session_options: NotRequired[dict[str, Any]]
+    headers: NotRequired[dict[str, str]]
     extra: NotRequired[dict[str, Any]]
 
 
