@@ -36,7 +36,7 @@ def test_bulk_copy_defaults_match_upstream(driver_cls: Any) -> None:
     from mssql_python.cursor import Cursor
 
     upstream = inspect.signature(Cursor.bulkcopy).parameters
-    wrapper = inspect.signature(driver_cls._bulk_copy).parameters
+    wrapper = inspect.signature(driver_cls.bulk_copy).parameters
     for name in (
         "batch_size",
         "timeout",

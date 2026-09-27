@@ -3,27 +3,36 @@
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import mssql_python as mssql_python_module
+import mssql_python as _mssql_python  # pyright: ignore[reportMissingImports]
 from mssql_python import Error as MssqlPythonError
-from mssql_python.connection import Connection as MssqlPythonConnection
-from mssql_python.connection import TokenProvider
-from mssql_python.cursor import Cursor as MssqlPythonRawCursor
+from mssql_python.connection import Connection, TokenProvider  # pyright: ignore
+from mssql_python.cursor import Cursor  # pyright: ignore
+
+MSSQL_PYTHON_MODULE: Any = _mssql_python
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
+    from typing import TypeAlias
 
     from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
     from sqlspec.core import StatementConfig
 
+    MssqlPythonConnection: TypeAlias = Connection
+    MssqlPythonRawCursor: TypeAlias = Cursor
+
+if not TYPE_CHECKING:
+    MssqlPythonConnection = Connection
+    MssqlPythonRawCursor = Cursor
+
 __all__ = (
+    "MSSQL_PYTHON_MODULE",
     "MssqlPythonConnection",
     "MssqlPythonCursor",
     "MssqlPythonError",
     "MssqlPythonRawCursor",
     "MssqlPythonSessionContext",
     "TokenProvider",
-    "mssql_python_module",
 )
 
 

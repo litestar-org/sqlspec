@@ -1,12 +1,14 @@
 """mssql-python Litestar Store implementation."""
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor
-from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
+
+if TYPE_CHECKING:
+    from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 
 __all__ = ("MssqlPythonStore",)
 
@@ -16,7 +18,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: MssqlPythonConfig) -> None:
+    def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
 
     async def create_table(self) -> None:
@@ -27,11 +29,11 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    async def get(self, key: str, renew_for: int | timedelta | None = None) -> bytes | None:
+    async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key."""
         return await async_(self._get)(key, renew_for)
 
-    async def set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
+    async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value."""
         await async_(self._set)(key, value, expires_in)
 
@@ -47,7 +49,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         """Check if a session key exists and is not expired."""
         return await async_(self._exists)(key)
 
-    async def expires_in(self, key: str) -> int | None:
+    async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires."""
         return await async_(self._expires_in)(key)
 
@@ -79,7 +81,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         END;
         """
 
-    def _drop_table_sql(self) -> list[str]:
+    def _drop_table_sql(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
         return [f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};"]
 
@@ -89,7 +91,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             driver.commit()
         self._log_table_created()
 
-    def _get(self, key: str, renew_for: int | timedelta | None = None) -> bytes | None:
+    def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = ?
@@ -120,7 +122,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
 
             return _coerce_bytes(_row_value(row, "data", 0))
 
-    def _set(self, key: str, value: str | bytes, expires_in: int | timedelta | None = None) -> None:
+    def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         sql = f"""
@@ -162,7 +164,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             cursor.execute(sql, (key,))
             return cursor.fetchone() is not None
 
-    def _expires_in(self, key: str) -> int | None:
+    def _expires_in(self, key: str) -> "int | None":
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,))
             row = cursor.fetchone()
@@ -204,7 +206,7 @@ def _row_value(row: object, key: str, index: int) -> Any:
     return getattr(row, key, None)
 
 
-def _normalize_utc(value: Any) -> datetime | None:
+def _normalize_utc(value: Any) -> "datetime | None":
     if value is None:
         return None
     if not isinstance(value, datetime):

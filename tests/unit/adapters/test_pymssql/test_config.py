@@ -4,9 +4,7 @@ from typing import get_type_hints
 
 import pytest
 
-from sqlspec.adapters.pymssql import PymssqlConnection as PublicPymssqlConnection
 from sqlspec.adapters.pymssql import build_connection_config
-from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor, pymssql_module
 from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
@@ -33,7 +31,6 @@ def test_connection_params_cover_common_pymssql_keywords() -> None:
         "tds_version",
         "pool_recycle_seconds",
         "health_check_interval",
-        "encryption",
     }
 
     assert expected_keys <= set(annotations)
@@ -48,7 +45,6 @@ def test_config_defaults_server_port_and_features() -> None:
     assert config.driver_type is PymssqlDriver
     assert config.supports_transactional_ddl is True
     assert config.supports_native_arrow_export is False
-    assert config.supports_native_arrow_import is True
     assert config.driver_features["enable_events"] is True
 
 
@@ -123,10 +119,12 @@ def test_signature_namespace_exposes_public_adapter_types() -> None:
 def test_pymssql_runtime_aliases_resolve_to_installed_classes() -> None:
     """pymssql public runtime aliases should expose installed pymssql classes."""
     pymssql = pytest.importorskip("pymssql")
+    from sqlspec.adapters.pymssql import PymssqlConnection as PublicPymssqlConnection
+    from sqlspec.adapters.pymssql._typing import PYMSSQL_MODULE, PymssqlConnection, PymssqlRawCursor
 
     namespace = PymssqlConfig().get_signature_namespace()
 
-    assert pymssql_module is pymssql
+    assert PYMSSQL_MODULE is pymssql
     assert PymssqlConnection is pymssql.Connection
     assert PublicPymssqlConnection is pymssql.Connection
     assert PymssqlRawCursor is pymssql.Cursor

@@ -3,7 +3,6 @@
 import re
 
 from sqlspec.adapters.pymssql.config import PymssqlConfig
-from sqlspec.adapters.pymssql.core import quote_tsql_identifier
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -70,4 +69,8 @@ def _split_table_name(table_name: str) -> tuple[str, str]:
 
 def _object_name(table_name: str) -> str:
     schema_name, bare_table_name = _split_table_name(table_name)
-    return f"{quote_tsql_identifier(schema_name)}.{quote_tsql_identifier(bare_table_name)}"
+    return f"{_quote_bracket_identifier(schema_name)}.{_quote_bracket_identifier(bare_table_name)}"
+
+
+def _quote_bracket_identifier(identifier: str) -> str:
+    return f"[{identifier.replace(']', ']]')}]"

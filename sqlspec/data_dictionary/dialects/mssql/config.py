@@ -18,16 +18,14 @@ from sqlspec.data_dictionary import (
     SystemMetadataRedactionPolicy,
     SystemMetadataRequest,
     SystemMetadataResult,
-    VersionInfo,
     register_dialect,
     system_metadata_gated_result,
 )
 
 if TYPE_CHECKING:
-    from sqlspec.data_dictionary import TableMetadata
+    from sqlspec.data_dictionary import TableMetadata, VersionInfo
 
 __all__ = (
-    "MssqlVersionInfo",
     "build_mssql_metadata_capability_profile",
     "build_mssql_system_metadata_capability",
     "build_mssql_system_metadata_result",
@@ -41,7 +39,6 @@ __all__ = (
     "mssql_supports_json_functions",
     "mssql_supports_native_json",
     "mssql_supports_string_agg",
-    "mssql_supports_vector",
     "mssql_system_metadata_denied",
     "parse_mssql_engine_edition",
     "parse_mssql_version_components",
@@ -56,7 +53,6 @@ MSSQL_MIN_JSON_FUNCTIONS_VERSION: Final[int] = 13
 MSSQL_MIN_STRING_AGG_VERSION: Final[int] = 14
 MSSQL_MIN_GREATEST_LEAST_VERSION: Final[int] = 16
 MSSQL_MIN_NATIVE_JSON_VERSION: Final[int] = 17
-MSSQL_VECTOR_MIN_MAJOR: Final[int] = 17
 MSSQL_ENGINE_EDITION_AZURE_SET: Final[frozenset[int]] = frozenset({5, 8, 11})
 
 MSSQL_DYNAMIC_FEATURES: Final[tuple[str, ...]] = (
@@ -65,7 +61,6 @@ MSSQL_DYNAMIC_FEATURES: Final[tuple[str, ...]] = (
     "supports_string_agg",
     "supports_greatest_least",
     "supports_native_json",
-    "supports_vector",
 )
 
 MSSQL_REPLACEMENT_DOMAINS: Final[tuple[str, ...]] = (
@@ -138,7 +133,6 @@ MSSQL_TYPE_MAPPINGS: dict[str, str] = {
     "text": "NVARCHAR(MAX)",
     "json": "NVARCHAR(MAX)",
     "jsonb": "NVARCHAR(MAX)",
-    "vector": "VARBINARY(MAX)",
     "timestamp": "DATETIME2(6)",
     "timestamptz": "DATETIMEOFFSET(6)",
     "bytea": "VARBINARY(MAX)",
@@ -160,48 +154,6 @@ MSSQL_CONFIG = DialectConfig(
 )
 
 register_dialect(MSSQL_CONFIG)
-
-
-class MssqlVersionInfo(VersionInfo):
-    """MSSQL database version info with build, revision, and Azure SQL detection."""
-
-    def __init__(
-        self,
-        major: int,
-        minor: int = 0,
-        build: int = 0,
-        revision: int = 0,
-        edition: str | None = None,
-        engine_edition: int | None = None,
-    ) -> None:
-        super().__init__(major, minor, 0)
-        self.build = build
-        self.revision = revision
-        self.edition = edition
-        self.engine_edition = engine_edition
-        self.is_azure_sql = is_mssql_azure_sql(engine_edition)
-
-    def supports_native_json(self) -> bool:
-        """Return whether this server supports the native JSON type."""
-        return mssql_supports_native_json(self.major, is_azure_sql=self.is_azure_sql)
-
-    def supports_vector(self) -> bool:
-        """Return whether this server supports native VECTOR data types and functions."""
-        return mssql_supports_vector(self.major, is_azure_sql=self.is_azure_sql)
-
-    @property
-    def version_tuple(self) -> tuple[int, int, int]:
-        """Get version tuple using the MSSQL build number as the third component."""
-        return (self.major, self.minor, self.build)
-
-    def __str__(self) -> str:
-        """String representation of version info."""
-        version_str = f"{self.major}.{self.minor}.{self.build}.{self.revision}"
-        if self.edition:
-            version_str += f" ({self.edition})"
-        if self.is_azure_sql:
-            version_str += " [Azure]"
-        return version_str
 
 
 def extract_mssql_version_value(row: object) -> "str | None":
@@ -270,11 +222,6 @@ def mssql_supports_native_json(major: int, is_azure_sql: bool = False) -> bool:
     return is_azure_sql or major >= MSSQL_MIN_NATIVE_JSON_VERSION
 
 
-def mssql_supports_vector(major: int, is_azure_sql: bool = False) -> bool:
-    """Return whether the SQL Server version supports native VECTOR data types and functions."""
-    return is_azure_sql or major >= MSSQL_VECTOR_MIN_MAJOR
-
-
 def resolve_mssql_feature_flag(
     feature: str,
     *,
@@ -296,8 +243,6 @@ def resolve_mssql_feature_flag(
         return mssql_supports_greatest_least(major)
     if feature == "supports_native_json":
         return mssql_supports_native_json(major, is_azure_sql=is_azure_sql)
-    if feature == "supports_vector":
-        return mssql_supports_vector(major, is_azure_sql=is_azure_sql)
 
     dialect_config = config or MSSQL_CONFIG
     flag = dialect_config.get_feature_flag(feature)

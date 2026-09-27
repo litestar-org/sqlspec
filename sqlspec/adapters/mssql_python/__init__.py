@@ -9,12 +9,17 @@ from sqlspec.adapters.mssql_python.config import (
 )
 from sqlspec.adapters.mssql_python.core import default_statement_config, driver_profile
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary, MssqlVersionInfo
-from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver, MssqlPythonExceptionHandler
+from sqlspec.adapters.mssql_python.driver import (
+    MssqlPythonBulkCopyResult,
+    MssqlPythonDriver,
+    MssqlPythonExceptionHandler,
+)
 from sqlspec.adapters.mssql_python.migrations import MssqlPythonSyncMigrationTracker
 from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.adapters.mssql_python.type_converter import MssqlPythonTypeConverter, mssql_type_to_arrow
 
 __all__ = (
+    "MssqlPythonBulkCopyResult",
     "MssqlPythonConfig",
     "MssqlPythonConnection",
     "MssqlPythonConnectionParams",

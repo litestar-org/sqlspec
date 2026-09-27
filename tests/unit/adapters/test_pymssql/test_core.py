@@ -6,7 +6,6 @@ import pytest
 
 from sqlspec.adapters.pymssql.core import (
     build_insert_statement,
-    build_multi_row_insert,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -15,7 +14,6 @@ from sqlspec.adapters.pymssql.core import (
     format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
-    quote_tsql_identifier,
 )
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import (
@@ -149,14 +147,6 @@ def test_normalize_execute_many_parameters_passes_through() -> None:
     assert normalize_execute_many_parameters(rows) is rows
 
 
-def test_quote_tsql_identifier() -> None:
-    """quote_tsql_identifier wraps identifiers in brackets and escapes closing brackets."""
-    assert quote_tsql_identifier("users") == "[users]"
-    assert quote_tsql_identifier("[users]") == "[users]"
-    assert quote_tsql_identifier("dbo.users") == "[dbo.users]"
-    assert quote_tsql_identifier("col]name") == "[col]]name]"
-
-
 def test_extract_error_number() -> None:
     """extract_error_number detects error number from attribute, tuple, or regex."""
 
@@ -172,12 +162,6 @@ def test_extract_error_number() -> None:
     assert extract_error_number(Exception(1205, "Deadlock found")) == 1205
     assert extract_error_number(Exception("Violation of UNIQUE KEY constraint (2627)")) == 2627
     assert extract_error_number(Exception("Plain error")) is None
-
-
-def test_build_multi_row_insert() -> None:
-    """build_multi_row_insert generates a multi-row VALUES INSERT statement."""
-    sql = build_multi_row_insert("dbo.users", ["id", "name"], 3)
-    assert sql == "INSERT INTO [dbo].[users] ([id], [name]) VALUES (%s, %s), (%s, %s), (%s, %s)"
 
 
 def test_collect_rows_preserves_list_identity() -> None:

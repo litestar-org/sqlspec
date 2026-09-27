@@ -1,25 +1,24 @@
 """mssql-python ADK stores for Google Agent Development Kit session storage."""
 
-from collections.abc import Sequence
-from datetime import datetime, timedelta
-from typing import Any, ClassVar, Final, Literal, cast
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor, MssqlPythonError
-from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 from sqlspec.adapters.mssql_python.core import extract_error_number
 from sqlspec.config import ADKConfig
-from sqlspec.extensions.adk import (
-    BaseSyncADKMemoryStore,
-    BaseSyncADKStore,
-    SessionOrderBy,
-    StoredEvent,
-    StoredMemory,
-    StoredSession,
-    normalize_session_list_options,
-)
+from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
+from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from datetime import timedelta
+
+    from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
+    from sqlspec.extensions.adk import SessionOrderBy
+    from sqlspec.extensions.adk.memory._types import StoredMemory
 
 __all__ = ("MssqlPythonADKConfig", "MssqlPythonADKMemoryStore", "MssqlPythonADKStore")
 
@@ -44,7 +43,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     connector_name: ClassVar[str] = "mssql_python"
     __slots__ = ("_json_column_type",)
 
-    def __init__(self, config: MssqlPythonConfig) -> None:
+    def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
@@ -71,7 +70,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             driver.commit()
 
     def create_session(
-        self, session_id: str, app_name: str, user_id: str, state: dict[str, Any], owner_id: Any | None = None
+        self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         """Create a new ADK session."""
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
@@ -95,8 +94,8 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         return _session_record_from_row(row)
 
     def get_session(
-        self, app_name: str, user_id: str, session_id: str, *, renew_for: int | timedelta | None = None
-    ) -> StoredSession | None:
+        self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
+    ) -> "StoredSession | None":
         """Return a scoped session or ``None`` if absent."""
         try:
             if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -123,7 +122,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             raise
         return _session_record_from_row(row) if row is not None else None
 
-    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: dict[str, Any]) -> None:
+    def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Replace a session's durable state."""
         self._execute(
             f"""
@@ -138,13 +137,13 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     def list_sessions(
         self,
         app_name: str,
-        user_id: str | None = None,
+        user_id: "str | None" = None,
         *,
-        order_by: SessionOrderBy = "update_time",
+        order_by: "SessionOrderBy" = "update_time",
         descending: bool = True,
-        limit: int | None = None,
-        offset: int | None = None,
-    ) -> list[StoredSession]:
+        limit: "int | None" = None,
+        offset: "int | None" = None,
+    ) -> "list[StoredSession]":
         """List ADK sessions for an application, optionally scoped to a user."""
         column, direction, page_limit, page_offset = normalize_session_list_options(order_by, descending, limit, offset)
         if page_limit == 0:
@@ -179,10 +178,10 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         app_name: str,
         user_id: str,
         session_id: str,
-        state: dict[str, Any],
+        state: "dict[str, Any]",
         *,
-        app_state: dict[str, Any] | None = None,
-        user_state: dict[str, Any] | None = None,
+        app_state: "dict[str, Any] | None" = None,
+        user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Atomically append an event and update durable session/scoped state."""
         update_sql = f"""
@@ -213,9 +212,9 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         app_name: str,
         user_id: str,
         session_id: str,
-        after_timestamp: datetime | None = None,
-        limit: int | None = None,
-    ) -> list[StoredEvent]:
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
+    ) -> "list[StoredEvent]":
         """Return events for a scoped session ordered by event timestamp."""
         if limit == 0:
             return []
@@ -228,7 +227,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             raise
         return [_event_record_from_row(row) for row in rows]
 
-    def delete_expired_events(self, before: datetime, app_name: str | None = None) -> int:
+    def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than ``before``."""
         sql = f"DELETE FROM {_table_ref(self._events_table)} WHERE timestamp < ?"
         params: list[Any] = [before]
@@ -242,7 +241,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 return 0
             raise
 
-    def delete_idle_sessions(self, updated_before: datetime, app_name: str | None = None) -> int:
+    def delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete sessions whose update_time is older than ``updated_before``."""
         sql = f"DELETE FROM {_table_ref(self._session_table)} WHERE update_time < ?"
         params: list[Any] = [updated_before]
@@ -256,7 +255,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 return 0
             raise
 
-    def delete_idle_user_states(self, updated_before: datetime, app_name: str | None = None) -> int:
+    def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete user state rows whose update_time is older than ``updated_before``."""
         sql = f"DELETE FROM {_table_ref(self._user_state_table)} WHERE update_time < ?"
         params: list[Any] = [updated_before]
@@ -270,7 +269,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 return 0
             raise
 
-    def get_app_state(self, app_name: str) -> dict[str, Any] | None:
+    def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state."""
         try:
             row = self._execute_fetchone(
@@ -282,7 +281,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             raise
         return _json_dict(row[0]) if row is not None else None
 
-    def get_user_state(self, app_name: str, user_id: str) -> dict[str, Any] | None:
+    def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state."""
         try:
             row = self._execute_fetchone(
@@ -299,15 +298,15 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             raise
         return _json_dict(row[0]) if row is not None else None
 
-    def upsert_app_state(self, app_name: str, state: dict[str, Any]) -> None:
+    def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state."""
         self._execute(self._upsert_app_state_sql(), (app_name, to_json(state)), commit=True)
 
-    def upsert_user_state(self, app_name: str, user_id: str, state: dict[str, Any]) -> None:
+    def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state."""
         self._execute(self._upsert_user_state_sql(), (app_name, user_id, to_json(state)), commit=True)
 
-    def get_metadata(self, key: str) -> str | None:
+    def get_metadata(self, key: str) -> "str | None":
         """Return an ADK metadata value."""
         try:
             row = self._execute_fetchone(
@@ -323,7 +322,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         """Set an ADK metadata value."""
         self._execute(_upsert_metadata_sql(self._metadata_table), (key, value), commit=True)
 
-    def _index_specs(self) -> list[tuple[str, str, str]]:
+    def _index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for session and event indexes."""
         return [*_sessions_index_specs(self._session_table), *_events_index_specs(self._events_table)]
 
@@ -356,7 +355,7 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     def _drop_metadata_table_sql(self) -> str:
         return f"DROP TABLE IF EXISTS {_table_ref(self._metadata_table)}"
 
-    def _drop_tables_sql(self) -> list[str]:
+    def _drop_tables_sql(self) -> "list[str]":
         return [
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
@@ -376,15 +375,15 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         app_name: str,
         user_id: str,
         session_id: str,
-        after_timestamp: datetime | None = None,
-        limit: int | None = None,
-    ) -> tuple[str, tuple[Any, ...]]:
+        after_timestamp: "datetime | None" = None,
+        limit: "int | None" = None,
+    ) -> "tuple[str, tuple[Any, ...]]":
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
     def _json_column_type_sync(self) -> str:
         return self._json_column_type
 
-    def _execute_fetchone(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> Any | None:
+    def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
@@ -392,12 +391,12 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
                 conn.commit()
             return row
 
-    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = _cursor_rowcount(cursor)
@@ -411,7 +410,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
 
     __slots__ = ()
 
-    def __init__(self, config: MssqlPythonConfig) -> None:
+    def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
 
     def create_tables(self) -> None:
@@ -432,7 +431,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
 
-    def insert_memory_entries(self, entries: list[StoredMemory], owner_id: object | None = None) -> int:
+    def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with event-id deduplication."""
         if not self._enabled:
             msg = "ADK memory store is disabled"
@@ -442,6 +441,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
 
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", ?" if self._owner_id_column_name else ""
+        # Keep the key-range lock and insertion in one statement, including autocommit.
         sql = f"""
         INSERT INTO {_table_ref(self._memory_table)} (
             id, session_id, app_name, user_id, scope, event_id, author, timestamp,
@@ -481,10 +481,10 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
         query: str,
         app_name: str,
         user_id: str,
-        limit: int | None = None,
+        limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
-        embedding: Sequence[float] | None = None,
-    ) -> list[StoredMemory]:
+        embedding: "Sequence[float] | None" = None,
+    ) -> "list[StoredMemory]":
         """Search memory entries by text query."""
         if not self._enabled:
             msg = "ADK memory store is disabled"
@@ -508,7 +508,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
             f"DELETE FROM {_table_ref(self._memory_table)} WHERE session_id = ?", (session_id,), commit=True
         )
 
-    def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
+    def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than the retention window."""
         clauses = ["inserted_at < DATEADD(day, -?, SYSUTCDATETIME())"]
         params: list[Any] = [days]
@@ -549,7 +549,7 @@ BEGIN
 END;
 """
 
-    def _memory_index_specs(self) -> list[tuple[str, str, str]]:
+    def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
         return [
             (
@@ -562,26 +562,21 @@ END;
             (f"idx_{self._memory_table}_timestamp", self._memory_table, "timestamp DESC"),
         ]
 
-    def _drop_memory_table_sql(self) -> list[str]:
+    def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
 
-    def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
+    def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
-    def _execute(self, sql: str, params: tuple[Any, ...] = (), *, commit: bool = False) -> int:
+    def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
             cursor.execute(sql, params)
             rowcount = _cursor_rowcount(cursor)
             if commit:
                 conn.commit()
             return rowcount
-
-
-def _cursor_rowcount(cursor: Any) -> int:
-    rowcount = getattr(cursor, "rowcount", 0)
-    return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
 
 
 def _adk_config(config: Any) -> MssqlPythonADKConfig:
@@ -594,7 +589,7 @@ def _adk_config(config: Any) -> MssqlPythonADKConfig:
     return cast("MssqlPythonADKConfig", adk_config)
 
 
-def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: str | None) -> str:
+def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
     owner_line = f",\n        {owner_id_column_ddl}" if owner_id_column_ddl else ""
     return f"""
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
@@ -614,7 +609,7 @@ END;
 """
 
 
-def _sessions_index_specs(table: str) -> list[tuple[str, str, str]]:
+def _sessions_index_specs(table: str) -> "list[tuple[str, str, str]]":
     return [
         (f"idx_{table}_app_user", table, "app_name, user_id"),
         (f"idx_{table}_update_time", table, "update_time DESC"),
@@ -643,7 +638,7 @@ END;
 """
 
 
-def _events_index_specs(table: str) -> list[tuple[str, str, str]]:
+def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
     return [
         (f"idx_{table}_scope", table, "app_name, user_id, session_id, timestamp ASC"),
         (f"idx_{table}_session", table, "session_id, timestamp ASC"),
@@ -699,7 +694,7 @@ def _create_index_sql(table: str, index_name: str, columns: str) -> str:
     return f"CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns})"
 
 
-def _casefold_names(rows: list[Any], key: str) -> set[str]:
+def _casefold_names(rows: "list[Any]", key: str) -> "set[str]":
     """Collapse data-dictionary rows into a case-folded, schema-stripped name set."""
     return {str(row.get(key, "")).rsplit(".", 1)[-1].casefold() for row in rows}
 
@@ -718,7 +713,7 @@ def _insert_event_sql(table: str) -> str:
     """
 
 
-def _upsert_state_sql(table: str, key_columns: tuple[str, ...], key_params: tuple[str, ...]) -> str:
+def _upsert_state_sql(table: str, key_columns: "tuple[str, ...]", key_params: "tuple[str, ...]") -> str:
     source_columns = ", ".join(
         f"{param} AS {_quote_identifier(column)}" for column, param in zip(key_columns, key_params, strict=False)
     )
@@ -754,8 +749,8 @@ def _upsert_metadata_sql(table: str) -> str:
 
 
 def _events_query(
-    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: datetime | None, limit: int | None
-) -> tuple[str, tuple[Any, ...]]:
+    table: str, app_name: str, user_id: str, session_id: str, after_timestamp: "datetime | None", limit: "int | None"
+) -> "tuple[str, tuple[Any, ...]]":
     top_clause = "TOP (?) " if limit is not None else ""
     params: list[Any] = [limit] if limit is not None else []
     params.extend([app_name, user_id, session_id])
@@ -772,7 +767,7 @@ def _events_query(
     return sql, tuple(params)
 
 
-def _event_insert_params(event_record: StoredEvent) -> tuple[Any, ...]:
+def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -802,7 +797,7 @@ def _event_record_from_row(row: Any) -> StoredEvent:
     )
 
 
-def _memory_record_from_row(row: Any) -> StoredMemory:
+def _memory_record_from_row(row: Any) -> "StoredMemory":
     return cast(
         "StoredMemory",
         {
@@ -825,7 +820,7 @@ def _memory_record_from_row(row: Any) -> StoredMemory:
 
 def _build_mssql_scope_where(
     app_name: str, user_id: str, scope_filter: Literal["all", "user", "app"]
-) -> tuple[str, tuple[Any, ...]]:
+) -> "tuple[str, tuple[Any, ...]]":
     if scope_filter == "all":
         return "app_name = ? AND ((scope = 'user' AND user_id = ?) OR scope = 'app')", (app_name, user_id)
     if scope_filter == "user":
@@ -833,7 +828,7 @@ def _build_mssql_scope_where(
     return "app_name = ? AND scope = 'app'", (app_name,)
 
 
-def _json_dict(value: Any) -> dict[str, Any]:
+def _json_dict(value: Any) -> "dict[str, Any]":
     if value is None:
         return {}
     if isinstance(value, dict):
@@ -843,6 +838,11 @@ def _json_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, (bytes, str)):
         return cast("dict[str, Any]", from_json(value))
     return cast("dict[str, Any]", from_json(str(value)))
+
+
+def _cursor_rowcount(cursor: Any) -> int:
+    rowcount = getattr(cursor, "rowcount", 0)
+    return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
 
 
 def _is_mssql_table_missing(exc: BaseException) -> bool:
@@ -872,8 +872,14 @@ def _raise_session_not_found(session_id: str) -> None:
 
 
 def _session_list_query(
-    session_table: str, app_name: str, user_id: str | None, column: str, direction: str, limit: int | None, offset: int
-) -> tuple[str, tuple[Any, ...]]:
+    session_table: str,
+    app_name: str,
+    user_id: "str | None",
+    column: str,
+    direction: str,
+    limit: "int | None",
+    offset: int,
+) -> "tuple[str, tuple[Any, ...]]":
     """Return the bounded session-list query and its bound values."""
     params: list[Any] = [app_name]
     where_clause = "app_name = ?"

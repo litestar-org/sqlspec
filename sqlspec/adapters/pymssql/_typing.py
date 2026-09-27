@@ -7,25 +7,39 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import pymssql as pymssql_module
-from pymssql import Connection as PymssqlConnection
-from pymssql import Cursor as PymssqlRawCursor
+import pymssql as _pymssql  # pyright: ignore[reportMissingTypeStubs]
+from pymssql import Connection as _PymssqlConnection  # pyright: ignore[reportMissingTypeStubs]
+from pymssql import Cursor as _PymssqlRawCursor  # pyright: ignore[reportMissingTypeStubs]
 from pymssql import Error as PymssqlError
+
+PYMSSQL_MODULE = _pymssql
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
+    from typing import TypeAlias
+
+    from pymssql._pymssql import QueryParams as PymssqlQueryParams
 
     from sqlspec.adapters.pymssql.driver import PymssqlDriver
     from sqlspec.core import StatementConfig
 
+    PymssqlConnection: TypeAlias = _PymssqlConnection
+    PymssqlRawCursor: TypeAlias = _PymssqlRawCursor
+
+if not TYPE_CHECKING:
+    PymssqlQueryParams = Any
+    PymssqlConnection = _PymssqlConnection
+    PymssqlRawCursor = _PymssqlRawCursor
+
 __all__ = (
+    "PYMSSQL_MODULE",
     "PymssqlConnection",
     "PymssqlCursor",
     "PymssqlError",
+    "PymssqlQueryParams",
     "PymssqlRawCursor",
     "PymssqlSessionContext",
-    "pymssql_module",
 )
 
 
