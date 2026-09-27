@@ -6,8 +6,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
+from sqlglot import exp
 from typing_extensions import NotRequired, TypedDict
 
+from sqlspec.builder._column import Column
+from sqlspec.builder._ddl import CreateTable, _parse_ddl_identifier, _parse_ddl_table
+from sqlspec.builder._delete import Delete
+from sqlspec.builder._insert import Insert
+from sqlspec.builder._select import Select
+from sqlspec.builder._update import Update
 from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
@@ -16,7 +23,6 @@ from sqlspec.utils.module_loader import module_to_os_path
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
-    from sqlspec.builder import CreateTable, Delete, Insert, Select, Update
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.migrations.templates import MigrationTemplateSettings
     from sqlspec.observability import ObservabilityRuntime
@@ -85,11 +91,36 @@ class BaseMigrationTracker(Generic[DriverT]):
             version_table_name: Name of the table to track migrations.
             version_table_schema: Optional schema that stores the tracking table.
         """
+        parsed_table = _parse_ddl_table(version_table_name)
+        table_identifier = (
+            parsed_table.this
+            if isinstance(parsed_table.this, exp.Identifier)
+            else _parse_ddl_identifier(version_table_name)
+        )
+        embedded_db = parsed_table.args.get("db")
+        embedded_schema_identifier = embedded_db if isinstance(embedded_db, exp.Identifier) else None
+
+        explicit_schema_identifier = _parse_ddl_identifier(version_table_schema) if version_table_schema else None
+        if explicit_schema_identifier is not None:
+            if (
+                embedded_schema_identifier is not None
+                and explicit_schema_identifier.name == embedded_schema_identifier.name
+                and embedded_schema_identifier.quoted
+                and not explicit_schema_identifier.quoted
+            ):
+                resolved_schema_identifier: exp.Identifier | None = embedded_schema_identifier
+            else:
+                resolved_schema_identifier = explicit_schema_identifier
+        else:
+            resolved_schema_identifier = embedded_schema_identifier
+
         bare_name, embedded_schema = self._split_version_table(version_table_name)
-        resolved_schema = version_table_schema or embedded_schema
+        resolved_schema = resolved_schema_identifier.name if resolved_schema_identifier is not None else embedded_schema
         self.version_table_name = bare_name
         self.version_table_schema = resolved_schema
-        self.version_table = self._qualify_version_table(bare_name, resolved_schema)
+        self.version_table = self._qualify_version_table(
+            table_identifier.sql(), resolved_schema_identifier.sql() if resolved_schema_identifier is not None else None
+        )
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
 
     def set_output_policy(self, *, use_logger: bool, echo: bool, summary_only: bool) -> None:
@@ -131,26 +162,24 @@ class BaseMigrationTracker(Generic[DriverT]):
 
     @staticmethod
     def _split_version_table(version_table_name: str) -> "tuple[str, str | None]":
-        """Split a ``schema.table`` value into (table, schema)."""
-        if "." not in version_table_name:
-            return version_table_name, None
-        schema, _, table = version_table_name.rpartition(".")
-        return table, schema or None
+        """Split a ``schema.table`` value into unquoted ``(table, schema)`` names."""
+        parsed_table = _parse_ddl_table(version_table_name)
+        table_identifier = (
+            parsed_table.this
+            if isinstance(parsed_table.this, exp.Identifier)
+            else _parse_ddl_identifier(version_table_name)
+        )
+        embedded_db = parsed_table.args.get("db")
+        schema_name = embedded_db.name if isinstance(embedded_db, exp.Identifier) else None
+        return table_identifier.name, schema_name or None
 
     def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
         """Return the tracker table name, qualified with schema when configured."""
-        if version_table_schema:
-            return f"{version_table_schema}.{version_table_name}"
-        return version_table_name
+        return _parse_ddl_table(version_table_name, schema=version_table_schema).sql()
 
     def _tracking_table_builder(self) -> "CreateTable":
         """Return a CREATE TABLE builder for the tracker table."""
-        from sqlspec.builder import sql
-
-        builder = sql.create_table(self.version_table_name)
-        if self.version_table_schema:
-            builder.in_schema(self.version_table_schema)
-        return builder
+        return CreateTable(self.version_table)
 
     def _should_echo(self) -> bool:
         """Return True when console output should be emitted."""
@@ -196,9 +225,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for version query.
         """
-        from sqlspec.builder import sql
-
-        return sql.select("version_num").from_(self.version_table).order_by("execution_sequence DESC").limit(1)
+        return Select("version_num").from_(self.version_table).order_by("execution_sequence DESC").limit(1)
 
     def _applied_migrations_query(self) -> "Select":
         """Get SQL builder for retrieving all applied migrations.
@@ -209,9 +236,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for migrations query.
         """
-        from sqlspec.builder import sql
-
-        return sql.select("*").from_(self.version_table).order_by("execution_sequence")
+        return Select("*").from_(self.version_table).order_by("execution_sequence")
 
     def _next_execution_sequence_query(self) -> "Select":
         """Get SQL builder for retrieving next execution sequence.
@@ -219,9 +244,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for sequence query.
         """
-        from sqlspec.builder import sql
-
-        return sql.select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
+        return Select("COALESCE(MAX(execution_sequence), 0) + 1 AS next_seq").from_(self.version_table)
 
     def _record_migration_statement(
         self,
@@ -247,11 +270,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for insert.
         """
-        from sqlspec.builder import sql
-
         return (
-            sql
-            .insert(self.version_table)
+            Insert(self.version_table)
             .columns(
                 "version_num",
                 "version_type",
@@ -273,9 +293,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for delete.
         """
-        from sqlspec.builder import sql
-
-        return sql.delete().from_(self.version_table).where(sql.column("version_num") == version)
+        return Delete().from_(self.version_table).where(Column("version_num") == version)
 
     def _update_version_statement(self, old_version: str, new_version: str, new_version_type: str) -> "Update":
         """Get SQL builder for updating version record.
@@ -292,14 +310,11 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for update.
         """
-        from sqlspec.builder import sql
-
         return (
-            sql
-            .update(self.version_table)
+            Update(self.version_table)
             .set("version_num", new_version)
             .set("version_type", new_version_type)
-            .where(sql.column("version_num") == old_version)
+            .where(Column("version_num") == old_version)
         )
 
     def _delete_versions_statement(self, versions: "list[str]") -> "Delete":
@@ -313,9 +328,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for delete.
         """
-        from sqlspec.builder import sql
-
-        return sql.delete().from_(self.version_table).where(sql.column("version_num").in_(versions))
+        return Delete().from_(self.version_table).where(Column("version_num").in_(versions))
 
     def _check_versions_query(self, versions: "list[str]") -> "Select":
         """Get SQL builder for checking whether any versions exist.
@@ -326,9 +339,7 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for version existence query.
         """
-        from sqlspec.builder import sql
-
-        return sql.select("version_num").from_(self.version_table).where(sql.column("version_num").in_(versions))
+        return Select("version_num").from_(self.version_table).where(Column("version_num").in_(versions))
 
     def _record_squashed_migration_statement(
         self,
@@ -356,11 +367,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         Returns:
             SQL builder object for insert.
         """
-        from sqlspec.builder import sql
-
         return (
-            sql
-            .insert(self.version_table)
+            Insert(self.version_table)
             .columns(
                 "version_num",
                 "version_type",

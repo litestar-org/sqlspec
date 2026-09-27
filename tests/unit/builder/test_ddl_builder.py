@@ -217,3 +217,24 @@ def test_create_table_timestamp_on_tsql_renders_datetime2() -> None:
     sql_text = builder.build(dialect="tsql").sql
     assert "DATETIME2" in sql_text
     assert "ROWVERSION" not in sql_text
+
+
+def test_ddl_builders_preserve_quoted_and_schema_qualified_identifiers() -> None:
+    """CreateTable, DropTable, and AlterTable preserve identifier quoting without double-wrapping."""
+    pg_config = StatementConfig(dialect="postgres")
+
+    create_from_qualified = sql.create_table('"App"."Tracker"').column("id", "INT").to_statement(pg_config)
+    create_from_in_schema = sql.create_table('"Tracker"').in_schema('"App"').column("id", "INT").to_statement(pg_config)
+    drop_stmt = sql.drop_table('"App"."Tracker"').to_statement(pg_config)
+    alter_from_qualified = sql.alter_table('"App"."Tracker"').add_column("replaces", "TEXT").to_statement(pg_config)
+    alter_from_in_schema = (
+        sql.alter_table('"Tracker"').in_schema('"App"').add_column("replaces", "TEXT").to_statement(pg_config)
+    )
+
+    assert create_from_qualified.sql.startswith('CREATE TABLE "App"."Tracker"')
+    assert create_from_in_schema.sql.startswith('CREATE TABLE "App"."Tracker"')
+    assert drop_stmt.sql == 'DROP TABLE "App"."Tracker"'
+    assert alter_from_qualified.sql.startswith('ALTER TABLE "App"."Tracker" ADD COLUMN')
+    assert alter_from_in_schema.sql.startswith('ALTER TABLE "App"."Tracker" ADD COLUMN')
+    for stmt in (create_from_qualified, create_from_in_schema, drop_stmt, alter_from_qualified, alter_from_in_schema):
+        assert '""' not in stmt.sql

@@ -12,7 +12,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._parsing_utils import _normalize_dialect
+from sqlspec.builder._parsing_utils import _normalize_dialect, parse_table_expression
 from sqlspec.builder._select import Select
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
@@ -639,10 +639,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
             if key != "engine":
                 props.append(exp.Property(this=exp.to_identifier(key.upper()), value=exp.convert(value)))
 
-        if self._schema:
-            table_identifier = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
-        else:
-            table_identifier = exp.Table(this=exp.to_identifier(self._table_name))
+        table_identifier = _parse_ddl_table(self._table_name, schema=self._schema, dialect=effective_dialect)
 
         schema_expr = exp.Schema(this=table_identifier, expressions=column_defs)
 
@@ -736,7 +733,8 @@ class DropTable(_SingleObjectDropBuilder):
         return self
 
     def _build_drop_this(self) -> exp.Expr:
-        return exp.to_table(self._name)
+        effective_dialect = self._expression_dialect or self.dialect_name
+        return _parse_ddl_table(self._name, dialect=effective_dialect)
 
 
 class DropIndex(_SingleObjectDropBuilder):
@@ -1464,10 +1462,8 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
         """Create the SQLGlot expression for ALTER TABLE."""
         self._require(self._operations, "At least one operation must be specified for ALTER TABLE")
 
-        if self._schema:
-            table = exp.Table(this=exp.to_identifier(self._table_name), db=exp.to_identifier(self._schema))
-        else:
-            table = exp.to_table(self._table_name)
+        effective_dialect = self._expression_dialect or self.dialect_name
+        table = _parse_ddl_table(self._table_name, schema=self._schema, dialect=effective_dialect)
 
         actions: list[exp.Expr] = [self._build_operation_expression(op) for op in self._operations]
 
@@ -1655,3 +1651,31 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
     except ParseError as exc:
         msg = f"Column {name!r}: cannot parse type {dtype!r} for dialect {dialect!r}"
         raise SQLBuilderError(msg) from exc
+
+
+_MIN_QUOTED_IDENTIFIER_LENGTH = 2
+
+
+def _parse_ddl_identifier(name: str, dialect: "DialectType | None" = None) -> exp.Identifier:
+    """Parse a DDL identifier, preserving explicit SQL quoting without double-wrapping."""
+    stripped = name.strip()
+    if not stripped:
+        return exp.to_identifier(name)
+    parsed = parse_table_expression(stripped, dialect=dialect)
+    if isinstance(parsed, exp.Table) and isinstance(parsed.this, exp.Identifier) and not parsed.args.get("db"):
+        return parsed.this
+    if len(stripped) >= _MIN_QUOTED_IDENTIFIER_LENGTH and stripped[0] == stripped[-1] == '"':
+        return exp.Identifier(this=stripped[1:-1].replace('""', '"'), quoted=True)
+    return exp.to_identifier(name)
+
+
+def _parse_ddl_table(table_name: str, schema: "str | None" = None, dialect: "DialectType | None" = None) -> exp.Table:
+    """Parse a DDL table reference, preserving quoted table and schema identifiers."""
+    parsed = parse_table_expression(table_name, dialect=dialect)
+    if isinstance(parsed, exp.Table):
+        table = parsed.copy()
+    else:
+        table = exp.Table(this=_parse_ddl_identifier(table_name, dialect=dialect))
+    if schema:
+        table.set("db", _parse_ddl_identifier(schema, dialect=dialect))
+    return table
