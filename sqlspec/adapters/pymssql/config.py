@@ -42,6 +42,7 @@ class PymssqlConnectionParams(TypedDict):
     conn_properties: NotRequired[str]
     autocommit: NotRequired[bool]
     tds_version: NotRequired[str]
+    encryption: NotRequired[Literal["off", "request", "require"]]
     use_datetime2: NotRequired[bool]
     arraysize: NotRequired[int]
     conv: NotRequired[Mapping[int | type[Any], Callable[..., Any]]]

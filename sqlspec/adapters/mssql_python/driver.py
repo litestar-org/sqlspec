@@ -198,7 +198,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         successful_count = 0
         for stmt in statements:
-            _execute_cursor(cursor, stmt, prepared_parameters)
+            _execute_cursor(cursor, stmt, prepared_parameters, use_prepare=False)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -272,10 +272,12 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 _execute_cursor(cursor, "SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None)
                 row: Any = cursor.fetchone()
                 user_name, current_schema = row[0], row[1]
-                _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None)
+                _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None, use_prepare=False)
                 self._migration_schema_restore = (str(user_name), str(current_schema))
                 return
-            _execute_cursor(cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None)
+            _execute_cursor(
+                cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None, use_prepare=False
+            )
 
     def reset_migration_session_schema(self) -> None:
         """Restore the user's default schema captured by set_migration_session_schema and commit it."""
@@ -283,7 +285,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             return
         user_name, previous_schema = self._migration_schema_restore
         with self.with_cursor(self.connection) as cursor:
-            _execute_cursor(cursor, _alter_default_schema_sql(user_name, previous_schema), None)
+            _execute_cursor(cursor, _alter_default_schema_sql(user_name, previous_schema), None, use_prepare=False)
         self.connection.commit()
         self._migration_schema_restore = None
 
@@ -419,21 +421,98 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        batch_size: int = 0,
+        timeout: int = 30,
+        table_lock: bool = False,
+        check_constraints: bool = False,
+        fire_triggers: bool = False,
+        keep_identity: bool = False,
+        keep_nulls: bool = False,
+        use_internal_transaction: bool = False,
+        column_mappings: "list[str] | list[tuple[int, str]] | None" = None,
     ) -> "StorageBridgeJob":
-        """Load Arrow data into SQL Server via BulkCopy."""
+        """Load Arrow tables or streams using native BulkCopy options.
+
+        Stream sources without schema metadata require explicit column mappings.
+        Overwrite deletes existing rows after validating the source shape; errors
+        while consuming a stream can still leave a partially completed load.
+        """
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
-        if overwrite:
-            exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        if batch_size < 0 or timeout < 0:
+            msg = "batch_size and timeout must be non-negative"
+            raise ValueError(msg)
+        is_stream = not isinstance(source, pa.Table) and (
+            isinstance(source, (pa.RecordBatchReader, pa.RecordBatch)) or hasattr(source, "__arrow_c_stream__")
+        )
+        if is_stream:
+            arrow_source = source
+            has_rows = True
+            schema = getattr(source, "schema", None)
+            schema_names = getattr(schema, "names", None)
+            if column_mappings is None and schema_names is None:
+                msg = "Arrow stream sources without schema metadata require column_mappings"
+                raise ValueError(msg)
+            columns = column_mappings if column_mappings is not None else list(cast("Iterable[str]", schema_names))
+            telemetry_payload = cast("StorageTelemetry", {"format": "arrow", "extra": {}})
+        else:
+            arrow_source = self._coerce_arrow_table(source)
+            has_rows = bool(arrow_source.num_rows)
+            columns = column_mappings if column_mappings is not None else list(arrow_source.column_names)
+            telemetry_payload = self._ingest_telemetry(arrow_source)
+
+        options = {
+            "batch_size": batch_size,
+            "timeout": timeout,
+            "table_lock": table_lock,
+            "check_constraints": check_constraints,
+            "fire_triggers": fire_triggers,
+            "keep_identity": keep_identity,
+            "keep_nulls": keep_nulls,
+            "use_internal_transaction": use_internal_transaction,
+            "column_mappings": columns,
+        }
+        raw_result: Any = None
+        use_fallback = False
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler, self.with_cursor(self.connection) as cursor:
+            native_bulkcopy = getattr(cursor, "bulkcopy_arrow", None)
+            if is_stream and not callable(native_bulkcopy):
+                msg = "This mssql-python version does not support native Arrow stream bulk copy"
+                raise SQLSpecError(msg)
+            if overwrite:
                 cursor.execute(f"DELETE FROM {_quote_mssql_table(table)}")
-            self._check_pending_exception(exc_handler)
-        if arrow_table.num_rows:
-            exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.bulkcopy_arrow(table, arrow_table, column_mappings=list(arrow_table.column_names))
-            self._check_pending_exception(exc_handler)
-        telemetry_payload = self._ingest_telemetry(arrow_table)
+            if has_rows:
+                if callable(native_bulkcopy):
+                    raw_result = native_bulkcopy(table, arrow_source, **options)
+                else:
+                    use_fallback = True
+        self._check_pending_exception(exc_handler)
+        if use_fallback:
+            _, records = self._arrow_table_to_rows(cast("Any", arrow_source))
+            raw_result = self.bulk_copy(
+                table,
+                records,
+                batch_size=batch_size,
+                timeout=timeout,
+                table_lock=table_lock,
+                check_constraints=check_constraints,
+                fire_triggers=fire_triggers,
+                keep_identity=keep_identity,
+                keep_nulls=keep_nulls,
+                use_internal_transaction=use_internal_transaction,
+                column_mappings=columns,
+            )
+        if isinstance(raw_result, dict):
+            extra = telemetry_payload.setdefault("extra", {})
+            if "rows_copied" in raw_result:
+                telemetry_payload["rows_processed"] = raw_result["rows_copied"]
+                extra["rows_ingested"] = raw_result["rows_copied"]
+            for key in ("elapsed_time", "rows_per_second", "batch_count"):
+                if key in raw_result:
+                    extra[key] = raw_result[key]
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
@@ -476,11 +555,19 @@ def _quote_mssql_table(table: str) -> str:
     return ".".join(_quote_tsql_identifier(part) for part in split_qualified_identifier(table))
 
 
-def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:
-    if parameters is None:
+def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any, *, use_prepare: bool = True) -> None:
+    if use_prepare or parameters:
+        if parameters is None:
+            cursor.execute(sql)
+        else:
+            cursor.execute(sql, parameters)
+        return
+    try:
+        cursor.execute(sql, use_prepare=False)
+    except TypeError as exc:
+        if "use_prepare" not in str(exc):
+            raise
         cursor.execute(sql)
-    else:
-        cursor.execute(sql, parameters)
 
 
 def _cursor_rowcount(cursor: "MssqlPythonRawCursor") -> int:

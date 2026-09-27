@@ -177,15 +177,17 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
 
 
 def materialize_tuple_rows(fetched: "Sequence[Any] | None") -> "list[tuple[Any, ...]]":
-    """Materialize mssql-python ``Row`` objects into plain tuples.
+    """Materialize mssql-python Row objects into plain tuples.
 
-    ``mssql-python`` returns ``mssql_python.Row`` objects that are iterable and
-    indexable but are not ``tuple`` subclasses. The driver reports
-    ``row_format="tuple"``, so fetched rows are converted to real tuples to keep
-    that contract accurate when results are materialized.
+    Uses native tuple storage when available, avoiding a tuple copy per row.
     """
     if not fetched:
         return []
+    first = fetched[0]
+    if isinstance(first, tuple):
+        return list(fetched) if not isinstance(fetched, list) else fetched
+    if hasattr(first, "_values"):
+        return [tuple(row._values) if not isinstance(row._values, tuple) else row._values for row in fetched]
     return [tuple(row) for row in fetched]
 
 
