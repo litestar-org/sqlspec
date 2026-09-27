@@ -77,3 +77,12 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.psqlpy.adk.PsqlpyADKConfig
    :members:
    :show-inheritance:
+
+Dense vector parameters
+-----------------------
+
+Parameters explicitly cast to ``VECTOR`` accept lists, tuples, and objects
+with ``tolist()``. SQLSpec wraps these values with psqlpy's native ``PgVector``;
+already-wrapped values pass through. This conversion does not require the
+Python ``pgvector`` package and does not apply the dense-vector encoder to
+``HALFVEC`` or ``SPARSEVEC``.

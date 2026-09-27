@@ -1,13 +1,13 @@
-=========
+==
 Changelog
-=========
+==
 
 All notable SQLSpec changes are summarized here. Entries are grouped by release
 and focus on user-visible behavior, public API changes, compatibility notes, and
 important operational fixes.
 
 Recent Updates
-==============
+=======
 
 Unreleased
 ----------
@@ -24,6 +24,13 @@ Unreleased
 * ADBC FlightSQL adds options for TLS/mTLS, RPC timeouts, message size, cookies
   and headers. Values set in native ``db_kwargs`` take precedence.
 
+* PostgreSQL adapters expose native asyncpg custom codecs and per-query timeouts,
+  psycopg null pools and JSON codecs, supported CockroachDB startup settings,
+  and psqlpy dense-vector conversion. PgBouncer compatibility mode avoids
+  explicit prepared stack statements without weakening transaction cleanup.
+  Null pools preserve concurrency limits, and timeout forwarding retains
+  explicit zero values.
+
 * Added an IBM Db2 adapter for Db2 LUW 11.5 and later with sync
   (``Db2SyncConfig``) and async (``Db2AsyncConfig``) configurations built on
   ``ibm_db``. It includes connection pooling, catalog reflection, migrations,
@@ -38,6 +45,8 @@ Unreleased
 
 **Fixed:**
 
+* Builder upserts emit ``MERGE`` for the ``db2`` dialect.
+
 * ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
   question marks in quoted identifiers, literals, and comments.
 
@@ -45,7 +54,6 @@ Unreleased
   parsing SQL again. ADBC keeps bound values in its ADK store queries.
   DuckDB Arrow loads keep sparse dictionary fields and quote table names.
 
-* Builder upserts emit ``MERGE`` for the ``db2`` dialect.
 * The arrow-odbc adapter detects the SQL dialect from the ODBC driver name
   only, so database, host, or user names no longer select the wrong dialect.
 
@@ -2229,7 +2237,7 @@ v0.24.0 - Builder consolidation
 * Refactored builder code to reduce duplication.
 
 Previous Versions
-=================
+==========
 
 For releases before ``v0.24.0``, see the repository tag history and GitHub
 release records.

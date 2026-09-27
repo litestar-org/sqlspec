@@ -110,3 +110,16 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.psycopg.adk.PsycopgADKConfig
    :members:
    :show-inheritance:
+
+Native null pools and JSON codecs
+--------------------------------
+
+Set ``null_pool=True`` in ``connection_config`` or ``driver_features`` to select
+psycopg's native null pool. Returned connections close instead of remaining idle.
+``max_size`` and ``max_waiting`` still control concurrency and waiting clients;
+``min_size`` is omitted because null pools do not maintain idle connections.
+The same option works for sync and async configurations.
+
+``json_serializer`` and ``json_deserializer`` driver features also configure
+psycopg's native JSON adaptation for each new connection. Codec setup errors
+propagate to the caller.

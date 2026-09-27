@@ -8,6 +8,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
+from sqlspec.adapters.asyncpg.core import build_connection_config as asyncpg_build_connection_config
 from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "CockroachAsyncpgRetryConfig",
+    "build_connection_config",
     "build_native_export",
     "build_native_import",
     "calculate_backoff_seconds",
@@ -63,6 +65,31 @@ class CockroachAsyncpgRetryConfig:
             max_delay_ms=float(driver_features.get("retry_delay_max_ms", _DEFAULT_MAX_DELAY_MS)),
             enable_logging=bool(driver_features.get("enable_retry_logging", _DEFAULT_ENABLE_LOGGING)),
         )
+
+
+def build_connection_config(config: "dict[str, Any]") -> "dict[str, Any]":
+    """Prepare CockroachDB AsyncPG connection config, extracting multi-region server settings."""
+    result = asyncpg_build_connection_config(config)
+    server_settings = dict(result.get("server_settings") or {})
+    if "application_name" in result:
+        server_settings.setdefault("application_name", str(result.pop("application_name")))
+    if "default_transaction_use_follower_reads" in result:
+        val = result.pop("default_transaction_use_follower_reads")
+        if not isinstance(val, bool):
+            msg = "default_transaction_use_follower_reads must be a boolean"
+            raise ImproperConfigurationError(msg)
+        server_settings.setdefault("default_transaction_use_follower_reads", "on" if val else "off")
+    for key in ("results_buffer_size",):
+        if key not in result:
+            continue
+        value = result.pop(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            msg = f"{key} must be a non-negative integer"
+            raise ImproperConfigurationError(msg)
+        server_settings.setdefault(key, str(value))
+    if server_settings:
+        result["server_settings"] = server_settings
+    return result
 
 
 def is_retryable_error(error: BaseException) -> bool:

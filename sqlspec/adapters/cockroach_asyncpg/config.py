@@ -7,7 +7,6 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg.core import (
     apply_driver_features,
-    build_connection_config,
     default_statement_config,
     register_json_codecs,
     register_pgvector_support,
@@ -20,7 +19,7 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgRecord as Record
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_connect as asyncpg_connect
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_create_pool as asyncpg_create_pool
-from sqlspec.adapters.cockroach_asyncpg.core import validate_follower_read_staleness
+from sqlspec.adapters.cockroach_asyncpg.core import build_connection_config, validate_follower_read_staleness
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -80,6 +79,9 @@ class CockroachAsyncpgConnectionConfig(TypedDict):
     timeout: NotRequired[float]
     connect_timeout: NotRequired[float]
     command_timeout: NotRequired[float]
+    application_name: NotRequired[str]
+    default_transaction_use_follower_reads: NotRequired[bool]
+    results_buffer_size: NotRequired[int]
     statement_cache_size: NotRequired[int]
     max_cached_statement_lifetime: NotRequired[int]
     max_cacheable_statement_size: NotRequired[int]

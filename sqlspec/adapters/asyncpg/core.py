@@ -131,6 +131,9 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if found_user:
         config["user"] = user_val
 
+    if config.pop("pgbouncer", False):
+        config["statement_cache_size"] = 0
+
     return config
 
 
@@ -167,7 +170,7 @@ def configure_parameter_serializers(
 
 
 async def invoke_prepared_statement(
-    prepared: Any, parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None", *, fetch: bool
+    prepared: Any, parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None", *, fetch: bool, **kwargs: Any
 ) -> Any:
     """Invoke an AsyncPG prepared statement with optional parameters.
 
@@ -175,25 +178,26 @@ async def invoke_prepared_statement(
         prepared: AsyncPG prepared statement object.
         parameters: Prepared parameters payload.
         fetch: Whether to fetch rows.
+        **kwargs: Native execution options, including timeout.
 
     Returns:
         Query result or status message.
     """
     if parameters is None:
         if fetch:
-            return await prepared.fetch()
-        await prepared.fetch()
+            return await prepared.fetch(**kwargs)
+        await prepared.fetch(**kwargs)
         return prepared.get_statusmsg()
 
     if isinstance(parameters, dict):
         if fetch:
-            return await prepared.fetch(**parameters)
-        await prepared.fetch(**parameters)
+            return await prepared.fetch(**parameters, **kwargs)
+        await prepared.fetch(**parameters, **kwargs)
         return prepared.get_statusmsg()
 
     if fetch:
-        return await prepared.fetch(*parameters)
-    await prepared.fetch(*parameters)
+        return await prepared.fetch(*parameters, **kwargs)
+    await prepared.fetch(*parameters, **kwargs)
     return prepared.get_statusmsg()
 
 
@@ -426,9 +430,17 @@ def collect_rows(records: "list[Any] | None") -> "tuple[list[Any], list[str]]":
 class AsyncpgStreamSource:
     """Compiled async chunk source streaming dict rows from an asyncpg cursor in a stream-owned transaction."""
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
+    __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_timeout_args", "_transaction")
 
-    def __init__(self, driver: Any, sql: str, parameters: "tuple[Any, ...]", chunk_size: int) -> None:
+    def __init__(
+        self,
+        driver: Any,
+        sql: str,
+        parameters: "tuple[Any, ...]",
+        chunk_size: int,
+        timeout_args: "dict[str, Any] | None" = None,
+    ) -> None:
+        self._timeout_args = timeout_args or {}
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
@@ -446,7 +458,7 @@ class AsyncpgStreamSource:
         await transaction.start()
         self._transaction = transaction
         try:
-            self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters)
+            self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, **self._timeout_args)
         except BaseException:
             await transaction.rollback()
             self._transaction = None
@@ -454,7 +466,9 @@ class AsyncpgStreamSource:
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        records = await self._driver._run_with_exception_handler(handler, self._cursor.fetch, self._chunk_size)
+        records = await self._driver._run_with_exception_handler(
+            handler, self._cursor.fetch, self._chunk_size, **self._timeout_args
+        )
         self._driver._check_pending_exception(handler)
         assert records is not None
         return [dict(record) for record in records]

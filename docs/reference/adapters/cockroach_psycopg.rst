@@ -254,3 +254,11 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.cockroach_psycopg.adk.CockroachPsycopgADKConfig
    :members:
    :show-inheritance:
+
+Native startup settings
+-----------------------
+
+``connection_config`` accepts ``default_transaction_use_follower_reads`` as a
+boolean, plus non-negative integer ``results_buffer_size`` (bytes),
+``statement_timeout`` and ``idle_in_transaction_session_timeout`` (milliseconds).
+These settings append to the existing libpq ``options`` string.
