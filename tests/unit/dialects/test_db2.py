@@ -196,6 +196,7 @@ def test_db2_direct_generation_preserves_query_and_pagination_ownership() -> Non
     from sqlspec.dialects.db2._transforms import add_sysibm_dual
 
     select = parse_one("SELECT 1 LIMIT 2", read="postgres")
+    assert isinstance(select, exp.Select)
     select.set("sqlspec_db2_isolation", "UR")
     snapshot = select.copy()
     dialect = DB2()
@@ -206,6 +207,7 @@ def test_db2_direct_generation_preserves_query_and_pagination_ownership() -> Non
     assert select == snapshot
 
     union = parse_one("SELECT 1 UNION SELECT 2 LIMIT 3", read="postgres")
+    assert isinstance(union, exp.SetOperation)
     union_snapshot = union.copy()
     assert set_operation_sql(dialect.generator(), union).endswith("FETCH FIRST 3 ROWS ONLY")
     assert union == union_snapshot
