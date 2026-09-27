@@ -1,13 +1,10 @@
-=========
 Changelog
-=========
 
 All notable SQLSpec changes are summarized here. Entries are grouped by release
 and focus on user-visible behavior, public API changes, compatibility notes, and
 important operational fixes.
 
 Recent Updates
-==============
 
 Unreleased
 ----------
@@ -17,6 +14,9 @@ Unreleased
 * BigQuery supports native query resource controls,
   explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
   stream modes while retaining the atomic PENDING default.
+* SQLite and aiosqlite support custom window functions on Python 3.11 and
+  later, explicit transaction locking modes, and configurable Arrow import
+  batch sizes. Existing transaction defaults remain unchanged.
 
 * Arrow ODBC runs ``execute_many()`` one row at a time. It reports an unknown
   row count since the native driver does not return the number of changed rows.
@@ -2277,7 +2277,6 @@ v0.24.0 - Builder consolidation
 * Refactored builder code to reduce duplication.
 
 Previous Versions
-=================
 
 For releases before ``v0.24.0``, see the repository tag history and GitHub
 release records.

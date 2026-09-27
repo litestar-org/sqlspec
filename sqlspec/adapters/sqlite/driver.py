@@ -1,7 +1,7 @@
 """SQLite driver implementation."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -235,15 +235,24 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    def begin(self) -> None:
+    def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
         """Begin a database transaction.
+
+        Args:
+            mode: Transaction lock mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
+                Defaults to configured driver feature or SQLite default (DEFERRED).
 
         Raises:
             SQLSpecError: If transaction cannot be started
         """
+        transaction_mode = mode if mode is not None else self.driver_features.get("default_transaction_mode")
+        if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
+            msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
+            raise ValueError(msg)
         try:
             if not self.connection.in_transaction:
-                self.connection.execute("BEGIN")
+                stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
+                self.connection.execute(stmt)
         except sqlite3.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -342,11 +351,15 @@ class SqliteDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
+        batch_size: int = 10000,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into SQLite using chunked batched inserts."""
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            msg = "batch_size must be a positive integer"
+            raise ValueError(msg)
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         columns = arrow_table.column_names
@@ -361,7 +374,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 statement = f"DELETE FROM {format_identifier(table)}"
                 with self.with_cursor(self.connection) as cursor:
                     cursor.execute(statement)
-            for batch in arrow_table.to_batches(max_chunksize=10000):
+            for batch in arrow_table.to_batches(max_chunksize=batch_size):
                 pydict = batch.to_pydict()
                 records = list(zip(*[pydict[col] for col in columns], strict=False))
                 if records:

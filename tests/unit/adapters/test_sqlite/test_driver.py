@@ -283,3 +283,47 @@ def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails(monkeypatch
         assert connection.execute("SELECT COUNT(*) FROM target").fetchone() == (0,)
     finally:
         connection.close()
+
+
+def test_sqlite_begin_mode_and_arrow_batch_validation() -> None:
+    connection = sqlite3.connect(":memory:")
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+    driver = SqliteDriver(connection=connection, driver_features={"default_transaction_mode": "EXCLUSIVE"})
+    try:
+        driver.begin()
+        driver.rollback()
+        driver.begin(mode="DEFERRED")
+        driver.rollback()
+        with pytest.raises(ValueError, match="Transaction mode"):
+            driver.begin(mode=cast("Any", "INVALID"))
+        with pytest.raises(ValueError, match="batch_size"):
+            driver.load_from_arrow("sample", cast("Any", None), batch_size=0)
+        assert statements == ["BEGIN EXCLUSIVE", "ROLLBACK", "BEGIN DEFERRED", "ROLLBACK"]
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("async_adapter", [False, True])
+def test_window_registration_checks_native_capability(async_adapter: bool) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.aiosqlite.pool import _register_runtime_objects
+    from sqlspec.adapters.sqlite.pool import _apply_runtime_setup
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    window_class = type("Window", (), {})
+    functions = [{"name": "window_sum", "narg": 1, "window_class": window_class}]
+    register = Mock()
+    native = SimpleNamespace(create_window_function=register)
+    if async_adapter:
+        _register_runtime_objects(cast("Any", SimpleNamespace(_conn=native)), (), (), functions)
+    else:
+        _apply_runtime_setup(cast("Any", native), {"custom_window_functions": functions})
+    register.assert_called_once_with("window_sum", 1, window_class)
+    with pytest.raises(ImproperConfigurationError, match="Python 3"):
+        if async_adapter:
+            _register_runtime_objects(cast("Any", SimpleNamespace(_conn=object())), (), (), functions)
+        else:
+            _apply_runtime_setup(cast("Any", object()), {"custom_window_functions": functions})

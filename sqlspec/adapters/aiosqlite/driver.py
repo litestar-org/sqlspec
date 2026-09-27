@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import inspect
 import random
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
@@ -218,13 +218,26 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                             await close_result
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    async def begin(self) -> None:
-        """Begin a database transaction."""
+    async def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
+        """Begin a database transaction.
+
+        Args:
+            mode: Transaction locking mode (DEFERRED, IMMEDIATE, EXCLUSIVE).
+                Falls back to ``driver_features['default_transaction_mode']``,
+                or ``IMMEDIATE`` when neither is set.
+        """
+        transaction_mode = (
+            mode if mode is not None else self.driver_features.get("default_transaction_mode", "IMMEDIATE")
+        )
+        stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
+        if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
+            msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
+            raise ValueError(msg)
         try:
             if not self.connection.in_transaction:
-                await self.connection.execute("BEGIN IMMEDIATE")
+                await self.connection.execute(stmt)
         except aiosqlite.Error as e:
-            await _retry_begin_with_backoff(self.connection, e)
+            await _retry_begin_with_backoff(self.connection, e, statement=stmt)
 
     async def commit(self) -> None:
         """Commit the current transaction."""
@@ -285,11 +298,15 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
+        batch_size: int = 10000,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into SQLite using batched inserts."""
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            msg = "batch_size must be a positive integer"
+            raise ValueError(msg)
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
         columns = arrow_table.column_names
@@ -304,7 +321,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 statement = f"DELETE FROM {format_identifier(table)}"
                 async with self.with_cursor(self.connection) as cursor:
                     await cursor.execute(statement)
-            for batch in arrow_table.to_batches(max_chunksize=10000):
+            for batch in arrow_table.to_batches(max_chunksize=batch_size):
                 pydict = batch.to_pydict()
                 records = list(zip(*(pydict[col] for col in columns), strict=False))
                 if records:
@@ -546,9 +563,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
 
 async def _retry_begin_with_backoff(
-    connection: "AiosqliteConnection", initial_error: aiosqlite.Error, max_retries: int = 3
+    connection: "AiosqliteConnection",
+    initial_error: aiosqlite.Error,
+    max_retries: int = 3,
+    *,
+    statement: str = "BEGIN IMMEDIATE",
 ) -> None:
-    """Retry ``BEGIN IMMEDIATE`` after SQLite reports a busy connection.
+    """Retry transaction start after SQLite reports a busy connection.
 
     Aiosqlite surfaces SQLite lock contention through ``aiosqlite.Error``. Preserve
     the existing bounded exponential-backoff behavior for every native error and
@@ -558,6 +579,7 @@ async def _retry_begin_with_backoff(
         connection: Aiosqlite connection used to retry the transaction start.
         initial_error: Error raised by the first transaction-start attempt.
         max_retries: Maximum number of retry attempts.
+        statement: SQL statement used to start the transaction.
 
     Raises:
         SQLSpecError: If every retry attempt fails.
@@ -566,7 +588,7 @@ async def _retry_begin_with_backoff(
         delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
         await asyncio.sleep(delay)
         try:
-            await connection.execute("BEGIN IMMEDIATE")
+            await connection.execute(statement)
         except aiosqlite.Error:
             if attempt == max_retries - 1:
                 break

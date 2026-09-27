@@ -40,6 +40,7 @@ __all__ = (
     "SqliteConnectionParams",
     "SqliteDriverFeatures",
     "SqliteFunctionConfig",
+    "SqliteWindowFunctionConfig",
 )
 
 logger = get_logger("sqlspec.adapters.sqlite")
@@ -88,6 +89,14 @@ class SqliteAggregateConfig(TypedDict):
     aggregate_class: "type[Any]"
 
 
+class SqliteWindowFunctionConfig(TypedDict):
+    """User-defined SQLite window function registration."""
+
+    name: str
+    narg: int
+    window_class: "type[Any]"
+
+
 class SqliteDriverFeatures(TypedDict):
     """SQLite driver feature configuration.
 
@@ -117,6 +126,9 @@ class SqliteDriverFeatures(TypedDict):
      Each entry must include name and func.
     custom_aggregates: Register SQL aggregates with step/finalize classes.
      Each entry must include name, narg, and aggregate_class.
+    custom_window_functions: Register user-defined aggregate window functions.
+     Each entry must include name, narg, and window_class.
+    default_transaction_mode: Default SQLite transaction mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
     authorizer_callback: sqlite3 authorizer hook run during statement compilation.
     trace_callback: sqlite3 trace hook run for executed statements.
     progress_handler: sqlite3 progress hook run every progress_handler_interval VM opcodes.
@@ -140,6 +152,8 @@ class SqliteDriverFeatures(TypedDict):
     custom_functions: "NotRequired[Sequence[SqliteFunctionConfig]]"
     custom_collations: "NotRequired[Sequence[SqliteCollationConfig]]"
     custom_aggregates: "NotRequired[Sequence[SqliteAggregateConfig]]"
+    custom_window_functions: "NotRequired[Sequence[SqliteWindowFunctionConfig]]"
+    default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
     authorizer_callback: "NotRequired[Callable[[int, str | None, str | None, str | None, str | None], int]]"
     trace_callback: "NotRequired[Callable[[str], None]]"
     progress_handler: "NotRequired[Callable[[], int | None]]"
@@ -156,6 +170,7 @@ _RUNTIME_FEATURE_KEYS = (
     "custom_aggregates",
     "custom_collations",
     "custom_functions",
+    "custom_window_functions",
     "extensions",
     "pragmas",
     "progress_handler",
@@ -299,6 +314,7 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             "SqliteExceptionHandler": SqliteExceptionHandler,
             "SqliteFunctionConfig": SqliteFunctionConfig,
             "SqliteSessionContext": SqliteSessionContext,
+            "SqliteWindowFunctionConfig": SqliteWindowFunctionConfig,
         })
         return namespace
 
@@ -383,6 +399,9 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
     _validate_entries(runtime_setup.get("custom_collations", ()), ("name", "func"), "custom_collations")
     _validate_entries(
         runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
+    )
+    _validate_entries(
+        runtime_setup.get("custom_window_functions", ()), ("name", "narg", "window_class"), "custom_window_functions"
     )
 
     interval = runtime_setup.get("progress_handler_interval")
