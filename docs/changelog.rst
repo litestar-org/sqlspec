@@ -55,16 +55,19 @@ Unreleased
 
 **Fixed:**
 
-* SQL Server event queue DDL guards use the configured table and index names.
-  Arrow ODBC index checks no longer include column text in the table name.
-
-* Arrow read failures in the mssql-python adapter use SQLSpec error types.
+* Spanner binds Decimal values as NUMERIC and boolean arrays as BOOL.
+  Typed null dictionaries use JSON, and JSON null results stay ``None``.
 * ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
   question marks in quoted identifiers, literals, and comments.
 
 * Arrow ODBC pagination reuses compiled placeholder positions instead of
   parsing SQL again. ADBC keeps bound values in its ADK store queries.
   DuckDB Arrow loads keep sparse dictionary fields and quote table names.
+
+* SQL Server event queue DDL guards use the configured table and index names.
+  Arrow ODBC index checks no longer include column text in the table name.
+
+* Arrow read failures in the mssql-python adapter use SQLSpec error types.
 * SQLite pools replace lost in-memory connections. Arrow imports roll back
   writes on failure or cancellation when the adapter owns the transaction.
 
