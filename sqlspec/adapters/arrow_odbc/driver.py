@@ -155,13 +155,19 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             self._data_dictionary = ArrowOdbcDataDictionary(self._dialect)
         return self._data_dictionary
 
-    def dispatch_execute(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+    def _execute_non_query(self, cursor: "ArrowOdbcRawCursor", sql: str, prepared_parameters: Any) -> None:
         if self._dialect == "mssql":
             sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
         parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
+        cursor.execute(query=sql, parameters=parameters)
+
+    def dispatch_execute(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         if statement.returns_rows():
+            if self._dialect == "mssql":
+                sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
+            parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
             reader = self._read_arrow_batches(sql, parameters, self._chunk_size())
             table = self._normalize_table(_reader_to_table(reader))
             rows = table.to_pylist()
@@ -175,12 +181,18 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 row_format="dict",
             )
 
-        cursor.execute(query=sql, parameters=parameters)
+        self._execute_non_query(cursor, sql, prepared_parameters)
         return self.create_execution_result(cursor, rowcount_override=0)
 
     def dispatch_execute_many(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
-        msg = "arrow-odbc does not expose a row-oriented executemany API; use bulk_insert_arrow() for Arrow ingestion."
-        raise NotImplementedError(msg)
+        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        if isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
+            for parameter_set in prepared_parameters:
+                self._execute_non_query(cursor, sql, parameter_set)
+            row_count = len(prepared_parameters) if statement.is_modifying_operation() else 0
+        else:
+            row_count = 0
+        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -311,12 +323,12 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         ensure_pyarrow()
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        prepared_statement.compile()
         sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
         if self._dialect == "mssql":
             sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
         resolved_batch_size = batch_size or self._chunk_size()
         table: Any | None = None
+        arrow_result: ArrowResult | None = None
 
         exc_handler = self.handle_database_exceptions()
         with exc_handler, self.with_cursor(self.connection):
@@ -327,16 +339,19 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             )
             if return_format in {"reader", "batches"}:
                 arrow_reader = self._normalize_reader(_to_pyarrow_reader(reader))
-                return build_arrow_result_from_reader(
+                arrow_result = build_arrow_result_from_reader(
                     prepared_statement,
                     arrow_reader,
                     return_format=return_format,
                     batch_size=resolved_batch_size,
                     arrow_schema=arrow_schema,
                 )
-            table = self._normalize_table(_reader_to_table(reader))
+            else:
+                table = self._normalize_table(_reader_to_table(reader))
         self._check_pending_exception(exc_handler)
 
+        if arrow_result is not None:
+            return arrow_result
         if table is None:
             msg = "arrow-odbc did not return an Arrow table."
             raise SQLSpecError(msg)
@@ -355,19 +370,20 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
         resolved_chunk_size = chunk_size or self._chunk_size()
         exc_handler = self.handle_database_exceptions()
+        inserted = False
         with exc_handler, self.with_cursor(self.connection):
             if isinstance(source, pa.Table) and hasattr(self.connection, "from_table_to_db"):
                 self.connection.from_table_to_db(source=source, target=target_table, chunk_size=resolved_chunk_size)
-                self._check_pending_exception(exc_handler)
-                return
-
-            reader = _table_to_reader(source, resolved_chunk_size) if isinstance(source, pa.Table) else source
-            if hasattr(self.connection, "insert_into_table"):
-                self.connection.insert_into_table(reader=reader, table=target_table, chunk_size=resolved_chunk_size)
-                self._check_pending_exception(exc_handler)
-                return
+                inserted = True
+            else:
+                reader = _table_to_reader(source, resolved_chunk_size) if isinstance(source, pa.Table) else source
+                if hasattr(self.connection, "insert_into_table"):
+                    self.connection.insert_into_table(reader=reader, table=target_table, chunk_size=resolved_chunk_size)
+                    inserted = True
         self._check_pending_exception(exc_handler)
 
+        if inserted:
+            return
         msg = "arrow-odbc connection does not expose table import APIs."
         raise ImproperConfigurationError(msg)
 
@@ -498,13 +514,14 @@ def _statement_dialect_for(dialect: str) -> str:
 _DB2_PLAIN_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TSQL_DIALECT: Final = Dialect.get_or_raise("tsql")
 _MSSQL_TOP_MIN_TOKEN_INDEX: Final = 2
-_MSSQL_OFFSET_FETCH_TAIL_TOKENS: Final = 6
+_MSSQL_FETCH_MIN_TOKEN_INDEX: Final = 2
+_MSSQL_FETCH_TAIL_TOKENS: Final = 2
 _MSSQL_ROW_TOKEN_TYPES: Final = frozenset({TokenType.ROW, TokenType.ROWS})
 _MSSQL_FETCH_DIR_TOKEN_TYPES: Final = frozenset({TokenType.FIRST, TokenType.NEXT})
 
 
 def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[str, object]:
-    """Inline integer parameters bound to T-SQL TOP (?) and OFFSET/FETCH clauses.
+    """Inline integer parameters bound to T-SQL TOP (?), OFFSET, and FETCH clauses.
 
     Uses sqlglot's T-SQL tokenizer so placeholders are counted in exact SQL
     lexical order while ignoring question marks inside string literals or SQL
@@ -513,7 +530,7 @@ def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[s
     if not isinstance(parameters, (list, tuple)) or not parameters:
         return sql, parameters
     upper_sql = sql.upper()
-    if "TOP" not in upper_sql and "OFFSET" not in upper_sql:
+    if "TOP" not in upper_sql and "OFFSET" not in upper_sql and "FETCH" not in upper_sql:
         return sql, parameters
 
     tokens = _TSQL_DIALECT.tokenize(sql)
@@ -525,36 +542,36 @@ def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[s
     for index, token in enumerate(tokens):
         if token.token_type != TokenType.PLACEHOLDER:
             continue
-        if parameter_index not in consumed and parameter_index < len(parameters):
-            if (
-                index >= _MSSQL_TOP_MIN_TOKEN_INDEX
-                and tokens[index - 1].token_type == TokenType.L_PAREN
-                and tokens[index - 2].token_type == TokenType.TOP
-                and index + 1 < token_count
-                and tokens[index + 1].token_type == TokenType.R_PAREN
-            ):
-                replacements.append((token.start, token.end + 1, str(_pagination_int(parameters[parameter_index]))))
-                consumed.add(parameter_index)
-            elif (
-                index >= 1
-                and index + _MSSQL_OFFSET_FETCH_TAIL_TOKENS < token_count
-                and parameter_index + 1 < len(parameters)
-                and tokens[index - 1].token_type == TokenType.OFFSET
-                and tokens[index + 1].token_type in _MSSQL_ROW_TOKEN_TYPES
-                and tokens[index + 2].token_type == TokenType.FETCH
-                and tokens[index + 3].token_type in _MSSQL_FETCH_DIR_TOKEN_TYPES
-                and tokens[index + 4].token_type == TokenType.PLACEHOLDER
-                and tokens[index + 5].token_type in _MSSQL_ROW_TOKEN_TYPES
-                and tokens[index + 6].token_type == TokenType.VAR
-                and tokens[index + 6].text.upper() == "ONLY"
-            ):
-                offset_val = _pagination_int(parameters[parameter_index])
-                limit_val = _pagination_int(parameters[parameter_index + 1])
-                fetch_token = tokens[index + 4]
-                replacements.append((token.start, token.end + 1, str(offset_val)))
-                replacements.append((fetch_token.start, fetch_token.end + 1, str(limit_val)))
-                consumed.add(parameter_index)
-                consumed.add(parameter_index + 1)
+        if (
+            parameter_index not in consumed
+            and parameter_index < len(parameters)
+            and (
+                (
+                    index >= _MSSQL_TOP_MIN_TOKEN_INDEX
+                    and tokens[index - 1].token_type == TokenType.L_PAREN
+                    and tokens[index - 2].token_type == TokenType.TOP
+                    and index + 1 < token_count
+                    and tokens[index + 1].token_type == TokenType.R_PAREN
+                )
+                or (
+                    index >= 1
+                    and tokens[index - 1].token_type == TokenType.OFFSET
+                    and index + 1 < token_count
+                    and tokens[index + 1].token_type in _MSSQL_ROW_TOKEN_TYPES
+                )
+                or (
+                    index >= _MSSQL_FETCH_MIN_TOKEN_INDEX
+                    and index + _MSSQL_FETCH_TAIL_TOKENS < token_count
+                    and tokens[index - 2].token_type == TokenType.FETCH
+                    and tokens[index - 1].token_type in _MSSQL_FETCH_DIR_TOKEN_TYPES
+                    and tokens[index + 1].token_type in _MSSQL_ROW_TOKEN_TYPES
+                    and tokens[index + 2].token_type == TokenType.VAR
+                    and tokens[index + 2].text.upper() == "ONLY"
+                )
+            )
+        ):
+            replacements.append((token.start, token.end + 1, str(_pagination_int(parameters[parameter_index]))))
+            consumed.add(parameter_index)
         parameter_index += 1
 
     if not consumed:

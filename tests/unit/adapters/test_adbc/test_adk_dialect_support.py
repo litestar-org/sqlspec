@@ -3,7 +3,7 @@
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
-from sqlspec.adapters.adbc.adk import AdbcADKStore
+from sqlspec.adapters.adbc.adk import AdbcADKMemoryStore, AdbcADKStore
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
@@ -272,3 +272,14 @@ def test_list_sessions_rejects_invalid_options_before_connecting(options: "dict[
 
     with pytest.raises(ValueError):
         store.list_sessions("app", **options)  # type: ignore[arg-type]
+
+
+def test_memory_store_detects_postgresql_from_uri_and_formats_placeholders() -> None:
+    """AdbcADKMemoryStore resolves dialect from URI and formats PostgreSQL placeholders."""
+    config = AdbcConfig(connection_config={"uri": "postgresql://localhost/testdb"})
+    store = AdbcADKMemoryStore(config)
+
+    assert store.dialect == "postgresql"
+    formatted = store._format_sql("DELETE FROM adk_memory_entries WHERE session_id = ? AND app_name = ?")
+    assert formatted == "DELETE FROM adk_memory_entries WHERE session_id = $1 AND app_name = $2"
+    assert store._json_placeholder() == "?::jsonb"

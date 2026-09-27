@@ -73,7 +73,7 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
                 table_name = match.group(1)
                 return f"IF OBJECT_ID(N'{_object_name(table_name)}', N'U') IS NULL BEGIN {statement}; END"
         if object_type == "index":
-            match = re.search(r"CREATE INDEX\s+(\S+)\s+ON\s+(\S+)", statement, re.IGNORECASE)
+            match = re.search(r"CREATE INDEX\s+(\S+)\s+ON\s+([^\s(]+)", statement, re.IGNORECASE)
             if match:
                 index_name = match.group(1).strip("[]")
                 table_name = match.group(2)

@@ -18,6 +18,7 @@ from sqlspec.adapters.duckdb.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    format_identifier,
     normalize_execute_parameters,
     resolve_rowcount,
 )
@@ -34,6 +35,7 @@ from sqlspec.core import (
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
@@ -179,19 +181,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         if prepared_parameters:
             parameter_sets = cast("list[Any]", prepared_parameters)
-            if not self._transaction_active:
-                cursor.execute("BEGIN TRANSACTION")
-                try:
-                    cursor.executemany(sql, parameter_sets)
-                except Exception:
-                    with contextlib.suppress(Exception):
-                        cursor.execute("ROLLBACK")
-                    raise
-                else:
-                    cursor.execute("COMMIT")
-            else:
-                cursor.executemany(sql, parameter_sets)
-
+            cursor.executemany(sql, parameter_sets)
             row_count = len(parameter_sets) if statement.is_modifying_operation() else resolve_rowcount(cursor)
         else:
             row_count = 0
@@ -377,22 +367,46 @@ class DuckDBDriver(SyncDriverAdapterBase):
         exc_handler = self.handle_database_exceptions()
         arrow_result: ArrowResult | None = None
 
+        if return_format in {"reader", "batches"}:
+            cursor_manager = self.with_cursor(self.connection)
+            cursor_obj: Any = None
+            arrow_reader: Any = None
+            with exc_handler:
+                cursor_obj = cursor_manager.__enter__()
+                try:
+                    sql, driver_params = self._compiled_sql(prepared_statement, config)
+                    cursor_obj.execute(sql, driver_params or ())
+                    arrow_reader = (
+                        cursor_obj.to_arrow_reader(batch_size)
+                        if batch_size is not None
+                        else cursor_obj.to_arrow_reader()
+                    )
+                except Exception:
+                    cursor_manager.__exit__(None, None, None)
+                    cursor_obj = None
+                    raise
+
+            self._check_pending_exception(exc_handler)
+            if cursor_obj is None or arrow_reader is None:
+                msg = "DuckDB did not return an Arrow reader."
+                raise SQLSpecError(msg)
+            close_callback = (
+                cursor_obj.close
+                if cursor_obj is not self.connection and hasattr(cursor_obj, "close")
+                else lambda: cursor_manager.__exit__(None, None, None)
+            )
+            return build_arrow_result_from_reader(
+                prepared_statement,
+                arrow_reader_with_deferred_close(arrow_reader, close_callback),
+                return_format=return_format,
+                batch_size=batch_size,
+                arrow_schema=arrow_schema,
+            )
+
         with self.with_cursor(self.connection) as cursor, exc_handler:
             sql, driver_params = self._compiled_sql(prepared_statement, config)
 
             cursor.execute(sql, driver_params or ())
-
-            if return_format in {"reader", "batches"}:
-                arrow_reader = (
-                    cursor.to_arrow_reader(batch_size) if batch_size is not None else cursor.to_arrow_reader()
-                )
-                return build_arrow_result_from_reader(
-                    prepared_statement,
-                    arrow_reader,
-                    return_format=return_format,
-                    batch_size=batch_size,
-                    arrow_schema=arrow_schema,
-                )
 
             arrow_table = cursor.to_arrow_table()
 
@@ -404,12 +418,11 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
 
         if arrow_result is None:
             msg = "Unreachable"
-            raise RuntimeError(msg)  # pragma: no cover
+            raise RuntimeError(msg)
 
         return arrow_result
 
@@ -486,13 +499,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         else:
             arrow_table = self._coerce_arrow_table(source_data)
             arrow_source = arrow_table
+        table_name = format_identifier(table)
         temp_view = f"_sqlspec_arrow_{uuid4().hex}"
         if overwrite:
-            self.connection.execute(f"TRUNCATE TABLE {table}")
+            self.connection.execute(f"TRUNCATE TABLE {table_name}")
         self.connection.register(temp_view, arrow_source)
         inserted_rows = 0
         try:
-            insert_result = self.connection.execute(f"INSERT INTO {table} SELECT * FROM {temp_view}")
+            insert_result = self.connection.execute(f"INSERT INTO {table_name} SELECT * FROM {temp_view}")
             inserted_rows = _resolve_duckdb_inserted_rows(insert_result)
         finally:
             with contextlib.suppress(Exception):

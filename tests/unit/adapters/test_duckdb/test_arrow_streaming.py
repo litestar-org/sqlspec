@@ -195,3 +195,21 @@ def test_missing_pyarrow_raises_cleanly(monkeypatch: pytest.MonkeyPatch) -> None
 
         with pytest.raises(MissingDependencyError):
             driver.select_to_arrow("SELECT id FROM arrow_streaming", return_format="reader")
+
+
+def test_select_to_arrow_reader_maps_duckdb_exceptions() -> None:
+    with _seed_driver() as driver:
+        with pytest.raises(NotFoundError):
+            driver.select_to_arrow("SELECT * FROM missing_arrow_table", return_format="reader")
+
+
+def test_load_from_arrow_quotes_qualified_and_special_identifiers() -> None:
+    with _seed_driver() as driver:
+        driver.execute('CREATE SCHEMA IF NOT EXISTS "custom schema"')
+        driver.execute('CREATE OR REPLACE TABLE "custom schema"."target table" (id INTEGER, name VARCHAR)')
+        table = pa.table({"id": [1, 2], "name": ["one", "two"]})
+
+        driver.load_from_arrow('"custom schema"."target table"', table, overwrite=True)
+
+        rows = driver.execute('SELECT id, name FROM "custom schema"."target table" ORDER BY id').get_data()
+        assert rows == [{"id": 1, "name": "one"}, {"id": 2, "name": "two"}]

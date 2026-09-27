@@ -3,8 +3,11 @@
 from typing import TYPE_CHECKING, cast
 
 import pyarrow as pa
+import pytest
 
+from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.driver import AdbcDriver
+from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc._typing import AdbcConnection
@@ -98,3 +101,44 @@ def test_load_from_arrow_passes_record_batch_reader_to_adbc_ingest() -> None:
     assert mode == "create_append"
     assert job.telemetry["rows_processed"] == 3
     assert job.telemetry["destination"] == "target_table"
+
+
+def test_adbc_config_create_connection_returns_connection_instance() -> None:
+    connection = _AdbcStreamingConnection()
+    config = AdbcConfig(connection_instance=cast("AdbcConnection", connection))
+
+    assert cast("object", config.create_connection()) is connection
+
+
+def test_select_to_arrow_postgres_rolls_back_on_error() -> None:
+    class _PostgresErrorCursor:
+        def __init__(self, conn: "_PostgresErrorConnection") -> None:
+            self.connection = conn
+            self.closed = False
+
+        def execute(self, sql: str, parameters: object = None) -> None:
+            msg = "postgres failure"
+            raise RuntimeError(msg)
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _PostgresErrorConnection:
+        def __init__(self) -> None:
+            self.rolled_back = False
+
+        def adbc_get_info(self) -> dict[str, str]:
+            return {"vendor_name": "PostgreSQL", "driver_name": "adbc_driver_postgresql"}
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+        def cursor(self) -> _PostgresErrorCursor:
+            return _PostgresErrorCursor(self)
+
+    connection = _PostgresErrorConnection()
+    driver = AdbcDriver(cast("AdbcConnection", connection), dialect="postgres")
+
+    with pytest.raises((RuntimeError, SQLSpecError)):
+        driver.select_to_arrow("SELECT 1", return_format="table")
+    assert connection.rolled_back is True

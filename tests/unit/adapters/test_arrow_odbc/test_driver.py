@@ -903,6 +903,18 @@ def test_arrow_odbc_driver_slots_in_class_definition() -> None:
             "SELECT 'OFFSET ? ROWS FETCH NEXT ? ROWS ONLY' AS label FROM t WHERE id = ?",
             [7],
         ),
+        (
+            "SELECT id FROM t WHERE active = ? ORDER BY id OFFSET ? ROWS",
+            [1, 10],
+            "SELECT id FROM t WHERE active = ? ORDER BY id OFFSET 10 ROWS",
+            [1],
+        ),
+        (
+            "SELECT id FROM t WHERE active = ? ORDER BY id OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY",
+            [1, 25],
+            "SELECT id FROM t WHERE active = ? ORDER BY id OFFSET 0 ROWS FETCH NEXT 25 ROWS ONLY",
+            [1],
+        ),
     ],
 )
 def test_mssql_top_preserves_data_bindings(
@@ -926,3 +938,27 @@ def test_mssql_top_rejects_fractional_limits(suffix: str) -> None:
 
     with pytest.raises(ValueError, match="whole integers"):
         _inline_mssql_pagination_parameters("SELECT TOP (?)" + suffix + " id FROM t", [12.5])
+
+
+def test_arrow_odbc_execute_many_iterates_parameter_sets() -> None:
+    """execute_many should execute each parameter set sequentially via _execute_non_query."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    result = driver.execute_many("INSERT INTO items (id, name) VALUES (?, ?)", [(1, "alpha"), (2, "beta")])
+
+    assert result.rows_affected == 2
+    assert connection.executed == [
+        ("INSERT INTO items (id, name) VALUES (?, ?)", ["1", "alpha"]),
+        ("INSERT INTO items (id, name) VALUES (?, ?)", ["2", "beta"]),
+    ]
+
+
+def test_arrow_odbc_select_to_arrow_reader_maps_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """select_to_arrow with return_format='reader' should raise mapped SQLSpec exceptions."""
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
+    connection = ErrorConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(SQLSpecError, match="ODBC database error"):
+        driver.select_to_arrow("SELECT * FROM items", return_format="reader")

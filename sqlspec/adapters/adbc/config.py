@@ -331,6 +331,8 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         Raises:
             ImproperConfigurationError: If the connection could not be established.
         """
+        if self.connection_instance is not None:
+            return cast("AdbcConnection", self.connection_instance)
 
         try:
             driver_name = cast("str | None", self.connection_config.get("driver_name"))
