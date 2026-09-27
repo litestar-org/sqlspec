@@ -53,14 +53,9 @@ class _FakeMutationGroups:
 class _FakeDatabase:
     def __init__(self) -> None:
         self.mutation_groups_obj = _FakeMutationGroups()
-        self.partitioned_dml_calls: list[str] = []
 
     def mutation_groups(self) -> _FakeMutationGroups:
         return self.mutation_groups_obj
-
-    def execute_partitioned_dml(self, dml: str, **kwargs: Any) -> int:
-        self.partitioned_dml_calls.append(dml)
-        return 0
 
 
 class _FakeSession:
@@ -115,13 +110,10 @@ def test_batch_write_splits_before_crossing_mutation_group_cell_cap(batch_write_
     assert [len(chunk) for chunk in chunks] == [26_666, 1]
 
 
-def test_batch_write_overwrite_uses_batch_write_after_partitioned_dml(batch_write_driver: SpannerSyncDriver) -> None:
+def test_batch_write_overwrite_uses_transactional_mutations(batch_write_driver: SpannerSyncDriver) -> None:
     conn = cast("_FakeBatchTransaction", batch_write_driver.connection)
     batch_write_driver.load_from_arrow("users", pa.table({"id": [1]}), overwrite=True)
 
-    assert (
-        conn.database.partitioned_dml_calls and "DELETE FROM users WHERE TRUE" in conn.database.partitioned_dml_calls[0]
-    )
-    assert conn.insert_or_update_calls == []
-    assert conn.database.mutation_groups_obj.batch_write_calls == 1
-    assert conn.database.mutation_groups_obj.groups[0].calls == [("users", ["id"], [[1]])]
+    assert conn.execute_update_calls and "DELETE FROM users WHERE TRUE" in conn.execute_update_calls[0]
+    assert conn.insert_or_update_calls == [("users", ["id"], [[1]])]
+    assert conn.database.mutation_groups_obj.batch_write_calls == 0

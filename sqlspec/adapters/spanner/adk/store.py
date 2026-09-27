@@ -9,9 +9,8 @@ from typing_extensions import NotRequired, TypedDict
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
-from sqlspec.adapters.spanner.core import _unwrap_spanner_json_object
 from sqlspec.config import ADKConfig
-from sqlspec.core import TypedParameter
+from sqlspec.exceptions import OperationalError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
@@ -21,6 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.spanner._typing import SpannerDatabase as Database
+    from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
@@ -225,9 +225,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        with self._config.provide_session(transaction=True) as driver:
-            for sql, params, types in statements:
-                driver.execute(sql, _prepare_spanner_write_params(params, types))
+        self._database().run_in_transaction(_SpannerWriteJob(statements))  # type: ignore[no-untyped-call]
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
@@ -267,30 +265,22 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         return {"key": SPANNER_PARAM_TYPES.STRING, "value": SPANNER_PARAM_TYPES.STRING}
 
     def _decode_state(self, raw: Any) -> Any:
-        if raw is None:
-            return None
         if isinstance(raw, str):
-            try:
-                return from_json(raw)
-            except Exception:
-                return raw
-        return _unwrap_spanner_json_object(raw)
+            return from_json(raw)
+        return raw
 
     def _decode_json(self, raw: Any) -> Any:
         if raw is None:
             return None
         if isinstance(raw, str):
-            try:
-                return from_json(raw)
-            except Exception:
-                return raw
-        return _unwrap_spanner_json_object(raw)
+            return from_json(raw)
+        return raw
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
-        state_payload = _to_spanner_json_payload(state)
-        params: dict[str, Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_payload}
+        state_json = to_json(state)
+        params: dict[str, Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json}
         columns = "id, app_name, user_id, state, create_time, update_time"
         values = "@id, @app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP()"
         if self._owner_id_column_name:
@@ -372,7 +362,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         return record
 
     def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
-        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": _to_spanner_json_payload(state)}
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": to_json(state)}
         json_type = _json_param_type()
         sql = f"""
             UPDATE {self._session_table}
@@ -450,18 +440,13 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         )
         delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = @session_id{shard_clause}"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = @app_name AND user_id = @user_id AND id = @session_id{shard_clause}"
-        delete_events_params = {"session_id": session_id}
-        delete_events_types = {"session_id": SPANNER_PARAM_TYPES.STRING}
-        delete_session_params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
-        delete_session_types = {
+        params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
+        types = {
             "app_name": SPANNER_PARAM_TYPES.STRING,
             "user_id": SPANNER_PARAM_TYPES.STRING,
             "session_id": SPANNER_PARAM_TYPES.STRING,
         }
-        self._run_write([
-            (delete_events_sql, delete_events_params, delete_events_types),
-            (delete_session_sql, delete_session_params, delete_session_types),
-        ])
+        self._run_write([(delete_events_sql, params, types), (delete_session_sql, params, types)])
 
     def _append_event_and_update_state(
         self,
@@ -498,7 +483,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
             "timestamp": event_record["timestamp"],
-            "event_data": _to_spanner_json_payload(event_record["event_data"]),
+            "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -510,7 +495,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "app_name": app_name,
             "user_id": user_id,
             "id": session_id,
-            "state": _to_spanner_json_payload(state),
+            "state": to_json(state),
         }
         update_sql = f"""
             UPDATE {self._session_table}
@@ -539,7 +524,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
                 INSERT OR UPDATE {self._app_state_table} (app_name, state, update_time)
                 VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
                 """,
-                {"app_name": app_name, "state": _to_spanner_json_payload(app_state)},
+                {"app_name": app_name, "state": to_json(app_state)},
                 self._app_state_param_types(),
             ))
         if user_state is not None:
@@ -548,7 +533,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
                 INSERT OR UPDATE {self._user_state_table} (app_name, user_id, state, update_time)
                 VALUES (@app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP())
                 """,
-                {"app_name": app_name, "user_id": user_id, "state": _to_spanner_json_payload(user_state)},
+                {"app_name": app_name, "user_id": user_id, "state": to_json(user_state)},
                 self._user_state_param_types(),
             ))
 
@@ -568,7 +553,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
             "timestamp": event_record["timestamp"],
-            "event_data": _to_spanner_json_payload(event_record["event_data"]),
+            "event_data": to_json(event_record["event_data"]),
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -631,32 +616,32 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < @before"
         params: dict[str, Any] = {"before": before}
+        types: dict[str, Any] = {"before": SPANNER_PARAM_TYPES.TIMESTAMP}
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        with self._config.provide_session(transaction=True) as driver:
-            result = driver.execute(sql, params)
-            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._session_table} WHERE update_time < @updated_before"
         params: dict[str, Any] = {"updated_before": updated_before}
+        types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        with self._config.provide_session(transaction=True) as driver:
-            result = driver.execute(sql, params)
-            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
 
     def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._user_state_table} WHERE update_time < @updated_before"
         params: dict[str, Any] = {"updated_before": updated_before}
+        types: dict[str, Any] = {"updated_before": SPANNER_PARAM_TYPES.TIMESTAMP}
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        with self._config.provide_session(transaction=True) as driver:
-            result = driver.execute(sql, params)
-            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
+            types["app_name"] = SPANNER_PARAM_TYPES.STRING
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = @app_name LIMIT 1"
@@ -686,9 +671,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             INSERT OR UPDATE {self._app_state_table} (app_name, state, update_time)
             VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
         """
-        self._run_write([
-            (sql, {"app_name": app_name, "state": _to_spanner_json_payload(state)}, self._app_state_param_types())
-        ])
+        self._run_write([(sql, {"app_name": app_name, "state": to_json(state)}, self._app_state_param_types())])
 
     def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         sql = f"""
@@ -696,11 +679,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             VALUES (@app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP())
         """
         self._run_write([
-            (
-                sql,
-                {"app_name": app_name, "user_id": user_id, "state": _to_spanner_json_payload(state)},
-                self._user_state_param_types(),
-            )
+            (sql, {"app_name": app_name, "user_id": user_id, "state": to_json(state)}, self._user_state_param_types())
         ])
 
     def _get_metadata(self, key: str) -> "str | None":
@@ -900,14 +879,10 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        with self._config.provide_session(transaction=True) as driver:
-            for sql, params, types in statements:
-                driver.execute(sql, _prepare_spanner_write_params(params, types))
+        self._database().run_in_transaction(_SpannerMemoryWriteJob(statements))  # type: ignore[no-untyped-call]
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        with self._config.provide_session(transaction=True) as driver:
-            result = driver.execute(sql, _prepare_spanner_write_params(params, types))
-            return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
+        return int(self._database().run_in_transaction(_SpannerMemoryUpdateJob(sql, params, types)))  # type: ignore[no-untyped-call]
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {
@@ -932,11 +907,8 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
         if raw is None:
             return None
         if isinstance(raw, str):
-            try:
-                return from_json(raw)
-            except Exception:
-                return raw
-        return _unwrap_spanner_json_object(raw)
+            return from_json(raw)
+        return raw
 
     def _create_tables(self) -> None:
         if not self._enabled:
@@ -1169,53 +1141,6 @@ CREATE TABLE {self._memory_table} (
         ]
 
 
-def _prepare_spanner_write_params(params: "dict[str, Any]", types: "dict[str, Any] | None") -> "dict[str, Any]":
-    """Prepare ADK write parameters for Spanner driver execution."""
-    if not types:
-        return params
-    json_type = _json_param_type()
-    changed = False
-    prepared: dict[str, Any] = {}
-    for key, value in params.items():
-        param_type = types.get(key)
-        if param_type == json_type:
-            if value is None:
-                prepared[key] = TypedParameter(None, dict)
-                changed = True
-            elif isinstance(value, (str, bytes)):
-                prepared[key] = _to_spanner_json_payload(value)
-                changed = True
-            else:
-                prepared[key] = value
-        elif value is None and param_type is not None:
-            if param_type == SPANNER_PARAM_TYPES.STRING:
-                prepared[key] = TypedParameter(None, str)
-                changed = True
-            elif param_type == SPANNER_PARAM_TYPES.TIMESTAMP:
-                prepared[key] = TypedParameter(None, datetime)
-                changed = True
-            elif param_type == SPANNER_PARAM_TYPES.INT64:
-                prepared[key] = TypedParameter(None, int)
-                changed = True
-            else:
-                prepared[key] = value
-        else:
-            prepared[key] = value
-    return prepared if changed else params
-
-
-def _to_spanner_json_payload(value: Any) -> Any:
-    """Prepare a value for Spanner JSON column parameter binding."""
-    if value is None:
-        return None
-    if isinstance(value, (str, bytes)):
-        try:
-            return from_json(value)
-        except Exception:
-            return value
-    return value
-
-
 def _json_param_type() -> Any:
     try:
         return SPANNER_PARAM_TYPES.JSON
@@ -1282,6 +1207,64 @@ def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -
         if index_name.startswith(f"idx_{table_name}_"):
             return table_name
     return None
+
+
+class _SpannerWriteJob:
+    __slots__ = ("_statements",)
+
+    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
+        self._statements = statements
+
+    def __call__(self, transaction: "Transaction") -> None:
+        if len(self._statements) > 1:
+            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
+            if status.code != 0:
+                msg = f"Spanner batch update failed (code {status.code}): {status.message}"
+                raise OperationalError(msg)
+            return
+        for sql, params, types in self._statements:
+            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerMemoryWriteJob:
+    __slots__ = ("_statements",)
+
+    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
+        self._statements = statements
+
+    def __call__(self, transaction: "Transaction") -> None:
+        if len(self._statements) > 1:
+            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
+            if status.code != 0:
+                msg = f"Spanner batch update failed (code {status.code}): {status.message}"
+                raise OperationalError(msg)
+            return
+        for sql, params, types in self._statements:
+            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+
+
+class _SpannerUpdateJob:
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: "Transaction") -> int:
+        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
+
+
+class _SpannerMemoryUpdateJob:
+    __slots__ = ("_params", "_sql", "_types")
+
+    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
+        self._sql = sql
+        self._params = params
+        self._types = types
+
+    def __call__(self, transaction: "Transaction") -> int:
+        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
 
 
 class _SpannerReadProtocol(Protocol):

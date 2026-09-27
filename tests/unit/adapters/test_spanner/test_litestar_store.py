@@ -1,72 +1,70 @@
-from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from sqlspec.adapters.spanner.litestar import SpannerSyncStore
-from sqlspec.adapters.spanner.type_converter import bytes_to_spanner
 
 
-def test_set_uses_session() -> None:
-    """Verify _set uses config.provide_session(transaction=True) for write operations."""
-    driver = MagicMock()
-    driver.execute.return_value = MagicMock(rows_affected=1)
-    cm = _context_manager_yielding(driver)
-
-    config = MagicMock()
-    config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_session.return_value = cm
-
-    store = SpannerSyncStore(config)
-    store._set("s1", b"data", None)
-
-    config.provide_session.assert_called_once_with(transaction=True)
+def _mock_database() -> MagicMock:
+    """Create a mock database that captures run_in_transaction calls."""
+    db = MagicMock()
+    db.run_in_transaction = MagicMock(side_effect=lambda func: func(MagicMock()))
+    return db
 
 
-def test_delete_uses_session() -> None:
-    """Verify _delete uses config.provide_session(transaction=True) for write operations."""
-    driver = MagicMock()
-    cm = _context_manager_yielding(driver)
+def test_set_uses_run_in_transaction() -> None:
+    """Verify _set uses database.run_in_transaction for write operations."""
+    mock_db = _mock_database()
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_session.return_value = cm
+    config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
-    store._delete("s1")
+    store._set("s1", b"data", None)  # pyright: ignore
 
-    config.provide_session.assert_called_once_with(transaction=True)
+    mock_db.run_in_transaction.assert_called_once()
 
 
-def test_delete_all_uses_session() -> None:
-    """Verify _delete_all uses config.provide_session(transaction=True) for write operations."""
-    driver = MagicMock()
-    cm = _context_manager_yielding(driver)
+def test_delete_uses_run_in_transaction() -> None:
+    """Verify _delete uses database.run_in_transaction for write operations."""
+    mock_db = _mock_database()
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_session.return_value = cm
+    config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
-    store._delete_all()
+    store._delete("s1")  # pyright: ignore
 
-    config.provide_session.assert_called_once_with(transaction=True)
+    mock_db.run_in_transaction.assert_called_once()
 
 
-def test_delete_expired_uses_session() -> None:
-    """Verify _delete_expired uses config.provide_session(transaction=True) for write operations."""
-    driver = MagicMock()
-    driver.execute.return_value = MagicMock(rows_affected=3)
-    cm = _context_manager_yielding(driver)
+def test_delete_all_uses_run_in_transaction() -> None:
+    """Verify _delete_all uses database.run_in_transaction for write operations."""
+    mock_db = _mock_database()
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_session.return_value = cm
+    config.get_database.return_value = mock_db
 
     store = SpannerSyncStore(config)
-    result = store._delete_expired()
+    store._delete_all()  # pyright: ignore
 
-    config.provide_session.assert_called_once_with(transaction=True)
-    assert result == 3
+    mock_db.run_in_transaction.assert_called_once()
+
+
+def test_delete_expired_uses_run_in_transaction() -> None:
+    """Verify _delete_expired uses database.run_in_transaction for write operations."""
+    mock_db = _mock_database()
+
+    config = MagicMock()
+    config.extension_config = {"litestar": {"session_table": "sess"}}
+    config.get_database.return_value = mock_db
+
+    store = SpannerSyncStore(config)
+    store._delete_expired()  # pyright: ignore
+
+    mock_db.run_in_transaction.assert_called_once()
 
 
 def _context_manager_yielding(value: Any) -> Any:
@@ -91,30 +89,10 @@ def test_get_uses_snapshot_session() -> None:
     config.provide_session.return_value = cm
 
     store = SpannerSyncStore(config)
-    result = store._get("s1")
+    result = store._get("s1")  # pyright: ignore
 
     config.provide_session.assert_called_once_with()
     assert result is None
-
-
-def test_get_renewal_uses_transaction_session() -> None:
-    """Verify _get token renewal uses provide_session(transaction=True) for the UPDATE."""
-    driver = MagicMock()
-    driver.select_one_or_none.return_value = {
-        "data": bytes_to_spanner(b"val"),
-        "expires_at": datetime(2030, 1, 1, tzinfo=timezone.utc),
-    }
-    cm = _context_manager_yielding(driver)
-
-    config = MagicMock()
-    config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_session.return_value = cm
-
-    store = SpannerSyncStore(config)
-    result = store._get("s1", renew_for=60)
-
-    assert result == b"val"
-    assert config.provide_session.call_args_list == [call(), call(transaction=True)]
 
 
 def test_exists_uses_snapshot_session() -> None:
@@ -128,7 +106,7 @@ def test_exists_uses_snapshot_session() -> None:
     config.provide_session.return_value = cm
 
     store = SpannerSyncStore(config)
-    result = store._exists("s1")
+    result = store._exists("s1")  # pyright: ignore
 
     config.provide_session.assert_called_once_with()
     assert result is True

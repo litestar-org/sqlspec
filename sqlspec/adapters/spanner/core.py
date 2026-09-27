@@ -333,15 +333,10 @@ def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], A
     if isinstance(value, JsonObject):
         if json_deserializer is from_json:
             return _unwrap_spanner_json_object(value)
-        if getattr(value, "_is_null", False):
-            return None
         try:
-            serialized = cast("Any", value).serialize()
-            if serialized is None:
-                return None
-            return json_deserializer(serialized)
+            return json_deserializer(cast("Any", value).serialize())
         except (TypeError, ValueError):
-            return _unwrap_spanner_json_object(value)
+            return value
     elif isinstance(value, str):
         try:
             return json_deserializer(value)

@@ -1,7 +1,6 @@
 """Spanner load_from_arrow mutations transport (insert_or_update)."""
 
 from typing import Any, cast
-from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
@@ -23,8 +22,6 @@ class _FakeTransaction:
         self.insert_or_update_calls: list[tuple[str, list[str], list[list[Any]]]] = []
         self.execute_update_calls: list[str] = []
         self.committed = None
-        self._database = MagicMock()
-        self._database.execute_partitioned_dml.return_value = 0
 
     def insert_or_update(self, table: str, columns: Any, values: Any) -> None:
         self.insert_or_update_calls.append((table, list(columns), [list(v) for v in values]))
@@ -73,9 +70,8 @@ def test_load_from_arrow_overwrite_deletes_then_mutates(mutations_driver: Spanne
 
     mutations_driver.load_from_arrow("users", arrow_table, overwrite=True)
 
-    txn._database.execute_partitioned_dml.assert_called_once()
-    sql = txn._database.execute_partitioned_dml.call_args[0][0]
-    assert "DELETE FROM users WHERE TRUE" in sql
+    assert txn.execute_update_calls
+    assert "DELETE FROM users WHERE TRUE" in txn.execute_update_calls[0]
     assert len(txn.insert_or_update_calls) == 1
 
 
