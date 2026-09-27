@@ -21,6 +21,7 @@ from sqlspec.adapters.pymssql.core import (
     default_statement_config,
     driver_profile,
     format_identifier,
+    is_plain_values_insert,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
     quote_tsql_identifier,
@@ -30,7 +31,6 @@ from sqlspec.adapters.pymssql.core import (
 )
 from sqlspec.adapters.pymssql.data_dictionary import PymssqlSyncDataDictionary
 from sqlspec.core import SQL, ArrowResult, StatementConfig, get_cache_config, register_driver_profile
-from sqlspec.core.result import DMLResult, SQLResult
 from sqlspec.driver import (
     BaseSyncExceptionHandler,
     ExecutionResult,
@@ -45,10 +45,6 @@ from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from pymssql._pymssql import QueryParams
-
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import Statement, StatementFilter
-    from sqlspec.typing import StatementParameters
 
 __all__ = ("PymssqlCursor", "PymssqlDriver", "PymssqlExceptionHandler", "PymssqlSessionContext")
 
@@ -144,15 +140,6 @@ class PymssqlDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config.replace(
                 enable_caching=get_cache_config().compiled_cache_enabled
             )
-        if driver_features is None or "storage_capabilities" not in driver_features:
-            driver_features = dict(driver_features) if driver_features else {}
-            driver_features["storage_capabilities"] = {
-                "arrow_export_enabled": False,
-                "arrow_import_enabled": True,
-                "parquet_export_enabled": False,
-                "parquet_import_enabled": False,
-                "partition_strategies": [],
-            }
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PymssqlSyncDataDictionary | None = None
@@ -181,7 +168,16 @@ class PymssqlDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: PymssqlRawCursor, statement: SQL) -> ExecutionResult:
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        cached_statement, prepared_parameters = self._compiled_statement(statement, self.statement_config)
+        sql = cached_statement.compiled_sql
+        parsed_expression = cached_statement.expression
+        if parsed_expression is None and statement.raw_sql.lstrip().upper().startswith("INSERT"):
+            with contextlib.suppress(Exception):
+                parsed_expression = sqlglot.parse_one(statement.raw_sql, read="tsql")
+        if isinstance(parsed_expression, exp.Insert):
+            bulk_result = self._execute_bulk_insert_many(cursor, parsed_expression, prepared_parameters)
+            if bulk_result is not None:
+                return bulk_result
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
@@ -312,70 +308,51 @@ class PymssqlDriver(SyncDriverAdapterBase):
             self._data_dictionary = PymssqlSyncDataDictionary()
         return self._data_dictionary
 
-    def execute_many(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        /,
-        parameters: "Sequence[StatementParameters]",
-        *filters: "StatementParameters | StatementFilter",
-        statement_config: StatementConfig | None = None,
-        **kwargs: Any,
-    ) -> SQLResult:
-        """Execute a statement across parameter sets with multi-row batching."""
-        config = statement_config or self.statement_config
-        if isinstance(statement, str) and not filters and not kwargs and config is self.statement_config:
-            prepared_statement = SQL(
-                statement,
-                tuple(parameters) if isinstance(parameters, list) else parameters,
-                statement_config=config,
-                is_many=True,
-            )
-            cached_statement, prepared_parameters = self._compiled_statement(prepared_statement, config)
-            parsed_expression = cached_statement.expression
-            if parsed_expression is None and statement.lstrip().upper().startswith("INSERT"):
-                with contextlib.suppress(Exception):
-                    parsed_expression = sqlglot.parse_one(statement, read="tsql")
-            if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
-                bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
-                if bulk_result is not None:
-                    return bulk_result
-        return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
-
-    def _execute_bulk_insert_many(self, expression: exp.Insert, prepared_parameters: Any) -> DMLResult | None:
+    def _execute_bulk_insert_many(
+        self, cursor: PymssqlRawCursor, expression: exp.Insert, prepared_parameters: Any
+    ) -> ExecutionResult | None:
         """Execute a batch INSERT via multi-row VALUES chunking up to 1,000 rows."""
         if not isinstance(prepared_parameters, (list, tuple)) or not prepared_parameters:
             return None
-        if not isinstance(expression.this, exp.Schema):
-            return None
-        if not _is_plain_values_insert(expression, len(expression.this.expressions)):
-            return None
-        if not isinstance(prepared_parameters[0], (list, tuple)):
+        first_row = prepared_parameters[0]
+        if not isinstance(first_row, (list, tuple)) or not first_row:
             return None
 
-        table_expr = expression.this.this
+        target = expression.this
+        if isinstance(target, exp.Schema):
+            table_expr = target.this
+            column_names = [column.name for column in target.expressions]
+        elif isinstance(target, exp.Table):
+            table_expr = target
+            column_names = []
+        else:
+            return None
+
         if not isinstance(table_expr, exp.Table) or table_expr.alias:
             return None
 
-        column_names = [column.name for column in expression.this.expressions]
+        expected_columns = len(column_names) if column_names else len(first_row)
+        if expected_columns <= 0 or not is_plain_values_insert(expression, expected_columns):
+            return None
+
         target_table = table_expr.sql(dialect="tsql")
         rows = prepared_parameters
         total_affected = 0
-        chunk_size = 1000
+        chunk_size = max(1, min(1000, 2000 // expected_columns))
 
-        handler = self.handle_database_exceptions()
-        with handler, self.with_cursor(self.connection) as cursor:
-            for i in range(0, len(rows), chunk_size):
-                chunk = rows[i : i + chunk_size]
-                chunk_sql = build_multi_row_insert(target_table, column_names, len(chunk))
-                flat_params: list[Any] = []
-                for row in chunk:
-                    flat_params.extend(row)
-                cursor.execute(chunk_sql, tuple(flat_params))
-                total_affected += len(chunk)
-        self._check_pending_exception(handler)
-        return DMLResult("INSERT", total_affected)
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i : i + chunk_size]
+            chunk_sql = build_multi_row_insert(target_table, column_names, len(chunk), num_columns=expected_columns)
+            flat_params: list[Any] = []
+            for row in chunk:
+                flat_params.extend(row)
+            cursor.execute(chunk_sql, tuple(flat_params))
+            rowcount = resolve_rowcount(cursor)
+            total_affected += rowcount if rowcount > 0 else len(chunk)
 
-    def bulk_copy(
+        return self.create_execution_result(cursor, rowcount_override=total_affected, is_many_result=True)
+
+    def _bulk_copy(
         self,
         table_name: str,
         rows: Sequence[Sequence[Any]] | Iterable[Sequence[Any]],
@@ -453,7 +430,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
             for batch in arrow_table.to_batches():
                 pydict = batch.to_pydict()
                 rows = list(zip(*pydict.values(), strict=False))
-                self.bulk_copy(
+                self._bulk_copy(
                     table,
                     rows,
                     column_ids=column_ids,
@@ -487,19 +464,6 @@ class PymssqlDriver(SyncDriverAdapterBase):
     def _connection_in_transaction(self) -> bool:
         """Return whether a transaction opened by this driver remains active."""
         return self._transaction_active
-
-
-def _is_plain_values_insert(expression: exp.Insert, expected_columns: int) -> bool:
-    values = expression.expression
-    if not isinstance(values, exp.Values):
-        return False
-    rows = values.expressions
-    if len(rows) != 1:
-        return False
-    row = rows[0]
-    if not isinstance(row, exp.Tuple):
-        return False
-    return len(row.expressions) == expected_columns
 
 
 def _alter_default_schema_sql(user_name: str, schema: str) -> str:

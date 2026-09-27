@@ -4,7 +4,9 @@ from typing import get_type_hints
 
 import pytest
 
+from sqlspec.adapters.pymssql import PymssqlConnection as PublicPymssqlConnection
 from sqlspec.adapters.pymssql import build_connection_config
+from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor, pymssql_module
 from sqlspec.adapters.pymssql.config import PymssqlConfig, PymssqlConnectionParams
 from sqlspec.adapters.pymssql.driver import PymssqlDriver
 from sqlspec.adapters.pymssql.pool import PymssqlConnectionPool
@@ -121,8 +123,6 @@ def test_signature_namespace_exposes_public_adapter_types() -> None:
 def test_pymssql_runtime_aliases_resolve_to_installed_classes() -> None:
     """pymssql public runtime aliases should expose installed pymssql classes."""
     pymssql = pytest.importorskip("pymssql")
-    from sqlspec.adapters.pymssql import PymssqlConnection as PublicPymssqlConnection
-    from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor, pymssql_module
 
     namespace = PymssqlConfig().get_signature_namespace()
 

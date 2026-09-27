@@ -2,7 +2,9 @@
 
 from typing import Any, cast
 
+from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo as MssqlPythonVersionInfo
 from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo, PymssqlSyncDataDictionary
+from sqlspec.data_dictionary.dialects.mssql import MssqlVersionInfo as DialectMssqlVersionInfo
 
 
 class FakeSyncDriver:
@@ -144,13 +146,23 @@ def test_mssql_version_info_supports_vector() -> None:
 
 def test_data_dictionary_vector_feature_flag_and_optimal_type() -> None:
     """Sync data dictionary resolves supports_vector and optimal type for vector."""
+    assert MssqlVersionInfo is MssqlPythonVersionInfo
+    assert MssqlVersionInfo is DialectMssqlVersionInfo
 
     class VectorDriver:
         def select_one_or_none(self, _statement: Any, **_kwargs: Any) -> dict[str, Any]:
             return {"product_version": "17.0.1000.1", "edition": "Enterprise Edition", "engine_edition": 3}
 
+    class NonVectorDriver:
+        def select_one_or_none(self, _statement: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {"product_version": "16.0.1000.1", "edition": "Enterprise Edition", "engine_edition": 3}
+
     data_dictionary = PymssqlSyncDataDictionary()
     driver = VectorDriver()
+    old_driver = NonVectorDriver()
 
+    assert "supports_vector" in data_dictionary.list_available_features()
     assert data_dictionary.get_feature_flag(cast(Any, driver), "supports_vector") is True
     assert data_dictionary.get_optimal_type(cast(Any, driver), "vector") == "VECTOR"
+    assert data_dictionary.get_feature_flag(cast(Any, old_driver), "supports_vector") is False
+    assert data_dictionary.get_optimal_type(cast(Any, old_driver), "vector") == "VARBINARY(MAX)"

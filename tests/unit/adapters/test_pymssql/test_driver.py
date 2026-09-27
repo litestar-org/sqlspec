@@ -2,11 +2,14 @@
 
 from typing import Any, cast
 
+import pyarrow as pa
 import pytest
 from pymssql import IntegrityError as PymssqlIntegrityError
 
 from sqlspec import StatementStack
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlRawCursor
+from sqlspec.adapters.pymssql.core import default_statement_config
+from sqlspec.adapters.pymssql.driver import PymssqlDriver, PymssqlExceptionHandler
 from sqlspec.core import SQL
 from sqlspec.exceptions import SQLSpecError, StackExecutionError, TransactionError, UniqueViolationError
 from tests.unit.adapters.test_pymssql._fakes import FakeConnection, FakeCursor
@@ -29,8 +32,6 @@ UNSAFE_SAVEPOINT_NAMES = ["1; DROP TABLE users", "sp-1", "sp 1", "", '"sp"']
 def test_execute_maps_pymssql_row_formats(
     rows: list[tuple[int, str] | dict[str, int | str]], expected: list[dict[str, int | str]]
 ) -> None:
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor(rows=rows, description=[("id",), ("name",)])
     driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)))
 
@@ -44,8 +45,6 @@ def test_execute_maps_pymssql_row_formats(
 @pytest.mark.parametrize("bad_name", UNSAFE_SAVEPOINT_NAMES)
 def test_pymssql_savepoint_overrides_reject_unsafe_names(bad_name: str) -> None:
     """The T-SQL savepoint overrides must reject unsafe identifiers before interpolation."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection()))
 
     with pytest.raises(TransactionError):
@@ -58,8 +57,6 @@ def test_pymssql_savepoint_overrides_reject_unsafe_names(bad_name: str) -> None:
 
 def test_pymssql_savepoint_overrides_accept_valid_name() -> None:
     """A safe savepoint name should pass validation and reach the underlying execute path."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
     driver = PymssqlDriver(cast("PymssqlConnection", connection))
@@ -74,9 +71,6 @@ def test_pymssql_savepoint_overrides_accept_valid_name() -> None:
 
 def test_dispatch_execute_select_compiles_to_pyformat_and_collects_rows() -> None:
     """SELECT dispatch should execute pyformat SQL and return fetched rows."""
-    from sqlspec.adapters.pymssql.core import default_statement_config
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor(rows=[(1, "Ada")], description=[("id",), ("name",)])
     driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)), statement_config=default_statement_config)
     statement = SQL("SELECT id, name FROM dbo.users WHERE id = ?", 1, statement_config=default_statement_config)
@@ -90,19 +84,19 @@ def test_dispatch_execute_select_compiles_to_pyformat_and_collects_rows() -> Non
 
 
 def test_dispatch_execute_many_uses_executemany_and_rowcount() -> None:
-    """execute_many dispatch should forward batch parameters to pymssql."""
-    from sqlspec.adapters.pymssql.core import default_statement_config
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
+    """execute_many dispatch should forward non-plain-INSERT batch parameters to pymssql executemany."""
     cursor = FakeCursor(rowcount=2)
     driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)), statement_config=default_statement_config)
     statement = SQL(
-        "INSERT INTO dbo.users (id) VALUES (?)", [(1,), (2,)], statement_config=default_statement_config, is_many=True
+        "UPDATE dbo.users SET name = ? WHERE id = ?",
+        [("Ada", 1), ("Grace", 2)],
+        statement_config=default_statement_config,
+        is_many=True,
     )
 
     result = driver.dispatch_execute_many(cast("PymssqlRawCursor", cursor), statement)
 
-    assert cursor.many_calls == [("INSERT INTO dbo.users (id) VALUES (%s)", [(1,), (2,)])]
+    assert cursor.many_calls == [("UPDATE dbo.users SET name = %s WHERE id = %s", [("Ada", 1), ("Grace", 2)])]
     assert result.rowcount_override == 2
     assert result.is_many_result is True
 
@@ -110,8 +104,6 @@ def test_dispatch_execute_many_uses_executemany_and_rowcount() -> None:
 @pytest.mark.parametrize("finish", ["commit", "rollback"])
 def test_autocommit_transaction_is_ended_with_tsql(finish: str) -> None:
     """pymssql ignores commit() and rollback() under autocommit, so the driver ends its own transaction."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
     driver = PymssqlDriver(cast("PymssqlConnection", connection))
@@ -127,8 +119,6 @@ def test_autocommit_transaction_is_ended_with_tsql(finish: str) -> None:
 @pytest.mark.parametrize("finish", ["commit", "rollback"])
 def test_non_autocommit_transaction_uses_connection_boundaries(finish: str) -> None:
     """Without autocommit, pymssql's connection commit() and rollback() end the open transaction."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
     connection.autocommit(False)
@@ -143,8 +133,6 @@ def test_non_autocommit_transaction_uses_connection_boundaries(finish: str) -> N
 
 def test_begin_reuses_the_open_transaction_without_autocommit() -> None:
     """A connection with autocommit disabled already holds a transaction, so begin issues no SQL."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
     connection.autocommit(False)
@@ -160,8 +148,6 @@ def test_begin_reuses_the_open_transaction_without_autocommit() -> None:
 
 def test_exception_handler_maps_pymssql_errors() -> None:
     """pymssql exception handlers should surface mapped SQLSpec exceptions."""
-    from sqlspec.adapters.pymssql.driver import PymssqlExceptionHandler
-
     handler = PymssqlExceptionHandler()
 
     handled = handler._handle_exception(
@@ -174,7 +160,6 @@ def test_exception_handler_maps_pymssql_errors() -> None:
 
 def test_commit_wraps_driver_errors() -> None:
     """Commit failures should be wrapped in SQLSpecError."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
     class FailingConnection(FakeConnection):
         def commit(self) -> None:
@@ -188,8 +173,6 @@ def test_commit_wraps_driver_errors() -> None:
 
 def test_collect_rows_returns_column_names() -> None:
     """The direct row collection hook should match SyncDriverAdapterBase expectations."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor(description=[("id",), ("name",)])
     driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)))
 
@@ -202,8 +185,6 @@ def test_collect_rows_returns_column_names() -> None:
 
 def test_select_stream_uses_fetchmany_chunks() -> None:
     """The pymssql driver should stream rows with cursor.fetchmany()."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor(rows=[(1, "Ada"), (2, "Grace"), (3, "Linus")], description=[("id",), ("name",)])
     driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)))
 
@@ -218,8 +199,6 @@ def test_select_stream_uses_fetchmany_chunks() -> None:
 
 @pytest.mark.parametrize("finish", ["commit", "rollback"])
 def test_connection_in_transaction_tracks_successful_boundaries(finish: str) -> None:
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection()))
     assert driver._connection_in_transaction() is False
     driver.begin()
@@ -230,8 +209,6 @@ def test_connection_in_transaction_tracks_successful_boundaries(finish: str) -> 
 
 @pytest.mark.parametrize("operation", ["begin", "commit", "rollback"])
 def test_failed_transaction_boundary_preserves_state(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     connection = FakeConnection()
     driver = PymssqlDriver(cast("PymssqlConnection", connection))
     if operation != "begin":
@@ -250,8 +227,6 @@ def test_failed_transaction_boundary_preserves_state(operation: str, monkeypatch
 
 @pytest.mark.parametrize("fails", [False, True])
 def test_execute_stack_preserves_caller_transaction(fails: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     connection = FakeConnection(FakeCursor(rowcount=1))
     driver = PymssqlDriver(cast("PymssqlConnection", connection))
     driver.begin()
@@ -281,13 +256,11 @@ def test_execute_stack_preserves_caller_transaction(fails: bool, monkeypatch: py
 
 
 def test_driver_bulk_copy_forwards_options() -> None:
-    """bulk_copy forwards batch options to underlying connection."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
+    """_bulk_copy forwards batch options to underlying connection."""
     connection = FakeConnection()
     driver = PymssqlDriver(cast("PymssqlConnection", connection))
 
-    result = driver.bulk_copy(
+    result = driver._bulk_copy(
         "dbo.users",
         [(1, "Ada"), (2, "Grace")],
         column_ids=[1, 2],
@@ -310,13 +283,11 @@ def test_driver_bulk_copy_forwards_options() -> None:
 
 
 def test_load_from_arrow_bulk_copies_batches() -> None:
-    """load_from_arrow processes Arrow table in batches via bulk_copy."""
-    import pyarrow as pa
-
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
+    """load_from_arrow processes Arrow table in batches via _bulk_copy."""
     connection = FakeConnection()
-    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+    driver = PymssqlDriver(
+        cast("PymssqlConnection", connection), driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
     table = pa.table({"id": [1, 2], "name": ["Ada", "Grace"]})
 
     job = driver.load_from_arrow("dbo.users", table, batch_size=500)
@@ -327,13 +298,11 @@ def test_load_from_arrow_bulk_copies_batches() -> None:
 
 def test_load_from_arrow_overwrite_truncates_first() -> None:
     """load_from_arrow with overwrite=True executes TRUNCATE TABLE."""
-    import pyarrow as pa
-
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
-    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+    driver = PymssqlDriver(
+        cast("PymssqlConnection", connection), driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
     table = pa.table({"id": [1], "name": ["Ada"]})
 
     driver.load_from_arrow("dbo.users", table, overwrite=True)
@@ -344,16 +313,15 @@ def test_load_from_arrow_overwrite_truncates_first() -> None:
 
 def test_load_from_arrow_overwrite_falls_back_on_fk_error() -> None:
     """load_from_arrow falls back to DELETE FROM when error 4712 is encountered."""
-    import pyarrow as pa
-
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
     class FkError(Exception):
         number = 4712
 
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
-    driver = PymssqlDriver(cast("PymssqlConnection", connection))
+    driver = PymssqlDriver(
+        cast("PymssqlConnection", connection), driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
 
     def execute_with_fk(sql: str, *args: Any) -> None:
         cursor.calls.append((sql, args))
@@ -371,9 +339,7 @@ def test_load_from_arrow_overwrite_falls_back_on_fk_error() -> None:
 
 
 def test_execute_many_plain_values_chunks_into_multi_row_insert() -> None:
-    """execute_many with plain VALUES uses multi-row INSERT."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
+    """execute_many with plain VALUES uses multi-row INSERT for both str and SQL objects."""
     cursor = FakeCursor(rowcount=3)
     connection = FakeConnection(cursor)
     driver = PymssqlDriver(cast("PymssqlConnection", connection))
@@ -386,11 +352,15 @@ def test_execute_many_plain_values_chunks_into_multi_row_insert() -> None:
     assert len(executed_sqls) == 1
     assert "VALUES (%s, %s), (%s, %s), (%s, %s)" in executed_sqls[0]
 
+    cursor.calls.clear()
+    sql_obj_result = driver.execute_many(SQL("INSERT INTO dbo.users VALUES (?, ?)"), params)
+    assert sql_obj_result.rows_affected == 3
+    assert len(cursor.calls) == 1
+    assert "INSERT INTO [dbo].[users] VALUES (%s, %s), (%s, %s), (%s, %s)" in cursor.calls[0][0]
+
 
 def test_execute_many_non_plain_values_uses_standard_executemany() -> None:
     """execute_many with non-plain SQL uses cursor.executemany."""
-    from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
     cursor = FakeCursor(rowcount=2)
     connection = FakeConnection(cursor)
     driver = PymssqlDriver(cast("PymssqlConnection", connection))

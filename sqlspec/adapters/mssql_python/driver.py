@@ -49,13 +49,7 @@ if TYPE_CHECKING:
     from sqlspec.core import Statement, StatementFilter
     from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
-__all__ = (
-    "MssqlPythonBulkCopyResult",
-    "MssqlPythonCursor",
-    "MssqlPythonDriver",
-    "MssqlPythonExceptionHandler",
-    "MssqlPythonSessionContext",
-)
+__all__ = ("MssqlPythonCursor", "MssqlPythonDriver", "MssqlPythonExceptionHandler", "MssqlPythonSessionContext")
 
 logger = get_logger("sqlspec.adapters.mssql_python")
 _COLUMN_CACHE_MAX_SIZE = 256
@@ -371,7 +365,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             prepared_statement, table, return_format=return_format, batch_size=batch_size, arrow_schema=arrow_schema
         )
 
-    def bulk_copy(
+    def _bulk_copy(
         self,
         target_table: str,
         rows: Iterable[tuple[Any, ...]],
@@ -479,24 +473,43 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             telemetry_payload = cast("StorageTelemetry", {"destination": table, "format": "arrow", "extra": {}})
         else:
             arrow_table = self._coerce_arrow_table(source)
-            cols = column_mappings or list(arrow_table.column_names)
+            cols = column_mappings if column_mappings is not None else list(arrow_table.column_names)
             if arrow_table.num_rows:
                 exc_handler = self.handle_database_exceptions()
+                use_fallback = False
                 with exc_handler, self.with_cursor(self.connection) as cursor:
-                    raw_result = cursor.bulkcopy_arrow(
+                    if hasattr(cursor, "bulkcopy_arrow"):
+                        raw_result = cursor.bulkcopy_arrow(
+                            table,
+                            arrow_table,
+                            batch_size=batch_size,
+                            timeout=timeout,
+                            table_lock=table_lock,
+                            check_constraints=check_constraints,
+                            fire_triggers=fire_triggers,
+                            keep_identity=keep_identity,
+                            keep_nulls=keep_nulls,
+                            use_internal_transaction=use_internal_transaction,
+                            column_mappings=cols,
+                        )
+                    else:
+                        use_fallback = True
+                self._check_pending_exception(exc_handler)
+                if use_fallback:
+                    _, records = self._arrow_table_to_rows(arrow_table)
+                    raw_result = self._bulk_copy(
                         table,
-                        arrow_table,
+                        records,
                         batch_size=batch_size,
                         timeout=timeout,
-                        table_lock=table_lock,
-                        check_constraints=check_constraints,
-                        fire_triggers=fire_triggers,
-                        keep_identity=keep_identity,
-                        keep_nulls=keep_nulls,
-                        use_internal_transaction=use_internal_transaction,
                         column_mappings=cols,
+                        keep_identity=keep_identity,
+                        check_constraints=check_constraints,
+                        table_lock=table_lock,
+                        keep_nulls=keep_nulls,
+                        fire_triggers=fire_triggers,
+                        use_internal_transaction=use_internal_transaction,
                     )
-                self._check_pending_exception(exc_handler)
             telemetry_payload = self._ingest_telemetry(arrow_table)
 
         extra = telemetry_payload.setdefault("extra", {})

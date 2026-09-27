@@ -22,6 +22,11 @@ def test_event_queue_store_uses_tsql_column_types_and_idempotency() -> None:
     assert "payload_json NVARCHAR(MAX) NOT NULL" in ddl
     assert "available_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME()" in ddl
     assert "IF NOT EXISTS (SELECT 1 FROM sys.indexes" in ddl
+    assert "OBJECT_ID(N'[dbo].[sqlspec_event_queue]')" in ddl
+    wrapped_no_space = store._wrap_create_statement(
+        "CREATE INDEX idx_events_channel_status ON app_events(channel, status, available_at)", "index"
+    )
+    assert "OBJECT_ID(N'[dbo].[app_events]')" in wrapped_no_space
 
 
 def test_event_queue_store_drop_uses_object_id_guard() -> None:

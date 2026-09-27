@@ -4,6 +4,19 @@ from typing import Any
 
 import pytest
 
+from sqlspec.adapters.pymssql.core import (
+    build_insert_statement,
+    build_multi_row_insert,
+    collect_rows,
+    create_mapped_exception,
+    default_statement_config,
+    driver_profile,
+    extract_error_number,
+    format_identifier,
+    normalize_execute_many_parameters,
+    normalize_execute_parameters,
+    quote_tsql_identifier,
+)
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -16,8 +29,6 @@ from sqlspec.exceptions import (
 
 def test_profile_uses_tsql_and_pyformat_execution() -> None:
     """The pymssql profile should compile T-SQL to pyformat placeholders."""
-    from sqlspec.adapters.pymssql.core import default_statement_config, driver_profile
-
     parameter_config = default_statement_config.parameter_config
 
     assert default_statement_config.dialect == "tsql"
@@ -35,8 +46,6 @@ def test_profile_uses_tsql_and_pyformat_execution() -> None:
 
 def test_statement_config_compiles_qmark_input_to_percent_s() -> None:
     """Qmark input should execute as positional pyformat for pymssql."""
-    from sqlspec.adapters.pymssql.core import default_statement_config
-
     statement = SQL("SELECT * FROM dbo.users WHERE id = ?", 3, statement_config=default_statement_config)
 
     compiled_sql, parameters = statement.compile()
@@ -47,8 +56,6 @@ def test_statement_config_compiles_qmark_input_to_percent_s() -> None:
 
 def test_statement_config_compiles_named_pyformat_input_to_positional() -> None:
     """Named pyformat input should compile to pymssql's supported positional style."""
-    from sqlspec.adapters.pymssql.core import default_statement_config
-
     statement = SQL(
         "SELECT * FROM dbo.users WHERE id = %(user_id)s", {"user_id": 3}, statement_config=default_statement_config
     )
@@ -61,8 +68,6 @@ def test_statement_config_compiles_named_pyformat_input_to_positional() -> None:
 
 def test_format_identifier_and_insert_statement_use_tsql_identifiers() -> None:
     """Generated DML helpers should quote T-SQL identifiers and use %s placeholders."""
-    from sqlspec.adapters.pymssql.core import build_insert_statement, format_identifier
-
     assert format_identifier("dbo.users") == "[dbo].[users]"
     assert format_identifier("[sales].[order]]items]") == "[sales].[order]]items]"
     assert build_insert_statement("dbo.users", ["id", "display_name"]) == (
@@ -79,8 +84,6 @@ def test_format_identifier_and_insert_statement_use_tsql_identifiers() -> None:
 )
 def test_create_mapped_exception_maps_tsql_error_numbers(message: str, expected_type: type[Exception]) -> None:
     """SQL Server error numbers should map to SQLSpec exceptions."""
-    from sqlspec.adapters.pymssql.core import create_mapped_exception
-
     exc = create_mapped_exception(Exception(message))
 
     assert isinstance(exc, expected_type)
@@ -116,8 +119,6 @@ def test_create_mapped_exception_disambiguates_547_check_vs_foreign_key(
     message: str, expected_type: type[Exception], expected_detail: str
 ) -> None:
     """SQL Server 547 distinguishes CHECK from foreign-key constraint violations."""
-    from sqlspec.adapters.pymssql.core import create_mapped_exception
-
     mapped = create_mapped_exception(Exception(message))
 
     assert isinstance(mapped, expected_type)
@@ -137,15 +138,11 @@ def test_create_mapped_exception_classifies_native_constraint_shapes(
     error: Exception, expected_type: type[Exception]
 ) -> None:
     """Native pymssql argument and message shapes map to specific constraint exceptions."""
-    from sqlspec.adapters.pymssql.core import create_mapped_exception
-
     assert isinstance(create_mapped_exception(error), expected_type)
 
 
 def test_normalize_execute_many_parameters_passes_through() -> None:
     """normalize_execute_many_parameters returns the batch payload unchanged."""
-    from sqlspec.adapters.pymssql.core import normalize_execute_many_parameters
-
     assert normalize_execute_many_parameters([]) == []
 
     rows: list[tuple[Any, ...]] = [(1,), (2,)]
@@ -154,8 +151,6 @@ def test_normalize_execute_many_parameters_passes_through() -> None:
 
 def test_quote_tsql_identifier() -> None:
     """quote_tsql_identifier wraps identifiers in brackets and escapes closing brackets."""
-    from sqlspec.adapters.pymssql.core import quote_tsql_identifier
-
     assert quote_tsql_identifier("users") == "[users]"
     assert quote_tsql_identifier("[users]") == "[users]"
     assert quote_tsql_identifier("dbo.users") == "[dbo.users]"
@@ -164,12 +159,16 @@ def test_quote_tsql_identifier() -> None:
 
 def test_extract_error_number() -> None:
     """extract_error_number detects error number from attribute, tuple, or regex."""
-    from sqlspec.adapters.pymssql.core import extract_error_number
 
     class AttributeException(Exception):
         number = 2627
 
+    class BoolAttributeException(Exception):
+        number = True
+
     assert extract_error_number(AttributeException("duplicate key")) == 2627
+    assert extract_error_number(BoolAttributeException("Msg 2627, Level 14")) == 2627
+    assert extract_error_number(Exception(True, "Msg 1205, Level 13")) == 1205
     assert extract_error_number(Exception(1205, "Deadlock found")) == 1205
     assert extract_error_number(Exception("Violation of UNIQUE KEY constraint (2627)")) == 2627
     assert extract_error_number(Exception("Plain error")) is None
@@ -177,16 +176,12 @@ def test_extract_error_number() -> None:
 
 def test_build_multi_row_insert() -> None:
     """build_multi_row_insert generates a multi-row VALUES INSERT statement."""
-    from sqlspec.adapters.pymssql.core import build_multi_row_insert
-
     sql = build_multi_row_insert("dbo.users", ["id", "name"], 3)
     assert sql == "INSERT INTO [dbo].[users] ([id], [name]) VALUES (%s, %s), (%s, %s), (%s, %s)"
 
 
 def test_collect_rows_preserves_list_identity() -> None:
     """collect_rows avoids copying when the input rows are already a list."""
-    from sqlspec.adapters.pymssql.core import collect_rows
-
     input_rows = [(1, "Alice"), (2, "Bob")]
     description = [("id",), ("name",)]
     rows, column_names, row_format = collect_rows(input_rows, description)
@@ -198,7 +193,5 @@ def test_collect_rows_preserves_list_identity() -> None:
 
 def test_normalize_execute_parameters_preserves_tuples() -> None:
     """normalize_execute_parameters passes tuples through directly."""
-    from sqlspec.adapters.pymssql.core import normalize_execute_parameters
-
     params = (1, "Alice")
     assert normalize_execute_parameters(params) is params

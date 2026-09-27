@@ -89,9 +89,6 @@ class PymssqlSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if exc_type is not None and self._driver is not None:
-            with contextlib.suppress(Exception):
-                self._driver.rollback()
         if self._connection is not None:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None

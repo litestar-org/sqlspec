@@ -3,6 +3,7 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, cast
 
+import pyarrow as pa
 import pytest
 
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
@@ -36,13 +37,9 @@ class ArrowCursor:
         return chunk
 
     def arrow(self, batch_size: int = 8192) -> object:
-        import pyarrow as pa
-
         return pa.table({"x": [1, 2, 3]})
 
     def arrow_reader(self, batch_size: int = 8192) -> object:
-        import pyarrow as pa
-
         table = pa.table({"x": [1, 2, 3]})
         return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=batch_size))
 
@@ -158,7 +155,7 @@ def test_bulk_copy_forwards_options_to_cursor_bulkcopy() -> None:
     connection = ArrowConnection()
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
-    result = driver.bulk_copy(
+    result = driver._bulk_copy(
         "dbo.target", [(1, "a"), (2, "b")], batch_size=1000, timeout=30, table_lock=True, keep_nulls=True
     )
 
@@ -178,7 +175,7 @@ def test_bulk_copy_defaults_match_mssql_python_runtime() -> None:
     connection = ArrowConnection()
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
-    result = driver.bulk_copy("dbo.target", [(1,)])
+    result = driver._bulk_copy("dbo.target", [(1,)])
 
     _, _, options = connection.cursor_obj.bulkcopy_calls[0]
     assert result["rows_copied"] == 1
@@ -193,6 +190,24 @@ def test_bulk_copy_raises_mapped_driver_exception() -> None:
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
 
     with pytest.raises(UniqueViolationError):
-        driver.bulk_copy("dbo.target", [(1,)])
+        driver._bulk_copy("dbo.target", [(1,)])
 
     assert connection.cursor_obj.closed is True
+
+
+def test_load_from_arrow_falls_back_to_bulk_copy_when_bulkcopy_arrow_absent() -> None:
+    """load_from_arrow should fall back to _bulk_copy when cursor lacks bulkcopy_arrow."""
+    connection = ArrowConnection()
+    driver = MssqlPythonDriver(
+        cast("MssqlPythonConnection", connection),
+        driver_features={"storage_capabilities": {"arrow_import_enabled": True}},
+    )
+    table = pa.table({"id": [1, 2], "name": ["Ada", "Grace"]})
+
+    job = driver.load_from_arrow("dbo.target", table, column_mappings=[])
+
+    assert job.telemetry["rows_processed"] == 2
+    target_table, rows, options = connection.cursor_obj.bulkcopy_calls[0]
+    assert target_table == "dbo.target"
+    assert rows == [(1, "Ada"), (2, "Grace")]
+    assert options["column_mappings"] == []

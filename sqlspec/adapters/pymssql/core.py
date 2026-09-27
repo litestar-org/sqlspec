@@ -5,6 +5,8 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from logging import Logger
 from typing import Any, Final, Literal
 
+from sqlglot import exp
+
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -38,6 +40,7 @@ __all__ = (
     "driver_profile",
     "extract_error_number",
     "format_identifier",
+    "is_plain_values_insert",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "quote_tsql_identifier",
@@ -46,7 +49,7 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)(?:,|\))")
+_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
@@ -88,21 +91,43 @@ def build_insert_statement(table: str, columns: list[str]) -> str:
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
 
 
-def build_multi_row_insert(table: str, columns: list[str], num_rows: int) -> str:
+def build_multi_row_insert(table: str, columns: Sequence[str], num_rows: int, *, num_columns: int | None = None) -> str:
     """Build a multi-row VALUES (...), (...) batch INSERT statement.
 
     Args:
         table: Target table name.
-        columns: Column names to insert.
+        columns: Column names to insert (empty when inserting into all table columns).
         num_rows: Number of row tuples in the VALUES clause (up to 1,000).
+        num_columns: Explicit column count when ``columns`` is empty.
 
     Returns:
         Parameterized T-SQL INSERT statement.
     """
-    column_clause = ", ".join(quote_tsql_identifier(column) for column in columns)
-    single_row = f"({', '.join('%s' for _ in columns)})"
+    col_count = len(columns) if columns else (num_columns or 0)
+    single_row = f"({', '.join('%s' for _ in range(col_count))})"
     values_clause = ", ".join(single_row for _ in range(num_rows))
-    return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES {values_clause}"
+    if columns:
+        column_clause = ", ".join(quote_tsql_identifier(column) for column in columns)
+        return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES {values_clause}"
+    return f"INSERT INTO {format_identifier(table)} VALUES {values_clause}"
+
+
+def is_plain_values_insert(expression: Any, expected_columns: int) -> bool:
+    """Return whether a parsed INSERT expression is a single-row plain VALUES insert without OUTPUT/RETURNING."""
+    if not isinstance(expression, exp.Insert):
+        return False
+    if expression.args.get("output") or expression.args.get("returning"):
+        return False
+    values = expression.expression
+    if not isinstance(values, exp.Values):
+        return False
+    rows = values.expressions
+    if len(rows) != 1:
+        return False
+    row = rows[0]
+    if not isinstance(row, exp.Tuple):
+        return False
+    return len(row.expressions) == expected_columns
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:
@@ -292,16 +317,18 @@ def extract_error_number(exc: BaseException | None) -> int | None:
         return None
     for attr in ("number", "error_code", "errno"):
         val = getattr(exc, attr, None)
-        if isinstance(val, int) and val != 0:
+        if isinstance(val, int) and not isinstance(val, bool) and val != 0:
             return val
     if hasattr(exc, "args") and exc.args:
         first = exc.args[0]
-        if isinstance(first, int):
+        if isinstance(first, int) and not isinstance(first, bool):
             return first
     matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
     if matches:
+        last_match = matches[-1]
+        raw_num = last_match[0] or last_match[1] if isinstance(last_match, tuple) else last_match
         try:
-            return int(matches[-1])
+            return int(raw_num)
         except ValueError:
             pass
     return None

@@ -1,6 +1,6 @@
 """pymssql data dictionary."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -14,23 +14,21 @@ from sqlspec.data_dictionary import (
     SystemMetadataRequest,
     SystemMetadataResult,
     TableMetadata,
-    VersionInfo,
     ensure_system_metadata_request,
     get_data_dictionary_loader,
     get_dialect_config,
     system_metadata_gated_result,
 )
 from sqlspec.data_dictionary.dialects.mssql import (
+    MssqlVersionInfo,
     build_mssql_metadata_capability_profile,
     build_mssql_system_metadata_capability,
     build_mssql_system_metadata_result,
     build_mssql_table_ddl_result,
     extract_mssql_version_value,
     get_mssql_data_dictionary_options,
-    is_mssql_azure_sql,
     list_mssql_available_features,
     merge_mssql_table_lists,
-    mssql_supports_native_json,
     parse_mssql_engine_edition,
     parse_mssql_version_components,
     resolve_mssql_feature_flag,
@@ -49,50 +47,6 @@ if TYPE_CHECKING:
 __all__ = ("MssqlVersionInfo", "PymssqlSyncDataDictionary")
 
 logger = get_logger("sqlspec.adapters.pymssql.data_dictionary")
-
-MSSQL_VECTOR_MIN_MAJOR: Final[int] = 17
-
-
-class MssqlVersionInfo(VersionInfo):
-    """MSSQL database version info with build, revision, and Azure SQL detection."""
-
-    def __init__(
-        self,
-        major: int,
-        minor: int = 0,
-        build: int = 0,
-        revision: int = 0,
-        edition: str | None = None,
-        engine_edition: int | None = None,
-    ) -> None:
-        super().__init__(major, minor, 0)
-        self.build = build
-        self.revision = revision
-        self.edition = edition
-        self.engine_edition = engine_edition
-        self.is_azure_sql = is_mssql_azure_sql(engine_edition)
-
-    def supports_native_json(self) -> bool:
-        """Return whether this server supports the native JSON type."""
-        return mssql_supports_native_json(self.major, is_azure_sql=self.is_azure_sql)
-
-    def supports_vector(self) -> bool:
-        """Return whether this server supports native VECTOR data types and functions."""
-        return self.is_azure_sql or self.major >= MSSQL_VECTOR_MIN_MAJOR
-
-    @property
-    def version_tuple(self) -> tuple[int, int, int]:
-        """Get version tuple using the MSSQL build number as the third component."""
-        return (self.major, self.minor, self.build)
-
-    def __str__(self) -> str:
-        """String representation of version info."""
-        version_str = f"{self.major}.{self.minor}.{self.build}.{self.revision}"
-        if self.edition:
-            version_str += f" ({self.edition})"
-        if self.is_azure_sql:
-            version_str += " [Azure]"
-        return version_str
 
 
 class _MssqlDataDictionaryMixin:
@@ -196,8 +150,6 @@ class PymssqlSyncDataDictionary(_MssqlDataDictionaryMixin, SyncDataDictionaryBas
     def get_feature_flag(self, driver: "PymssqlDriver", feature: str) -> bool:
         """Check whether SQL Server supports a feature."""
         version_info = self.get_version(driver)
-        if feature == "supports_vector":
-            return bool(version_info and version_info.supports_vector())
         return resolve_mssql_feature_flag(
             feature,
             major=version_info.major if version_info is not None else 0,

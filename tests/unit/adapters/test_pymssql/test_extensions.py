@@ -17,6 +17,10 @@ def test_event_store_uses_tsql_column_types_and_idempotent_wrappers() -> None:
     assert store._timestamp_default() == "SYSUTCDATETIME()"
     assert "OBJECT_ID" in store._wrap_create_statement("CREATE TABLE event_queue (id INT)", "table")
     assert "sys.indexes" in store._wrap_create_statement("CREATE INDEX idx_events ON event_queue (channel)", "index")
+    wrapped_no_space = store._wrap_create_statement(
+        "CREATE INDEX idx_events_channel_status ON app_events(channel, status, available_at)", "index"
+    )
+    assert "OBJECT_ID(N'[dbo].[app_events]')" in wrapped_no_space
 
 
 def test_litestar_store_ddl_is_tsql_idempotent() -> None:
