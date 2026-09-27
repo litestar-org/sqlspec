@@ -2,7 +2,6 @@
 
 from typing import TYPE_CHECKING, Any
 
-from arrow_odbc import BatchReader as ArrowOdbcBatchReader
 from arrow_odbc import Connection as ArrowOdbcConnection
 from arrow_odbc import Connection as ArrowOdbcRawCursor
 from arrow_odbc import Error as ArrowOdbcError
@@ -17,7 +16,6 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
 __all__ = (
-    "ArrowOdbcBatchReader",
     "ArrowOdbcConnection",
     "ArrowOdbcCursor",
     "ArrowOdbcError",

@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlglot import exp
+from sqlglot import Dialect, exp
+from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
 from sqlspec.adapters.arrow_odbc.core import (
@@ -106,7 +107,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         "_data_dictionary",
         "_dbms_name",
         "_dialect",
-        "_falliable_allocations_val",
         "_lowercase_column_names",
         "_max_batch_bytes",
         "_max_binary_size_val",
@@ -136,10 +136,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             statement_config = statement_config.replace(dialect=statement_dialect)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
-        self._chunk_size_val: int = int(features.get("chunk_size") or features.get("max_batch_size") or 65_536)
-        self._falliable_allocations_val: bool | None = (
-            bool(features["falliable_allocations"]) if "falliable_allocations" in features else None
-        )
+        self._chunk_size_val: int = int(features.get("chunk_size") or 65_536)
         self._max_batch_bytes: int | None = features.get("max_bytes_per_batch")
         self._max_binary_size_val: int | None = features.get("max_binary_size")
         self._max_text_size_val: int | None = features.get("max_text_size")
@@ -327,7 +324,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 sql,
                 _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"),
                 resolved_batch_size,
-                schema=arrow_schema,
             )
             if return_format in {"reader", "batches"}:
                 arrow_reader = self._normalize_reader(_to_pyarrow_reader(reader))
@@ -386,29 +382,12 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load Arrow data into a table via arrow-odbc bulk insert."""
         self._require_capability("arrow_import_enabled")
-        ensure_pyarrow()
-        import pyarrow as pa
-
-        source_data = source.get_data() if hasattr(source, "get_data") else source
+        arrow_table = self._coerce_arrow_table(source)
         if overwrite:
             target = _db2_table_reference(table) if self._dialect == "db2" else _quote_odbc_table(table)
             self.execute(f"DELETE FROM {target}")
-        telemetry_payload: StorageTelemetry
-        if isinstance(source_data, (pa.RecordBatchReader, pa.Table)):
-            self.bulk_insert_arrow(table, source_data)
-            if isinstance(source_data, pa.Table):
-                telemetry_payload = self._ingest_telemetry(source_data)
-            else:
-                telemetry_payload = {
-                    "rows_processed": -1,
-                    "bytes_processed": 0,
-                    "format": "arrow",
-                    "destination": table,
-                }
-        else:
-            arrow_table = self._coerce_arrow_table(source_data)
-            self.bulk_insert_arrow(table, arrow_table)
-            telemetry_payload = self._ingest_telemetry(arrow_table)
+        self.bulk_insert_arrow(table, arrow_table)
+        telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
@@ -435,9 +414,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         """
         return self._transaction_active
 
-    def _read_arrow_batches(
-        self, sql: str, parameters: "list[str | None] | None", batch_size: int, schema: Any | None = None
-    ) -> Any:
+    def _read_arrow_batches(self, sql: str, parameters: "list[str | None] | None", batch_size: int) -> Any:
         kwargs: dict[str, Any] = {
             "query": sql,
             "batch_size": batch_size,
@@ -447,10 +424,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             "max_binary_size": self._max_binary_size_val,
             "fetch_concurrently": self._use_concurrent_fetch,
         }
-        if schema is not None:
-            kwargs["schema"] = schema
-        if self._falliable_allocations_val is not None:
-            kwargs["falliable_allocations"] = self._falliable_allocations_val
         if self._query_timeout_sec_val is not None:
             kwargs["query_timeout_sec"] = self._query_timeout_sec_val
         if self._payload_text_encoding is not None:
@@ -523,58 +496,73 @@ def _statement_dialect_for(dialect: str) -> str:
 
 
 _DB2_PLAIN_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_MSSQL_TOP_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
-    r"(?P<literal>'(?:''|[^'])*')|"
-    r"(?P<comment>--[^\r\n]*|/\*[\s\S]*?\*/)|"
-    r"(?P<top>\bTOP\s*(?:/\*[\s\S]*?\*/\s*)*\(\s*\?\s*\))|"
-    r"(?P<param>\?)",
-    re.IGNORECASE,
-)
-_MSSQL_OFFSET_FETCH_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"OFFSET\s+\?\s+ROWS\s+FETCH\s+(?P<fetch_keyword>NEXT|FIRST)\s+\?\s+ROWS\s+ONLY", re.IGNORECASE
-)
-_MSSQL_PAGINATION_PARAMETER_COUNT: Final = 2
+_TSQL_DIALECT: Final = Dialect.get_or_raise("tsql")
+_MSSQL_TOP_MIN_TOKEN_INDEX: Final = 2
+_MSSQL_OFFSET_FETCH_TAIL_TOKENS: Final = 6
+_MSSQL_ROW_TOKEN_TYPES: Final = frozenset({TokenType.ROW, TokenType.ROWS})
+_MSSQL_FETCH_DIR_TOKEN_TYPES: Final = frozenset({TokenType.FIRST, TokenType.NEXT})
 
 
 def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[str, object]:
-    if isinstance(parameters, (list, tuple)) and "TOP" in sql.upper():
-        pieces: list[str] = []
-        last_end = 0
-        param_idx = 0
-        consumed: set[int] = set()
-        for top_match in _MSSQL_TOP_TOKEN_RE.finditer(sql):
-            group = top_match.lastgroup
-            if group == "top":
-                if param_idx < len(parameters):
-                    val = _pagination_int(parameters[param_idx])
-                    consumed.add(param_idx)
-                    param_idx += 1
-                    pieces.append(sql[last_end : top_match.start()])
-                    top_text = top_match.group()
-                    q_idx = top_text.rfind("?")
-                    replaced_top = top_text[:q_idx] + str(val) + top_text[q_idx + 1 :]
-                    pieces.append(replaced_top)
-                    last_end = top_match.end()
-            elif group == "param":
-                param_idx += 1
-        if consumed:
-            pieces.append(sql[last_end:])
-            sql = "".join(pieces)
-            parameters = [value for index, value in enumerate(parameters) if index not in consumed]
-    offset_match = _MSSQL_OFFSET_FETCH_PATTERN.search(sql)
-    if (
-        offset_match is None
-        or not isinstance(parameters, (list, tuple))
-        or len(parameters) < _MSSQL_PAGINATION_PARAMETER_COUNT
-    ):
+    """Inline integer parameters bound to T-SQL TOP (?) and OFFSET/FETCH clauses.
+
+    Uses sqlglot's T-SQL tokenizer so placeholders are counted in exact SQL
+    lexical order while ignoring question marks inside string literals or SQL
+    comments.
+    """
+    if not isinstance(parameters, (list, tuple)) or not parameters:
+        return sql, parameters
+    upper_sql = sql.upper()
+    if "TOP" not in upper_sql and "OFFSET" not in upper_sql:
         return sql, parameters
 
-    offset_value = _pagination_int(parameters[-2])
-    limit_value = _pagination_int(parameters[-1])
-    fetch_keyword = offset_match.group("fetch_keyword")
-    replacement = f"OFFSET {offset_value} ROWS FETCH {fetch_keyword} {limit_value} ROWS ONLY"
-    remaining_parameters = parameters[:-2]
-    return _MSSQL_OFFSET_FETCH_PATTERN.sub(replacement, sql, count=1), remaining_parameters
+    tokens = _TSQL_DIALECT.tokenize(sql)
+    replacements: list[tuple[int, int, str]] = []
+    consumed: set[int] = set()
+    parameter_index = 0
+    token_count = len(tokens)
+
+    for index, token in enumerate(tokens):
+        if token.token_type != TokenType.PLACEHOLDER:
+            continue
+        if parameter_index not in consumed and parameter_index < len(parameters):
+            if (
+                index >= _MSSQL_TOP_MIN_TOKEN_INDEX
+                and tokens[index - 1].token_type == TokenType.L_PAREN
+                and tokens[index - 2].token_type == TokenType.TOP
+                and index + 1 < token_count
+                and tokens[index + 1].token_type == TokenType.R_PAREN
+            ):
+                replacements.append((token.start, token.end + 1, str(_pagination_int(parameters[parameter_index]))))
+                consumed.add(parameter_index)
+            elif (
+                index >= 1
+                and index + _MSSQL_OFFSET_FETCH_TAIL_TOKENS < token_count
+                and parameter_index + 1 < len(parameters)
+                and tokens[index - 1].token_type == TokenType.OFFSET
+                and tokens[index + 1].token_type in _MSSQL_ROW_TOKEN_TYPES
+                and tokens[index + 2].token_type == TokenType.FETCH
+                and tokens[index + 3].token_type in _MSSQL_FETCH_DIR_TOKEN_TYPES
+                and tokens[index + 4].token_type == TokenType.PLACEHOLDER
+                and tokens[index + 5].token_type in _MSSQL_ROW_TOKEN_TYPES
+                and tokens[index + 6].token_type == TokenType.VAR
+                and tokens[index + 6].text.upper() == "ONLY"
+            ):
+                offset_val = _pagination_int(parameters[parameter_index])
+                limit_val = _pagination_int(parameters[parameter_index + 1])
+                fetch_token = tokens[index + 4]
+                replacements.append((token.start, token.end + 1, str(offset_val)))
+                replacements.append((fetch_token.start, fetch_token.end + 1, str(limit_val)))
+                consumed.add(parameter_index)
+                consumed.add(parameter_index + 1)
+        parameter_index += 1
+
+    if not consumed:
+        return sql, parameters
+    for start, end, value in reversed(replacements):
+        sql = sql[:start] + value + sql[end:]
+    remaining = [value for index, value in enumerate(parameters) if index not in consumed]
+    return sql, remaining
 
 
 def _pagination_int(value: object) -> int:

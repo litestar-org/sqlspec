@@ -219,20 +219,16 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Merge arrow-odbc driver feature defaults with caller overrides."""
     defaults: dict[str, Any] = {
-        "chunk_size": 65535,
+        "chunk_size": 65_536,
         "max_bytes_per_batch": 512 * 1024 * 1024,
         "max_text_size": 1024 * 1024,
         "max_binary_size": 1024 * 1024,
         "fetch_concurrently": True,
         "query_timeout_sec": None,
-        "falliable_allocations": True,
-        "enable_driver_pooling": True,
         "json_serializer": to_json,
         "json_deserializer": from_json,
     }
     defaults.update(driver_features or {})
-    if "max_batch_size" in defaults and "chunk_size" not in (driver_features or {}):
-        defaults["chunk_size"] = defaults["max_batch_size"]
     return statement_config, defaults
 
 

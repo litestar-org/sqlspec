@@ -13,6 +13,7 @@ from sqlspec.adapters.duckdb.core import (
     _build_storage_read_sql,
     _DuckDBStreamSource,
     _resolve_native_storage_target,
+    _restore_uuid_columns,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -36,7 +37,6 @@ from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
-from sqlspec.utils.type_guards import resolve_row_format
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
@@ -144,16 +144,18 @@ class DuckDBDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            fetched_data = cursor.fetchall()
-            data, column_names, row_count = self.collect_rows(cursor, fetched_data)
-            row_format = resolve_row_format(data)
+            arrow_table = cursor.to_arrow_table()
+            data = arrow_table.to_pylist()
+            _restore_uuid_columns(data, cursor.description)
+            column_names = list(arrow_table.column_names)
+
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
-                data_row_count=row_count,
+                data_row_count=len(data),
                 is_select_result=True,
-                row_format=row_format,
+                row_format="dict",
             )
 
         row_count = resolve_rowcount(cursor)

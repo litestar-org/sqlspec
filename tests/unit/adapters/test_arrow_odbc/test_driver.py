@@ -891,6 +891,18 @@ def test_arrow_odbc_driver_slots_in_class_definition() -> None:
         ),
         ("SELECT TOP /* limit */ (?) '?' AS marker FROM t", [3], "SELECT TOP /* limit */ (3) '?' AS marker FROM t", []),
         ("SELECT 'TOP (?)' AS label FROM t WHERE id = ?", [7], "SELECT 'TOP (?)' AS label FROM t WHERE id = ?", [7]),
+        (
+            "WITH c AS (SELECT id FROM t ORDER BY id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY) SELECT * FROM c WHERE id > ?",
+            [10, 5, 42],
+            "WITH c AS (SELECT id FROM t ORDER BY id OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY) SELECT * FROM c WHERE id > ?",
+            [42],
+        ),
+        (
+            "SELECT 'OFFSET ? ROWS FETCH NEXT ? ROWS ONLY' AS label FROM t WHERE id = ?",
+            [7],
+            "SELECT 'OFFSET ? ROWS FETCH NEXT ? ROWS ONLY' AS label FROM t WHERE id = ?",
+            [7],
+        ),
     ],
 )
 def test_mssql_top_preserves_data_bindings(
