@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import zipfile
+from collections.abc import Mapping
 from datetime import time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -28,7 +29,7 @@ from sqlspec.utils.serializers import to_json as encode_json
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
@@ -52,7 +53,8 @@ _TABLE_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9
 _POSTGRES_DIALECTS: Final["frozenset[str]"] = frozenset({"postgres", "postgresql"})
 _MYSQL_DIALECTS: Final["frozenset[str]"] = frozenset({"mariadb", "mysql"})
 _ON_CONFLICT_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "postgres", "sqlite"})
-_JSON_VALUE_FAMILIES: Final["frozenset[str]"] = frozenset({"mysql", "postgres"})
+_JSON_VALUE_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "mysql", "postgres"})
+_JSON_TYPE_NAMES: Final["frozenset[str]"] = frozenset({"json", "jsonb"})
 _METADATA_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "mysql", "postgres", "sqlite"})
 _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
     "binary",
@@ -233,18 +235,21 @@ def load_table_fixtures_sync(
     *,
     tables: "Sequence[str] | None" = None,
     table_order: "Sequence[str] | None" = None,
-    conflict_keys: "Mapping[str, Sequence[str]] | None" = None,
+    conflict_keys: "Mapping[str, Sequence[str] | str] | None" = None,
     batch_size: int = 500,
     resync_sequences: bool = False,
+    ignore_unknown_columns: bool = False,
+    exclude_update_columns: "Sequence[str] | Mapping[str, Sequence[str] | str] | None" = None,
 ) -> "dict[str, int]":
     """Load per-table fixture files into database tables.
 
     Each table reads from one file named after it: ``<table>.json`` holding a JSON
     array of row objects, or ``<table>.jsonl`` holding one row object per line, either
-    optionally gzipped (``.gz``). Every row in a file must have the same keys, which
-    become the inserted columns. Table and column names are quoted, so they must match
-    the database spelling exactly. Rows are inserted in batches with ``execute_many``;
-    each file is read into memory. Transaction control stays with the caller.
+    optionally gzipped (``.gz``). Sparse row objects are normalized across the ordered
+    union of column keys in the file, defaulting omitted keys to ``None``. Table and
+    column names are quoted, so they must match the database spelling exactly. Rows
+    are inserted in batches with ``execute_many``; each file is read into memory.
+    Transaction control stays with the caller.
 
     On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's columns
     are read from the driver's data dictionary first, and JSON values of these column
@@ -254,8 +259,8 @@ def load_table_fixtures_sync(
     DuckDB ``[months, days, nanoseconds]`` interval lists to interval text; strings and
     numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
     ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
-    PostgreSQL and MySQL json and jsonb values to JSON text. SQLite only converts binary
-    columns. All other values, including array elements and durations with year or
+    PostgreSQL, MySQL, and DuckDB json and jsonb values to JSON text. SQLite only converts
+    binary columns. All other values, including array elements and durations with year or
     month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
     of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS`` identity
     columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and are never
@@ -269,53 +274,62 @@ def load_table_fixtures_sync(
             a dot in a file name marks a schema-qualified table.
         table_order: Tables to load first, in this order. Remaining tables load
             afterwards in alphabetical order; names not being loaded are ignored.
-        conflict_keys: Mapping of loaded table name to the key columns of a unique
-            constraint. Rows for these tables are upserted, updating every non-key column
-            when a row with the same key already exists. Supported on PostgreSQL-family, SQLite,
-            and DuckDB drivers (``ON CONFLICT``) and MySQL (``ON DUPLICATE KEY UPDATE``,
-            which matches any unique key of the table).
+        conflict_keys: Mapping of table name to a column name or sequence of key column
+            names of a unique constraint; tables not being loaded are ignored. Rows for
+            matched tables are upserted, updating every non-key, non-excluded column
+            when a row with the same key already exists. Supported on PostgreSQL-family,
+            SQLite, and DuckDB drivers (``ON CONFLICT``) and MySQL
+            (``ON DUPLICATE KEY UPDATE``, which matches any unique key of the table).
         batch_size: Maximum number of rows per ``execute_many`` call.
         resync_sequences: On PostgreSQL-family drivers, set the sequence behind each
             serial or identity column of a loaded table to the column's maximum value,
             or back to the sequence's minimum value for an empty table, so the next
             generated value follows the loaded rows. On other dialects the option is
             skipped with a debug log.
+        ignore_unknown_columns: When ``True`` and table column metadata is available,
+            strip fixture columns not present in the target table before inserting.
+        exclude_update_columns: Column names (or per-table mapping of column names) to
+            omit from the ``SET`` clause of upserts so existing values are preserved on
+            conflict.
 
     Returns:
         Mapping of table name to the number of rows loaded, in load order.
 
     Raises:
         ValueError: If ``batch_size`` is below 1, ``conflict_keys`` is given for an
-            unsupported dialect or names a table that is not loaded, a table or column
-            name is not a plain SQL identifier,
-            a table has more than one fixture file, the rows of a fixture file have
-            differing columns, or a fixture file only holds generated columns.
-        TypeError: If a fixture file does not hold a list of row objects.
+            unsupported dialect, a table or column name is not a plain SQL identifier,
+            a table has more than one fixture file, a row in a fixture file is empty,
+            or a fixture file only holds generated columns.
+        TypeError: If a fixture file does not hold a list of row objects, or
+            ``conflict_keys`` / ``exclude_update_columns`` has an invalid type.
         FileNotFoundError: If a requested table has no fixture file.
     """
     dialect = driver.statement_config.dialect
     dialect_name = _dialect_name(dialect)
     family = _dialect_family(dialect_name)
-    _validate_load_arguments(conflict_keys, batch_size, dialect_name, family)
+    _validate_load_arguments(conflict_keys, batch_size, dialect_name, family, exclude_update_columns)
     table_files = _ordered_table_files(fixtures_path, tables, table_order)
-    _validate_conflict_tables(conflict_keys, table_files)
     resync = _sequence_resync_enabled(resync_sequences, dialect_name, family)
     counts: dict[str, int] = {}
     for table, file_path in table_files:
         rows = _table_fixture_rows(file_path, _read_table_fixture_text(file_path))
         columns = _table_columns_sync(driver, family, table) if rows or resync else []
-        if rows:
-            _drop_generated_values(rows, columns)
-            _decode_row_values(rows, family, columns)
-            statement = _table_insert_statement(
-                dialect, family, table, list(rows[0]), _conflict_keys_for(conflict_keys, table), columns
-            )
-            for start in range(0, len(rows), batch_size):
-                driver.execute_many(statement, rows[start : start + batch_size])
+        loaded_count = _insert_table_rows_sync(
+            driver,
+            dialect,
+            family,
+            table,
+            rows,
+            columns,
+            _conflict_keys_for(conflict_keys, table),
+            _excluded_update_columns_for(exclude_update_columns, table),
+            batch_size,
+            ignore_unknown_columns=ignore_unknown_columns,
+        )
         if resync:
             for resync_statement, parameters in _sequence_resync_statements(table, columns):
                 driver.execute(resync_statement, parameters)
-        counts[table] = len(rows)
+        counts[table] = loaded_count
     return counts
 
 
@@ -325,19 +339,21 @@ async def load_table_fixtures_async(
     *,
     tables: "Sequence[str] | None" = None,
     table_order: "Sequence[str] | None" = None,
-    conflict_keys: "Mapping[str, Sequence[str]] | None" = None,
+    conflict_keys: "Mapping[str, Sequence[str] | str] | None" = None,
     batch_size: int = 500,
     resync_sequences: bool = False,
+    ignore_unknown_columns: bool = False,
+    exclude_update_columns: "Sequence[str] | Mapping[str, Sequence[str] | str] | None" = None,
 ) -> "dict[str, int]":
     """Load per-table fixture files into database tables asynchronously.
 
     Each table reads from one file named after it: ``<table>.json`` holding a JSON
     array of row objects, or ``<table>.jsonl`` holding one row object per line, either
-    optionally gzipped (``.gz``). Every row in a file must have the same keys, which
-    become the inserted columns. Table and column names are quoted, so they must match
-    the database spelling exactly. Rows are inserted in batches with ``execute_many``;
-    each file is read into memory in a worker thread. Transaction control stays with
-    the caller.
+    optionally gzipped (``.gz``). Sparse row objects are normalized across the ordered
+    union of column keys in the file, defaulting omitted keys to ``None``. Table and
+    column names are quoted, so they must match the database spelling exactly. Rows
+    are inserted in batches with ``execute_many``; each file is read into memory in a
+    worker thread. Transaction control stays with the caller.
 
     On PostgreSQL-family, MySQL, DuckDB, and SQLite drivers the target table's columns
     are read from the driver's data dictionary first, and JSON values of these column
@@ -347,8 +363,8 @@ async def load_table_fixtures_async(
     DuckDB ``[months, days, nanoseconds]`` interval lists to interval text; strings and
     numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
     ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
-    PostgreSQL and MySQL json and jsonb values to JSON text. SQLite only converts binary
-    columns. All other values, including array elements and durations with year or
+    PostgreSQL, MySQL, and DuckDB json and jsonb values to JSON text. SQLite only converts
+    binary columns. All other values, including array elements and durations with year or
     month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
     of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS`` identity
     columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and are never
@@ -362,53 +378,62 @@ async def load_table_fixtures_async(
             a dot in a file name marks a schema-qualified table.
         table_order: Tables to load first, in this order. Remaining tables load
             afterwards in alphabetical order; names not being loaded are ignored.
-        conflict_keys: Mapping of loaded table name to the key columns of a unique
-            constraint. Rows for these tables are upserted, updating every non-key column
-            when a row with the same key already exists. Supported on PostgreSQL-family, SQLite,
-            and DuckDB drivers (``ON CONFLICT``) and MySQL (``ON DUPLICATE KEY UPDATE``,
-            which matches any unique key of the table).
+        conflict_keys: Mapping of table name to a column name or sequence of key column
+            names of a unique constraint; tables not being loaded are ignored. Rows for
+            matched tables are upserted, updating every non-key, non-excluded column
+            when a row with the same key already exists. Supported on PostgreSQL-family,
+            SQLite, and DuckDB drivers (``ON CONFLICT``) and MySQL
+            (``ON DUPLICATE KEY UPDATE``, which matches any unique key of the table).
         batch_size: Maximum number of rows per ``execute_many`` call.
         resync_sequences: On PostgreSQL-family drivers, set the sequence behind each
             serial or identity column of a loaded table to the column's maximum value,
             or back to the sequence's minimum value for an empty table, so the next
             generated value follows the loaded rows. On other dialects the option is
             skipped with a debug log.
+        ignore_unknown_columns: When ``True`` and table column metadata is available,
+            strip fixture columns not present in the target table before inserting.
+        exclude_update_columns: Column names (or per-table mapping of column names) to
+            omit from the ``SET`` clause of upserts so existing values are preserved on
+            conflict.
 
     Returns:
         Mapping of table name to the number of rows loaded, in load order.
 
     Raises:
         ValueError: If ``batch_size`` is below 1, ``conflict_keys`` is given for an
-            unsupported dialect or names a table that is not loaded, a table or column
-            name is not a plain SQL identifier,
-            a table has more than one fixture file, the rows of a fixture file have
-            differing columns, or a fixture file only holds generated columns.
-        TypeError: If a fixture file does not hold a list of row objects.
+            unsupported dialect, a table or column name is not a plain SQL identifier,
+            a table has more than one fixture file, a row in a fixture file is empty,
+            or a fixture file only holds generated columns.
+        TypeError: If a fixture file does not hold a list of row objects, or
+            ``conflict_keys`` / ``exclude_update_columns`` has an invalid type.
         FileNotFoundError: If a requested table has no fixture file.
     """
     dialect = driver.statement_config.dialect
     dialect_name = _dialect_name(dialect)
     family = _dialect_family(dialect_name)
-    _validate_load_arguments(conflict_keys, batch_size, dialect_name, family)
+    _validate_load_arguments(conflict_keys, batch_size, dialect_name, family, exclude_update_columns)
     table_files = await _async_ordered_table_files(fixtures_path, tables, table_order)
-    _validate_conflict_tables(conflict_keys, table_files)
     resync = _sequence_resync_enabled(resync_sequences, dialect_name, family)
     counts: dict[str, int] = {}
     for table, file_path in table_files:
         rows = _table_fixture_rows(file_path, await _async_read_table_fixture_text(file_path))
         columns = await _table_columns_async(driver, family, table) if rows or resync else []
-        if rows:
-            _drop_generated_values(rows, columns)
-            _decode_row_values(rows, family, columns)
-            statement = _table_insert_statement(
-                dialect, family, table, list(rows[0]), _conflict_keys_for(conflict_keys, table), columns
-            )
-            for start in range(0, len(rows), batch_size):
-                await driver.execute_many(statement, rows[start : start + batch_size])
+        loaded_count = await _insert_table_rows_async(
+            driver,
+            dialect,
+            family,
+            table,
+            rows,
+            columns,
+            _conflict_keys_for(conflict_keys, table),
+            _excluded_update_columns_for(exclude_update_columns, table),
+            batch_size,
+            ignore_unknown_columns=ignore_unknown_columns,
+        )
         if resync:
             for resync_statement, parameters in _sequence_resync_statements(table, columns):
                 await driver.execute(resync_statement, parameters)
-        counts[table] = len(rows)
+        counts[table] = loaded_count
     return counts
 
 
@@ -661,18 +686,52 @@ def _dialect_family(dialect_name: str) -> str:
     return dialect_name
 
 
+def _normalize_column_sequence(columns: "Sequence[str] | str", parameter_name: str) -> "tuple[str, ...]":
+    """Normalize a single column name or sequence of column names to a validated non-empty tuple."""
+    if isinstance(columns, (bytes, bytearray)):
+        msg = f"{parameter_name} must be a column name or sequence of column names, not bytes"
+        raise TypeError(msg)
+    items = (columns,) if isinstance(columns, str) else tuple(columns)
+    if not items:
+        msg = f"{parameter_name} must not be empty"
+        raise ValueError(msg)
+    return tuple(_validated_column_name(item) for item in items)
+
+
 def _validate_load_arguments(
-    conflict_keys: "Mapping[str, Sequence[str]] | None", batch_size: int, dialect_name: str, family: str
+    conflict_keys: "Mapping[str, Sequence[str] | str] | None",
+    batch_size: int,
+    dialect_name: str,
+    family: str,
+    exclude_update_columns: "Sequence[str] | Mapping[str, Sequence[str] | str] | None" = None,
 ) -> None:
-    """Validate the batch size and conflict keys of a table fixture load.
+    """Validate the batch size, conflict keys, and excluded update columns of a table fixture load.
 
     Raises:
         ValueError: If ``batch_size`` is below 1, conflict keys are unsupported for the
-            dialect, or a conflict key name is unsafe.
+            dialect, or a table or column name is unsafe or empty.
+        TypeError: If ``conflict_keys`` or ``exclude_update_columns`` has an invalid type.
     """
     if batch_size < 1:
         msg = f"batch_size must be at least 1, got {batch_size}"
         raise ValueError(msg)
+    if exclude_update_columns is not None:
+        if isinstance(exclude_update_columns, (str, bytes, bytearray)):
+            msg = (
+                "exclude_update_columns must be a sequence of column names or a mapping of table names to column names"
+            )
+            raise TypeError(msg)
+        if isinstance(exclude_update_columns, Mapping):
+            for table, cols in exclude_update_columns.items():
+                _validated_table_name(table)
+                if cols or isinstance(cols, (str, bytes, bytearray)):
+                    _normalize_column_sequence(cols, f"exclude_update_columns[{table!r}]")
+        else:
+            for column in exclude_update_columns:
+                if not isinstance(column, str):
+                    msg = "exclude_update_columns items must be column name strings"
+                    raise TypeError(msg)
+                _validated_column_name(column)
     if not conflict_keys:
         return
     if family not in _ON_CONFLICT_FAMILIES and family != "mysql":
@@ -683,33 +742,28 @@ def _validate_load_arguments(
         raise ValueError(msg)
     for table, keys in conflict_keys.items():
         _validated_table_name(table)
-        for key in keys:
-            _validated_column_name(key)
+        _normalize_column_sequence(keys, f"conflict_keys[{table!r}]")
 
 
-def _validate_conflict_tables(
-    conflict_keys: "Mapping[str, Sequence[str]] | None", table_files: "list[tuple[str, Path]]"
-) -> None:
-    """Validate that every conflict key entry names a table being loaded.
-
-    Raises:
-        ValueError: If a conflict key table is not among the loaded tables.
-    """
-    if not conflict_keys:
-        return
-    loaded = {table for table, _ in table_files}
-    unknown = sorted(table for table in conflict_keys if table not in loaded)
-    if unknown:
-        names = ", ".join(repr(table) for table in unknown)
-        msg = f"conflict_keys names tables that are not loaded: {names}"
-        raise ValueError(msg)
-
-
-def _conflict_keys_for(conflict_keys: "Mapping[str, Sequence[str]] | None", table: str) -> "tuple[str, ...]":
+def _conflict_keys_for(conflict_keys: "Mapping[str, Sequence[str] | str] | None", table: str) -> "tuple[str, ...]":
     """Return the conflict key columns configured for a table."""
     if not conflict_keys or table not in conflict_keys:
         return ()
-    return tuple(conflict_keys[table])
+    return _normalize_column_sequence(conflict_keys[table], f"conflict_keys[{table!r}]")
+
+
+def _excluded_update_columns_for(
+    exclude_update_columns: "Sequence[str] | Mapping[str, Sequence[str] | str] | None", table: str
+) -> "set[str]":
+    """Return the column names excluded from upsert updates for a table."""
+    if not exclude_update_columns:
+        return set()
+    if isinstance(exclude_update_columns, Mapping):
+        raw = exclude_update_columns.get(table)
+        if not raw:
+            return set()
+        return set(_normalize_column_sequence(raw, f"exclude_update_columns[{table!r}]"))
+    return set(exclude_update_columns)
 
 
 def _table_name_for_file(file_name: str) -> "str | None":
@@ -789,11 +843,11 @@ def _read_table_fixture_text(file_path: Path) -> str:
 
 
 def _table_fixture_rows(file_path: Path, content: str) -> "list[dict[str, Any]]":
-    """Decode the row objects of a table fixture file and validate their columns.
+    """Decode the row objects of a table fixture file and normalize sparse columns.
 
     Raises:
         TypeError: If the content is not a list of row objects.
-        ValueError: If the rows do not share the same non-empty set of safe column names.
+        ValueError: If any row is empty or has an unsafe column name.
     """
     decoded: Any
     if file_path.name.endswith((".jsonl", ".jsonl.gz")):
@@ -803,22 +857,23 @@ def _table_fixture_rows(file_path: Path, content: str) -> "list[dict[str, Any]]"
         if not isinstance(decoded, list):
             msg = f"Table fixture {file_path} must contain a JSON array of row objects"
             raise TypeError(msg)
-    rows: list[dict[str, Any]] = []
-    columns: set[str] = set()
+    raw_rows: list[dict[str, Any]] = []
+    ordered_columns: list[str] = []
+    seen_columns: set[str] = set()
     for index, row in enumerate(decoded):
         if not isinstance(row, dict):
             msg = f"Row {index} in table fixture {file_path} must be an object"
             raise TypeError(msg)
-        if index == 0:
-            if not row:
-                msg = f"Row 0 in table fixture {file_path} must have at least one column"
-                raise ValueError(msg)
-            columns = {_validated_column_name(column) for column in row}
-        elif set(row) != columns:
-            msg = f"Row {index} in table fixture {file_path} has columns {sorted(row)} that do not match {sorted(columns)}"
+        if not row:
+            msg = f"Row {index} in table fixture {file_path} must have at least one column"
             raise ValueError(msg)
-        rows.append(row)
-    return rows
+        for column in row:
+            if column not in seen_columns:
+                _validated_column_name(column)
+                seen_columns.add(column)
+                ordered_columns.append(column)
+        raw_rows.append(row)
+    return [{column: raw_row.get(column) for column in ordered_columns} for raw_row in raw_rows]
 
 
 def _quoted_identifier(name: str) -> exp.Identifier:
@@ -893,29 +948,59 @@ def _generated_column_names(columns: "list[_TableColumn]") -> "set[str]":
     return {column.name for column in columns if column.is_generated}
 
 
-def _drop_generated_values(rows: "list[dict[str, Any]]", columns: "list[_TableColumn]") -> None:
-    """Remove the values of generated columns from fixture rows in place.
+def _drop_generated_values(
+    rows: "list[dict[str, Any]]", columns: "list[_TableColumn]", *, ignore_unknown_columns: bool = False
+) -> None:
+    """Remove generated columns and optionally unknown columns from fixture rows in place.
 
     Raises:
         ValueError: If only generated columns remain in the rows.
     """
+    if not rows or not columns:
+        return
     generated = _generated_column_names(columns)
-    if not rows or generated.isdisjoint(rows[0]):
+    unknown: set[str] = set()
+    if ignore_unknown_columns:
+        known_lower = {column.name.lower() for column in columns}
+        unknown = {key for key in rows[0] if key.lower() not in known_lower}
+    to_drop = (generated & set(rows[0])) | unknown
+    if not to_drop:
         return
     for row in rows:
-        for name in generated:
+        for name in to_drop:
             row.pop(name, None)
     if not rows[0]:
+        if unknown:
+            rows.clear()
+            return
         msg = f"Table fixture rows only contain generated columns: {sorted(generated)}"
         raise ValueError(msg)
 
 
+def _decode_exported_json_value(value: Any) -> Any:
+    """Decode a JSON string returned by a driver on a JSON/JSONB column, falling back to the raw string."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return decode_json(value)
+    except (ValueError, TypeError):
+        return value
+
+
 def _without_generated_values(rows: "list[dict[str, Any]]", columns: "list[_TableColumn]") -> "list[dict[str, Any]]":
-    """Return exported rows without the values of generated columns."""
+    """Return exported rows without generated columns and with string JSON cells decoded."""
     generated = _generated_column_names(columns)
-    if not generated:
+    json_columns = {column.name for column in columns if column.data_type in _JSON_TYPE_NAMES}
+    if not generated and not json_columns:
         return rows
-    return [{key: value for key, value in row.items() if key not in generated} for row in rows]
+    return [
+        {
+            key: _decode_exported_json_value(value) if key in json_columns else value
+            for key, value in row.items()
+            if key not in generated
+        }
+        for row in rows
+    ]
 
 
 def _decode_bytes(value: Any) -> Any:
@@ -992,6 +1077,19 @@ def _decode_uuid(value: Any) -> Any:
     return convert_uuid(value) if isinstance(value, str) else value
 
 
+def _encode_json_column_value(value: Any) -> str:
+    """Encode a JSON column value to JSON text, preserving legacy pre-encoded JSON object/array strings."""
+    if isinstance(value, str) and value.strip()[:1] in {"{", "["}:
+        try:
+            decoded = decode_json(value)
+        except (ValueError, TypeError):
+            pass
+        else:
+            if isinstance(decoded, (dict, list)):
+                return encode_json(decoded)
+    return encode_json(value)
+
+
 def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] | None":
     """Return the converter from a JSON value to the driver value for a column type, if any."""
     if data_type.endswith("]"):
@@ -1000,8 +1098,8 @@ def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] 
         return _decode_bytes
     if family == "sqlite":
         return None
-    if data_type in {"json", "jsonb"}:
-        return encode_json if family in _JSON_VALUE_FAMILIES else None
+    if data_type in _JSON_TYPE_NAMES:
+        return _encode_json_column_value if family in _JSON_VALUE_FAMILIES else None
     if data_type.startswith(("timestamp", "datetime")):
         return _decode_datetime
     if data_type == "date":
@@ -1034,10 +1132,19 @@ def _decode_row_values(rows: "list[dict[str, Any]]", family: str, columns: "list
 
 
 def _conflict_clause(
-    family: str, columns: "list[str]", conflict_keys: "tuple[str, ...]", always_identity: "set[str]"
+    family: str,
+    columns: "list[str]",
+    conflict_keys: "tuple[str, ...]",
+    always_identity: "set[str]",
+    excluded_updates: "set[str] | None" = None,
 ) -> exp.OnConflict:
-    """Return the upsert clause that updates non-key, non-identity columns on a key conflict."""
-    updates = [column for column in columns if column not in conflict_keys and column not in always_identity]
+    """Return the upsert clause that updates non-key, non-identity, non-excluded columns on a key conflict."""
+    excluded = excluded_updates or set()
+    updates = [
+        column
+        for column in columns
+        if column not in conflict_keys and column not in always_identity and column not in excluded
+    ]
     if family == "mysql":
         assignments = [
             exp.EQ(
@@ -1067,6 +1174,7 @@ def _table_insert_statement(
     columns: "list[str]",
     conflict_keys: "tuple[str, ...]",
     table_columns: "list[_TableColumn]",
+    excluded_updates: "set[str] | None" = None,
 ) -> "Insert | str":
     """Return an INSERT with a named placeholder per quoted column, upserting on conflict keys.
 
@@ -1082,10 +1190,64 @@ def _table_insert_statement(
     insert_expression = statement.get_insert_expression()
     always_identity = {column.name for column in table_columns if column.identity_kind == "a"}
     if conflict_keys:
-        insert_expression.set("conflict", _conflict_clause(family, columns, conflict_keys, always_identity))
+        insert_expression.set(
+            "conflict", _conflict_clause(family, columns, conflict_keys, always_identity, excluded_updates)
+        )
     if family != "postgres" or always_identity.isdisjoint(columns):
         return statement
     return insert_expression.sql(dialect=dialect).replace(") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1)
+
+
+def _insert_table_rows_sync(
+    driver: "SyncDriverAdapterBase",
+    dialect: "DialectType",
+    family: str,
+    table: str,
+    rows: "list[dict[str, Any]]",
+    columns: "list[_TableColumn]",
+    conflict_keys: "tuple[str, ...]",
+    excluded_updates: "set[str]",
+    batch_size: int,
+    *,
+    ignore_unknown_columns: bool = False,
+) -> int:
+    """Prepare and insert fixture rows for a single table synchronously, returning the loaded row count."""
+    if not rows:
+        return 0
+    _drop_generated_values(rows, columns, ignore_unknown_columns=ignore_unknown_columns)
+    if not rows:
+        return 0
+    _decode_row_values(rows, family, columns)
+    statement = _table_insert_statement(dialect, family, table, list(rows[0]), conflict_keys, columns, excluded_updates)
+    for start in range(0, len(rows), batch_size):
+        driver.execute_many(statement, rows[start : start + batch_size])
+    return len(rows)
+
+
+async def _insert_table_rows_async(
+    driver: "AsyncDriverAdapterBase",
+    dialect: "DialectType",
+    family: str,
+    table: str,
+    rows: "list[dict[str, Any]]",
+    columns: "list[_TableColumn]",
+    conflict_keys: "tuple[str, ...]",
+    excluded_updates: "set[str]",
+    batch_size: int,
+    *,
+    ignore_unknown_columns: bool = False,
+) -> int:
+    """Prepare and insert fixture rows for a single table asynchronously, returning the loaded row count."""
+    if not rows:
+        return 0
+    _drop_generated_values(rows, columns, ignore_unknown_columns=ignore_unknown_columns)
+    if not rows:
+        return 0
+    _decode_row_values(rows, family, columns)
+    statement = _table_insert_statement(dialect, family, table, list(rows[0]), conflict_keys, columns, excluded_updates)
+    for start in range(0, len(rows), batch_size):
+        await driver.execute_many(statement, rows[start : start + batch_size])
+    return len(rows)
 
 
 def _is_orderable_type(data_type: str) -> bool:
