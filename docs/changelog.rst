@@ -14,6 +14,10 @@ Unreleased
 
 **Added:**
 
+* BigQuery supports native query resource controls,
+  explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
+  stream modes while retaining the atomic PENDING default.
+
 * Added an IBM Db2 adapter for Db2 LUW 11.5 and later with sync
   (``Db2SyncConfig``) and async (``Db2AsyncConfig``) configurations built on
   ``ibm_db``. It includes connection pooling, catalog reflection, migrations,

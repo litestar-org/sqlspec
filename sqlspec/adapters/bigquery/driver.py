@@ -6,6 +6,7 @@ type coercion, error handling, and query job management.
 
 import io
 from collections.abc import Mapping
+from contextlib import suppress
 from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
 
@@ -15,6 +16,7 @@ from sqlspec.adapters.bigquery._typing import BIGQUERY_POLLING_DEFAULT_VALUE as 
 from sqlspec.adapters.bigquery._typing import (
     BigQueryConnection,
     BigQueryCursor,
+    BigQueryQueryJobConfig,
     BigQuerySessionContext,
     BigQueryStorageWriteModule,
     BigQueryStorageWriteTypes,
@@ -147,7 +149,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._literal_inliner = build_literal_inlining_transform(json_serializer=self._json_serializer)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
+        default_job_config = features.get("default_query_job_config")
+        if default_job_config is None:
+            connection_default = getattr(connection, "default_query_job_config", None)
+            if isinstance(connection_default, BigQueryQueryJobConfig):
+                default_job_config = connection_default
+        self._default_query_job_config: QueryJobConfig | None = default_job_config
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._job_result_kwargs_defaults = self._build_job_result_kwargs(features)
@@ -725,12 +732,21 @@ class BigQueryDriver(SyncDriverAdapterBase):
         else:
             return cast("bigquery_storage.BigQueryReadClient | None", client)
 
-    def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
-        """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
+    def _load_arrow_via_storage_write_api(
+        self, table: str, arrow_table: "Any", *, stream_type: str | None = None
+    ) -> "StorageTelemetry":
+        """Ingest an Arrow table via BigQuery Storage Write API using native arrow_rows."""
         if BigQueryStorageWriteModule is None or BigQueryStorageWriteTypes is None:
             msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion"
             raise ImportError(msg)
         types = BigQueryStorageWriteTypes
+
+        resolved_stream_type = stream_type or self.driver_features.get("storage_write_stream_type", "PENDING")
+        normalized_stream_type = str(resolved_stream_type).upper()
+        if normalized_stream_type not in {"COMMITTED", "PENDING"}:
+            msg = f"Unsupported storage_write_stream_type '{resolved_stream_type}'. Expected 'COMMITTED' or 'PENDING'."
+            raise ImproperConfigurationError(msg)
+        is_committed = normalized_stream_type == "COMMITTED"
 
         project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 
@@ -741,24 +757,33 @@ class BigQueryDriver(SyncDriverAdapterBase):
             credentials = getattr(self.connection, "_credentials", None)
             client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
+        write_stream_type_enum = types.WriteStream.Type.COMMITTED if is_committed else types.WriteStream.Type.PENDING
         write_stream = client.create_write_stream(
-            parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)
+            parent=parent, write_stream=types.WriteStream(type_=write_stream_type_enum)
         )
         stream_name = write_stream.name
 
-        requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
-        if requests:
-            for response in client.append_rows(requests=iter(requests)):
-                if response.error.code:
-                    msg = f"Storage Write API append failed: {response.error.message}"
-                    raise StorageOperationFailedError(msg)
+        try:
+            requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
+            if requests:
+                for response in client.append_rows(requests=iter(requests)):
+                    if response.error.code:
+                        msg = f"Storage Write API append failed: {response.error.message}"
+                        raise StorageOperationFailedError(msg)  # noqa: TRY301
+
+        except BaseException:
+            with suppress(Exception):
+                client.finalize_write_stream(name=stream_name)
+            raise
+
         client.finalize_write_stream(name=stream_name)
-        commit = client.batch_commit_write_streams(
-            request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
-        )
-        if getattr(commit, "stream_errors", None):
-            msg = f"Storage Write API commit failed: {commit.stream_errors}"
-            raise StorageOperationFailedError(msg)
+        if not is_committed:
+            commit = client.batch_commit_write_streams(
+                request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
+            )
+            if getattr(commit, "stream_errors", None):
+                msg = f"Storage Write API commit failed: {commit.stream_errors}"
+                raise StorageOperationFailedError(msg)
 
         telemetry_payload = self._ingest_telemetry(arrow_table, format_label="arrow-storage-write")
         telemetry_payload["destination"] = table

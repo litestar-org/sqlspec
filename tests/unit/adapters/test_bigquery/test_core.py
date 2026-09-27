@@ -526,3 +526,25 @@ def test_result_timeout_uses_query_job() -> None:
 
     assert len(connection.query_calls) == 1
     assert connection.job.result_calls[0]["timeout"] == 5.0
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"), [(int, "INT64"), (bool, "BOOL"), (float, "FLOAT64"), (str, "STRING")]
+)
+def test_declared_empty_array_preserves_element_type(declared: type, expected: str) -> None:
+    from sqlspec.adapters.bigquery.core import create_parameters
+    from sqlspec.core import TypedParameter
+
+    parameter = create_parameters({"values": TypedParameter([], declared)})[0]
+    assert parameter.to_api_repr()["parameterType"] == {"type": "ARRAY", "arrayType": {"type": expected}}
+
+
+def test_native_default_job_config_guides_fast_path() -> None:
+    from sqlspec.core import SQL
+
+    connection = _RecordingConnection()
+    native_defaults = QueryJobConfig(priority="BATCH")
+    connection.default_query_job_config = native_defaults
+    driver = BigQueryDriver(cast("Any", connection))
+    assert driver._default_query_job_config is native_defaults
+    assert driver._can_use_query_and_wait(SQL("SELECT 1"), "SELECT 1") is False

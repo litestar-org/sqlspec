@@ -60,6 +60,10 @@ class BigQueryConnectionParams(TypedDict):
     maximum_bytes_billed: NotRequired[int]
     query_timeout_ms: NotRequired[int]
     job_timeout_ms: NotRequired[int]
+    labels: NotRequired["dict[str, str]"]
+    priority: NotRequired[Literal["INTERACTIVE", "BATCH"]]
+    reservation: NotRequired[str]
+    max_slots: NotRequired[int]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -125,6 +129,7 @@ class BigQueryDriverFeatures(TypedDict):
     query_page_size: NotRequired[int]
     query_max_results: NotRequired[int]
     enable_storage_write_api: NotRequired[bool]
+    storage_write_stream_type: NotRequired[Literal["COMMITTED", "PENDING"]]
     enable_native_storage: NotRequired[bool]
     native_export_connection: NotRequired[str]
 
@@ -371,10 +376,25 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if query_timeout_ms is not None:
             job_config.job_timeout_ms = query_timeout_ms
 
-        # job_timeout_ms intentionally wins when both timeout aliases are configured.
         job_timeout_ms = self.connection_config.get("job_timeout_ms")
         if job_timeout_ms is not None:
             job_config.job_timeout_ms = job_timeout_ms
+
+        labels = self.connection_config.get("labels")
+        if labels is not None:
+            job_config.labels = labels
+
+        priority = self.connection_config.get("priority")
+        if priority is not None:
+            job_config.priority = priority.upper()
+
+        reservation = self.connection_config.get("reservation")
+        if reservation is not None:
+            job_config.reservation = reservation
+
+        max_slots = self.connection_config.get("max_slots")
+        if max_slots is not None:
+            job_config.max_slots = max_slots
 
         self.connection_config["default_query_job_config"] = job_config
 
