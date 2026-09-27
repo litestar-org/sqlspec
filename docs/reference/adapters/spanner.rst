@@ -139,3 +139,15 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKRetentionConfig
    :members:
    :show-inheritance:
+
+Native execution controls
+-------------------------
+
+``query_options`` can be configured on the driver, supplied when opening a
+session, or overridden per call. They apply to queries and single DML operations;
+native batch DML does not accept them. ``last_statement=True`` marks final
+transaction DML, including only the final statement of a script.
+
+Opt-in Arrow Batch Write ingestion works from database-backed read sessions.
+Mutation groups commit independently. Arrow overwrite retains transactional
+delete-and-insert behavior without partitioned DML or Batch Write.

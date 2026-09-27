@@ -314,6 +314,8 @@ def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], A
     """Convert a native Spanner JSON cell using the configured deserializer."""
     if isinstance(value, JsonObject):
         json_value = cast("Any", value).serialize()
+        if json_value is None:
+            return None
     elif isinstance(value, str):
         json_value = value
     else:

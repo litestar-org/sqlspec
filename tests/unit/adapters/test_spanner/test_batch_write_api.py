@@ -117,3 +117,16 @@ def test_batch_write_overwrite_uses_transactional_mutations(batch_write_driver: 
     assert conn.execute_update_calls and "DELETE FROM users WHERE TRUE" in conn.execute_update_calls[0]
     assert conn.insert_or_update_calls == [("users", ["id"], [[1]])]
     assert conn.database.mutation_groups_obj.batch_write_calls == 0
+
+
+def test_batch_write_accepts_database_backed_snapshot() -> None:
+    from types import SimpleNamespace
+
+    database = _FakeDatabase()
+    snapshot = SimpleNamespace(_session=_FakeSession(database))
+    driver = SpannerSyncDriver(
+        cast("Any", snapshot), driver_features={"storage_capabilities": CAPABILITIES, "enable_batch_write_api": True}
+    )
+    job = driver.load_from_arrow("users", pa.table({"id": [1]}))
+    assert job.telemetry["rows_processed"] == 1
+    assert database.mutation_groups_obj.batch_write_calls == 1

@@ -173,6 +173,7 @@ class SpannerDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     retry: "NotRequired[Retry | None]"
     timeout: "NotRequired[float | None]"
+    query_options: "NotRequired[ExecuteSqlRequest.QueryOptions | dict[str, Any] | None]"
     request_options: "NotRequired[RequestOptions | dict[str, Any] | None]"
     directed_read_options: "NotRequired[DirectedReadOptions | None]"
     session_labels: "NotRequired[dict[str, str]]"
@@ -480,6 +481,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -497,6 +499,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 Snapshot (False).
             request_options: Session-scoped RequestOptions for Spanner statements.
             directed_read_options: Session-scoped DirectedReadOptions for reads.
+            query_options: Session-scoped QueryOptions for Spanner statements.
             retry: Session-scoped retry policy for Spanner statement calls.
             timeout: Session-scoped timeout for Spanner statement calls.
             **kwargs: Additional keyword arguments.
@@ -514,6 +517,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             driver_features=self._session_driver_features(
                 request_options=request_options,
                 directed_read_options=directed_read_options,
+                query_options=query_options,
                 retry=retry,
                 timeout=timeout,
             ),
@@ -526,6 +530,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -537,6 +542,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             transaction=True,
             request_options=request_options,
             directed_read_options=directed_read_options,
+            query_options=query_options,
             retry=retry,
             timeout=timeout,
             **kwargs,
@@ -548,6 +554,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -563,6 +570,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             transaction=False,
             request_options=request_options,
             directed_read_options=directed_read_options,
+            query_options=query_options,
             retry=retry,
             timeout=timeout,
             **kwargs,
@@ -573,16 +581,25 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         *,
         request_options: "RequestOptions | dict[str, Any] | None",
         directed_read_options: "DirectedReadOptions | None",
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None",
         timeout: "float | None",
     ) -> "dict[str, Any]":
-        if request_options is None and directed_read_options is None and retry is None and timeout is None:
+        if (
+            request_options is None
+            and directed_read_options is None
+            and query_options is None
+            and retry is None
+            and timeout is None
+        ):
             return self.driver_features
         driver_features = dict(self.driver_features)
         if request_options is not None:
             driver_features["request_options"] = request_options
         if directed_read_options is not None:
             driver_features["directed_read_options"] = directed_read_options
+        if query_options is not None:
+            driver_features["query_options"] = query_options
         if retry is not None:
             driver_features["retry"] = retry
         if timeout is not None:

@@ -25,6 +25,9 @@ Unreleased
   and later when the SQLite runtime supports them. Choose a transaction lock
   mode or set the batch size for Arrow imports. Defaults stay the same.
 
+* Spanner forwards native query options and final-statement hints and
+  supports opt-in Batch Write from read sessions.
+
 * Arrow ODBC runs ``execute_many()`` one row at a time. It reports an unknown
   row count since the native driver does not return the number of changed rows.
 
