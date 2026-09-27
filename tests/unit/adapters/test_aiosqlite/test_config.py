@@ -237,6 +237,11 @@ def test_custom_aggregate_entry_requires_keys() -> None:
         AiosqliteConfig(driver_features={"custom_aggregates": [{"name": "agg", "narg": 1}]})
 
 
+def test_custom_window_function_entry_requires_keys() -> None:
+    with pytest.raises(ImproperConfigurationError, match="custom_window_functions"):
+        AiosqliteConfig(driver_features={"custom_window_functions": [{"name": "win", "narg": 1}]})
+
+
 def test_progress_handler_interval_must_be_positive() -> None:
     with pytest.raises(ImproperConfigurationError, match="progress_handler_interval"):
         AiosqliteConfig(driver_features={"progress_handler": lambda: None, "progress_handler_interval": 0})
