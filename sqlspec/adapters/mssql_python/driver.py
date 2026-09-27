@@ -198,7 +198,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         successful_count = 0
         for stmt in statements:
-            _execute_cursor(cursor, stmt, prepared_parameters, use_prepare=False)
+            _execute_cursor(cursor, stmt, prepared_parameters)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -272,12 +272,10 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
                 _execute_cursor(cursor, "SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None)
                 row: Any = cursor.fetchone()
                 user_name, current_schema = row[0], row[1]
-                _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None, use_prepare=False)
+                _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None)
                 self._migration_schema_restore = (str(user_name), str(current_schema))
                 return
-            _execute_cursor(
-                cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None, use_prepare=False
-            )
+            _execute_cursor(cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None)
 
     def reset_migration_session_schema(self) -> None:
         """Restore the user's default schema captured by set_migration_session_schema and commit it."""
@@ -285,7 +283,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
             return
         user_name, previous_schema = self._migration_schema_restore
         with self.with_cursor(self.connection) as cursor:
-            _execute_cursor(cursor, _alter_default_schema_sql(user_name, previous_schema), None, use_prepare=False)
+            _execute_cursor(cursor, _alter_default_schema_sql(user_name, previous_schema), None)
         self.connection.commit()
         self._migration_schema_restore = None
 
@@ -555,19 +553,11 @@ def _quote_mssql_table(table: str) -> str:
     return ".".join(_quote_tsql_identifier(part) for part in split_qualified_identifier(table))
 
 
-def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any, *, use_prepare: bool = True) -> None:
-    if use_prepare or parameters:
-        if parameters is None:
-            cursor.execute(sql)
-        else:
-            cursor.execute(sql, parameters)
-        return
-    try:
-        cursor.execute(sql, use_prepare=False)
-    except TypeError as exc:
-        if "use_prepare" not in str(exc):
-            raise
+def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:
+    if parameters is None:
         cursor.execute(sql)
+    else:
+        cursor.execute(sql, parameters)
 
 
 def _cursor_rowcount(cursor: "MssqlPythonRawCursor") -> int:

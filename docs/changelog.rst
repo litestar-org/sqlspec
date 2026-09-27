@@ -48,8 +48,7 @@ Unreleased
 
 **Fixed:**
 
-* The mssql-python adapter runs scripts and schema changes without a prepare
-  step when no values are bound. Arrow read failures use SQLSpec error types.
+* Arrow read failures in the mssql-python adapter use SQLSpec error types.
 * ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
   question marks in quoted identifiers, literals, and comments.
 
