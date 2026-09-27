@@ -35,7 +35,6 @@ from sqlspec.core import (
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
@@ -182,6 +181,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if prepared_parameters:
             parameter_sets = cast("list[Any]", prepared_parameters)
             cursor.executemany(sql, parameter_sets)
+
             row_count = len(parameter_sets) if statement.is_modifying_operation() else resolve_rowcount(cursor)
         else:
             row_count = 0
@@ -367,62 +367,38 @@ class DuckDBDriver(SyncDriverAdapterBase):
         exc_handler = self.handle_database_exceptions()
         arrow_result: ArrowResult | None = None
 
-        if return_format in {"reader", "batches"}:
-            cursor_manager = self.with_cursor(self.connection)
-            cursor_obj: Any = None
-            arrow_reader: Any = None
-            with exc_handler:
-                cursor_obj = cursor_manager.__enter__()
-                try:
-                    sql, driver_params = self._compiled_sql(prepared_statement, config)
-                    cursor_obj.execute(sql, driver_params or ())
-                    arrow_reader = (
-                        cursor_obj.to_arrow_reader(batch_size)
-                        if batch_size is not None
-                        else cursor_obj.to_arrow_reader()
-                    )
-                except Exception:
-                    cursor_manager.__exit__(None, None, None)
-                    cursor_obj = None
-                    raise
-
-            self._check_pending_exception(exc_handler)
-            if cursor_obj is None or arrow_reader is None:
-                msg = "DuckDB did not return an Arrow reader."
-                raise SQLSpecError(msg)
-            close_callback = (
-                cursor_obj.close
-                if cursor_obj is not self.connection and hasattr(cursor_obj, "close")
-                else lambda: cursor_manager.__exit__(None, None, None)
-            )
-            return build_arrow_result_from_reader(
-                prepared_statement,
-                arrow_reader_with_deferred_close(arrow_reader, close_callback),
-                return_format=return_format,
-                batch_size=batch_size,
-                arrow_schema=arrow_schema,
-            )
-
         with self.with_cursor(self.connection) as cursor, exc_handler:
             sql, driver_params = self._compiled_sql(prepared_statement, config)
 
             cursor.execute(sql, driver_params or ())
 
-            arrow_table = cursor.to_arrow_table()
+            if return_format in {"reader", "batches"}:
+                arrow_reader = (
+                    cursor.to_arrow_reader(batch_size) if batch_size is not None else cursor.to_arrow_reader()
+                )
+                arrow_result = build_arrow_result_from_reader(
+                    prepared_statement,
+                    arrow_reader,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
+            else:
+                arrow_table = cursor.to_arrow_table()
 
-            arrow_result = build_arrow_result_from_table(
-                prepared_statement,
-                arrow_table,
-                return_format=return_format,
-                batch_size=batch_size,
-                arrow_schema=arrow_schema,
-            )
+                arrow_result = build_arrow_result_from_table(
+                    prepared_statement,
+                    arrow_table,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
 
         self._check_pending_exception(exc_handler)
 
         if arrow_result is None:
             msg = "Unreachable"
-            raise RuntimeError(msg)
+            raise RuntimeError(msg)  # pragma: no cover
 
         return arrow_result
 
@@ -669,14 +645,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
         first_row = rows[0]
 
         if isinstance(first_row, dict):
+            keys = column_names or list(first_row.keys())
             if any(not isinstance(row, dict) for row in rows):
                 return None
             import pyarrow as pa
 
-            table = pa.Table.from_pylist(rows)
-            if column_names and [f.name for f in table.schema] != column_names:
-                return table.select(column_names)
-            return table
+            return pa.table({key: [row.get(key) for row in rows] for key in keys})
 
         if isinstance(first_row, (list, tuple)):
             values = list(first_row)
@@ -686,7 +660,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 return None
             import pyarrow as pa
 
-            return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
+            return pa.table({name: [row[index] for row in rows] for index, name in enumerate(column_names)})
 
         return None
 

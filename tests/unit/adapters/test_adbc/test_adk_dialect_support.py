@@ -280,6 +280,6 @@ def test_memory_store_detects_postgresql_from_uri_and_formats_placeholders() -> 
     store = AdbcADKMemoryStore(config)
 
     assert store.dialect == "postgresql"
-    formatted = store._format_sql("DELETE FROM adk_memory_entries WHERE session_id = ? AND app_name = ?")
-    assert formatted == "DELETE FROM adk_memory_entries WHERE session_id = $1 AND app_name = $2"
+    formatted = store._format_sql('DELETE FROM "memory?" WHERE session_id = ? AND app_name = ?')
+    assert formatted == 'DELETE FROM "memory?" WHERE session_id = $1 AND app_name = $2'
     assert store._json_placeholder() == "?::jsonb"

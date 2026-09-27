@@ -10,6 +10,7 @@ from sqlspec.adapters.adbc.core import (
     is_shared_object_driver,
     resolve_dialect_from_config,
 )
+from sqlspec.core.parameters._validator import PARAMETER_REGEX
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -1354,12 +1355,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return sql
         index = 0
 
-        def replace_placeholder(_match: Any) -> str:
+        def replace_placeholder(match: "re.Match[str]") -> str:
             nonlocal index
+            if match.lastgroup != "qmark":
+                return match.group(0)
             index += 1
             return f"${index}"
 
-        return re.sub(r"\?", replace_placeholder, sql)
+        return PARAMETER_REGEX.sub(replace_placeholder, sql)
 
     def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
         """Execute parameterized SQL using the current ADBC dialect's placeholder style."""

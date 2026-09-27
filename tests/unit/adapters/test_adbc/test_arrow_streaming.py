@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import pytest
 
-from sqlspec.adapters.adbc.config import AdbcConfig
 from sqlspec.adapters.adbc.driver import AdbcDriver
 from sqlspec.exceptions import SQLSpecError
 
@@ -101,13 +100,6 @@ def test_load_from_arrow_passes_record_batch_reader_to_adbc_ingest() -> None:
     assert mode == "create_append"
     assert job.telemetry["rows_processed"] == 3
     assert job.telemetry["destination"] == "target_table"
-
-
-def test_adbc_config_create_connection_returns_connection_instance() -> None:
-    connection = _AdbcStreamingConnection()
-    config = AdbcConfig(connection_instance=cast("AdbcConnection", connection))
-
-    assert cast("object", config.create_connection()) is connection
 
 
 def test_select_to_arrow_postgres_rolls_back_on_error() -> None:

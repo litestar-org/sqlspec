@@ -11,19 +11,27 @@ from duckdb import BinderException as DuckDBBinderException
 from duckdb import CatalogException as DuckDBCatalogException
 from duckdb import ConstraintException as DuckDBConstraintException
 from duckdb import ConversionException as DuckDBConversionException
-from duckdb import DuckDBPyConnection as DuckDBConnection
+from duckdb import DuckDBPyConnection
 from duckdb import InterruptException as DuckDBInterruptException
 from duckdb import IOException as DuckDBIOException
 from duckdb import ParserException as DuckDBParserException
 from duckdb import PermissionException as DuckDBPermissionException
 from duckdb import TransactionException as DuckDBTransactionException
 
+_DuckDBConnection = DuckDBPyConnection
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
+    from typing import TypeAlias
 
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
     from sqlspec.core import StatementConfig
+
+    DuckDBConnection: TypeAlias = _DuckDBConnection
+
+if not TYPE_CHECKING:
+    DuckDBConnection = _DuckDBConnection
 
 __all__ = (
     "DuckDBBinderException",

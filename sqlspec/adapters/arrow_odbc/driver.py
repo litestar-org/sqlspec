@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from sqlglot import Dialect, exp
-from sqlglot.tokenizer_core import TokenType
+from sqlglot import exp
 
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcConnection, ArrowOdbcCursor, ArrowOdbcError, ArrowOdbcRawCursor
 from sqlspec.adapters.arrow_odbc.core import (
@@ -26,6 +25,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
+from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import ensure_pyarrow
@@ -33,7 +33,7 @@ from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core import ArrowResult, ParameterProfile, Statement, StatementConfig, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
@@ -155,19 +155,16 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             self._data_dictionary = ArrowOdbcDataDictionary(self._dialect)
         return self._data_dictionary
 
-    def _execute_non_query(self, cursor: "ArrowOdbcRawCursor", sql: str, prepared_parameters: Any) -> None:
-        if self._dialect == "mssql":
-            sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
-        parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
-        cursor.execute(query=sql, parameters=parameters)
-
     def dispatch_execute(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        compiled_statement, prepared_parameters = self._compiled_statement(statement, self.statement_config)
+        sql = compiled_statement.compiled_sql
+        if self._dialect == "mssql":
+            sql, prepared_parameters = _inline_mssql_pagination_parameters(
+                sql, prepared_parameters, compiled_statement.parameter_profile, statement.statement_config
+            )
+        parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
 
         if statement.returns_rows():
-            if self._dialect == "mssql":
-                sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
-            parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
             reader = self._read_arrow_batches(sql, parameters, self._chunk_size())
             table = self._normalize_table(_reader_to_table(reader))
             rows = table.to_pylist()
@@ -181,18 +178,12 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 row_format="dict",
             )
 
-        self._execute_non_query(cursor, sql, prepared_parameters)
+        cursor.execute(query=sql, parameters=parameters)
         return self.create_execution_result(cursor, rowcount_override=0)
 
     def dispatch_execute_many(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        if isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
-            for parameter_set in prepared_parameters:
-                self._execute_non_query(cursor, sql, parameter_set)
-            row_count = len(prepared_parameters) if statement.is_modifying_operation() else 0
-        else:
-            row_count = 0
-        return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
+        msg = "arrow-odbc does not expose a row-oriented executemany API; use bulk_insert_arrow() for Arrow ingestion."
+        raise NotImplementedError(msg)
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -215,9 +206,12 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         """Return a native Arrow ODBC row stream backed by record batches."""
         if not statement.returns_rows():
             return None
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        compiled_statement, prepared_parameters = self._compiled_statement(statement, self.statement_config)
+        sql = compiled_statement.compiled_sql
         if self._dialect == "mssql":
-            sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
+            sql, prepared_parameters = _inline_mssql_pagination_parameters(
+                sql, prepared_parameters, compiled_statement.parameter_profile, statement.statement_config
+            )
         return SyncRowStream(
             ArrowOdbcStreamSource(
                 self, sql, _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2"), chunk_size
@@ -323,9 +317,12 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         ensure_pyarrow()
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
+        compiled_statement, prepared_parameters = self._compiled_statement(prepared_statement, config)
+        sql = compiled_statement.compiled_sql
         if self._dialect == "mssql":
-            sql, prepared_parameters = _inline_mssql_pagination_parameters(sql, prepared_parameters)
+            sql, prepared_parameters = _inline_mssql_pagination_parameters(
+                sql, prepared_parameters, compiled_statement.parameter_profile, config
+            )
         resolved_batch_size = batch_size or self._chunk_size()
         table: Any | None = None
         arrow_result: ArrowResult | None = None
@@ -512,20 +509,26 @@ def _statement_dialect_for(dialect: str) -> str:
 
 
 _DB2_PLAIN_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_TSQL_DIALECT: Final = Dialect.get_or_raise("tsql")
-_MSSQL_TOP_MIN_TOKEN_INDEX: Final = 2
-_MSSQL_FETCH_MIN_TOKEN_INDEX: Final = 2
-_MSSQL_FETCH_TAIL_TOKENS: Final = 2
-_MSSQL_ROW_TOKEN_TYPES: Final = frozenset({TokenType.ROW, TokenType.ROWS})
-_MSSQL_FETCH_DIR_TOKEN_TYPES: Final = frozenset({TokenType.FIRST, TokenType.NEXT})
+_MSSQL_SQL_GAP: Final = r"(?:\s|/\*.*?\*/|--[^\r\n]*(?:\r?\n|$))*"
+_MSSQL_PAGINATION_PATTERN: Final = re.compile(
+    rf"\bTOP{_MSSQL_SQL_GAP}\({_MSSQL_SQL_GAP}(?P<top>\?){_MSSQL_SQL_GAP}\)"
+    rf"|\bOFFSET{_MSSQL_SQL_GAP}(?P<offset>\?){_MSSQL_SQL_GAP}ROWS?\b"
+    rf"|\bFETCH{_MSSQL_SQL_GAP}(?:FIRST|NEXT){_MSSQL_SQL_GAP}"
+    rf"(?P<fetch>\?){_MSSQL_SQL_GAP}ROWS?{_MSSQL_SQL_GAP}ONLY\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
-def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[str, object]:
-    """Inline integer parameters bound to T-SQL TOP (?), OFFSET, and FETCH clauses.
+def _inline_mssql_pagination_parameters(
+    sql: str,
+    parameters: object,
+    parameter_profile: "ParameterProfile | None",
+    statement_config: "StatementConfig | None" = None,
+) -> tuple[str, object]:
+    """Inline pagination values using the compiler's lexical parameter positions.
 
-    Uses sqlglot's T-SQL tokenizer so placeholders are counted in exact SQL
-    lexical order while ignoring question marks inside string literals or SQL
-    comments.
+    The profile excludes placeholders inside comments and quoted strings and
+    preserves binding order across CTEs. Reuse it instead of tokenizing SQL again.
     """
     if not isinstance(parameters, (list, tuple)) or not parameters:
         return sql, parameters
@@ -533,53 +536,35 @@ def _inline_mssql_pagination_parameters(sql: str, parameters: object) -> tuple[s
     if "TOP" not in upper_sql and "OFFSET" not in upper_sql and "FETCH" not in upper_sql:
         return sql, parameters
 
-    tokens = _TSQL_DIALECT.tokenize(sql)
-    replacements: list[tuple[int, int, str]] = []
+    parameter_info = parameter_profile.parameters if parameter_profile is not None else ()
+    if parameter_profile is None or (
+        statement_config is not None
+        and (
+            statement_config.output_transformer is not None
+            or statement_config.parameter_config.output_transformer is not None
+        )
+    ):
+        # Output transformers run after profile construction and can shift offsets.
+        parameter_info = tuple(ParameterValidator(cache_max_size=0).extract_parameters(sql))
+    positions = {parameter.position: parameter.ordinal for parameter in parameter_info}
+    replacements: list[tuple[int, str]] = []
     consumed: set[int] = set()
-    parameter_index = 0
-    token_count = len(tokens)
-
-    for index, token in enumerate(tokens):
-        if token.token_type != TokenType.PLACEHOLDER:
+    for match in _MSSQL_PAGINATION_PATTERN.finditer(sql):
+        group = match.lastgroup
+        if group is None:
             continue
-        if (
-            parameter_index not in consumed
-            and parameter_index < len(parameters)
-            and (
-                (
-                    index >= _MSSQL_TOP_MIN_TOKEN_INDEX
-                    and tokens[index - 1].token_type == TokenType.L_PAREN
-                    and tokens[index - 2].token_type == TokenType.TOP
-                    and index + 1 < token_count
-                    and tokens[index + 1].token_type == TokenType.R_PAREN
-                )
-                or (
-                    index >= 1
-                    and tokens[index - 1].token_type == TokenType.OFFSET
-                    and index + 1 < token_count
-                    and tokens[index + 1].token_type in _MSSQL_ROW_TOKEN_TYPES
-                )
-                or (
-                    index >= _MSSQL_FETCH_MIN_TOKEN_INDEX
-                    and index + _MSSQL_FETCH_TAIL_TOKENS < token_count
-                    and tokens[index - 2].token_type == TokenType.FETCH
-                    and tokens[index - 1].token_type in _MSSQL_FETCH_DIR_TOKEN_TYPES
-                    and tokens[index + 1].token_type in _MSSQL_ROW_TOKEN_TYPES
-                    and tokens[index + 2].token_type == TokenType.VAR
-                    and tokens[index + 2].text.upper() == "ONLY"
-                )
-            )
-        ):
-            replacements.append((token.start, token.end + 1, str(_pagination_int(parameters[parameter_index]))))
-            consumed.add(parameter_index)
-        parameter_index += 1
+        position = match.start(group)
+        ordinal = positions.get(position)
+        if ordinal is None or ordinal >= len(parameters):
+            continue
+        replacements.append((position, str(_pagination_int(parameters[ordinal]))))
+        consumed.add(ordinal)
 
     if not consumed:
         return sql, parameters
-    for start, end, value in reversed(replacements):
-        sql = sql[:start] + value + sql[end:]
-    remaining = [value for index, value in enumerate(parameters) if index not in consumed]
-    return sql, remaining
+    for position, value in reversed(replacements):
+        sql = sql[:position] + value + sql[position + 1 :]
+    return sql, [value for index, value in enumerate(parameters) if index not in consumed]
 
 
 def _pagination_int(value: object) -> int:

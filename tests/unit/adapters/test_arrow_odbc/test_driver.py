@@ -20,7 +20,7 @@ from sqlspec.adapters.arrow_odbc import (
 )
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcError
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.core import LimitOffsetFilter, OrderByFilter
+from sqlspec.core import SQL, LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import (
     DatabaseConnectionError,
@@ -922,36 +922,31 @@ def test_mssql_top_preserves_data_bindings(
 ) -> None:
     from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
 
-    assert _inline_mssql_pagination_parameters(sql, parameters) == (expected_sql, expected_parameters)
+    statement = SQL(sql, parameters)
+    statement.compile()
+    assert _inline_mssql_pagination_parameters(sql, parameters, statement.get_processed_state().parameter_profile) == (
+        expected_sql,
+        expected_parameters,
+    )
 
 
 def test_mssql_top_rejects_noninteger_limit() -> None:
     from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
 
+    statement = SQL("SELECT TOP (?) id FROM t", ["3); DROP TABLE t; --"])
+    sql, parameters = statement.compile()
     with pytest.raises(ValueError):
-        _inline_mssql_pagination_parameters("SELECT TOP (?) id FROM t", ["3); DROP TABLE t; --"])
+        _inline_mssql_pagination_parameters(sql, parameters, statement.get_processed_state().parameter_profile)
 
 
 @pytest.mark.parametrize("suffix", ["", " PERCENT"])
 def test_mssql_top_rejects_fractional_limits(suffix: str) -> None:
     from sqlspec.adapters.arrow_odbc.driver import _inline_mssql_pagination_parameters
 
+    statement = SQL("SELECT TOP (?)" + suffix + " id FROM t", [12.5])
+    sql, parameters = statement.compile()
     with pytest.raises(ValueError, match="whole integers"):
-        _inline_mssql_pagination_parameters("SELECT TOP (?)" + suffix + " id FROM t", [12.5])
-
-
-def test_arrow_odbc_execute_many_iterates_parameter_sets() -> None:
-    """execute_many should execute each parameter set sequentially via _execute_non_query."""
-    connection = FakeConnection()
-    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
-
-    result = driver.execute_many("INSERT INTO items (id, name) VALUES (?, ?)", [(1, "alpha"), (2, "beta")])
-
-    assert result.rows_affected == 2
-    assert connection.executed == [
-        ("INSERT INTO items (id, name) VALUES (?, ?)", ["1", "alpha"]),
-        ("INSERT INTO items (id, name) VALUES (?, ?)", ["2", "beta"]),
-    ]
+        _inline_mssql_pagination_parameters(sql, parameters, statement.get_processed_state().parameter_profile)
 
 
 def test_arrow_odbc_select_to_arrow_reader_maps_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -962,3 +957,74 @@ def test_arrow_odbc_select_to_arrow_reader_maps_exceptions(monkeypatch: pytest.M
 
     with pytest.raises(SQLSpecError, match="ODBC database error"):
         driver.select_to_arrow("SELECT * FROM items", return_format="reader")
+
+
+@pytest.mark.parametrize("method", ["execute", "select_to_arrow"])
+def test_mssql_named_pagination_preserves_cte_binding_order(method: str) -> None:
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+    for offset, limit, value in [(10, 5, 42), (20, 7, 99)]:
+        getattr(driver, method)(
+            "WITH c AS (SELECT id FROM t ORDER BY id OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY) "
+            "SELECT * FROM c WHERE id > :value",
+            {"offset": offset, "limit": limit, "value": value},
+        )
+        call = connection.read_calls[-1]
+        assert f"OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY" in call["query"]
+        assert call["parameters"] == [str(value)]
+
+
+def test_mssql_prepared_pagination_reuses_compiler_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlglot import Dialect
+
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+    statement = driver.prepare_statement(
+        "SELECT TOP (:limit) id FROM t WHERE id > :value", (), kwargs={"limit": 2, "value": 7}
+    )
+    statement.compile()
+
+    def unexpected_tokenize(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Executing an already compiled statement must not tokenize again")
+
+    monkeypatch.setattr(Dialect, "tokenize", unexpected_tokenize)
+    with driver.with_cursor(driver.connection) as cursor:
+        driver.dispatch_execute(cursor, statement)
+        driver.dispatch_execute(cursor, statement)
+    assert [(call["query"], call["parameters"]) for call in connection.read_calls] == [
+        ("SELECT TOP (2) id FROM t WHERE id > ?", ["7"]),
+        ("SELECT TOP (2) id FROM t WHERE id > ?", ["7"]),
+    ]
+
+
+def test_arrow_odbc_execute_many_requires_native_bulk_ingestion() -> None:
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", FakeConnection()))
+    with pytest.raises(NotImplementedError, match="bulk_insert_arrow"):
+        driver.execute_many("UPDATE items SET name = ? WHERE id > ?", [("alpha", 0)])
+
+
+@pytest.mark.parametrize("parameter_transformer", [False, True])
+def test_mssql_pagination_after_output_transformer(parameter_transformer: bool) -> None:
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "Microsoft SQL Server"}
+    )
+
+    def prepend_comment(sql: str, parameters: Any) -> tuple[str, Any]:
+        return "/* trace */ " + sql, parameters
+
+    config = driver.statement_config
+    if parameter_transformer:
+        config = config.replace(parameter_config=config.parameter_config.replace(output_transformer=prepend_comment))
+    else:
+        config = config.replace(output_transformer=prepend_comment)
+    driver.select_to_arrow(
+        "SELECT TOP (:limit) id FROM t WHERE id > :value", {"limit": 2, "value": 7}, statement_config=config
+    )
+    call = connection.read_calls[-1]
+    assert call["query"] == "/* trace */ SELECT TOP (2) id FROM t WHERE id > ?"
+    assert call["parameters"] == ["7"]
