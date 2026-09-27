@@ -80,7 +80,8 @@ Unreleased
 
 * Spanner schema queries no longer require a table name. SQL output keeps JOIN
   hints and plain comments. Sequence statements keep qualified names and
-  ``IF NOT EXISTS`` guards.
+  ``IF NOT EXISTS`` guards. Cached row converters refresh when the configured
+  JSON deserializer changes.
 
 * ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
   question marks in quoted identifiers, literals, and comments.

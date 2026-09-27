@@ -12,6 +12,7 @@ from sqlspec.adapters.spanner.core import (
     resolve_column_names,
     resolve_row_plan,
 )
+from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.core import TypedParameter
 
 
@@ -75,6 +76,25 @@ def test_resolve_row_plan_caches_json_metadata_and_plan() -> None:
     assert first_column_plan is not None
     assert first_column_plan is second_column_plan
     assert first_column_plan[0][0] == 1
+
+
+def test_driver_row_plan_uses_changed_json_deserializer_with_reused_metadata() -> None:
+    fields = [_field("payload", TypeCode.JSON)]
+    rows = [('{"value":1}',)]
+    driver = SpannerSyncDriver(
+        cast("Any", object()), driver_features={"json_deserializer": lambda value: {"first": value}}
+    )
+
+    names, first_plan = driver._resolve_row_plan(fields)
+    first_rows, _ = collect_rows(rows, fields, column_names=names, column_plan=first_plan)
+    assert first_rows == [({"first": '{"value":1}'},)]
+
+    driver.driver_features["json_deserializer"] = lambda value: {"second": value}
+    names, second_plan = driver._resolve_row_plan(fields)
+    second_rows, _ = collect_rows(rows, fields, column_names=names, column_plan=second_plan)
+    assert second_rows == [({"second": '{"value":1}'},)]
+    assert second_plan is not first_plan
+    assert driver._resolve_row_plan(fields)[1] is second_plan
 
 
 def test_collect_rows_returns_original_rows_without_a_plan() -> None:
