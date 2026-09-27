@@ -62,11 +62,7 @@ class OracleMigrationTrackerMixin:
 
     def _tracking_table_builder(self) -> CreateTable:
         """Return an Oracle CREATE TABLE builder for the tracker table."""
-        table_name = self._normalize_oracle_identifier(self.version_table_name)
-        builder = sql.create_table(table_name)
-        if self.version_table_schema:
-            builder.in_schema(self._normalize_oracle_identifier(self.version_table_schema))
-        return builder
+        return sql.create_table(self.version_table)
 
     def _tracking_table_ddl(self) -> CreateTable:
         """Get Oracle-specific SQL builder for creating the tracking table.

@@ -402,21 +402,22 @@ def resolve_rowcount(cursor: Any) -> int:
 
 
 def resolve_many_rowcount(cursor: Any, parameters: Any) -> int:
-    """Resolve the affected rowcount of a batch, falling back to the number of parameter sets.
+    """Resolve a batch rowcount without assuming one affected row per parameter set.
 
     Args:
         cursor: Cursor that executed the batch.
         parameters: Parameter sets passed to ``executemany``.
 
     Returns:
-        The driver-reported rowcount, else the number of parameter sets, else 0.
+        The driver-reported rowcount, or -1 when the count is unknown.
+        An empty batch has no affected rows.
     """
     count = resolve_rowcount(cursor)
     if count >= 0:
         return count
-    if parameters is not None and hasattr(parameters, "__len__"):
-        return len(parameters)
-    return 0
+    if parameters is None or (isinstance(parameters, (list, tuple)) and not parameters):
+        return 0
+    return -1
 
 
 def collect_rows(

@@ -97,3 +97,15 @@ def test_normalize_spanner_tokens_without_sql_fallback() -> None:
     normalized = normalize_spanner_tokens(raw_tokens)
     assert len(normalized) == 2
     assert normalized[0].comments == ["@ LOCK_SCANNED_RANGES=exclusive, OPTIMIZER_VERSION=6"]
+
+
+def test_join_hint_round_trip() -> None:
+    sql = "SELECT * FROM t JOIN @{JOIN_METHOD=HASH_JOIN} u ON t.id = u.id"
+    parsed = parse_one(sql, dialect="spanner")
+    assert parsed.sql(dialect="spanner") == sql
+    assert "JOIN /*@ JOIN_METHOD=HASH_JOIN */ u" in parsed.sql(dialect="spangres")
+
+
+def test_at_comment_on_expression_is_preserved() -> None:
+    sql = "SELECT 1 /* @ ordinary comment */"
+    assert "@ ordinary comment" in parse_one(sql, dialect="spanner").sql(dialect="spanner")

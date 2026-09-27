@@ -1,7 +1,7 @@
 """Regression tests for DDL builder Wave 1 fixes."""
 
 import pytest
-from sqlglot import exp
+from sqlglot import exp, parse_one
 
 from sqlspec import sql
 from sqlspec.builder._ddl import (
@@ -238,3 +238,73 @@ def test_ddl_builders_preserve_quoted_and_schema_qualified_identifiers() -> None
     assert alter_from_in_schema.sql.startswith('ALTER TABLE "App"."Tracker" ADD COLUMN')
     for stmt in (create_from_qualified, create_from_in_schema, drop_stmt, alter_from_qualified, alter_from_in_schema):
         assert '""' not in stmt.sql
+
+
+def test_ddl_identifiers_with_spaces_and_escaped_quotes() -> None:
+    config = StatementConfig(dialect="postgres")
+    schema = '"App Schema"'
+    table = '"Migration ""Tracker"""'
+    qualified = f"{schema}.{table}"
+
+    create = sql.create_table(table).in_schema(schema).column("id", "INT").to_statement(config)
+    alter = sql.alter_table(qualified).add_column("name", "TEXT").to_statement(config)
+    drop = sql.drop_table(qualified).to_statement(config)
+
+    assert create.sql.startswith(f"CREATE TABLE {qualified} (")
+    assert alter.sql.startswith(f"ALTER TABLE {qualified} ADD COLUMN")
+    assert drop.sql == f"DROP TABLE {qualified}"
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "db2", "snowflake"])
+@pytest.mark.parametrize("table", ['"History"."Migration Tracker"', "history.tracker"])
+def test_ddl_quoting_survives_dialect_rendering(dialect: str, table: str) -> None:
+    expected = '"history"."tracker"' if dialect == "snowflake" and table == "history.tracker" else table
+    config = StatementConfig(dialect=dialect)
+    builders = (
+        (sql.create_table(table).column("id", "INT"), "CREATE TABLE"),
+        (sql.alter_table(table).add_column("name", "TEXT"), "ALTER TABLE"),
+        (sql.drop_table(table), "DROP TABLE"),
+    )
+    for builder, command in builders:
+        assert builder.build(dialect=dialect).sql.startswith(f"{command} {expected}")
+        assert builder.to_statement(config).sql.startswith(f"{command} {expected}")
+
+
+@pytest.mark.parametrize("dialect", ["oracle", "db2"])
+@pytest.mark.parametrize("quoted", [True, False])
+def test_tracking_table_dml_preserves_table_quotes(dialect: str, quoted: bool) -> None:
+    table = '"History"."Migration Tracker"' if quoted else "history.tracker"
+    config = StatementConfig(dialect=dialect)
+    builders = (
+        sql.select("version_num").from_(table),
+        sql.insert(table).columns("version_num").values("0001"),
+        sql.update(table).set("version_num", "0002"),
+        sql.delete().from_(table),
+    )
+    for builder in builders:
+        statement = builder.to_statement(config)
+        assert builder.to_statement(config).sql == statement.sql
+        parsed = parse_one(statement.sql, read=dialect)
+        target = parsed.find(exp.Table)
+        assert isinstance(target, exp.Table)
+        assert target.name == ("Migration Tracker" if quoted else "tracker")
+        assert target.db == ("History" if quoted else "history")
+        assert target.this.quoted is quoted
+        assert target.args["db"].quoted is quoted
+
+
+@pytest.mark.parametrize("table", ["tracker$log", "tracker#log"])
+def test_oracle_bare_table_special_characters_keep_folding(table: str) -> None:
+    statement = sql.select("version_num").from_(table).to_statement(StatementConfig(dialect="oracle"))
+    assert f"FROM {table} {table}" in statement.sql
+
+
+@pytest.mark.parametrize("schema", ["App", "tracker#log"])
+def test_oracle_mixed_table_quote_provenance(schema: str) -> None:
+    table = f'"{schema}".tracker#log'
+    config = StatementConfig(dialect="oracle")
+    query = sql.select("version_num").from_(table).to_statement(config)
+    ddl = sql.create_table(table).column("id", "INT").to_statement(config)
+
+    assert f"FROM {table} tracker#log" in query.sql
+    assert ddl.sql.startswith(f"CREATE TABLE {table} (")

@@ -1,5 +1,6 @@
 """Unit tests for mysql-connector configuration modernization."""
 
+import asyncio
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
@@ -392,3 +393,21 @@ def test_build_connection_config_normalizes_aliases() -> None:
     assert "db" not in cfg
     assert cfg["user"] == "alias_user"
     assert cfg["database"] == "alias_db"
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("hook failed"), asyncio.CancelledError()])
+async def test_async_connection_closes_when_initialization_fails(
+    monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    from sqlspec.adapters.mysqlconnector import config as config_module
+
+    connection = MagicMock()
+    connection.set_autocommit = AsyncMock()
+    connection.close = AsyncMock()
+    monkeypatch.setattr(config_module.mysqlconnector_aio, "connect", AsyncMock(return_value=connection))
+    config = MysqlConnectorAsyncConfig(driver_features={"on_connection_create": AsyncMock(side_effect=failure)})
+
+    with pytest.raises(type(failure)):
+        await config.create_connection()
+
+    connection.close.assert_awaited_once()

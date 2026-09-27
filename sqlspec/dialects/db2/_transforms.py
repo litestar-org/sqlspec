@@ -131,9 +131,15 @@ def render_ilike(generator: Any, expression: exp.ILike) -> str:
 
 
 def render_posstr(generator: Any, expression: exp.StrPosition) -> str:
-    """Map string position functions to Db2 POSSTR(haystack, needle)."""
+    """Render string searches without discarding start or occurrence arguments."""
     this = generator.sql(expression, "this")
     substr = generator.sql(expression, "substr")
+    position = generator.sql(expression, "position")
+    occurrence = generator.sql(expression, "occurrence")
+    if occurrence:
+        return f"LOCATE_IN_STRING({this}, {substr}, {position or '1'}, {occurrence})"
+    if position:
+        return f"LOCATE({substr}, {this}, {position})"
     return f"POSSTR({this}, {substr})"
 
 

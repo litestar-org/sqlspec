@@ -174,3 +174,18 @@ def test_set_operation_pagination() -> None:
         "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id LIMIT 3 OFFSET 2", read="postgres", write="db2"
     )[0]
     assert result == "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id OFFSET 2 ROWS FETCH NEXT 3 ROWS ONLY"
+
+
+def test_locate_preserves_native_start_argument() -> None:
+    sql = "SELECT LOCATE('x', 'x-x', 3) FROM SYSIBM.SYSDUMMY1"
+    assert parse_one(sql, dialect="db2").sql(dialect="db2") == sql
+
+
+def test_string_position_preserves_occurrence() -> None:
+    expression = exp.StrPosition(
+        this=exp.Literal.string("x-x-x"),
+        substr=exp.Literal.string("x"),
+        position=exp.Literal.number(2),
+        occurrence=exp.Literal.number(2),
+    )
+    assert expression.sql(dialect="db2") == "LOCATE_IN_STRING('x-x-x', 'x', 2, 2)"

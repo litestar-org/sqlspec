@@ -49,7 +49,7 @@ _PROPERTY_PARSERS_REGISTERED_ATTR: Final[str] = "_sqlspec_spanner_property_parse
 _SPANNER_DIALECT_NAMES: Final[frozenset[str]] = frozenset({"Spangres", "Spanner"})
 
 
-def build_interleave_property(parent: exp.Expr, on_delete: str | None = None, in_parent: bool = True) -> exp.Property:
+def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, in_parent: bool = True) -> exp.Property:
     """Build the canonical interleave property node."""
     if not in_parent:
         return exp.Property(this=exp.Literal.string(_INTERLEAVE_IN_NAME), value=exp.Tuple(expressions=[parent]))
@@ -72,7 +72,7 @@ def _is_spanner_parser(parser: Any) -> bool:
     return dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES
 
 
-def _parse_interleave(parser: Any) -> exp.Property | None:
+def _parse_interleave(parser: Any) -> "exp.Property | None":
     """Parse ``INTERLEAVE IN [PARENT] table [ON DELETE {CASCADE | NO ACTION}]``.
 
     The INTERLEAVE token is already consumed by sqlglot's property dispatch.
@@ -94,7 +94,7 @@ def _parse_interleave(parser: Any) -> exp.Property | None:
     return build_interleave_property(parent, on_delete, in_parent=in_parent)
 
 
-def _parse_row_deletion_policy(parser: Any) -> exp.Property | None:
+def _parse_row_deletion_policy(parser: Any) -> "exp.Property | None":
     """Parse ``ROW DELETION POLICY (OLDER_THAN(column, INTERVAL n DAY))``.
 
     The ROW token is already consumed by sqlglot's property dispatch.
@@ -116,7 +116,7 @@ def _parse_row_deletion_policy(parser: Any) -> exp.Property | None:
     return _build_row_deletion_property(column, interval)
 
 
-def _parse_ttl(parser: Any) -> exp.Property | None:
+def _parse_ttl(parser: Any) -> "exp.Property | None":
     """Parse ``TTL INTERVAL interval_spec ON column`` into the canonical policy node.
 
     The TTL token is already consumed by sqlglot's property dispatch.
@@ -176,7 +176,7 @@ def _parse_get_next_sequence_value(parser: Any) -> exp.Anonymous:
     """Parse GET_NEXT_SEQUENCE_VALUE(SEQUENCE sequence_name)."""
     if _is_spanner_parser(parser):
         parser._match_text_seq("SEQUENCE")
-        seq_name = cast("exp.Expr", parser._parse_id_var())
+        seq_name = cast("exp.Expr", parser._parse_table_parts(schema=True))
         return get_next_sequence_value(seq_name)
     return exp.Anonymous(this="GET_NEXT_SEQUENCE_VALUE", expressions=parser._parse_csv(parser._parse_lambda))
 
@@ -276,14 +276,15 @@ def _parse_create_search_index(parser: Any) -> exp.Index:
 
 def _parse_create_sequence(parser: Any) -> exp.Create:
     """Parse CREATE SEQUENCE name [OPTIONS (...)]."""
-    name = parser._parse_id_var()
+    exists = parser._parse_exists(not_=True)
+    name = parser._parse_table_parts(schema=True)
     options = _parse_options_properties(parser)
-    return exp.Create(this=name, kind="SEQUENCE", properties=options)
+    return exp.Create(this=name, kind="SEQUENCE", exists=exists, properties=options)
 
 
 def _parse_alter_sequence(parser: Any) -> exp.Alter:
     """Parse ALTER SEQUENCE name SET OPTIONS (...)."""
-    name = parser._parse_id_var()
+    name = parser._parse_table_parts(schema=True)
     options: exp.Properties | None = None
     if parser._match_text_seq("SET", "OPTIONS") or parser._match_text_seq("OPTIONS"):
         parser._retreat(parser._index - 1)
@@ -425,7 +426,6 @@ def attach_hints(expression: exp.Expr) -> None:
             continue
         hint_comments = [c for c in comments if c.strip().startswith("@")]
         for hc in hint_comments:
-            comments.remove(hc)
             hint = parse_hint_expression(hc)
             target_table: exp.Table | None = None
             if isinstance(node, exp.Table):
@@ -433,11 +433,16 @@ def attach_hints(expression: exp.Expr) -> None:
             elif isinstance(node, exp.TableAlias) and isinstance(node.parent, exp.Table):
                 target_table = node.parent
             if target_table is not None:
+                comments.remove(hc)
                 existing_hints = list(target_table.args.get("hints") or [])
                 existing_hints.append(hint)
                 target_table.set("hints", existing_hints)
             elif isinstance(node, (exp.Select, exp.Query)):
+                comments.remove(hc)
                 node.set("hint", hint)
+            elif isinstance(node, exp.Join):
+                comments.remove(hc)
+                node.set("spanner_hint", hint)
 
 
 _original_bq_statement_create: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.CREATE)

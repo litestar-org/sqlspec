@@ -56,12 +56,12 @@ def _is_post_schema_spanner_property(expression: exp.Expr) -> bool:
     return expression.this.name.upper() in _SPANNER_PROPERTY_NAMES
 
 
-def _get_dialect_name(generator: Any) -> str | None:
+def _get_dialect_name(generator: Any) -> "str | None":
     dialect_class = getattr(generator.dialect, "__class__", None)
     return dialect_class.__name__ if dialect_class else None
 
 
-def _interval_days(expression: exp.Expr) -> int | None:
+def _interval_days(expression: exp.Expr) -> "int | None":
     """Extract a whole-day count from an interval expression when possible."""
     if isinstance(expression, exp.Interval):
         unit = expression.args.get("unit")
@@ -114,7 +114,7 @@ def _render_pg_interval_spec(generator: Any, expression: exp.Expr) -> str:
     return cast("str", generator.sql(expression))
 
 
-def _render_interleave_sql(generator: Any, expression: exp.Property) -> str | None:
+def _render_interleave_sql(generator: Any, expression: exp.Property) -> "str | None":
     """Render INTERLEAVE IN [PARENT] for either dialect, or None if not interleave."""
     if not isinstance(expression.this, exp.Literal):
         return None
@@ -137,7 +137,7 @@ def _render_interleave_sql(generator: Any, expression: exp.Property) -> str | No
     return sql
 
 
-def _row_deletion_components(expression: exp.Property) -> tuple[exp.Expr, exp.Expr] | None:
+def _row_deletion_components(expression: exp.Property) -> "tuple[exp.Expr, exp.Expr] | None":
     if not isinstance(expression.this, exp.Literal) or expression.this.name.upper() != _ROW_DELETION_NAME:
         return None
     values = expression.args.get("value")
@@ -350,12 +350,13 @@ def _spanner_create_transform(generator: Any, expression: exp.Create) -> str:
     """Transform CREATE statements for Spanner including TABLE, SEQUENCE, and CHANGE STREAM."""
     if expression.kind == "SEQUENCE":
         name = generator.sql(expression, "this")
+        exists = " IF NOT EXISTS" if expression.args.get("exists") else ""
         props = expression.args.get("properties")
         if props:
             opts_list = [f"{generator.sql(p.this)} = {generator.sql(p.args.get('value'))}" for p in props.expressions]
             opts_str = ", ".join(opts_list)
-            return f"CREATE SEQUENCE {name} OPTIONS ({opts_str})"
-        return f"CREATE SEQUENCE {name}"
+            return f"CREATE SEQUENCE{exists} {name} OPTIONS ({opts_str})"
+        return f"CREATE SEQUENCE{exists} {name}"
     if expression.kind == "CHANGE STREAM":
         name = generator.sql(expression, "this")
         parts = [f"CREATE CHANGE STREAM {name}"]
@@ -689,6 +690,16 @@ def _spangres_anonymous_transform(generator: Any, expression: exp.Anonymous) -> 
     return str(generator.anonymous_sql(expression))
 
 
+def _spanner_join_sql(generator: Any, expression: exp.Join) -> str:
+    """Preserve native join hints in their position after JOIN."""
+    sql = str(generator.join_sql(expression))
+    hint = expression.args.get("spanner_hint")
+    if hint is not None and _get_dialect_name(generator) in {"Spanner", "Spangres"}:
+        prefix, separator, suffix = sql.partition("JOIN ")
+        return f"{prefix}{separator}{generator.sql(hint)} {suffix}"
+    return sql
+
+
 def _build_function_fallback_transform(expected_dialect: str, original: Any) -> Any:
     def _transform(generator: Any, expression: exp.Expr) -> str:
         if _get_dialect_name(generator) == expected_dialect:
@@ -719,6 +730,7 @@ BigQueryGenerator.TRANSFORMS[exp.DataType] = _bq_datatype_transform
 BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
 BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
 BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
+BigQueryGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql
 BigQueryGenerator.TRANSFORMS[exp.Anonymous] = _spanner_anonymous_transform
 BigQueryGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
     "Spanner", _original_bq_cosine_distance_transform
@@ -736,6 +748,7 @@ PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
 PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
 PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
 PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
+PostgresGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql
 PostgresGenerator.TRANSFORMS[exp.Anonymous] = _spangres_anonymous_transform
 PostgresGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
     "Spangres", _original_pg_cosine_distance_transform

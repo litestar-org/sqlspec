@@ -1,8 +1,10 @@
 """OracleDB configuration tests covering driver kwargs and typed options."""
 
 from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from ssl import TLSVersion
 from typing import Any, cast, get_args, get_origin, get_type_hints
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from oracledb import AuthMode, PoolGetMode, Purity
@@ -249,3 +251,39 @@ def test_oracle_config_normalizes_aliases() -> None:
     assert async_config.connection_config["user"] == "scott"
     assert "connection_string" not in async_config.connection_config
     assert "username" not in async_config.connection_config
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_pool_close_preserves_native_borrowed_connection_guard(asynchronous: bool) -> None:
+    pool = Mock()
+    close = AsyncMock if asynchronous else Mock
+    pool.close = close(side_effect=RuntimeError("connections remain checked out"))
+    config = OracleAsyncConfig(connection_instance=pool) if asynchronous else OracleSyncConfig(connection_instance=pool)
+
+    with pytest.raises(RuntimeError, match="checked out"):
+        result = config._close_pool()
+        if isawaitable(result):
+            await result
+
+    pool.close.assert_called_once_with()
+    assert config.connection_instance is pool
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_soda_pool_option_does_not_initialize_global_client_mode(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_pool = Mock()
+    initialize = Mock(side_effect=AssertionError("client mode must be selected by the application"))
+    create_pool = Mock(return_value=native_pool)
+    monkeypatch.setattr(oracle_config_module.oracledb, "init_oracle_client", initialize)
+    monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: True)
+    method = "create_pool_async" if asynchronous else "create_pool"
+    monkeypatch.setattr(oracle_config_module.oracledb, method, create_pool)
+    config_type = OracleAsyncConfig if asynchronous else OracleSyncConfig
+    config = config_type(connection_config={"soda_metadata_cache": True})
+    result = config._create_pool()
+    result = await result if isawaitable(result) else result
+
+    assert result is native_pool
+    assert create_pool.call_args.kwargs["soda_metadata_cache"] is True

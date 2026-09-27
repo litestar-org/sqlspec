@@ -45,13 +45,32 @@ Unreleased
 
 **Fixed:**
 
-* Psycopg reads COPY files in chunks, not all at once. ADK stores use
-  RETURNING to cut round trips. Psqlpy closes a connection if setup fails.
-
 * Asyncpg stack telemetry reports sequential prepared execution rather than
   native pipelining. Each statement still returns its own result.
 
-* Builder upserts emit ``MERGE`` for the ``db2`` dialect.
+* Fixture files keep JSON strings such as ``"true"`` and ``"[1]"`` as strings.
+  This also works for SQLite JSON columns. Write objects and arrays directly
+  instead of encoding them as strings. Column filtering respects case.
+  See :doc:`usage/testing`.
+
+* DDL builders and migration trackers keep quoted table names intact.
+  Names with spaces and mixed-case Oracle names retain their quotes.
+
+* MySQL pools release connections when setup fails. They discard connections
+  that fail to roll back. MySQL Connector's async config keeps its direct
+  connection path.
+
+* Oracle keeps the user's Thin/Thick mode choice. Pool shutdown waits for
+  borrowed connections. Custom handlers still convert LOBs, and JSON handlers
+  preserve the user's callbacks.
+
+* Db2 pools clean up after failed or cancelled setup. Batch results keep an
+  unknown row count when the driver cannot report one.
+  String searches keep their start position and requested occurrence.
+
+* Spanner schema queries no longer require a table name. SQL output keeps JOIN
+  hints and plain comments. Sequence statements keep qualified names and
+  ``IF NOT EXISTS`` guards.
 
 * ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
   question marks in quoted identifiers, literals, and comments.
@@ -60,6 +79,10 @@ Unreleased
   parsing SQL again. ADBC keeps bound values in its ADK store queries.
   DuckDB Arrow loads keep sparse dictionary fields and quote table names.
 
+* Psycopg reads COPY files in chunks, not all at once. ADK stores use
+  RETURNING to cut round trips. Psqlpy closes a connection if setup fails.
+
+* Builder upserts emit ``MERGE`` for the ``db2`` dialect.
 * The arrow-odbc adapter detects the SQL dialect from the ODBC driver name
   only, so database, host, or user names no longer select the wrong dialect.
 

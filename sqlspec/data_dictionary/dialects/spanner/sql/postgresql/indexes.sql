@@ -15,7 +15,6 @@ LEFT JOIN information_schema.index_columns AS ic
   AND i.table_name = ic.table_name
   AND i.index_name = ic.index_name
 WHERE (:schema_name::text IS NULL OR i.table_schema = :schema_name)
-  AND (:table_name::text IS NULL OR i.table_name = :table_name)
 GROUP BY
     i.table_catalog,
     i.table_schema,

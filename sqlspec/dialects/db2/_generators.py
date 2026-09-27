@@ -259,7 +259,7 @@ def date_add_sql(
 
 
 def str_position_sql(generator: "generator.Generator", expression: exp.StrPosition) -> str:
-    """Render a string position search with Db2 POSSTR."""
+    """Render a string position search with the matching native Db2 function."""
     return render_posstr(generator, expression)
 
 

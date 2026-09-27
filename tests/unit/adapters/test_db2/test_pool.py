@@ -206,3 +206,18 @@ def test_pool_is_connection_alive_failure() -> None:
     result = pool._is_connection_alive(broken_conn)
 
     assert result is False
+
+
+def test_failed_creation_hook_closes_unregistered_connection(fake_ibm_db: FakeModules) -> None:
+    _, module = fake_ibm_db
+    connection = FakeDb2Connection()
+    module.pending_connections.append(connection)
+
+    def fail_hook(_connection: object) -> None:
+        raise RuntimeError("hook failed")
+
+    pool = Db2SyncConnectionPool({"database": "TESTDB"}, on_connection_create=fail_hook)
+    with pytest.raises(RuntimeError, match="hook failed"):
+        pool.acquire()
+    assert connection.closed is True
+    assert pool.size() == 0

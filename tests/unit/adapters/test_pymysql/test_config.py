@@ -241,3 +241,19 @@ def test_pymysql_config_with_dsn_applies_to_connection_parameters() -> None:
     assert pool._connection_parameters["password"] == "pass1"
     assert pool._connection_parameters["host"] == "dbhost"
     assert pool._connection_parameters["database"] == "production"
+
+
+def test_pool_discards_connection_after_rollback_failure() -> None:
+    broken = MagicMock(server_status=1)
+    broken.rollback.side_effect = RuntimeError("rollback failed")
+    replacement = MagicMock(server_status=0)
+    factory = MagicMock(side_effect=[broken, replacement])
+    pool = PyMysqlConnectionPool({}, connection_factory=factory)
+    try:
+        connection = pool.acquire()
+        with pytest.raises(RuntimeError, match="rollback failed"):
+            pool.release(connection)
+        broken.close.assert_called_once()
+        assert pool.acquire() is replacement
+    finally:
+        pool.close()

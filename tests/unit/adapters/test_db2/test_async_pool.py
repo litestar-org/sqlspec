@@ -324,3 +324,50 @@ async def test_async_connection_create_hook_is_awaited(
         assert seen == [connection]
     finally:
         await pool.close()
+
+
+async def test_cancelled_health_check_closes_detached_connection(
+    fake_ibm_db: FakeModules, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool = Db2AsyncConnectionPool({"database": "TESTDB"}, max_size=1)
+    connection = _as_fake(await pool.acquire())
+    await pool.release(connection)
+    checking = asyncio.Event()
+
+    async def check(_pool: object, _record: object) -> bool:
+        checking.set()
+        await asyncio.Event().wait()
+        return True
+
+    monkeypatch.setattr(Db2AsyncConnectionPool, "_is_reusable", check)
+    task = asyncio.create_task(pool.acquire())
+    await checking.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert connection.sync_connection.closed is True
+    assert pool.size() == 0
+    replacement = await pool.acquire()
+    await pool.release(replacement)
+    await pool.close()
+
+
+async def test_pool_closed_while_opening_rejects_and_closes_connection(fake_ibm_db: FakeModules) -> None:
+    opening = asyncio.Event()
+    finish = asyncio.Event()
+    opened: list[FakeDb2AsyncConnection] = []
+
+    async def hook(connection: Any) -> None:
+        opened.append(_as_fake(connection))
+        opening.set()
+        await finish.wait()
+
+    pool = Db2AsyncConnectionPool({"database": "TESTDB"}, max_size=1, on_connection_create=hook)
+    task = asyncio.create_task(pool.acquire())
+    await opening.wait()
+    await pool.close()
+    finish.set()
+    with pytest.raises(DatabaseConnectionError, match="closed"):
+        await task
+    assert opened[0].sync_connection.closed is True
+    assert pool.size() == 0

@@ -11,7 +11,6 @@ SELECT
     ROW_DELETION_POLICY_EXPRESSION AS row_deletion_policy_expression
 FROM INFORMATION_SCHEMA.TABLES
 WHERE (CAST(:schema_name AS STRING) IS NULL OR TABLE_SCHEMA = :schema_name)
-  AND (CAST(:table_name AS STRING) IS NULL OR TABLE_NAME = :table_name)
 ORDER BY TABLE_SCHEMA, TABLE_NAME;
 
 -- name: by_table

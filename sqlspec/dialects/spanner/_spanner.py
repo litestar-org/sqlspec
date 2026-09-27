@@ -9,7 +9,6 @@ generation always emits valid GoogleSQL.
 
 from typing import TYPE_CHECKING, Any
 
-from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
 from sqlglot.tokenizer_core import TokenType
 
@@ -17,6 +16,7 @@ from sqlspec.dialects.spanner._generators import SpannerGenerator
 from sqlspec.dialects.spanner._parsers import SpannerParser, attach_hints, normalize_spanner_tokens
 
 if TYPE_CHECKING:
+    from sqlglot import exp
     from sqlglot.tokenizer_core import Token
 
 __all__ = ("Spanner",)
@@ -40,7 +40,7 @@ class Spanner(BigQuery):
     Parser = SpannerParser
     Generator = SpannerGenerator
 
-    def parse(self, sql: str, **opts: Any) -> list[exp.Expr | None]:
+    def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
         """Parse Spanner SQL statements and attach hints."""
         expressions = super().parse(sql, **opts)
         for expression in expressions:
@@ -48,7 +48,7 @@ class Spanner(BigQuery):
                 attach_hints(expression)
         return expressions
 
-    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> list[exp.Expr | None]:
+    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> "list[exp.Expr | None]":
         """Parse into specific expression type with attached hints."""
         expressions = super().parse_into(expression_type, sql, **opts)
         for expression in expressions:

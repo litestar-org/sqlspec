@@ -39,6 +39,7 @@ __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
 _UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
+_UNQUOTED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][\w$#]*$")
 
 
 logger = get_logger(__name__)
@@ -1093,7 +1094,7 @@ class QueryBuilder:
         return str(dialect).lower() in _UPPER_FOLDING_DIALECTS
 
     def _unquote_identifiers(self, expression: exp.Expr) -> exp.Expr:
-        """Return a copy of the expression with identifier quoting removed.
+        """Remove generated quoting while preserving explicit table identifiers.
 
         Upper-folding dialects resolve quoted lowercase names case-sensitively, so quoting is
         removed to keep lookups aligned with how unquoted DDL created the objects.
@@ -1260,6 +1261,10 @@ class _PlaceholderReplacer:
 
 
 def _unquote_identifier(node: exp.Expr) -> exp.Expr:
-    if isinstance(node, exp.Identifier):
+    if (
+        isinstance(node, exp.Identifier)
+        and not node.meta.get("sqlspec_explicit_table_quote")
+        and _UNQUOTED_IDENTIFIER_PATTERN.fullmatch(node.name)
+    ):
         node.set("quoted", False)
     return node

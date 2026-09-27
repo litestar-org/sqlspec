@@ -207,8 +207,14 @@ class PyMysqlConnectionPool:
     def release(self, connection: PyMysqlConnection) -> None:
         """Release connection back to the pool, sanitizing transactions."""
         if bool(getattr(connection, "server_status", 0) & PyMysqlServerStatus.SERVER_STATUS_IN_TRANS):
-            with contextlib.suppress(Exception):
+            try:
                 connection.rollback()
+            except Exception:
+                if getattr(self._thread_local, "connection", None) is connection:
+                    self._close_thread_connection()
+                else:
+                    self._retire_connection(connection)
+                raise
 
     def size(self) -> int:
         """Report total active connections managed by this pool."""

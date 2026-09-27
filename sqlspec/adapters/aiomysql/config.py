@@ -1,6 +1,5 @@
 """aiomysql database configuration."""
 
-import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 from weakref import WeakSet
@@ -182,7 +181,6 @@ def build_connection_config(
     config.setdefault("host", "localhost")
     config.setdefault("port", 3306)
     config.setdefault("charset", "utf8mb4")
-    config.setdefault("pool_recycle", 300)
     return _normalize_local_infile(config)
 
 
@@ -204,7 +202,7 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
         try:
             ensure_conn = self._config._ensure_connection
             await ensure_conn(connection)
-        except Exception:
+        except BaseException:
             self._contexts.pop(id(connection), None)
             with contextlib.suppress(Exception):
                 await ctx.__aexit__(None, None, None)
@@ -242,7 +240,7 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
         try:
             ensure_conn = self._config._ensure_connection
             await ensure_conn(connection)
-        except Exception:
+        except BaseException:
             self._connection = None
             self._ctx = None
             with contextlib.suppress(Exception):
@@ -374,8 +372,7 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
         """Close the actual async connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self.connection_instance.wait_closed(), timeout=5.0)
+            await self.connection_instance.wait_closed()
             self.connection_instance = None
 
     async def create_connection(self) -> AiomysqlConnection:

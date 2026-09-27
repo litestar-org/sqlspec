@@ -7,27 +7,31 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import aiomysql
-import pymysql.constants
-from aiomysql import Pool as AiomysqlPool
-from aiomysql import ProgrammingError as AiomysqlProgrammingError
+import aiomysql as _aiomysql  # pyright: ignore
+from aiomysql import Connection  # pyright: ignore
+from aiomysql import Error as _AiomysqlError  # pyright: ignore
+from aiomysql import MySQLError as _AiomysqlMySQLError  # pyright: ignore
+from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
+from aiomysql import ProgrammingError as AiomysqlProgrammingError  # pyright: ignore
 from aiomysql import SSCursor as AiomysqlSSCursor
 from aiomysql.cursors import RE_INSERT_VALUES as AIOMYSQL_INSERT_VALUES_PATTERN
-from aiomysql.cursors import Cursor as AiomysqlRawCursor
-from aiomysql.cursors import DictCursor as AiomysqlDictCursor
-from pymysql.err import Error as AiomysqlPymysqlError
-from pymysql.err import MySQLError as AiomysqlPymysqlMySQLError
+from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
+from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
+from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE  # pyright: ignore
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import Protocol, TypeAlias
 
+    from pymysql.err import Error as _PymysqlError
+    from pymysql.err import MySQLError as _PymysqlMySQLError
+
     from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
     from sqlspec.core import StatementConfig
 
     class AiomysqlConnectionProtocol(Protocol):
-        async def cursor(self, cursor: "type[AiomysqlRawCursor] | None" = None) -> AiomysqlRawCursor: ...
+        async def cursor(self, cursor: "type[AiomysqlRawCursor] | None" = None) -> "AiomysqlRawCursor": ...
 
         async def commit(self) -> object: ...
 
@@ -38,7 +42,7 @@ if TYPE_CHECKING:
         def get_transaction_status(self) -> bool: ...
 
     class AiomysqlModuleProtocol(Protocol):
-        async def create_pool(self, **kwargs: Any) -> AiomysqlPool: ...
+        async def create_pool(self, **kwargs: Any) -> "AiomysqlPool": ...
 
         async def connect(self, **kwargs: Any) -> "AiomysqlConnection": ...
 
@@ -46,13 +50,23 @@ if TYPE_CHECKING:
         JSON: int
 
     AiomysqlConnection: TypeAlias = AiomysqlConnectionProtocol
-    AiomysqlFieldType: TypeAlias = AiomysqlFieldTypeProtocol
     AiomysqlModule: TypeAlias = AiomysqlModuleProtocol
+    AiomysqlRawCursor: TypeAlias = _AiomysqlCursor
+    AiomysqlDictCursor: TypeAlias = _AiomysqlDictCursor
+    AiomysqlFieldType: TypeAlias = AiomysqlFieldTypeProtocol
+    AiomysqlPool: TypeAlias = _AiomysqlPool
+    AiomysqlPymysqlError: TypeAlias = _PymysqlError
+    AiomysqlPymysqlMySQLError: TypeAlias = _PymysqlMySQLError
 
 if not TYPE_CHECKING:
-    AiomysqlConnection = aiomysql.Connection
-    AiomysqlFieldType = pymysql.constants.FIELD_TYPE
-    AiomysqlModule = aiomysql
+    AiomysqlConnection = Connection
+    AiomysqlModule = _aiomysql
+    AiomysqlRawCursor = _AiomysqlCursor
+    AiomysqlDictCursor = _AiomysqlDictCursor
+    AiomysqlFieldType = _PYMYSQL_FIELD_TYPE
+    AiomysqlPool = _AiomysqlPool
+    AiomysqlPymysqlError = _AiomysqlError
+    AiomysqlPymysqlMySQLError = _AiomysqlMySQLError
 
 __all__ = (
     "AIOMYSQL_INSERT_VALUES_PATTERN",

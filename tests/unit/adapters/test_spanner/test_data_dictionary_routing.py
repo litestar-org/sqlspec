@@ -2,6 +2,8 @@
 
 from typing import Any, cast
 
+import pytest
+
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 
@@ -120,3 +122,15 @@ def test_get_query_explicit_mode_override() -> None:
     index_query = dictionary.get_query("indexes", "by_schema", mode="postgresql")
     assert "i.index_name AS index_name" in index_query.raw_sql
     assert "AS columns" in index_query.raw_sql
+
+
+@pytest.mark.parametrize("mode", ["googlesql", "postgresql"])
+@pytest.mark.parametrize("domain", ["tables", "columns", "indexes"])
+def test_schema_metadata_binds_only_schema(mode: str, domain: str) -> None:
+    dictionary = SpannerDataDictionary(mode=mode)
+    driver = MockSpannerDriver()
+    getattr(dictionary, f"get_{domain}")(cast("Any", driver), schema="public")
+
+    statement = driver.last_query.copy(parameters={"schema_name": driver.last_params["schema_name"]})
+    _sql, parameters = statement.compile()
+    assert parameters == ("public", "public")
