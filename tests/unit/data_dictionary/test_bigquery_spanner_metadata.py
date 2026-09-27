@@ -109,7 +109,7 @@ def test_bigquery_information_schema_reports_billing_and_region_warnings() -> No
 
 
 def test_spanner_mode_does_not_reuse_googlesql_for_postgresql() -> None:
-    """PostgreSQL-dialect Spanner metadata stays gated until live coverage exists."""
+    """PostgreSQL-dialect Spanner metadata routes to PostgreSQL query templates and reports supported."""
     loader = get_data_dictionary_loader()
 
     googlesql = loader.get_domain_query("spanner", "tables", "by_schema", mode="googlesql")
@@ -117,19 +117,18 @@ def test_spanner_mode_does_not_reuse_googlesql_for_postgresql() -> None:
     dictionary = SpannerDataDictionary()
     profile = dictionary.get_metadata_capabilities(cast(Any, object()), mode="postgresql")
     alias_profile = dictionary.get_metadata_capabilities(cast(Any, object()), mode="spanner_postgresql")
+    unknown_profile = dictionary.get_metadata_capabilities(cast(Any, object()), mode="unknown")
 
     assert googlesql.is_supported is True
     assert googlesql.mode == "googlesql"
-    assert postgresql.is_supported is False
+    assert postgresql.is_supported is True
     assert postgresql.mode == "postgresql"
-    assert postgresql.capability.support == MetadataSupport.UNSUPPORTED
-    assert profile.get("tables").support == MetadataSupport.UNSUPPORTED
-    assert MetadataRisk.VERSION_GATED in profile.get("tables").risks
+    assert postgresql.capability.support == MetadataSupport.SUPPORTED
+    assert profile.get("tables").support == MetadataSupport.SUPPORTED
     assert alias_profile.get("tables") == profile.get("tables")
-    assert any(
-        "PostgreSQL-dialect Spanner metadata requires live runtime coverage" in warning
-        for warning in profile.get("tables").warnings
-    )
+    assert googlesql.sql != postgresql.sql
+    assert unknown_profile.get("tables").support == MetadataSupport.UNSUPPORTED
+    assert MetadataRisk.VERSION_GATED in unknown_profile.get("tables").risks
 
 
 def test_spanner_nullable_schema_queries_cast_bind_as_string() -> None:

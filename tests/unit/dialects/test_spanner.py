@@ -100,6 +100,18 @@ def test_interleave_create_repairs_command_fallback() -> None:
     expression = parse_one(OFFICIAL_INTERLEAVE_DDL, dialect="spanner")
     assert isinstance(expression, exp.Create)
     assert "INTERLEAVE IN PARENT Singers ON DELETE CASCADE" in expression.sql(dialect="spanner")
+    assert not hasattr(_parsers, "_INTERLEAVE_PATTERN")
+    assert not hasattr(_parsers, "extract_interleave_property")
+
+    ordered_pk_ddl = (
+        "CREATE TABLE Albums (SingerId INT64 NOT NULL, AlbumId INT64 NOT NULL) "
+        "PRIMARY KEY (SingerId, AlbumId DESC), INTERLEAVE IN PARENT Singers ON DELETE CASCADE"
+    )
+    ordered_expr = parse_one(ordered_pk_ddl, dialect="spanner")
+    assert isinstance(ordered_expr, exp.Create)
+    assert "PRIMARY KEY (SingerId, AlbumId DESC), INTERLEAVE IN PARENT Singers ON DELETE CASCADE" in ordered_expr.sql(
+        dialect="spanner"
+    )
 
 
 def test_inline_primary_key_style_still_parses() -> None:
@@ -193,3 +205,12 @@ def test_dedup_parsers_import_canonical_helpers() -> None:
     assert _parsers._ROW_DELETION_NAME is _generators._ROW_DELETION_NAME
     assert _parsers._INTERLEAVE_NAME is _generators._INTERLEAVE_NAME
     assert _parsers._INTERLEAVE_IN_NAME is _generators._INTERLEAVE_IN_NAME
+
+
+def test_brace_hint_inside_string_literal_preserved() -> None:
+    sql = "SELECT '@{FORCE_INDEX=Idx}' AS literal"
+    parsed = parse_one(sql, dialect="spanner")
+    assert parsed.args.get("hint") is None
+    rendered = parsed.sql(dialect="spanner")
+    assert rendered == "SELECT '@{FORCE_INDEX=Idx}' AS literal"
+    assert "/*@" not in rendered

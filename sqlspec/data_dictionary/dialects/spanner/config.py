@@ -30,6 +30,8 @@ SPANNER_TYPE_MAPPINGS: dict[str, str] = {
     "integer": "INT64",
     "bigint": "INT64",
     "float": "FLOAT64",
+    "float32": "FLOAT32",
+    "tokenlist": "TOKENLIST",
     "varchar": "STRING({length})",
 }
 

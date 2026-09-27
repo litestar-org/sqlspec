@@ -1,6 +1,26 @@
 -- name: by_schema
 -- dialect: spanner
 SELECT
+    i.TABLE_CATALOG AS table_catalog,
+    i.TABLE_SCHEMA AS schema_name,
+    i.TABLE_NAME AS table_name,
+    i.INDEX_NAME AS index_name,
+    i.INDEX_TYPE AS index_type,
+    i.IS_UNIQUE AS is_unique,
+    i.IS_NULL_FILTERED AS is_null_filtered,
+    i.INDEX_STATE AS index_state,
+    i.SPANNER_IS_MANAGED AS spanner_is_managed,
+    ARRAY_AGG(ic.COLUMN_NAME ORDER BY ic.ORDINAL_POSITION) AS columns,
+    ARRAY_AGG(ic.COLUMN_ORDERING ORDER BY ic.ORDINAL_POSITION) AS key_column_ordering
+FROM INFORMATION_SCHEMA.INDEXES AS i
+LEFT JOIN INFORMATION_SCHEMA.INDEX_COLUMNS AS ic
+  ON i.TABLE_CATALOG = ic.TABLE_CATALOG
+  AND i.TABLE_SCHEMA = ic.TABLE_SCHEMA
+  AND i.TABLE_NAME = ic.TABLE_NAME
+  AND i.INDEX_NAME = ic.INDEX_NAME
+WHERE (CAST(:schema_name AS STRING) IS NULL OR i.TABLE_SCHEMA = :schema_name)
+  AND (CAST(:table_name AS STRING) IS NULL OR i.TABLE_NAME = :table_name)
+GROUP BY
     i.TABLE_CATALOG,
     i.TABLE_SCHEMA,
     i.TABLE_NAME,
@@ -9,9 +29,23 @@ SELECT
     i.IS_UNIQUE,
     i.IS_NULL_FILTERED,
     i.INDEX_STATE,
-    i.SPANNER_IS_MANAGED,
-    ARRAY_AGG(ic.COLUMN_NAME ORDER BY ic.ORDINAL_POSITION) AS KEY_COLUMNS,
-    ARRAY_AGG(ic.COLUMN_ORDERING ORDER BY ic.ORDINAL_POSITION) AS KEY_COLUMN_ORDERING
+    i.SPANNER_IS_MANAGED
+ORDER BY i.TABLE_SCHEMA, i.TABLE_NAME, i.INDEX_NAME;
+
+-- name: by_table
+-- dialect: spanner
+SELECT
+    i.TABLE_CATALOG AS table_catalog,
+    i.TABLE_SCHEMA AS schema_name,
+    i.TABLE_NAME AS table_name,
+    i.INDEX_NAME AS index_name,
+    i.INDEX_TYPE AS index_type,
+    i.IS_UNIQUE AS is_unique,
+    i.IS_NULL_FILTERED AS is_null_filtered,
+    i.INDEX_STATE AS index_state,
+    i.SPANNER_IS_MANAGED AS spanner_is_managed,
+    ARRAY_AGG(ic.COLUMN_NAME ORDER BY ic.ORDINAL_POSITION) AS columns,
+    ARRAY_AGG(ic.COLUMN_ORDERING ORDER BY ic.ORDINAL_POSITION) AS key_column_ordering
 FROM INFORMATION_SCHEMA.INDEXES AS i
 LEFT JOIN INFORMATION_SCHEMA.INDEX_COLUMNS AS ic
   ON i.TABLE_CATALOG = ic.TABLE_CATALOG
