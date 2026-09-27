@@ -59,9 +59,10 @@ Unreleased
 * MySQL pools release connections when setup fails. They discard connections
   that fail to roll back. MySQL Connector keeps native async pooling on
   Connector 9.4 and later, plus direct connections on older versions.
+  Asyncmy retains native ``LOAD DATA LOCAL INFILE`` support.
 
 * Oracle keeps Thick-mode options for sync pools. Async pools reject Thick
-  mode before they open. Pool shutdown waits for
+  mode before they open. Pool shutdown preserves native checks for
   borrowed connections. Custom handlers still convert LOBs, and JSON handlers
   preserve the user's callbacks.
 
