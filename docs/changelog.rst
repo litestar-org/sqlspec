@@ -1,13 +1,13 @@
-==
+=========
 Changelog
-==
+=========
 
 All notable SQLSpec changes are summarized here. Entries are grouped by release
 and focus on user-visible behavior, public API changes, compatibility notes, and
 important operational fixes.
 
 Recent Updates
-=======
+==============
 
 Unreleased
 ----------
@@ -44,6 +44,12 @@ Unreleased
   and its Litestar session, events queue, and Google ADK stores.
 
 **Fixed:**
+
+* Psycopg reads COPY files in chunks, not all at once. ADK stores use
+  RETURNING to cut round trips. Psqlpy closes a connection if setup fails.
+
+* Asyncpg stack telemetry reports sequential prepared execution rather than
+  native pipelining. Each statement still returns its own result.
 
 * Builder upserts emit ``MERGE`` for the ``db2`` dialect.
 
@@ -2237,7 +2243,7 @@ v0.24.0 - Builder consolidation
 * Refactored builder code to reduce duplication.
 
 Previous Versions
-==========
+=================
 
 For releases before ``v0.24.0``, see the repository tag history and GitHub
 release records.
