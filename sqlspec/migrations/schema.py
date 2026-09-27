@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp, parse
 
-from sqlspec.builder import AlterTable, CreateTable
+from sqlspec.builder._ddl import AlterTable, CreateTable, _parse_ddl_identifier, _parse_ddl_table
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -31,9 +31,17 @@ class SchemaTarget:
         schema: str | None = None,
         create_statement: "str | CreateTable | None" = None,
     ) -> None:
-        self.table_name = table_name
+        parsed_table = _parse_ddl_table(table_name, schema=schema, dialect=create_table.dialect)
+        self.table_name = parsed_table.name or table_name
+        db_arg = parsed_table.args.get("db")
+        self.schema = db_arg.name if isinstance(db_arg, exp.Identifier) and db_arg.name else schema
+        if (
+            schema
+            and not create_table._schema
+            and not _parse_ddl_table(create_table._table_name, dialect=create_table.dialect).args.get("db")
+        ):
+            create_table.in_schema(schema)
         self.create_table = create_table
-        self.schema = schema
         self.create_statement = create_statement or create_table
 
     @property
@@ -62,10 +70,8 @@ class SchemaTarget:
         Raises:
             ValueError: If no CREATE TABLE definition can be parsed.
         """
-        from sqlspec.builder import sql
-
         create_expression = _find_create_table_expression(create_statement, table_name, dialect)
-        target = sql.create_table(table_name, dialect=dialect)
+        target = CreateTable(table_name, dialect=dialect)
         if schema:
             target.in_schema(schema)
         for column in create_expression.find_all(exp.ColumnDef):
@@ -305,20 +311,23 @@ def _add_column_statements(
     target: SchemaTarget, existing_columns: set[str]
 ) -> "tuple[list[tuple[str, AlterTable]], bool]":
     """Build additive statements and identify likely rename-only drift."""
-    from sqlspec.builder import sql
-
     target_columns = {column.name.casefold(): column for column in target.create_table.columns}
     missing_columns = set(target_columns).difference(existing_columns)
     extra_columns = existing_columns.difference(target_columns)
     if missing_columns and extra_columns and len(target_columns) == len(existing_columns):
         return [], True
 
+    target_table = _parse_ddl_table(
+        target.create_table._table_name, schema=target.create_table._schema, dialect=target.create_table.dialect
+    )
+    if not target_table.args.get("db") and target.schema:
+        target_table.set("db", _parse_ddl_identifier(target.schema, dialect=target.create_table.dialect))
+    alter_table_name = target_table.sql(dialect=target.create_table.dialect)
+
     statements: list[tuple[str, AlterTable]] = []
     for column_name in sorted(missing_columns):
         column = target_columns[column_name]
-        statement = sql.alter_table(target.table_name, dialect=target.create_table.dialect)
-        if target.schema:
-            statement.in_schema(target.schema)
+        statement = AlterTable(alter_table_name, dialect=target.create_table.dialect)
         statement.add_column(
             name=column.name,
             dtype=column.dtype,

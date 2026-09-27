@@ -4,10 +4,14 @@ import copy
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sqlspec import sql
+from sqlspec.core import StatementConfig
 from sqlspec.migrations.fix import MigrationFixer
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.validation import detect_out_of_order_migrations
 from sqlspec.migrations.version import (
     MigrationVersion,
@@ -358,3 +362,101 @@ def test_parse_extension_stem_round_trips_through_parse_version() -> None:
     parsed = parse_version(f"ext_{ext_name}_{version}")
     assert parsed.extension == "litestar_queues"
     assert parsed.sequence == 1
+
+
+def test_quoted_and_schema_qualified_version_table_ddl_and_tracker() -> None:
+    """Quoted and schema-qualified version_table identifiers render valid SQL without doubled quotes."""
+    pg_config = StatementConfig(dialect="postgres")
+
+    create_stmt = (
+        sql.create_table('"Tracker"').in_schema('"App"').column("version_num", "VARCHAR(32)").to_statement(pg_config)
+    )
+    assert 'CREATE TABLE "App"."Tracker"' in create_stmt.sql
+    assert '""' not in create_stmt.sql
+
+    qualified_create_stmt = (
+        sql.create_table('"App"."Tracker"').column("version_num", "VARCHAR(32)").to_statement(pg_config)
+    )
+    assert 'CREATE TABLE "App"."Tracker"' in qualified_create_stmt.sql
+    assert '""' not in qualified_create_stmt.sql
+
+    drop_stmt = sql.drop_table('"App"."Tracker"').to_statement(pg_config)
+    assert drop_stmt.sql == 'DROP TABLE "App"."Tracker"'
+
+    alter_stmt = sql.alter_table('"Tracker"').in_schema('"App"').add_column("replaces", "TEXT").to_statement(pg_config)
+    assert 'ALTER TABLE "App"."Tracker" ADD COLUMN' in alter_stmt.sql
+    assert '""' not in alter_stmt.sql
+
+    for tracker in (
+        SyncMigrationTracker(version_table_name='"App"."Tracker"'),
+        SyncMigrationTracker(version_table_name='"Tracker"', version_table_schema='"App"'),
+    ):
+        assert tracker.version_table_name == "Tracker"
+        assert tracker.version_table_schema == "App"
+        assert tracker.version_table == '"App"."Tracker"'
+
+        ddl_builder = tracker._tracking_table_ddl()  # pyright: ignore[reportPrivateUsage]
+        ddl_sql = str(ddl_builder)
+        pg_ddl_sql = ddl_builder.to_statement(pg_config).sql
+        assert 'CREATE TABLE IF NOT EXISTS "App"."Tracker"' in ddl_sql
+        assert 'CREATE TABLE IF NOT EXISTS "App"."Tracker"' in pg_ddl_sql
+        assert '""' not in ddl_sql
+        assert '""' not in pg_ddl_sql
+
+        driver = MagicMock()
+        driver.driver_features = {}
+        driver.data_dictionary.get_columns.return_value = [
+            {"column_name": col.name} for col in ddl_builder.columns if col.name != "replaces"
+        ]
+
+        tracker.ensure_tracking_table(driver)
+
+        driver.data_dictionary.get_columns.assert_called_once_with(driver, "Tracker", schema="App")
+        assert driver.execute.call_count == 2
+        alter_builder = driver.execute.call_args_list[1].args[0]
+        alter_rendered = alter_builder.to_statement(pg_config).sql
+        assert 'ALTER TABLE "App"."Tracker" ADD COLUMN' in alter_rendered
+        assert '""' not in alter_rendered
+
+
+@pytest.mark.anyio
+async def test_async_quoted_and_schema_qualified_version_table_tracker() -> None:
+    """AsyncMigrationTracker preserves quoting in DDL while using unquoted catalog identifiers."""
+    pg_config = StatementConfig(dialect="postgres")
+    tracker = AsyncMigrationTracker(version_table_name='"App"."Tracker"')
+
+    assert tracker.version_table_name == "Tracker"
+    assert tracker.version_table_schema == "App"
+    assert tracker.version_table == '"App"."Tracker"'
+
+    ddl_builder = tracker._tracking_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    driver = MagicMock()
+    driver.driver_features = {}
+    driver.execute = AsyncMock()
+    driver.commit = AsyncMock()
+    driver.rollback = AsyncMock()
+    driver.data_dictionary.get_columns = AsyncMock(
+        return_value=[{"column_name": col.name} for col in ddl_builder.columns if col.name != "replaces"]
+    )
+
+    await tracker.ensure_tracking_table(driver)
+
+    driver.data_dictionary.get_columns.assert_awaited_once_with(driver, "Tracker", schema="App")
+    assert driver.execute.await_count == 2
+    alter_builder = driver.execute.await_args_list[1].args[0]
+    alter_rendered = alter_builder.to_statement(pg_config).sql
+    assert 'ALTER TABLE "App"."Tracker" ADD COLUMN' in alter_rendered
+    assert '""' not in alter_rendered
+
+    bare_quoted = AsyncMigrationTracker(version_table_name='"Tracker"')
+    assert bare_quoted.version_table_name == "Tracker"
+    assert bare_quoted.version_table_schema is None
+    assert bare_quoted.version_table == '"Tracker"'
+
+    partially_quoted = AsyncMigrationTracker(version_table_name='App."Tracker"')
+    assert partially_quoted.version_table_name == "Tracker"
+    assert partially_quoted.version_table_schema == "App"
+    assert partially_quoted.version_table == 'App."Tracker"'
+    partial_ddl = partially_quoted._tracking_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    assert 'CREATE TABLE IF NOT EXISTS "app"."Tracker"' in str(partial_ddl)
+    assert 'CREATE TABLE IF NOT EXISTS "app"."Tracker"' in partial_ddl.to_statement(pg_config).sql
