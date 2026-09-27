@@ -12,7 +12,7 @@ import sqlspec.adapters.bigquery.config as bigquery_config
 from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.core import build_arrow_write_stream_payload
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
-from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
+from sqlspec.exceptions import StorageOperationFailedError
 
 CAPABILITIES = {
     "arrow_export_enabled": True,
@@ -106,11 +106,7 @@ def test_storage_write_api_orchestration(monkeypatch: pytest.MonkeyPatch) -> Non
     connection = _Connection()
     driver = BigQueryDriver(
         cast("Any", connection),
-        driver_features={
-            "enable_storage_write_api": True,
-            "storage_write_stream_type": "PENDING",
-            "storage_capabilities": CAPABILITIES,
-        },
+        driver_features={"enable_storage_write_api": True, "storage_capabilities": CAPABILITIES},
     )
 
     job = driver.load_from_arrow("dataset.table", pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}))
@@ -124,28 +120,6 @@ def test_storage_write_api_orchestration(monkeypatch: pytest.MonkeyPatch) -> Non
     assert client.append_request_batches[0][0].write_stream == "projects/proj/datasets/dataset/tables/table/streams/s1"
     assert client.finalize_calls == ["projects/proj/datasets/dataset/tables/table/streams/s1"]
     assert client.commit_calls
-    assert job.telemetry["rows_processed"] == 3
-
-
-def test_storage_write_api_uses_committed_stream(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_write_client(monkeypatch)
-    connection = _Connection()
-    driver = BigQueryDriver(
-        cast("Any", connection),
-        driver_features={"enable_storage_write_api": True, "storage_capabilities": CAPABILITIES},
-    )
-
-    job = driver.load_from_arrow("dataset.table", pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}))
-
-    assert connection.load_file_calls == []
-    client = _FakeWriteClient.instances[0]
-    assert client.create_calls
-    parent, stream = client.create_calls[0]
-    assert parent == "projects/proj/datasets/dataset/tables/table"
-    assert stream.type_ == types.WriteStream.Type.COMMITTED
-    assert client.append_request_batches and client.append_request_batches[0]
-    assert client.finalize_calls == []
-    assert client.commit_calls == []
     assert job.telemetry["rows_processed"] == 3
 
 
@@ -286,20 +260,3 @@ def test_close_pool_closes_only_clients_sqlspec_created() -> None:
     supplied.close_pool()
 
     assert "supplied" not in closed
-
-
-def test_storage_write_api_rejects_invalid_stream_type(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify unsupported storage_write_stream_type raises ImproperConfigurationError."""
-    _patch_write_client(monkeypatch)
-    connection = _Connection()
-    driver = BigQueryDriver(
-        cast("Any", connection),
-        driver_features={
-            "enable_storage_write_api": True,
-            "storage_write_stream_type": "BUFFERED",
-            "storage_capabilities": CAPABILITIES,
-        },
-    )
-
-    with pytest.raises(ImproperConfigurationError, match="Unsupported storage_write_stream_type 'BUFFERED'"):
-        driver.load_from_arrow("dataset.table", pa.table({"id": [1]}))

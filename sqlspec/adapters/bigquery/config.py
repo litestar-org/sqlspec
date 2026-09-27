@@ -60,10 +60,6 @@ class BigQueryConnectionParams(TypedDict):
     maximum_bytes_billed: NotRequired[int]
     query_timeout_ms: NotRequired[int]
     job_timeout_ms: NotRequired[int]
-    labels: NotRequired[dict[str, str]]
-    priority: NotRequired[Literal["INTERACTIVE", "BATCH"]]
-    reservation: NotRequired[str]
-    max_slots: NotRequired[int]
     extra: NotRequired["dict[str, Any]"]
 
 
@@ -108,10 +104,6 @@ class BigQueryDriverFeatures(TypedDict):
         enable_storage_write_api: Route ``load_from_arrow`` (append, ``overwrite=False``) through the
             BigQuery Storage Write API using native Arrow instead of a Parquet load job. Falls back to
             the Parquet path on any ``bigquery_storage`` import/availability failure. Defaults to False.
-        storage_write_stream_type: Write stream type for Storage Write API ingestion ("COMMITTED" or "PENDING").
-            Defaults to "COMMITTED".
-        split_script_statements: Whether to execute scripts by splitting into individual statements.
-            Defaults to False (single un-split query job).
         enable_native_storage: Export eligible remote destinations through EXPORT DATA.
             Defaults to True. False retains the client Arrow writer. Local emulator endpoints,
             custom storage pipelines, and unsupported destinations/formats use the client path.
@@ -133,8 +125,6 @@ class BigQueryDriverFeatures(TypedDict):
     query_page_size: NotRequired[int]
     query_max_results: NotRequired[int]
     enable_storage_write_api: NotRequired[bool]
-    storage_write_stream_type: NotRequired[Literal["COMMITTED", "PENDING"]]
-    split_script_statements: NotRequired[bool]
     enable_native_storage: NotRequired[bool]
     native_export_connection: NotRequired[str]
 
@@ -252,6 +242,9 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
+        # Fired directly in create_connection (the client-construction path) like every other adapter,
+        # rather than bridged through the observability lifecycle dispatcher (which only runs under the
+        # SQLSpec registry wrapper, not bare config.provide_session()).
         self._user_connection_hook = user_connection_hook
 
         super().__init__(
@@ -312,11 +305,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if self._owns_connection_instance and self._connection_instance is not None:
             self._connection_instance.close()
             self._connection_instance = None
-
-    @property
-    def _default_query_job_config(self) -> Any:
-        """Return the default QueryJobConfig configured for this instance."""
-        return self.connection_config.get("default_query_job_config")
 
     def _resolve_default_dataset(self) -> "str | None":
         """Resolve the fully qualified default dataset, if one can be determined.
@@ -383,25 +371,10 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if query_timeout_ms is not None:
             job_config.job_timeout_ms = query_timeout_ms
 
+        # job_timeout_ms intentionally wins when both timeout aliases are configured.
         job_timeout_ms = self.connection_config.get("job_timeout_ms")
         if job_timeout_ms is not None:
             job_config.job_timeout_ms = job_timeout_ms
-
-        labels = self.connection_config.get("labels")
-        if labels is not None:
-            job_config.labels = labels
-
-        priority = self.connection_config.get("priority")
-        if priority is not None:
-            job_config.priority = priority.upper()
-
-        reservation = self.connection_config.get("reservation")
-        if reservation is not None:
-            job_config.reservation = reservation
-
-        max_slots = self.connection_config.get("max_slots")
-        if max_slots is not None:
-            job_config.max_slots = max_slots
 
         self.connection_config["default_query_job_config"] = job_config
 

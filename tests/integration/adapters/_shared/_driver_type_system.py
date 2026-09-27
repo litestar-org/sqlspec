@@ -157,8 +157,6 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_storage_write_api",
         "enable_native_storage",
         "native_export_connection",
-        "split_script_statements",
-        "storage_write_stream_type",
     ),
     "duckdb": (
         "extensions",

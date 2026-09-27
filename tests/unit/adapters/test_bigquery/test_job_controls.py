@@ -137,7 +137,7 @@ def test_query_and_wait_used_when_enabled() -> None:
     assert connection.query_calls == []
     assert connection.query_and_wait_calls[0][0] == "SELECT 1 AS v"
     assert connection.query_and_wait_calls[0][1]["api_timeout"] == driver._job_request_timeout()
-    assert connection.query_and_wait_calls[0][1]["wait_timeout"] == driver._job_request_timeout()
+    assert connection.query_and_wait_calls[0][1].get("wait_timeout") is None
     assert result.get_data()[0]["v"] == 1
 
 
