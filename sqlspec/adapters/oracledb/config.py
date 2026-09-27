@@ -42,6 +42,7 @@ from sqlspec.driver import (
     SyncPoolConnectionContext,
     SyncPoolSessionFactory,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -134,6 +135,8 @@ class OracleConnectionParams(TypedDict):
 class OraclePoolParams(OracleConnectionParams):
     """OracleDB pool parameters."""
 
+    thick_mode: NotRequired[bool]
+    lib_dir: NotRequired[str]
     pool_class: NotRequired[type[Any]]
     params: NotRequired[oracledb.PoolParams]
     min: NotRequired[int]
@@ -407,6 +410,15 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create the actual connection pool."""
         config = dict(self.connection_config)
+        thick_mode = config.pop("thick_mode", False)
+        lib_dir = config.pop("lib_dir", None)
+        if (thick_mode or lib_dir is not None or config.get("soda_metadata_cache")) and oracledb.is_thin_mode():
+            client_config = {}
+            if lib_dir is not None:
+                client_config["lib_dir"] = lib_dir
+            if config.get("config_dir") is not None:
+                client_config["config_dir"] = config["config_dir"]
+            oracledb.init_oracle_client(**client_config)
 
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
@@ -599,6 +611,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     async def _create_pool(self) -> "OracleAsyncConnectionPool":
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
+        thick_mode = config.pop("thick_mode", False)
+        lib_dir = config.pop("lib_dir", None)
+        if thick_mode or lib_dir is not None:
+            msg = "OracleAsyncConfig only supports Thin mode; use OracleSyncConfig for Thick mode."
+            raise ImproperConfigurationError(msg)
 
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
