@@ -155,6 +155,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "query_page_size",
         "query_max_results",
         "enable_storage_write_api",
+        "storage_write_stream_type",
         "enable_native_storage",
         "native_export_connection",
     ),
