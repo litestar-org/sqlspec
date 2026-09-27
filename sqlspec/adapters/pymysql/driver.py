@@ -1,5 +1,6 @@
 """PyMySQL MySQL driver implementation."""
 
+import os
 import tempfile
 from collections.abc import Sized
 from pathlib import Path
@@ -93,7 +94,7 @@ class PyMysqlExceptionHandler(BaseSyncExceptionHandler):
 class PyMysqlDriver(SyncDriverAdapterBase):
     """MySQL/MariaDB database driver using PyMySQL."""
 
-    __slots__ = ("_data_dictionary",)
+    __slots__ = ("_data_dictionary", "_json_deserializer")
     dialect = "mysql"
 
     def __init__(
@@ -109,6 +110,10 @@ class PyMysqlDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PyMysqlDataDictionary | None = None
+        features = driver_features or {}
+        self._json_deserializer: Callable[[Any], Any] = cast(
+            "Callable[[Any], Any]", features.get("json_deserializer", from_json)
+        )
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
@@ -135,8 +140,9 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             fetched_data = cursor.fetchall()
             description = cursor.description or None
             row_plan = resolve_row_plan(description, PYMYSQL_JSON_TYPE_CODES)
-            deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-            rows, column_names, row_format = collect_rows(fetched_data, row_plan, deserializer, logger=logger)
+            rows, column_names, row_format = collect_rows(
+                fetched_data, row_plan, self._json_deserializer, logger=logger
+            )
             column_types = _resolve_column_types(description)
 
             return self.create_execution_result(
@@ -267,10 +273,10 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
             if use_infile:
                 payload = encode_records_for_local_infile(records)
-                with tempfile.NamedTemporaryFile(mode="wb", suffix=".tsv", delete=False) as tmp:
-                    tmp.write(payload)
-                    tmp_name = tmp.name
+                fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
                 try:
+                    with os.fdopen(fd, "wb") as tmp:
+                        tmp.write(payload)
                     load_sql = build_load_data_statement(table, columns)
                     exc_handler = self.handle_database_exceptions()
                     with exc_handler, self.with_cursor(self.connection) as cursor:
@@ -319,8 +325,7 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         """Collect PyMySQL rows for the direct execution path."""
         description = cursor.description or None
         row_plan = resolve_row_plan(description, PYMYSQL_JSON_TYPE_CODES)
-        deserializer = cast("Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json))
-        rows, column_names, _row_format = collect_rows(fetched, row_plan, deserializer, logger=logger)
+        rows, column_names, _row_format = collect_rows(fetched, row_plan, self._json_deserializer, logger=logger)
         return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: Any) -> int:

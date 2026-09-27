@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection
+from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection, PyMysqlServerStatus
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -187,6 +187,8 @@ class PyMysqlConnectionPool:
             with contextlib.suppress(Exception):
                 self._close_thread_connection()
             raise
+        else:
+            self.release(connection)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -203,15 +205,15 @@ class PyMysqlConnectionPool:
         return self._get_thread_connection()
 
     def release(self, connection: PyMysqlConnection) -> None:
-        _ = connection
+        """Release connection back to the pool, sanitizing transactions."""
+        if bool(getattr(connection, "server_status", 0) & PyMysqlServerStatus.SERVER_STATUS_IN_TRANS):
+            with contextlib.suppress(Exception):
+                connection.rollback()
 
     def size(self) -> int:
-        try:
-            _ = self._thread_local.connection
-        except AttributeError:
-            return 0
-        else:
-            return 1
+        """Report total active connections managed by this pool."""
+        with self._registry_lock:
+            return len(self._connection_registry)
 
     def checked_out(self) -> int:
         return 0
