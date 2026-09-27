@@ -345,3 +345,74 @@ def test_profile_aiosqlite_statement_config_parity_with_sqlite() -> None:
     aio_config = build_statement_config()
     sqlite_config = sqlite_build_statement_config()
     assert aio_config.enable_parameter_type_wrapping == sqlite_config.enable_parameter_type_wrapping
+
+
+class _AsyncAutocommitConnection:
+    """Mimics an aiosqlite connection wrapping a Python 3.12+ sqlite3 connection in autocommit mode."""
+
+    def __init__(self, in_transaction: bool = True, autocommit: bool = True) -> None:
+        self.autocommit = autocommit
+        self.in_transaction = in_transaction
+        self._conn = self
+        self.statements: list[str] = []
+        self.commit_calls = 0
+        self.rollback_calls = 0
+
+    async def execute(self, sql: str, parameters: object = ()) -> None:
+        _ = parameters
+        self.statements.append(sql)
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
+
+
+@pytest.mark.parametrize(
+    ("method", "statement"), [("commit", "COMMIT"), ("rollback", "ROLLBACK")], ids=["commit", "rollback"]
+)
+async def test_aiosqlite_autocommit_mode_ends_transactions_with_explicit_statement(
+    method: str, statement: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In autocommit mode AiosqliteDriver commit/rollback must execute explicit SQL."""
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.core.SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT", True)
+    connection = _AsyncAutocommitConnection(in_transaction=True, autocommit=True)
+    driver = AiosqliteDriver(connection=cast("Any", connection), statement_config=default_statement_config)
+
+    await getattr(driver, method)()
+
+    assert connection.statements == [statement]
+    assert connection.commit_calls == 0
+    assert connection.rollback_calls == 0
+
+
+@pytest.mark.parametrize("method", ["commit", "rollback"])
+async def test_aiosqlite_autocommit_mode_skips_statement_without_open_transaction(
+    method: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ending a transaction in autocommit mode without an open transaction must be a no-op."""
+    monkeypatch.setattr("sqlspec.adapters.aiosqlite.core.SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT", True)
+    connection = _AsyncAutocommitConnection(in_transaction=False, autocommit=True)
+    driver = AiosqliteDriver(connection=cast("Any", connection), statement_config=default_statement_config)
+
+    await getattr(driver, method)()
+
+    assert connection.statements == []
+    assert connection.commit_calls == 0
+    assert connection.rollback_calls == 0
+
+
+async def test_aiosqlite_begin_honors_explicit_and_default_transaction_mode() -> None:
+    """AiosqliteDriver.begin should honor explicit mode and driver_features default_transaction_mode."""
+    connection = _AsyncAutocommitConnection(in_transaction=False, autocommit=False)
+    driver = AiosqliteDriver(
+        connection=cast("Any", connection),
+        statement_config=default_statement_config,
+        driver_features={"default_transaction_mode": "DEFERRED"},
+    )
+
+    await driver.begin()
+    await driver.begin(mode="EXCLUSIVE")
+
+    assert connection.statements == ["BEGIN DEFERRED", "BEGIN EXCLUSIVE"]

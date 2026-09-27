@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import inspect
 import secrets
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
@@ -16,6 +16,7 @@ from sqlspec.adapters.aiosqlite.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    end_transaction,
     execute_and_resolve_metadata,
     execute_fetchall_with_metadata,
     execute_many_on_worker_thread,
@@ -216,18 +217,26 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                             await close_result
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    async def begin(self) -> None:
-        """Begin a database transaction."""
+    async def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
+        """Begin a database transaction.
+
+        Args:
+            mode: Transaction locking mode (DEFERRED, IMMEDIATE, EXCLUSIVE).
+                Falls back to ``driver_features['default_transaction_mode']``,
+                or ``IMMEDIATE`` when neither is set.
+        """
+        transaction_mode = mode or self.driver_features.get("default_transaction_mode") or "IMMEDIATE"
+        stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
         try:
             if not self.connection.in_transaction:
-                await self.connection.execute("BEGIN IMMEDIATE")
+                await self.connection.execute(stmt)
         except aiosqlite.Error as e:
-            await _retry_begin_with_backoff(self.connection, e)
+            await _retry_begin_with_backoff(self.connection, e, statement=stmt)
 
     async def commit(self) -> None:
         """Commit the current transaction."""
         try:
-            await self.connection.commit()
+            await end_transaction(self.connection, commit=True)
         except aiosqlite.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -235,7 +244,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     async def rollback(self) -> None:
         """Rollback the current transaction."""
         try:
-            await self.connection.rollback()
+            await end_transaction(self.connection, commit=False)
         except aiosqlite.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -545,9 +554,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
 
 async def _retry_begin_with_backoff(
-    connection: "AiosqliteConnection", initial_error: aiosqlite.Error, max_retries: int = 3
+    connection: "AiosqliteConnection",
+    initial_error: aiosqlite.Error,
+    max_retries: int = 3,
+    *,
+    statement: str = "BEGIN IMMEDIATE",
 ) -> None:
-    """Retry ``BEGIN IMMEDIATE`` after SQLite reports a busy connection.
+    """Retry transaction start after SQLite reports a busy connection.
 
     Aiosqlite surfaces SQLite lock contention through ``aiosqlite.Error``. Preserve
     the existing bounded exponential-backoff behavior for every native error and
@@ -557,6 +570,7 @@ async def _retry_begin_with_backoff(
         connection: Aiosqlite connection used to retry the transaction start.
         initial_error: Error raised by the first transaction-start attempt.
         max_retries: Maximum number of retry attempts.
+        statement: SQL statement used to start the transaction.
 
     Raises:
         SQLSpecError: If every retry attempt fails.
@@ -565,7 +579,7 @@ async def _retry_begin_with_backoff(
         delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)
         await asyncio.sleep(delay)
         try:
-            await connection.execute("BEGIN IMMEDIATE")
+            await connection.execute(statement)
         except aiosqlite.Error:
             if attempt == max_retries - 1:
                 break

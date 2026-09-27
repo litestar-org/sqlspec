@@ -1,6 +1,7 @@
 """SQLite driver implementation."""
 
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+import contextlib
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -54,7 +55,6 @@ if TYPE_CHECKING:
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
 
 T = TypeVar("T")
-_BATCH_SAMPLE_THRESHOLD: Final = 100
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -221,13 +221,17 @@ class SqliteDriver(SyncDriverAdapterBase):
             and self.observability.is_idle
             and self._can_use_execute_many_thin_path(statement, parameters, config)
         ):
+            cursor = None
             try:
                 cursor = self.connection.executemany(statement, parameters)
+                affected_rows = resolve_rowcount(cursor)
             except sqlite3.Error as exc:
                 raise create_mapped_exception(exc) from exc
+            finally:
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        cursor.close()
 
-            rowcount = cursor.rowcount
-            affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
             operation = self._resolve_dml_operation_type(statement)
             self._invalidate_rowid_target_cache(operation)
             return DMLResult(operation, affected_rows)
@@ -432,6 +436,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         This bypasses cursor context-manager overhead for repeated cached
         statements while preserving driver exception mapping behavior.
         """
+        cursor = None
         direct_statement: SQL | None = None
         returns_rows = cached.operation_profile.returns_rows
         self._invalidate_rowid_target_cache(cached.operation_type)
@@ -483,6 +488,9 @@ class SqliteDriver(SyncDriverAdapterBase):
             )
             return self.build_statement_result(direct_statement, execution_result)
         finally:
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    cursor.close()
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
         msg = "unreachable"
@@ -521,7 +529,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _thin_path_parameters_are_eligible(
-        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
+        parameters: "Sequence[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
     ) -> bool:
         """Validate parameter payload for the SQLite execute-many thin path."""
         first_sequence = SqliteDriver._as_sequence_parameter_set(parameters[0])
@@ -534,16 +542,9 @@ class SqliteDriver(SyncDriverAdapterBase):
         has_type_coercion = bool(coercion_map)
         fallback_items = type_coercion_fallbacks(coercion_map) if coercion_map else ()
 
-        total_rows = len(parameters)
-        if total_rows > _BATCH_SAMPLE_THRESHOLD:
-            sample_indices = (0, 1, total_rows // 4, total_rows // 2, (3 * total_rows) // 4, total_rows - 1)
-            eval_parameters = [parameters[i] for i in sample_indices]
-        else:
-            eval_parameters = parameters
-
         if row_len == 1:
             if has_type_coercion and coercion_map is not None:
-                for param_set in eval_parameters:
+                for param_set in parameters:
                     sequence = SqliteDriver._as_sequence_parameter_set(param_set)
                     if sequence is None or type(sequence) is not first_type:
                         return False
@@ -553,7 +554,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                         return False
                 return True
 
-            for param_set in eval_parameters:
+            for param_set in parameters:
                 sequence = SqliteDriver._as_sequence_parameter_set(param_set)
                 if sequence is None or type(sequence) is not first_type:
                     return False
@@ -564,7 +565,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             return True
 
         if has_type_coercion and coercion_map is not None:
-            for param_set in eval_parameters:
+            for param_set in parameters:
                 sequence = SqliteDriver._as_sequence_parameter_set(param_set)
                 if sequence is None or type(sequence) is not first_type:
                     return False
@@ -575,7 +576,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                         return False
             return True
 
-        for param_set in eval_parameters:
+        for param_set in parameters:
             sequence = SqliteDriver._as_sequence_parameter_set(param_set)
             if sequence is None or type(sequence) is not first_type:
                 return False

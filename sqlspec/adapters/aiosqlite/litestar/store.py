@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import NotRequired
 
-from sqlspec.adapters.aiosqlite.core import apply_extension_pragmas, extension_pragma_statements
+from sqlspec.adapters.aiosqlite.core import apply_extension_pragmas, end_transaction, extension_pragma_statements
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
@@ -112,7 +112,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
                     WHERE session_id = ?
                     """
                     await conn.execute(update_sql, (new_expires_at_julian, key))
-                    await conn.commit()
+                    await end_transaction(conn, commit=True)
 
             return bytes(data)
 
@@ -135,7 +135,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, (key, data, expires_at_julian))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -147,7 +147,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
         async with self._config.provide_connection() as conn:
             await conn.execute(sql, (key,))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -155,7 +155,7 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
 
         async with self._config.provide_connection() as conn:
             await conn.execute(sql)
-            await conn.commit()
+            await end_transaction(conn, commit=True)
         self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
@@ -218,12 +218,15 @@ class AiosqliteStore(BaseSQLSpecStore["AiosqliteConfig"]):
         Returns:
             Number of sessions deleted.
         """
-        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= julianday('now')"
+        sql = f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at <= julianday('now')"
 
         async with self._config.provide_connection() as conn:
             cursor = await conn.execute(sql)
-            await conn.commit()
-            count = cursor.rowcount
+            try:
+                await end_transaction(conn, commit=True)
+                count = cursor.rowcount
+            finally:
+                await cursor.close()
             if count > 0:
                 self._log_delete_expired(count)
             return count

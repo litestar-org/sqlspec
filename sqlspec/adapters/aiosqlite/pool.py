@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
-from sqlspec.adapters.aiosqlite.core import run_on_worker_thread
+from sqlspec.adapters.aiosqlite.core import end_transaction, run_on_worker_thread
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
@@ -78,9 +78,12 @@ def _has_active_transaction(connection: "AiosqliteConnection") -> bool:
 
 
 def _register_runtime_objects(
-    connection: "AiosqliteConnection", aggregates: "Sequence[dict[str, Any]]", collations: "Sequence[dict[str, Any]]"
+    connection: "AiosqliteConnection",
+    aggregates: "Sequence[dict[str, Any]]",
+    collations: "Sequence[dict[str, Any]]",
+    window_functions: "Sequence[dict[str, Any]]" = (),
 ) -> None:
-    """Register custom aggregates and collations on the worker thread."""
+    """Register custom aggregates, collations, and window functions on the worker thread."""
     raw_connection = connection._conn
     for aggregate_config in aggregates:
         raw_connection.create_aggregate(
@@ -88,6 +91,10 @@ def _register_runtime_objects(
         )
     for collation_config in collations:
         raw_connection.create_collation(collation_config["name"], collation_config["func"])
+    create_window_fn = getattr(raw_connection, "create_window_function", None)
+    if create_window_fn is not None:
+        for window_config in window_functions:
+            create_window_fn(window_config["name"], window_config["narg"], window_config["window_class"])
 
 
 async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup: "dict[str, Any]") -> None:
@@ -115,8 +122,11 @@ async def _apply_runtime_setup(connection: "AiosqliteConnection", runtime_setup:
 
     aggregates = runtime_setup.get("custom_aggregates", ())
     collations = runtime_setup.get("custom_collations", ())
-    if aggregates or collations:
-        await run_on_worker_thread(connection, _register_runtime_objects, connection, aggregates, collations)
+    window_functions = runtime_setup.get("custom_window_functions", ())
+    if aggregates or collations or window_functions:
+        await run_on_worker_thread(
+            connection, _register_runtime_objects, connection, aggregates, collations, window_functions
+        )
 
     authorizer_callback = runtime_setup.get("authorizer_callback")
     if authorizer_callback is not None:
@@ -228,7 +238,7 @@ class AiosqlitePoolConnection:
         if not _has_active_transaction(self.connection):
             return
         with suppress(Exception):
-            await self.connection.rollback()
+            await end_transaction(self.connection, commit=False)
 
     async def close(self) -> None:
         """Close the connection."""
@@ -237,7 +247,7 @@ class AiosqlitePoolConnection:
         try:
             if _has_active_transaction(self.connection):
                 with suppress(Exception):
-                    await self.connection.rollback()
+                    await end_transaction(self.connection, commit=False)
             await self.connection.close()
         except Exception:
             log_with_context(
@@ -805,7 +815,7 @@ class AiosqliteConnectionPool:
         try:
             if _has_active_transaction(connection.connection):
                 with suppress(Exception):
-                    await connection.connection.rollback()
+                    await end_transaction(connection.connection, commit=False)
             connection.idle_since = time.time()
             self._queue.put_nowait(connection)
         except Exception as e:

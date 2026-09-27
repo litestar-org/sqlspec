@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 __all__ = (
+    "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "AiosqliteStreamSource",
     "apply_driver_features",
     "apply_extension_pragmas",
@@ -54,6 +55,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "end_transaction",
     "execute_and_resolve_metadata",
     "execute_and_resolve_rowcount",
     "execute_fetchall_with_description",
@@ -98,10 +100,75 @@ SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
 SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
+SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT = sys.version_info >= (3, 12)
 SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
 SQLITE_TABLE_INFO_MIN_COLUMNS = 2
 SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
+
+
+def _end_transaction_on_worker(raw_conn: Any, *, commit: bool, supports_autocommit: bool) -> None:
+    """End an open transaction on a sqlite3 connection on the worker thread."""
+    if supports_autocommit and getattr(raw_conn, "autocommit", False) is True:
+        if getattr(raw_conn, "in_transaction", False):
+            cursor = raw_conn.execute("COMMIT" if commit else "ROLLBACK")
+            with contextlib.suppress(Exception):
+                cursor.close()
+        return
+    if commit:
+        raw_conn.commit()
+    else:
+        raw_conn.rollback()
+
+
+def _read_transaction_state_on_worker(raw_conn: Any) -> "tuple[bool, bool]":
+    """Read sqlite3 autocommit and in_transaction state on the worker thread."""
+    return getattr(raw_conn, "autocommit", False) is True, bool(getattr(raw_conn, "in_transaction", False))
+
+
+async def end_transaction(
+    connection: "AiosqliteConnection | Any", *, commit: bool, supports_autocommit: "bool | None" = None
+) -> None:
+    """End an open transaction on an aiosqlite connection.
+
+    Connection.commit and Connection.rollback are no-ops while the underlying
+    sqlite3 connection runs in autocommit mode, so the statement is issued
+    directly there.
+
+    Args:
+        connection: Connection whose transaction should end.
+        commit: Whether to commit rather than roll back.
+        supports_autocommit: Whether this runtime's sqlite3 exposes autocommit.
+    """
+    if supports_autocommit is None:
+        supports_autocommit = SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
+    raw_conn = getattr(connection, "_conn", None)
+    if isinstance(raw_conn, sqlite3.Connection) and callable(getattr(connection, "_execute", None)):
+        conn_dict = getattr(connection, "__dict__", None)
+        has_method_override = isinstance(conn_dict, dict) and any(
+            key in conn_dict for key in ("commit", "rollback", "execute")
+        )
+        if not has_method_override:
+            await run_on_worker_thread(
+                connection, _end_transaction_on_worker, raw_conn, commit=commit, supports_autocommit=supports_autocommit
+            )
+            return
+        autocommit, in_transaction = await run_on_worker_thread(connection, _read_transaction_state_on_worker, raw_conn)
+    else:
+        autocommit = getattr(raw_conn, "autocommit", False) is True or getattr(connection, "autocommit", False) is True
+        in_transaction = (
+            bool(getattr(raw_conn, "in_transaction", False))
+            if raw_conn is not None
+            else bool(getattr(connection, "in_transaction", False))
+        )
+    if supports_autocommit and autocommit:
+        if in_transaction:
+            await connection.execute("COMMIT" if commit else "ROLLBACK")
+        return
+    if commit:
+        await connection.commit()
+    else:
+        await connection.rollback()
 
 
 async def run_on_worker_thread(
