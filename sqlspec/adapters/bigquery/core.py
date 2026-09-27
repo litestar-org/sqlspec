@@ -6,7 +6,7 @@ import importlib
 import io
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
 from urllib.parse import urlparse
 
 import sqlglot
@@ -1035,6 +1035,12 @@ def _query_parameter_type(value: Any, declared_type: "type[Any] | None" = None) 
 
     if isinstance(value, (list, tuple)):
         if not value:
+            args = get_args(declared_type)
+            element_type = args[0] if args else declared_type
+            if element_type in _BQ_TYPE_MAP and element_type not in (list, tuple, dict):
+                return ("ARRAY", _BQ_TYPE_MAP[element_type][0])
+            if element_type is datetime.datetime:
+                return ("ARRAY", "TIMESTAMP")
             msg = "Cannot determine BigQuery ARRAY type for empty sequence."
             raise SQLSpecError(msg)
         element_type, _ = _query_parameter_type(value[0])
@@ -1119,7 +1125,6 @@ def _run_query_and_wait(
         query_kwargs["retry"] = retry
     if wait_timeout is not None:
         query_kwargs["api_timeout"] = wait_timeout
-        query_kwargs["wait_timeout"] = wait_timeout
     if job_retry is not None:
         query_kwargs["job_retry"] = job_retry
     if page_size is not None:

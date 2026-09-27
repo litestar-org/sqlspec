@@ -28,6 +28,7 @@ from sqlspec.utils.serializers import to_json
 
 class _RecordingConnection:
     def __init__(self) -> None:
+        self.default_query_job_config: QueryJobConfig | None = None
         self.job = object()
         self.queries: list[tuple[str, dict[str, Any]]] = []
 
@@ -396,3 +397,155 @@ def test_stream_source_converts_rows_without_items_copying() -> None:
 def test_bigquery_type_converter_module_is_gone() -> None:
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("sqlspec.adapters.bigquery.type_converter")
+
+
+class _RecordingInteractiveConnection:
+    """Mock BigQuery connection tracking query and query_and_wait calls."""
+
+    def __init__(self, row_iterator: Any = None) -> None:
+        self.row_iterator = row_iterator
+        self.query_and_wait_calls: list[tuple[str, dict[str, Any]]] = []
+        self.query_calls: list[tuple[str, dict[str, Any]]] = []
+        self.job = object()
+
+    def query_and_wait(self, sql: str, **kwargs: Any) -> Any:
+        self.query_and_wait_calls.append((sql, kwargs))
+        return self.row_iterator
+
+    def query(self, sql: str, **kwargs: Any) -> Any:
+        self.query_calls.append((sql, kwargs))
+        return self.job
+
+
+def test_bigquery_driver_defaults_to_query_and_wait_for_interactive_select() -> None:
+    """Verify BigQueryDriver defaults to query_and_wait for interactive SELECT statements."""
+
+    class _MockRowIterator:
+        schema = [SimpleNamespace(name="id")]
+        total_rows = 1
+
+        def __iter__(self) -> Iterator[dict[str, Any]]:
+            return iter([{"id": 1}])
+
+    row_iterator = _MockRowIterator()
+    connection = _RecordingInteractiveConnection(row_iterator=row_iterator)
+    driver = BigQueryDriver(cast(Any, connection))
+
+    result = driver.dispatch_execute(cast(Any, connection), driver.prepare_statement("SELECT 1 AS id"))
+
+    assert len(connection.query_and_wait_calls) == 1
+    assert len(connection.query_calls) == 0
+    assert result.is_select_result is True
+    assert result.selected_data == [{"id": 1}]
+
+
+def test_destination_table_bypasses_query_and_wait() -> None:
+    """Verify queries with destination tables bypass query_and_wait and route to query."""
+    row_iterator = SimpleNamespace(schema=[SimpleNamespace(name="id")], total_rows=1)
+    connection = _RecordingInteractiveConnection(row_iterator=row_iterator)
+    connection.job = _RecordingSelectJob([{"id": 1}])
+
+    job_config = QueryJobConfig()
+    job_config.destination = "project.dataset.table"
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"default_query_job_config": job_config})
+
+    stmt = driver.prepare_statement("SELECT 1 AS id")
+    result = driver.dispatch_execute(cast(Any, connection), stmt)
+
+    assert len(connection.query_and_wait_calls) == 0
+    assert len(connection.query_calls) == 1
+    assert result.is_select_result is True
+
+
+def test_batch_priority_bypasses_query_and_wait() -> None:
+    """Verify queries with BATCH priority bypass query_and_wait and route to query."""
+    row_iterator = SimpleNamespace(schema=[SimpleNamespace(name="id")], total_rows=1)
+    connection = _RecordingInteractiveConnection(row_iterator=row_iterator)
+    connection.job = _RecordingSelectJob([{"id": 1}])
+
+    job_config = QueryJobConfig()
+    job_config.priority = "BATCH"
+    driver = BigQueryDriver(cast(Any, connection), driver_features={"default_query_job_config": job_config})
+
+    stmt = driver.prepare_statement("SELECT 1 AS id")
+    driver.dispatch_execute(cast(Any, connection), stmt)
+
+    assert len(connection.query_and_wait_calls) == 0
+    assert len(connection.query_calls) == 1
+
+
+def test_script_execution_runs_as_single_unsplit_job() -> None:
+    """Verify multi-statement script runs as a single un-split query job."""
+    connection = _RecordingConnection()
+    script_job = SimpleNamespace(
+        statement_type="SCRIPT",
+        num_dml_affected_rows=5,
+        statistics=None,
+        _properties={"statistics": {"query": {"scriptStatistics": {"executionPath": [1, 2, 3, 4]}}}},
+        result=lambda **kwargs: None,
+    )
+    connection.job = script_job
+    driver = BigQueryDriver(cast(Any, connection))
+
+    script_sql = "BEGIN DECLARE x INT64; SET x = 1; SELECT x; END;"
+    result = driver.dispatch_execute_script(cast(Any, connection), driver.prepare_statement(script_sql))
+
+    assert len(connection.queries) == 1
+    executed_sql, _ = connection.queries[0]
+    assert executed_sql.strip() == script_sql.strip()
+    assert result.is_script_result is True
+    assert result.statement_count == 1
+    assert result.successful_statements == 1
+
+
+def test_script_preserves_bound_parameters() -> None:
+    """Verify scripts retain native parameter binding without reparsing."""
+    connection = _RecordingConnection()
+    script_job = SimpleNamespace(
+        statement_type="SCRIPT", num_dml_affected_rows=1, statistics=None, result=lambda **kwargs: None
+    )
+    connection.job = script_job
+    driver = BigQueryDriver(cast(Any, connection))
+
+    script_sql = "INSERT INTO t (id, name) VALUES (@id, @name);"
+    stmt = driver.prepare_statement(script_sql, ({"id": 42, "name": "alice"},))
+    driver.dispatch_execute_script(cast(Any, connection), stmt)
+
+    assert len(connection.queries) == 1
+    executed_sql, kwargs = connection.queries[0]
+    assert "@id" in executed_sql
+    assert "@name" in executed_sql
+    assert {p.name: p.value for p in kwargs["job_config"].query_parameters} == {"id": 42, "name": "alice"}
+
+
+def test_result_timeout_uses_query_job() -> None:
+    connection = _RecordingInteractiveConnection()
+    connection.job = _RecordingSelectJob([{"id": 1}])
+    driver = BigQueryDriver(cast("Any", connection), driver_features={"job_result_timeout": 5.0})
+
+    driver.execute("SELECT 1 AS id")
+
+    assert len(connection.query_calls) == 1
+    assert connection.job.result_calls[0]["timeout"] == 5.0
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"), [(int, "INT64"), (bool, "BOOL"), (float, "FLOAT64"), (str, "STRING")]
+)
+def test_declared_empty_array_preserves_element_type(declared: type, expected: str) -> None:
+    from sqlspec.adapters.bigquery.core import create_parameters
+    from sqlspec.core import TypedParameter
+
+    parameter = create_parameters({"values": TypedParameter([], declared)})[0]
+    assert parameter.to_api_repr()["parameterType"] == {"type": "ARRAY", "arrayType": {"type": expected}}
+
+
+def test_native_default_job_config_guides_fast_path() -> None:
+    from sqlspec.core import SQL
+
+    connection = _RecordingConnection()
+    native_defaults = QueryJobConfig(priority="BATCH")
+    connection.default_query_job_config = native_defaults
+    driver = BigQueryDriver(cast("Any", connection))
+    assert driver._default_query_job_config is native_defaults
+    assert driver._can_use_query_and_wait(SQL("SELECT 1"), "SELECT 1") is False

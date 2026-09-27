@@ -193,3 +193,20 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.bigquery.adk.BigQueryADKRetentionConfig
    :members:
    :show-inheritance:
+
+Native query and ingestion controls
+-----------------------------------
+
+Connection configuration accepts ``labels``, ``priority``, ``reservation``, and
+``max_slots`` and forwards them to the native default ``QueryJobConfig``. SDK
+validation and service availability restrictions still apply. Native client
+defaults also control SQLSpec query routing.
+
+Explicit SDK ``StructQueryParameter``
+values preserve STRUCT intent; dictionaries retain JSON semantics.
+Typed empty arrays support declared primitive element types.
+
+The ``storage_write_stream_type`` driver feature accepts ``PENDING`` (the default,
+with an atomic batch commit) or ``COMMITTED`` (immediate visibility).
+Committed writes can remain visible after a later append fails. Both modes
+finalize streams, with best-effort cleanup after append failures.

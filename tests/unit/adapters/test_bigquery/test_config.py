@@ -193,3 +193,20 @@ def test_bigquery_config_uses_project_id_and_dataset_alias() -> None:
     default_dataset = config.connection_config["default_query_job_config"].default_dataset
     assert default_dataset.project == "my-proj"
     assert default_dataset.dataset_id == "my-dataset"
+
+
+def test_native_job_resource_controls_are_forwarded() -> None:
+    config = BigQueryConfig(
+        connection_config={
+            "project": "test-project",
+            "labels": {"team": "analytics"},
+            "priority": "BATCH",
+            "reservation": "projects/p/locations/us/reservations/r",
+            "max_slots": 25,
+        }
+    )
+    job_config = config.connection_config["default_query_job_config"]
+    assert job_config.labels == {"team": "analytics"}
+    assert job_config.priority == "BATCH"
+    assert job_config.reservation == "projects/p/locations/us/reservations/r"
+    assert job_config.max_slots == 25

@@ -6,13 +6,17 @@ type coercion, error handling, and query job management.
 
 import io
 from collections.abc import Mapping
+from contextlib import suppress
 from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
+
+from sqlglot import exp
 
 from sqlspec.adapters.bigquery._typing import BIGQUERY_POLLING_DEFAULT_VALUE as POLLING_DEFAULT_VALUE
 from sqlspec.adapters.bigquery._typing import (
     BigQueryConnection,
     BigQueryCursor,
+    BigQueryQueryJobConfig,
     BigQuerySessionContext,
     BigQueryStorageWriteModule,
     BigQueryStorageWriteTypes,
@@ -145,7 +149,12 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._literal_inliner = build_literal_inlining_transform(json_serializer=self._json_serializer)
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._default_query_job_config: QueryJobConfig | None = (driver_features or {}).get("default_query_job_config")
+        default_job_config = features.get("default_query_job_config")
+        if default_job_config is None:
+            connection_default = getattr(connection, "default_query_job_config", None)
+            if isinstance(connection_default, BigQueryQueryJobConfig):
+                default_job_config = connection_default
+        self._default_query_job_config: QueryJobConfig | None = default_job_config
         self._data_dictionary: BigQueryDataDictionary | None = None
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._job_result_kwargs_defaults = self._build_job_result_kwargs(features)
@@ -153,8 +162,22 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._job_retry: Retry | None = build_retry(self._job_retry_deadline) if self._job_retry_deadline > 0 else None
         self._job_result_timeout: float | object = features.get("job_result_timeout", POLLING_DEFAULT_VALUE)
         self._request_timeout = self._resolve_request_timeout(features)
-        self._use_query_and_wait = bool(features.get("use_query_and_wait", False))
+        self._use_query_and_wait = bool(features.get("use_query_and_wait", True))
         self._enable_storage_write_api = bool(features.get("enable_storage_write_api", False))
+
+    def _can_use_query_and_wait(self, statement: "SQL", sql: str) -> bool:
+        """Use the interactive fast path only for compatible query jobs."""
+        if not self._use_query_and_wait or not hasattr(self.connection, "query_and_wait"):
+            return False
+        if self._job_result_timeout is not POLLING_DEFAULT_VALUE or _uses_local_bigquery_endpoint(self.connection):
+            return False
+        config = self._default_query_job_config
+        if config is not None:
+            if config.destination is not None or config.dry_run or config.create_session:
+                return False
+            if config.priority == "BATCH":
+                return False
+        return not isinstance(statement.expression, exp.Export) and not sql.lstrip().upper().startswith("EXPORT DATA")
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
@@ -167,7 +190,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             ExecutionResult with query results and metadata
         """
         sql, parameters = self._compiled_sql(statement, self.statement_config)
-        if self._use_query_and_wait:
+        if self._can_use_query_and_wait(statement, sql=sql):
             row_iterator = _run_query_and_wait(
                 cursor,
                 sql,
@@ -177,6 +200,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 retry=self._job_retry,
                 wait_timeout=self._job_request_timeout(),
                 job_retry=self._job_retry,
+                page_size=self._job_result_kwargs_defaults.get("page_size"),
+                max_results=self._job_result_kwargs_defaults.get("max_results"),
             )
             cursor.job = None
             iterator_schema = getattr(row_iterator, "schema", None)
@@ -270,38 +295,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
-        """Execute SQL script with statement splitting and parameter handling.
-
-        Parameters are embedded as static values for script execution compatibility.
-
-        Args:
-            cursor: BigQuery cursor object
-            statement: SQL statement to execute
-
-        Returns:
-            ExecutionResult with script execution details
-        """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-
-        successful_count = 0
-        last_job = None
-        last_rowcount = 0
-
-        for stmt in statements:
-            job = self._run_query_job(cursor, stmt, prepared_parameters or {})
-            job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
-            last_job = job
-            last_rowcount = normalize_script_rowcount(last_rowcount, job)
-            successful_count += 1
-
-        cursor.job = last_job
-
+        """Execute a procedural script as one native BigQuery job with bound parameters."""
+        sql, parameters = self._compiled_sql(statement, self.statement_config)
+        cursor.job = self._run_query_job(cursor, sql, parameters)
+        cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         return self.create_execution_result(
             cursor,
-            statement_count=len(statements),
-            successful_statements=successful_count,
-            rowcount_override=last_rowcount,
+            statement_count=1,
+            successful_statements=1,
+            rowcount_override=normalize_script_rowcount(0, cursor.job),
             is_script_result=True,
         )
 
@@ -730,12 +732,21 @@ class BigQueryDriver(SyncDriverAdapterBase):
         else:
             return cast("bigquery_storage.BigQueryReadClient | None", client)
 
-    def _load_arrow_via_storage_write_api(self, table: str, arrow_table: "Any") -> "StorageTelemetry":
-        """Ingest an Arrow table via a BigQuery PENDING write stream using native arrow_rows."""
+    def _load_arrow_via_storage_write_api(
+        self, table: str, arrow_table: "Any", *, stream_type: str | None = None
+    ) -> "StorageTelemetry":
+        """Ingest an Arrow table via BigQuery Storage Write API using native arrow_rows."""
         if BigQueryStorageWriteModule is None or BigQueryStorageWriteTypes is None:
             msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion"
             raise ImportError(msg)
         types = BigQueryStorageWriteTypes
+
+        resolved_stream_type = stream_type or self.driver_features.get("storage_write_stream_type", "PENDING")
+        normalized_stream_type = str(resolved_stream_type).upper()
+        if normalized_stream_type not in {"COMMITTED", "PENDING"}:
+            msg = f"Unsupported storage_write_stream_type '{resolved_stream_type}'. Expected 'COMMITTED' or 'PENDING'."
+            raise ImproperConfigurationError(msg)
+        is_committed = normalized_stream_type == "COMMITTED"
 
         project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 
@@ -746,24 +757,33 @@ class BigQueryDriver(SyncDriverAdapterBase):
             credentials = getattr(self.connection, "_credentials", None)
             client = BigQueryStorageWriteModule.BigQueryWriteClient(credentials=credentials)
         parent = f"projects/{project}/datasets/{dataset}/tables/{table_name}"
+        write_stream_type_enum = types.WriteStream.Type.COMMITTED if is_committed else types.WriteStream.Type.PENDING
         write_stream = client.create_write_stream(
-            parent=parent, write_stream=types.WriteStream(type_=types.WriteStream.Type.PENDING)
+            parent=parent, write_stream=types.WriteStream(type_=write_stream_type_enum)
         )
         stream_name = write_stream.name
 
-        requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
-        if requests:
-            for response in client.append_rows(requests=iter(requests)):
-                if response.error.code:
-                    msg = f"Storage Write API append failed: {response.error.message}"
-                    raise StorageOperationFailedError(msg)
+        try:
+            requests = build_arrow_write_stream_payload(stream_name, arrow_table, types)
+            if requests:
+                for response in client.append_rows(requests=iter(requests)):
+                    if response.error.code:
+                        msg = f"Storage Write API append failed: {response.error.message}"
+                        raise StorageOperationFailedError(msg)  # noqa: TRY301
+
+        except BaseException:
+            with suppress(Exception):
+                client.finalize_write_stream(name=stream_name)
+            raise
+
         client.finalize_write_stream(name=stream_name)
-        commit = client.batch_commit_write_streams(
-            request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
-        )
-        if getattr(commit, "stream_errors", None):
-            msg = f"Storage Write API commit failed: {commit.stream_errors}"
-            raise StorageOperationFailedError(msg)
+        if not is_committed:
+            commit = client.batch_commit_write_streams(
+                request=types.BatchCommitWriteStreamsRequest(parent=parent, write_streams=[stream_name])
+            )
+            if getattr(commit, "stream_errors", None):
+                msg = f"Storage Write API commit failed: {commit.stream_errors}"
+                raise StorageOperationFailedError(msg)
 
         telemetry_payload = self._ingest_telemetry(arrow_table, format_label="arrow-storage-write")
         telemetry_payload["destination"] = table
