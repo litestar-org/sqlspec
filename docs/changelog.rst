@@ -38,6 +38,10 @@ Unreleased
 
 **Fixed:**
 
+* Arrow ODBC pagination reuses compiled placeholder positions instead of
+  parsing SQL again. ADBC keeps bound values in its ADK store queries.
+  DuckDB Arrow loads keep sparse dictionary fields and quote table names.
+
 * Builder upserts emit ``MERGE`` for the ``db2`` dialect.
 * The arrow-odbc adapter detects the SQL dialect from the ODBC driver name
   only, so database, host, or user names no longer select the wrong dialect.
