@@ -28,6 +28,7 @@ from sqlspec.utils.serializers import to_json
 
 class _RecordingConnection:
     def __init__(self) -> None:
+        self.default_query_job_config: QueryJobConfig | None = None
         self.job = object()
         self.queries: list[tuple[str, dict[str, Any]]] = []
 
