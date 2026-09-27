@@ -117,7 +117,8 @@ class BaseMigrationTracker(Generic[DriverT]):
         self.version_table_name = table_identifier.name
         self.version_table_schema = resolved_schema_identifier.name if resolved_schema_identifier is not None else None
         self.version_table = self._qualify_version_table(
-            table_identifier.sql(), resolved_schema_identifier.sql() if resolved_schema_identifier is not None else None
+            table_identifier.sql(copy=False),
+            resolved_schema_identifier.sql(copy=False) if resolved_schema_identifier is not None else None,
         )
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
 

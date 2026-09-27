@@ -1607,25 +1607,24 @@ class SQL:
         builder: QueryBuilder
         if isinstance(base_expression, (exp.Select, exp.Union, exp.Except, exp.Intersect, exp.Values)):
             builder = Select(dialect=builder_dialect)
-            builder.set_expression(base_expression.copy())
+            builder.set_expression(base_expression)
         elif isinstance(base_expression, exp.Insert):
             builder = Insert(dialect=builder_dialect)
-            builder.set_expression(base_expression.copy())
+            builder.set_expression(base_expression)
         elif isinstance(base_expression, exp.Update):
             builder = Update(dialect=builder_dialect)
-            builder.set_expression(base_expression.copy())
+            builder.set_expression(base_expression)
         elif isinstance(base_expression, exp.Delete):
             builder = Delete(dialect=builder_dialect)
-            builder.set_expression(base_expression.copy())
+            builder.set_expression(base_expression)
         elif isinstance(base_expression, exp.Merge):
             builder = Merge(dialect=builder_dialect)
-            builder.set_expression(base_expression.copy())
+            builder.set_expression(base_expression)
         else:
-            copied = base_expression.copy()
-            if not isinstance(copied, exp.Expression):
-                msg = f"Unsupported expression type for builder: {type(copied).__name__}"
+            if not isinstance(base_expression, exp.Expression):
+                msg = f"Unsupported expression type for builder: {type(base_expression).__name__}"
                 raise sqlspec.exceptions.SQLBuilderError(msg)
-            builder = ExpressionBuilder(copied, dialect=builder_dialect)
+            builder = ExpressionBuilder(base_expression, dialect=builder_dialect)
 
         if ctes:
             builder.load_ctes(ctes)

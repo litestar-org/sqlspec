@@ -680,7 +680,7 @@ def _dml_count_query(sql: str) -> str | None:
     count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
     count_query = exp.select(count_expression).from_(cte_alias, copy=False)
     count_query.with_(cte_alias, as_=expression, copy=False)
-    return count_query.sql(dialect="postgres")
+    return count_query.sql(dialect="postgres", copy=False)
 
 
 def _create_postgres_error(error: Any, error_class: type[SQLSpecError], description: str) -> SQLSpecError:

@@ -45,6 +45,10 @@ Unreleased
 
 **Fixed:**
 
+* Builder results keep CTE trees independent, and column pruning no longer
+  exposes its cached expression to mutation. SQL generation avoids redundant
+  copies of temporary trees while preserving caller and cache ownership.
+
 * Asyncpg stack telemetry reports sequential prepared execution rather than
   native pipelining. Each statement still returns its own result.
 

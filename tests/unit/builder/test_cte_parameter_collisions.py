@@ -4,6 +4,8 @@ This module tests that CTEs with duplicate parameter names are properly
 handled with unique parameter naming to prevent collisions.
 """
 
+from typing import cast
+
 from sqlspec import sql
 
 
@@ -239,3 +241,33 @@ def test_multiple_cte_levels_parameter_isolation() -> None:
     assert "login" in param_values
     assert "summary" in param_values
     assert "monthly" in param_values
+
+
+def test_final_expression_copy_detaches_nested_ctes() -> None:
+    from sqlglot import exp
+
+    inner = sql.select("id").from_("items")
+    owner = sql.select("id").with_cte("source", inner).from_("source")
+    owner.enable_optimization = False
+    before = owner.build().sql
+    detached = owner._build_final_expression(copy=True)
+    cte = next(detached.find_all(exp.CTE))
+    cte.this.set("where", exp.Where(this=exp.false()))
+
+    assert owner.build().sql == before
+    assert "FALSE" in detached.sql()
+
+
+def test_from_subquery_keeps_nested_cte_owner_isolated() -> None:
+    from sqlglot import exp
+
+    source = sql.select("id").with_cte("nested", sql.select("id").from_("items")).from_("nested")
+    source.enable_optimization = False
+    before = source.build().sql
+    target = sql.select("*").from_(source, alias="derived")
+    target.enable_optimization = False
+    cte = next(cast("exp.Expr", target.get_expression()).find_all(exp.CTE))
+    cte.this.set("where", exp.Where(this=exp.false()))
+
+    assert source.build().sql == before
+    assert "FALSE" in target.build().sql

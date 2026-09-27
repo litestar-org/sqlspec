@@ -440,7 +440,7 @@ def wrap_as_subquery(expression: exp.Expr, alias: str = "filtered") -> exp.Selec
                     right.set("order", None)
     subquery = working if isinstance(working, exp.Subquery) and not bounded else exp.Subquery(this=working)
     subquery.set("alias", exp.TableAlias(this=exp.to_identifier(alias)))
-    outer = exp.Select().select("*").from_(subquery)
+    outer = exp.Select().select("*", copy=False).from_(subquery, copy=False)
     if with_ is not None:
         outer.set("with_", with_)
     if order is not None:
@@ -503,7 +503,7 @@ def apply_column_pruning(
     # Cache the result
     if cache_key is not None:
         cache = get_cache()
-        cache.put_optimized(cache_key, pruned, dialect)
+        cache.put_optimized(cache_key, pruned.copy(), dialect)
 
     if isinstance(pruned, exp.Expr):
         return pruned

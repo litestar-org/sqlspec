@@ -322,7 +322,7 @@ def _add_column_statements(
     )
     if not target_table.args.get("db") and target.schema:
         target_table.set("db", _parse_ddl_identifier(target.schema, dialect=target.create_table.dialect))
-    alter_table_name = target_table.sql(dialect=target.create_table.dialect)
+    alter_table_name = target_table.sql(dialect=target.create_table.dialect, copy=False)
 
     statements: list[tuple[str, AlterTable]] = []
     for column_name in sorted(missing_columns):

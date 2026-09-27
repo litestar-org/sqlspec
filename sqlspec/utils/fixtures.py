@@ -1182,7 +1182,9 @@ def _table_insert_statement(
         )
     if family != "postgres" or always_identity.isdisjoint(columns):
         return statement
-    return insert_expression.sql(dialect=dialect).replace(") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1)
+    return insert_expression.sql(dialect=dialect, copy=False).replace(
+        ") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1
+    )
 
 
 def _insert_table_rows_sync(

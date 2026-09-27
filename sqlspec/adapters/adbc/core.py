@@ -1162,7 +1162,7 @@ def _rewrite_postgres_uuid_placeholders(
 
     for expression in expressions:
         expression.transform(wrap_parameter, copy=False)
-    rewritten = "; ".join(expression.sql(dialect=dialect) for expression in expressions)
+    rewritten = "; ".join(expression.sql(dialect=dialect, copy=False) for expression in expressions)
     return rewritten, effective_scalars, effective_arrays
 
 

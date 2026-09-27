@@ -924,7 +924,7 @@ def _build_multi_row_insert_script(
         if not isinstance(statement_values, exp.Values):
             return None
         statement_values.set("expressions", chunk)
-        statements.append(str(statement.sql(dialect="bigquery")))
+        statements.append(str(statement.sql(dialect="bigquery", copy=False)))
     return ";\n".join(statements)
 
 

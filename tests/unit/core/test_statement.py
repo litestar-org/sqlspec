@@ -18,7 +18,7 @@ import copy
 import importlib.util
 import logging
 import pickle
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1710,3 +1710,24 @@ def test_qmark_escape_survives_unparsed_fallback() -> None:
     rendered, _ = statement.compile()
     assert "data ? other_col" in rendered
     assert "COALESCE" not in rendered
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "sqlite"])
+@pytest.mark.parametrize("compiled", [False, True])
+def test_statement_builder_owns_its_expression(dialect: str, compiled: bool) -> None:
+    statement = SQL("WITH source AS (SELECT id FROM items) SELECT id FROM source", dialect=dialect)
+    if compiled:
+        statement.compile()
+    builder = statement.builder()
+    builder.enable_optimization = False
+    expected = builder.build().sql
+    expression = cast("exp.Expr", builder.get_expression())
+    expression.set("limit", exp.Limit(expression=exp.Literal.number(2)))
+    nested = next(expression.find_all(exp.CTE))
+    nested.this.set("where", exp.Where(this=exp.false()))
+
+    fresh = statement.builder()
+    fresh.enable_optimization = False
+    assert fresh.build().sql == expected
+    assert "FALSE" in builder.build().sql
+    assert "LIMIT 2" in builder.build().sql
