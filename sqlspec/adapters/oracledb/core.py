@@ -86,8 +86,6 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "normalize_column_names",
-    "normalize_execute_many_parameters_async",
-    "normalize_execute_many_parameters_sync",
     "resolve_row_metadata",
     "resolve_rowcount",
     "supports_df_batches",
@@ -234,7 +232,7 @@ def normalize_column_names(column_names: "list[str]", driver_features: "dict[str
     return normalized
 
 
-def normalize_execute_many_parameters_sync(parameters: Any) -> Any:
+def _normalize_execute_many_parameters_sync(parameters: Any) -> Any:
     """Normalize parameters for Oracle executemany calls.
 
     Args:
@@ -248,7 +246,7 @@ def normalize_execute_many_parameters_sync(parameters: Any) -> Any:
     return parameters
 
 
-def normalize_execute_many_parameters_async(parameters: Any) -> Any:
+def _normalize_execute_many_parameters_async(parameters: Any) -> Any:
     """Normalize parameters for Oracle async executemany calls.
 
     Args:
@@ -372,7 +370,7 @@ def coerce_many_parameters_sync(
     version_cache: Any = None,
 ) -> Any:
     """Coerce every parameter row prepared for synchronous ``executemany``."""
-    normalized = normalize_execute_many_parameters_sync(parameters)
+    normalized = _normalize_execute_many_parameters_sync(parameters)
     if not normalized:
         return normalized
     json_binding_state = _OracleJsonBindingState(connection, version_cache)
@@ -406,7 +404,7 @@ async def coerce_many_parameters_async(
     version_cache: Any = None,
 ) -> Any:
     """Coerce every parameter row prepared for asynchronous ``executemany``."""
-    normalized = normalize_execute_many_parameters_async(parameters)
+    normalized = _normalize_execute_many_parameters_async(parameters)
     if not normalized:
         return normalized
     json_binding_state = _OracleJsonBindingState(connection, version_cache)

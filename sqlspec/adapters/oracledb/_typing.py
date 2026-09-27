@@ -22,42 +22,27 @@ from oracledb import (
     DB_TYPE_VECTOR,
     DEQ_IMMEDIATE,
     DEQ_ON_COMMIT,
-    AsyncConnection,
-    AsyncCursor,
-    Connection,
-    Cursor,
     DatabaseError,
     Error,
 )
+from oracledb import AsyncConnection as OracleAsyncConnection
+from oracledb import AsyncCursor as OracleAsyncRawCursor
 from oracledb import AuthMode as OracleAuthMode
+from oracledb import Connection as OracleSyncConnection
+from oracledb import Cursor as OracleSyncRawCursor
 from oracledb import PoolGetMode as OraclePoolGetMode
 from oracledb import Purity as OraclePurity
 from oracledb import SparseVector as OracleSparseVector
 from oracledb import create_pipeline as oracledb_create_pipeline
-from oracledb.pool import AsyncConnectionPool, ConnectionPool
+from oracledb.pool import AsyncConnectionPool as OracleAsyncConnectionPool
+from oracledb.pool import ConnectionPool as OracleSyncConnectionPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
 
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.core import StatementConfig
-
-    OracleSyncConnection: TypeAlias = Connection
-    OracleAsyncConnection: TypeAlias = AsyncConnection
-    OracleSyncConnectionPool: TypeAlias = ConnectionPool
-    OracleAsyncConnectionPool: TypeAlias = AsyncConnectionPool
-    OracleSyncRawCursor: TypeAlias = Cursor
-    OracleAsyncRawCursor: TypeAlias = AsyncCursor
-
-if not TYPE_CHECKING:
-    OracleSyncConnection = Connection
-    OracleAsyncConnection = AsyncConnection
-    OracleSyncConnectionPool = ConnectionPool
-    OracleAsyncConnectionPool = AsyncConnectionPool
-    OracleSyncRawCursor = Cursor
-    OracleAsyncRawCursor = AsyncCursor
 
 __all__ = (
     "DB_TYPE_BLOB",
