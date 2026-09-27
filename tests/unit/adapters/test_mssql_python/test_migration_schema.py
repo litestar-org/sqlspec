@@ -1,9 +1,13 @@
 """Unit coverage for mssql-python migration schema hooks."""
 
 from typing import Any, cast
+from unittest.mock import Mock
+
+import pytest
 
 from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
+from sqlspec.adapters.pymssql.driver import PymssqlDriver
 
 
 class FakeCursor:
@@ -103,3 +107,32 @@ def test_mssql_python_reset_without_set_is_noop() -> None:
 
     driver.reset_migration_session_schema()
     assert cursor.executed == []
+
+
+@pytest.mark.parametrize("driver_type", [MssqlPythonDriver, PymssqlDriver])
+@pytest.mark.parametrize("failure_point", ["execute", "commit"])
+def test_schema_restore_retries_original_schema_after_failure(
+    driver_type: "type[MssqlPythonDriver | PymssqlDriver]", failure_point: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cursor = FakeCursor(current_schema="sales")
+    connection = FakeConnection(cursor)
+    driver = driver_type(cast("Any", connection))
+    driver.set_migration_session_schema("tenant")
+    failure = RuntimeError("restore failed")
+    target = cursor if failure_point == "execute" else connection
+    original = getattr(target, failure_point)
+    failing = Mock(side_effect=failure)
+    monkeypatch.setattr(target, failure_point, failing)
+    with pytest.raises(RuntimeError, match="restore failed") as caught:
+        driver.reset_migration_session_schema()
+    assert caught.value is failure
+    monkeypatch.setattr(target, failure_point, original)
+    cursor.user_name = "different_user"
+    cursor.current_schema = "tenant"
+    driver.reset_migration_session_schema()
+    assert cursor.executed[-1] == ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [sales];", None)
+    assert connection.commits == 1
+    completed = list(cursor.executed)
+    driver.reset_migration_session_schema()
+    assert cursor.executed == completed
+    assert connection.commits == 1

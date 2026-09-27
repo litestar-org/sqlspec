@@ -49,6 +49,10 @@ Unreleased
   exposes its cached expression to mutation. SQL generation avoids redundant
   copies of temporary trees while preserving caller and cache ownership.
 
+* SQL Server migration drivers retain the previous default schema if restoring
+  it fails, so cleanup can be retried. The migration guide clarifies that this
+  setting belongs to the database user rather than one connection.
+
 * Asyncpg stack telemetry reports sequential prepared execution rather than
   native pipelining. Each statement still returns its own result.
 
