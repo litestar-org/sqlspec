@@ -3,7 +3,8 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -28,9 +29,10 @@ from sqlspec.data_dictionary import (
     unsupported_system_metadata_capability,
 )
 from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
+from sqlspec.driver import AsyncDataDictionaryBase, SyncDataDictionaryBase
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
+    from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
     from sqlspec.core import SQL
 
 __all__ = ("CockroachPsycopgAsyncDataDictionary", "CockroachPsycopgSyncDataDictionary")
@@ -55,7 +57,8 @@ _COCKROACH_METADATA_DOMAINS = (
 _COCKROACH_SUPPORTED_DOMAINS = frozenset(_COCKROACH_METADATA_DOMAINS) - {"crdb_internal", "system"}
 
 
-class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
     """CockroachDB sync data dictionary."""
 
     dialect: ClassVar[str] = "cockroachdb"
@@ -64,13 +67,13 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         super().__init__()
 
     def get_metadata_capabilities(
-        self, driver: "PsycopgSyncDriver", domains: Sequence[str] | None = None
+        self, driver: "CockroachPsycopgSyncDriver", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
         """Get CockroachDB data-dictionary capability profile."""
         return _cockroach_metadata_profile(type(self).__name__, domains)
 
     def get_system_metadata_capabilities(
-        self, driver: "PsycopgSyncDriver", domains: Sequence[str] | None = None
+        self, driver: "CockroachPsycopgSyncDriver", domains: Sequence[str] | None = None
     ) -> tuple[SystemMetadataCapability, ...]:
         """Get CockroachDB opt-in system metadata capability disclosures."""
         _ = driver
@@ -78,7 +81,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
 
     def _select_domain(
-        self, driver: "PsycopgSyncDriver", domain: str, query_name: str, **parameters: Any
+        self, driver: "CockroachPsycopgSyncDriver", domain: str, query_name: str, **parameters: Any
     ) -> MetadataResult:
         query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
         if not query.is_supported or query.sql is None:
@@ -86,15 +89,17 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         rows = driver.select(query.sql, **parameters)
         return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
 
-    def get_schemas(self, driver: "PsycopgSyncDriver") -> MetadataResult:
+    def get_schemas(self, driver: "CockroachPsycopgSyncDriver") -> MetadataResult:
         """Get schema metadata."""
         return self._select_domain(driver, "schemas", "list")
 
-    def get_objects(self, driver: "PsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
+    def get_objects(self, driver: "CockroachPsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
         """Get database object metadata."""
         return self._select_domain(driver, "objects", "by_schema", schema_name=self.resolve_schema(schema))
 
-    def get_table_details(self, driver: "PsycopgSyncDriver", table: str, schema: str | None = None) -> MetadataResult:
+    def get_table_details(
+        self, driver: "CockroachPsycopgSyncDriver", table: str, schema: str | None = None
+    ) -> MetadataResult:
         """Get rich table metadata."""
         return self._select_domain(
             driver,
@@ -105,7 +110,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
     def get_constraints(
-        self, driver: "PsycopgSyncDriver", table: str | None = None, schema: str | None = None
+        self, driver: "CockroachPsycopgSyncDriver", table: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get constraint metadata."""
         table_name = self.resolve_identifier(table) if table is not None else None
@@ -113,16 +118,16 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
             driver, "constraints", "by_schema", schema_name=self.resolve_schema(schema), table_name=table_name
         )
 
-    def get_views(self, driver: "PsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
+    def get_views(self, driver: "CockroachPsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
         """Get view metadata."""
         return self._select_domain(driver, "views", "by_schema", schema_name=self.resolve_schema(schema))
 
-    def get_routines(self, driver: "PsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
+    def get_routines(self, driver: "CockroachPsycopgSyncDriver", schema: str | None = None) -> MetadataResult:
         """Get routine metadata."""
         return _metadata_result("routines", MetadataCapability.unsupported("routines"))
 
     def get_privileges(
-        self, driver: "PsycopgSyncDriver", object_name: str | None = None, schema: str | None = None
+        self, driver: "CockroachPsycopgSyncDriver", object_name: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get privilege metadata."""
         resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
@@ -131,7 +136,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
     def get_dependencies(
-        self, driver: "PsycopgSyncDriver", object_name: str | None = None, schema: str | None = None
+        self, driver: "CockroachPsycopgSyncDriver", object_name: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get stable dependency metadata."""
         resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
@@ -141,7 +146,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
 
     def get_ddl(
         self,
-        driver: "PsycopgSyncDriver",
+        driver: "CockroachPsycopgSyncDriver",
         object_name: str,
         schema: str | None = None,
         *,
@@ -167,7 +172,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
     def get_system_metadata(
-        self, driver: "PsycopgSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+        self, driver: "CockroachPsycopgSyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
     ) -> SystemMetadataResult:
         """Get opt-in CockroachDB system metadata."""
         _ = driver
@@ -175,41 +180,41 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         capability = unsupported_system_metadata_capability(metadata_request.domain)
         return system_metadata_gated_result(metadata_request, capability)
 
-    def get_version(self, driver: "PsycopgSyncDriver") -> "VersionInfo | None":
+    def get_version(self, driver: "CockroachPsycopgSyncDriver") -> "VersionInfo | None":
         """Get CockroachDB version information."""
-        cache_key = id(driver.connection)
-        if cache_key in self._version_fetch_attempted:
-            return self._version_cache.get(cache_key)
+        driver_id = id(driver)
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
 
         version_value = driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
-            self.cache_version(cache_key, None)
+            self.cache_version(driver_id, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
             self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(cache_key, None)
+            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(cache_key, version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
-    def get_feature_flag(self, driver: "PsycopgSyncDriver", feature: str) -> bool:
+    def get_feature_flag(self, driver: "CockroachPsycopgSyncDriver", feature: str) -> bool:
         """Check if CockroachDB supports a specific feature."""
         version_info = self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
 
-    def get_optimal_type(self, driver: "PsycopgSyncDriver", type_category: str) -> str:
+    def get_optimal_type(self, driver: "CockroachPsycopgSyncDriver", type_category: str) -> str:
         """Get optimal CockroachDB type for a category."""
         config = self.get_dialect_config()
         if type_category == "json":
             return resolve_cockroachdb_json_type(self.get_version(driver))
         return config.get_optimal_type(type_category)
 
-    def get_tables(self, driver: "PsycopgSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+    def get_tables(self, driver: "CockroachPsycopgSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by dependency order."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -221,7 +226,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
     def get_columns(
-        self, driver: "PsycopgSyncDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachPsycopgSyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
@@ -245,7 +250,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
     def get_indexes(
-        self, driver: "PsycopgSyncDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachPsycopgSyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
@@ -268,7 +273,7 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
     def get_foreign_keys(
-        self, driver: "PsycopgSyncDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachPsycopgSyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)
@@ -288,7 +293,8 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
 
-class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
+class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     """CockroachDB async data dictionary."""
 
     dialect: ClassVar[str] = "cockroachdb"
@@ -297,13 +303,13 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         super().__init__()
 
     async def get_metadata_capabilities(
-        self, driver: "PsycopgAsyncDriver", domains: Sequence[str] | None = None
+        self, driver: "CockroachPsycopgAsyncDriver", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
         """Get CockroachDB data-dictionary capability profile."""
         return _cockroach_metadata_profile(type(self).__name__, domains)
 
     async def get_system_metadata_capabilities(
-        self, driver: "PsycopgAsyncDriver", domains: Sequence[str] | None = None
+        self, driver: "CockroachPsycopgAsyncDriver", domains: Sequence[str] | None = None
     ) -> tuple[SystemMetadataCapability, ...]:
         """Get CockroachDB opt-in system metadata capability disclosures."""
         _ = driver
@@ -311,7 +317,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
 
     async def _select_domain(
-        self, driver: "PsycopgAsyncDriver", domain: str, query_name: str, **parameters: Any
+        self, driver: "CockroachPsycopgAsyncDriver", domain: str, query_name: str, **parameters: Any
     ) -> MetadataResult:
         query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
         if not query.is_supported or query.sql is None:
@@ -319,16 +325,16 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         rows = await driver.select(query.sql, **parameters)
         return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
 
-    async def get_schemas(self, driver: "PsycopgAsyncDriver") -> MetadataResult:
+    async def get_schemas(self, driver: "CockroachPsycopgAsyncDriver") -> MetadataResult:
         """Get schema metadata."""
         return await self._select_domain(driver, "schemas", "list")
 
-    async def get_objects(self, driver: "PsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
+    async def get_objects(self, driver: "CockroachPsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
         """Get database object metadata."""
         return await self._select_domain(driver, "objects", "by_schema", schema_name=self.resolve_schema(schema))
 
     async def get_table_details(
-        self, driver: "PsycopgAsyncDriver", table: str, schema: str | None = None
+        self, driver: "CockroachPsycopgAsyncDriver", table: str, schema: str | None = None
     ) -> MetadataResult:
         """Get rich table metadata."""
         return await self._select_domain(
@@ -340,7 +346,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         )
 
     async def get_constraints(
-        self, driver: "PsycopgAsyncDriver", table: str | None = None, schema: str | None = None
+        self, driver: "CockroachPsycopgAsyncDriver", table: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get constraint metadata."""
         table_name = self.resolve_identifier(table) if table is not None else None
@@ -348,16 +354,16 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
             driver, "constraints", "by_schema", schema_name=self.resolve_schema(schema), table_name=table_name
         )
 
-    async def get_views(self, driver: "PsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
+    async def get_views(self, driver: "CockroachPsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
         """Get view metadata."""
         return await self._select_domain(driver, "views", "by_schema", schema_name=self.resolve_schema(schema))
 
-    async def get_routines(self, driver: "PsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
+    async def get_routines(self, driver: "CockroachPsycopgAsyncDriver", schema: str | None = None) -> MetadataResult:
         """Get routine metadata."""
         return _metadata_result("routines", MetadataCapability.unsupported("routines"))
 
     async def get_privileges(
-        self, driver: "PsycopgAsyncDriver", object_name: str | None = None, schema: str | None = None
+        self, driver: "CockroachPsycopgAsyncDriver", object_name: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get privilege metadata."""
         resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
@@ -366,7 +372,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         )
 
     async def get_dependencies(
-        self, driver: "PsycopgAsyncDriver", object_name: str | None = None, schema: str | None = None
+        self, driver: "CockroachPsycopgAsyncDriver", object_name: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get stable dependency metadata."""
         resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
@@ -376,7 +382,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
 
     async def get_ddl(
         self,
-        driver: "PsycopgAsyncDriver",
+        driver: "CockroachPsycopgAsyncDriver",
         object_name: str,
         schema: str | None = None,
         *,
@@ -402,7 +408,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         )
 
     async def get_system_metadata(
-        self, driver: "PsycopgAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+        self, driver: "CockroachPsycopgAsyncDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
     ) -> SystemMetadataResult:
         """Get opt-in CockroachDB system metadata."""
         _ = driver
@@ -410,41 +416,43 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         capability = unsupported_system_metadata_capability(metadata_request.domain)
         return system_metadata_gated_result(metadata_request, capability)
 
-    async def get_version(self, driver: "PsycopgAsyncDriver") -> "VersionInfo | None":
+    async def get_version(self, driver: "CockroachPsycopgAsyncDriver") -> "VersionInfo | None":
         """Get CockroachDB version information."""
-        cache_key = id(driver.connection)
-        if cache_key in self._version_fetch_attempted:
-            return self._version_cache.get(cache_key)
+        driver_id = id(driver)
+        if driver_id in self._version_fetch_attempted:
+            return self._version_cache.get(driver_id)
 
         version_value = await driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
-            self.cache_version(cache_key, None)
+            self.cache_version(driver_id, None)
             return None
 
         version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
         if version_info is None:
             self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(cache_key, None)
+            self.cache_version(driver_id, None)
             return None
 
         self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(cache_key, version_info)
+        self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_feature_flag(self, driver: "PsycopgAsyncDriver", feature: str) -> bool:
+    async def get_feature_flag(self, driver: "CockroachPsycopgAsyncDriver", feature: str) -> bool:
         """Check if CockroachDB supports a specific feature."""
         version_info = await self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
 
-    async def get_optimal_type(self, driver: "PsycopgAsyncDriver", type_category: str) -> str:
+    async def get_optimal_type(self, driver: "CockroachPsycopgAsyncDriver", type_category: str) -> str:
         """Get optimal CockroachDB type for a category."""
         config = self.get_dialect_config()
         if type_category == "json":
             return resolve_cockroachdb_json_type(await self.get_version(driver))
         return config.get_optimal_type(type_category)
 
-    async def get_tables(self, driver: "PsycopgAsyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+    async def get_tables(
+        self, driver: "CockroachPsycopgAsyncDriver", schema: "str | None" = None
+    ) -> "list[TableMetadata]":
         """Get tables sorted by dependency order."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -456,7 +464,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         )
 
     async def get_columns(
-        self, driver: "PsycopgAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachPsycopgAsyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
@@ -480,7 +488,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         )
 
     async def get_indexes(
-        self, driver: "PsycopgAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachPsycopgAsyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
@@ -503,7 +511,7 @@ class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
         )
 
     async def get_foreign_keys(
-        self, driver: "PsycopgAsyncDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachPsycopgAsyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)

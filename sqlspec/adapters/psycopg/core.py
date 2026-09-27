@@ -80,21 +80,11 @@ __all__ = (
     "resolve_runtime_statement_config",
 )
 
-TRANSACTION_STATUS_IDLE: int = 0
-TRANSACTION_STATUS_ACTIVE: int = 1
-TRANSACTION_STATUS_INTRANS: int = 2
-TRANSACTION_STATUS_INERROR: int = 3
-TRANSACTION_STATUS_UNKNOWN: int = 4
-try:
-    from psycopg.pq import TransactionStatus
-
-    TRANSACTION_STATUS_IDLE = int(TransactionStatus.IDLE)
-    TRANSACTION_STATUS_ACTIVE = int(TransactionStatus.ACTIVE)
-    TRANSACTION_STATUS_INTRANS = int(TransactionStatus.INTRANS)
-    TRANSACTION_STATUS_INERROR = int(TransactionStatus.INERROR)
-    TRANSACTION_STATUS_UNKNOWN = int(TransactionStatus.UNKNOWN)
-except (ImportError, AttributeError):
-    pass
+TRANSACTION_STATUS_IDLE = 0
+TRANSACTION_STATUS_ACTIVE = 1
+TRANSACTION_STATUS_INTRANS = 2
+TRANSACTION_STATUS_INERROR = 3
+TRANSACTION_STATUS_UNKNOWN = 4
 
 
 class PreparedStackOperation(NamedTuple):
@@ -129,7 +119,6 @@ def pipeline_supported() -> bool:
 
 
 def build_copy_from_command(table: str, columns: "list[str]") -> "PsycopgComposed":
-    """Build a COPY FROM STDIN command."""
     table_identifier = _compose_table_identifier(table)
     column_sql = PsycopgSQL(", ").join([PsycopgIdentifier(column) for column in columns])
     return PsycopgSQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)

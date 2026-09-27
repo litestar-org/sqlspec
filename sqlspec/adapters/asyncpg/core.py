@@ -4,7 +4,7 @@ import contextlib
 import datetime
 import re
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -42,10 +42,11 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import ParameterStyleConfig
+    from sqlspec.core import SQL, ParameterStyleConfig, StackOperation
 
 __all__ = (
     "AsyncpgStreamSource",
+    "NormalizedStackOperation",
     "apply_driver_features",
     "build_connection_config",
     "build_postgres_extension_probe_names",
@@ -56,6 +57,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "invoke_prepared_statement",
     "is_postgres_extension_active",
     "parse_status",
     "register_json_codecs",
@@ -72,6 +74,17 @@ logger = get_logger("sqlspec.adapters.asyncpg.core")
 _PGVECTOR_MISSING_LOGGED = False
 _JSONB_BINARY_VERSION = b"\x01"
 
+
+class NormalizedStackOperation(NamedTuple):
+    """Normalized execution metadata used for prepared stack operations."""
+
+    operation: "StackOperation"
+    statement: "SQL"
+    sql: str
+    parameters: "tuple[Any, ...] | dict[str, Any] | None"
+
+
+PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 
 
@@ -118,10 +131,6 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if found_user:
         config["user"] = user_val
 
-    pgbouncer = config.pop("pgbouncer", None)
-    if pgbouncer:
-        config.setdefault("statement_cache_size", 0)
-
     return config
 
 
@@ -155,6 +164,37 @@ def configure_parameter_serializers(
 
     effective_deserializer = deserializer or parameter_config.json_deserializer or from_json
     return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
+
+
+async def invoke_prepared_statement(
+    prepared: Any, parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None", *, fetch: bool
+) -> Any:
+    """Invoke an AsyncPG prepared statement with optional parameters.
+
+    Args:
+        prepared: AsyncPG prepared statement object.
+        parameters: Prepared parameters payload.
+        fetch: Whether to fetch rows.
+
+    Returns:
+        Query result or status message.
+    """
+    if parameters is None:
+        if fetch:
+            return await prepared.fetch()
+        await prepared.fetch()
+        return prepared.get_statusmsg()
+
+    if isinstance(parameters, dict):
+        if fetch:
+            return await prepared.fetch(**parameters)
+        await prepared.fetch(**parameters)
+        return prepared.get_statusmsg()
+
+    if fetch:
+        return await prepared.fetch(*parameters)
+    await prepared.fetch(*parameters)
+    return prepared.get_statusmsg()
 
 
 def build_statement_config(
@@ -257,17 +297,10 @@ def parse_status(status: Any) -> int:
     if not status or not isinstance(status, str):
         return 0
 
-    stripped = status.strip()
-    last_space = stripped.rfind(" ")
-    if last_space != -1:
-        token = stripped[last_space + 1 :]
-        if token.isdigit():
-            return int(token)
-
-    match = ASYNC_PG_STATUS_REGEX.match(stripped)
+    match = ASYNC_PG_STATUS_REGEX.match(status.strip())
     if match:
         groups = match.groups()
-        if len(groups) >= EXPECTED_REGEX_GROUPS and groups[-1]:
+        if len(groups) >= EXPECTED_REGEX_GROUPS:
             try:
                 return int(groups[-1])
             except (ValueError, IndexError):
@@ -423,8 +456,7 @@ class AsyncpgStreamSource:
         handler = self._driver.handle_database_exceptions()
         records = await self._driver._run_with_exception_handler(handler, self._cursor.fetch, self._chunk_size)
         self._driver._check_pending_exception(handler)
-        if not records:
-            return []
+        assert records is not None
         return [dict(record) for record in records]
 
     async def close(self, error: bool = False) -> None:
@@ -497,20 +529,12 @@ def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
     return str(encoded).encode("utf-8")
 
 
-def _decode_json_payload(value: Any, decoder: "Callable[..., Any]") -> Any:
-    """Decode JSON binary or string payload with zero-copy decoding when possible."""
+def _decode_json_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
     if isinstance(value, str):
         return decoder(value)
     if isinstance(value, memoryview):
-        raw_bytes = value.tobytes()
-    elif isinstance(value, (bytes, bytearray)):
-        raw_bytes = bytes(value)
-    else:
-        raw_bytes = bytes(value)
-    try:
-        return decoder(raw_bytes)
-    except (TypeError, UnicodeDecodeError):
-        return decoder(raw_bytes.decode("utf-8"))
+        value = value.tobytes()
+    return decoder(bytes(value).decode("utf-8"))
 
 
 def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
@@ -520,22 +544,15 @@ def _encode_jsonb_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
     return _JSONB_BINARY_VERSION + payload
 
 
-def _decode_jsonb_payload(value: Any, decoder: "Callable[..., Any]") -> Any:
-    """Decode JSONB binary or string payload stripping version prefix when present."""
+def _decode_jsonb_payload(value: Any, decoder: "Callable[[str], Any]") -> Any:
     if isinstance(value, str):
         return decoder(value)
     if isinstance(value, memoryview):
-        raw_bytes = value.tobytes()
-    elif isinstance(value, (bytes, bytearray)):
-        raw_bytes = bytes(value)
-    else:
-        raw_bytes = bytes(value)
-    if raw_bytes.startswith(_JSONB_BINARY_VERSION):
-        raw_bytes = raw_bytes[1:]
-    try:
-        return decoder(raw_bytes)
-    except (TypeError, UnicodeDecodeError):
-        return decoder(raw_bytes.decode("utf-8"))
+        value = value.tobytes()
+    payload = bytes(value)
+    if payload.startswith(_JSONB_BINARY_VERSION):
+        payload = payload[1:]
+    return decoder(payload.decode("utf-8"))
 
 
 def _create_postgres_error(

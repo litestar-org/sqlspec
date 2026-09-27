@@ -13,7 +13,6 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
-from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -92,7 +91,6 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
     "TIMESTAMP WITHOUT TIME ZONE",
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
-_VECTOR_CASTS: Final[frozenset[str]] = frozenset({"VECTOR", "HALFVEC", "SPARSEVEC"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
 _JSONB_TYPE: type[Any] | None = None
 try:
@@ -151,7 +149,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         connection_config: Raw connection configuration mapping.
 
     Returns:
-        Dictionary with sanitized connection parameters accepted by psqlpy.
+        Dictionary with connection parameters.
     """
     config = {key: value for key, value in connection_config.items() if value is not None}
     dsn = (
@@ -208,11 +206,10 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     Returns:
         Tuple of (rows, column_names).
     """
-    dict_rows: list[dict[str, Any]] = (
-        cast("list[dict[str, Any]]", query_result if isinstance(query_result, list) else query_result.result())
-        if query_result
-        else []
-    )
+    if not query_result:
+        return [], []
+
+    dict_rows = cast("list[dict[str, Any]]", query_result if isinstance(query_result, list) else query_result.result())
     if not dict_rows:
         return [], []
     return dict_rows, list(dict_rows[0])
@@ -227,13 +224,6 @@ class PsqlpyStreamSource:
     left untouched.
     """
 
-    _chunk_size: int
-    _cursor: Any
-    _driver: Any
-    _parameters: Any
-    _sql: str
-    _transaction: Any
-
     __slots__ = ("_chunk_size", "_cursor", "_driver", "_parameters", "_sql", "_transaction")
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
@@ -241,8 +231,8 @@ class PsqlpyStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._cursor = None
-        self._transaction = None
+        self._cursor: Any = None
+        self._transaction: Any = None
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
@@ -296,7 +286,6 @@ class PsqlpyStreamSource:
 
 
 def coerce_numeric_for_write(value: Any) -> Any:
-    """Coerce numerical values to Decimal for precise Postgres numeric writes."""
     if isinstance(value, float):
         return decimal.Decimal(str(value))
     if isinstance(value, decimal.Decimal):
@@ -609,8 +598,6 @@ def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable
         return _coerce_uuid_parameter(value)
     if upper_cast in _TIMESTAMP_CASTS:
         return _coerce_timestamp_parameter(value)
-    if upper_cast in _VECTOR_CASTS:
-        return coerce_pgvector(value)
     return value
 
 

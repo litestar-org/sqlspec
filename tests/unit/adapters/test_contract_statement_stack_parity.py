@@ -7,7 +7,7 @@ from tests.integration.adapters._shared._cases import DRIVER_CASES, get_driver_c
 from tests.integration.adapters._shared.behaviors import STATEMENT_STACK_SCOPE, validate_extra_assertions
 
 PARITY_PROOF_KEY = "statement_stack:native_fallback_parity"
-OPTED_IN_CASE_IDS = ("psycopg-sync", "psycopg-async", "oracledb-async")
+OPTED_IN_CASE_IDS = ("psycopg-sync", "asyncpg-async", "psycopg-async", "oracledb-async")
 
 
 def test_sync_statement_stack_parity_proof_registered() -> None:

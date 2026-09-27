@@ -510,6 +510,25 @@ async def test_asyncpg_statement_stack_continue_on_error_inside_transaction(asyn
     assert [row["id"] for row in persisted.get_data()] == [1, 2]
 
 
+async def test_asyncpg_statement_stack_marks_prepared(asyncpg_session: "AsyncpgDriver") -> None:
+    """Prepared statement metadata should be attached to stack results."""
+
+    await asyncpg_session.execute_script("DELETE FROM test_table_asyncpg")
+
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO test_table_asyncpg (id, name, value) VALUES ($1, $2, $3)", (1, "stack-prepared", 50))
+        .push_execute("SELECT value FROM test_table_asyncpg WHERE id = $1", (1,))
+    )
+
+    results = await asyncpg_session.execute_stack(stack)
+
+    assert results[0].metadata is not None
+    assert results[0].metadata.get("prepared_statement") is True
+    assert results[1].metadata is not None
+    assert results[1].metadata.get("prepared_statement") is True
+
+
 async def test_asyncpg_pool_concurrency(postgres_service: PostgresService) -> None:
     """Verify that multiple concurrent calls to provide_pool result in a single pool."""
     config_params = AsyncpgPoolConfig(

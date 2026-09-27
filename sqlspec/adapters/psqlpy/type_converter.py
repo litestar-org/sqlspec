@@ -1,36 +1,25 @@
-"""PostgreSQL-specific helpers for the psqlpy adapter."""
+"""PostgreSQL-specific helpers for the psqlpy adapter.
 
-from typing import TYPE_CHECKING, Any
+This module preserves the ``register_pgvector`` placeholder used by the
+driver configuration layer.
+"""
 
-from sqlspec.typing import PGVECTOR_INSTALLED, import_optional_attr
+from typing import TYPE_CHECKING
+
+from sqlspec.typing import PGVECTOR_INSTALLED
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection as Connection
 
-__all__ = ("coerce_pgvector", "register_pgvector")
-
-
-def coerce_pgvector(value: Any) -> Any:
-    """Coerce sequence or numpy array to psqlpy PgVector."""
-    if value is None or not PGVECTOR_INSTALLED:
-        return value
-    pg_vector_cls = import_optional_attr("psqlpy.extra_types", "PgVector")
-    if pg_vector_cls is None:
-        return value
-    try:
-        if isinstance(value, pg_vector_cls):
-            return value
-        if isinstance(value, (list, tuple)):
-            return pg_vector_cls(list(value))
-        if hasattr(value, "tolist"):
-            return pg_vector_cls(value.tolist())
-    except Exception:
-        return value
-    return value
+__all__ = ("register_pgvector",)
 
 
 def register_pgvector(connection: "Connection") -> None:
     """Register pgvector type handlers on psqlpy connection.
+
+    Currently a placeholder for future implementation. The psqlpy library
+    does not yet expose a type handler registration API compatible with
+    pgvector's automatic conversion system.
 
     Args:
         connection: Psqlpy connection instance.

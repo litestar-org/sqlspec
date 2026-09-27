@@ -3,7 +3,6 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from sqlspec.adapters.asyncpg.data_dictionary import AsyncpgDataDictionary
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -28,9 +27,10 @@ from sqlspec.data_dictionary import (
     unsupported_system_metadata_capability,
 )
 from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
+from sqlspec.driver import AsyncDataDictionaryBase
 
 if TYPE_CHECKING:
-    from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
+    from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
     from sqlspec.core import SQL
 
 __all__ = ("CockroachAsyncpgDataDictionary",)
@@ -55,19 +55,19 @@ _COCKROACH_METADATA_DOMAINS = (
 _COCKROACH_SUPPORTED_DOMAINS = frozenset(_COCKROACH_METADATA_DOMAINS) - {"crdb_internal", "system"}
 
 
-class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
+class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
     """CockroachDB async data dictionary (AsyncPG)."""
 
     dialect: ClassVar[str] = "cockroachdb"
 
     async def get_metadata_capabilities(
-        self, driver: "AsyncpgDriver", domains: Sequence[str] | None = None
+        self, driver: "CockroachAsyncpgDriver", domains: Sequence[str] | None = None
     ) -> MetadataCapabilityProfile:
         """Get CockroachDB data-dictionary capability profile."""
         return _cockroach_metadata_profile(type(self).__name__, domains)
 
     async def get_system_metadata_capabilities(
-        self, driver: "AsyncpgDriver", domains: Sequence[str] | None = None
+        self, driver: "CockroachAsyncpgDriver", domains: Sequence[str] | None = None
     ) -> tuple[SystemMetadataCapability, ...]:
         """Get CockroachDB opt-in system metadata capability disclosures."""
         _ = driver
@@ -75,7 +75,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
 
     async def _select_domain(
-        self, driver: "AsyncpgDriver", domain: str, query_name: str, **parameters: Any
+        self, driver: "CockroachAsyncpgDriver", domain: str, query_name: str, **parameters: Any
     ) -> MetadataResult:
         query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
         if not query.is_supported or query.sql is None:
@@ -83,15 +83,17 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         rows = await driver.select(query.sql, **parameters)
         return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
 
-    async def get_schemas(self, driver: "AsyncpgDriver") -> MetadataResult:
+    async def get_schemas(self, driver: "CockroachAsyncpgDriver") -> MetadataResult:
         """Get schema metadata."""
         return await self._select_domain(driver, "schemas", "list")
 
-    async def get_objects(self, driver: "AsyncpgDriver", schema: str | None = None) -> MetadataResult:
+    async def get_objects(self, driver: "CockroachAsyncpgDriver", schema: str | None = None) -> MetadataResult:
         """Get database object metadata."""
         return await self._select_domain(driver, "objects", "by_schema", schema_name=self.resolve_schema(schema))
 
-    async def get_table_details(self, driver: "AsyncpgDriver", table: str, schema: str | None = None) -> MetadataResult:
+    async def get_table_details(
+        self, driver: "CockroachAsyncpgDriver", table: str, schema: str | None = None
+    ) -> MetadataResult:
         """Get rich table metadata."""
         return await self._select_domain(
             driver,
@@ -102,7 +104,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         )
 
     async def get_constraints(
-        self, driver: "AsyncpgDriver", table: str | None = None, schema: str | None = None
+        self, driver: "CockroachAsyncpgDriver", table: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get constraint metadata."""
         table_name = self.resolve_identifier(table) if table is not None else None
@@ -110,16 +112,16 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
             driver, "constraints", "by_schema", schema_name=self.resolve_schema(schema), table_name=table_name
         )
 
-    async def get_views(self, driver: "AsyncpgDriver", schema: str | None = None) -> MetadataResult:
+    async def get_views(self, driver: "CockroachAsyncpgDriver", schema: str | None = None) -> MetadataResult:
         """Get view metadata."""
         return await self._select_domain(driver, "views", "by_schema", schema_name=self.resolve_schema(schema))
 
-    async def get_routines(self, driver: "AsyncpgDriver", schema: str | None = None) -> MetadataResult:
+    async def get_routines(self, driver: "CockroachAsyncpgDriver", schema: str | None = None) -> MetadataResult:
         """Get routine metadata."""
         return _metadata_result("routines", MetadataCapability.unsupported("routines"))
 
     async def get_privileges(
-        self, driver: "AsyncpgDriver", object_name: str | None = None, schema: str | None = None
+        self, driver: "CockroachAsyncpgDriver", object_name: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get privilege metadata."""
         resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
@@ -128,7 +130,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         )
 
     async def get_dependencies(
-        self, driver: "AsyncpgDriver", object_name: str | None = None, schema: str | None = None
+        self, driver: "CockroachAsyncpgDriver", object_name: str | None = None, schema: str | None = None
     ) -> MetadataResult:
         """Get stable dependency metadata."""
         resolved_object = self.resolve_identifier(object_name) if object_name is not None else None
@@ -138,7 +140,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
 
     async def get_ddl(
         self,
-        driver: "AsyncpgDriver",
+        driver: "CockroachAsyncpgDriver",
         object_name: str,
         schema: str | None = None,
         *,
@@ -164,7 +166,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         )
 
     async def get_system_metadata(
-        self, driver: "AsyncpgDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
+        self, driver: "CockroachAsyncpgDriver", request: SystemMetadataRequest | str | None = None, **kwargs: Any
     ) -> SystemMetadataResult:
         """Get opt-in CockroachDB system metadata."""
         _ = driver
@@ -172,8 +174,8 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         capability = unsupported_system_metadata_capability(metadata_request.domain)
         return system_metadata_gated_result(metadata_request, capability)
 
-    async def get_version(self, driver: "AsyncpgDriver") -> "VersionInfo | None":
-        driver_id = id(driver.connection) if hasattr(driver, "connection") else id(driver)
+    async def get_version(self, driver: "CockroachAsyncpgDriver") -> "VersionInfo | None":
+        driver_id = id(driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -193,17 +195,17 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         self.cache_version(driver_id, version_info)
         return version_info
 
-    async def get_feature_flag(self, driver: "AsyncpgDriver", feature: str) -> bool:
+    async def get_feature_flag(self, driver: "CockroachAsyncpgDriver", feature: str) -> bool:
         version_info = await self.get_version(driver)
         return self.resolve_feature_flag(feature, version_info)
 
-    async def get_optimal_type(self, driver: "AsyncpgDriver", type_category: str) -> str:
+    async def get_optimal_type(self, driver: "CockroachAsyncpgDriver", type_category: str) -> str:
         config = self.get_dialect_config()
         if type_category == "json":
             return resolve_cockroachdb_json_type(await self.get_version(driver))
         return config.get_optimal_type(type_category)
 
-    async def get_tables(self, driver: "AsyncpgDriver", schema: "str | None" = None) -> "list[TableMetadata]":
+    async def get_tables(self, driver: "CockroachAsyncpgDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
         return await driver.select(
@@ -214,7 +216,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         )
 
     async def get_columns(
-        self, driver: "AsyncpgDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachAsyncpgDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
         schema_name = self.resolve_schema(schema)
         if table is None:
@@ -237,7 +239,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         )
 
     async def get_indexes(
-        self, driver: "AsyncpgDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachAsyncpgDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         schema_name = self.resolve_schema(schema)
         if table is None:
@@ -259,7 +261,7 @@ class CockroachAsyncpgDataDictionary(AsyncpgDataDictionary):
         )
 
     async def get_foreign_keys(
-        self, driver: "AsyncpgDriver", table: "str | None" = None, schema: "str | None" = None
+        self, driver: "CockroachAsyncpgDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         schema_name = self.resolve_schema(schema)
         if table is None:

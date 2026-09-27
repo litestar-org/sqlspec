@@ -82,8 +82,8 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
-            new_expires_at = self._calculate_expires_at(renew_for)
+        new_expires_at = self._calculate_expires_at(renew_for) if renew_for is not None else None
+        if new_expires_at is not None:
             sql = f"""
             UPDATE {self._table_name}
             SET expires_at = CASE WHEN expires_at IS NOT NULL THEN $1 ELSE expires_at END,

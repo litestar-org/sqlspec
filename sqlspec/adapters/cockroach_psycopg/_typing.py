@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any
 import psycopg as cockroach_psycopg_module
 from psycopg import AsyncCursor, Cursor
 from psycopg import crdb as cockroach_psycopg_crdb
+from psycopg import crdb as psycopg_crdb
 from psycopg import errors as cockroach_psycopg_errors
 from psycopg import sql as cockroach_psycopg_sql
-from psycopg.crdb import AsyncCrdbConnection, CrdbConnection
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import dict_row as cockroach_psycopg_dict_row
 from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from types import TracebackType
     from typing import TypeAlias
 
+    from psycopg.crdb import AsyncCrdbConnection, CrdbConnection
+
     from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver, CockroachPsycopgSyncDriver
     from sqlspec.core import StatementConfig
 
@@ -32,8 +34,8 @@ if TYPE_CHECKING:
     CockroachAsyncCursor: TypeAlias = AsyncCursor[PsycopgDictRow]
 
 if not TYPE_CHECKING:
-    CockroachSyncConnection = CrdbConnection
-    CockroachAsyncConnection = AsyncCrdbConnection
+    CockroachSyncConnection = psycopg_crdb.CrdbConnection
+    CockroachAsyncConnection = psycopg_crdb.AsyncCrdbConnection
     CockroachSyncCursor = Cursor
     CockroachAsyncCursor = AsyncCursor
 

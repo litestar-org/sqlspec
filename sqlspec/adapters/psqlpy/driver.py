@@ -4,7 +4,6 @@ Provides parameter style conversion, type coercion, error handling,
 and transaction management.
 """
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
@@ -26,28 +25,13 @@ from sqlspec.adapters.psqlpy.core import (
     split_schema_and_table,
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
-from sqlspec.core import (
-    SQL,
-    StackResult,
-    StatementConfig,
-    StatementStack,
-    get_cache_config,
-    is_copy_operation,
-    register_driver_profile,
-)
-from sqlspec.driver import (
-    AsyncDriverAdapterBase,
-    AsyncRowStream,
-    BaseAsyncExceptionHandler,
-    StackExecutionObserver,
-    describe_stack_statement,
-)
-from sqlspec.exceptions import SQLSpecError, StackExecutionError
-from sqlspec.utils.logging import get_logger
+from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core import ArrowResult, SQLResult
@@ -55,8 +39,6 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
-
-logger = get_logger("sqlspec.adapters.psqlpy")
 
 
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
@@ -89,11 +71,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    _data_dictionary: PsqlpyDataDictionary | None
-    _transaction_active: bool
-    _json_columns_cache: dict[tuple[str | None, str], set[str]]
-
-    __slots__ = ("_data_dictionary", "_json_columns_cache", "_transaction_active")
+    __slots__ = ("_data_dictionary", "_transaction_active")
     dialect = "postgres"
 
     def __init__(
@@ -108,9 +86,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
-        self._data_dictionary = None
+        self._data_dictionary: PsqlpyDataDictionary | None = None
         self._transaction_active = False
-        self._json_columns_cache = {}
 
     async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
@@ -142,7 +119,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             count_sql = _dml_count_query(sql)
             if count_sql is not None:
                 count_result = await cursor.fetch(count_sql, params)
-                rows_affected = _extract_dml_count(count_result)
+                count_rows, _ = collect_rows(count_result)
+                if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
+                    msg = "psqlpy DML row count query returned an invalid result"
+                    raise SQLSpecError(msg)
+                rows_affected = count_rows[0][_DML_COUNT_COLUMN]
+                if type(rows_affected) is not int or rows_affected < 0:
+                    msg = "psqlpy DML row count query returned an invalid count"
+                    raise SQLSpecError(msg)
                 return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
         result = await cursor.execute(sql, params)
@@ -174,7 +158,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=rows_affected, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
-        """Execute SQL script with statement splitting and sequential execution.
+        """Execute SQL script with statement splitting.
 
         Args:
             cursor: Psqlpy connection object
@@ -186,7 +170,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         prepared_parameters = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters)
         statement_config = statement.statement_config
-
         statements = self.split_script_statements(sql, statement_config, strip_trailing_semicolon=True)
 
         successful_count = 0
@@ -264,10 +247,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         Returns:
             Names of columns typed json or jsonb.
         """
-        cache_key = (schema_name, table_name)
-        if cache_key in self._json_columns_cache:
-            return self._json_columns_cache[cache_key]
-
         qualified = quote_identifier(table_name)
         if schema_name is not None:
             qualified = f"{quote_identifier(schema_name)}.{qualified}"
@@ -282,9 +261,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             [qualified],
         )
         data, _ = collect_rows(rows)
-        result = {str(row["column_name"]) for row in data}
-        self._json_columns_cache[cache_key] = result
-        return result
+        return {str(row["column_name"]) for row in data}
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
@@ -321,147 +298,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Exception handler context manager
         """
         return PsqlpyExceptionHandler()
-
-    async def execute_stack(
-        self, stack: "StatementStack", *, continue_on_error: bool = False
-    ) -> "tuple[StackResult, ...]":
-        """Execute a StatementStack using psqlpy transaction pipeline when supported."""
-        if (
-            not isinstance(stack, StatementStack)
-            or not stack
-            or self.stack_native_disabled
-            or continue_on_error
-            or not hasattr(self.connection, "transaction")
-        ):
-            return await super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        prepared_ops = self._prepare_pipeline_operations(stack)
-        if prepared_ops is None:
-            return await super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        return await self._execute_stack_pipeline(stack, prepared_ops)
-
-    def _prepare_pipeline_operations(self, stack: "StatementStack") -> "list[tuple[SQL, str, list[Any], bool]] | None":
-        """Prepare stack operations for native psqlpy transaction pipeline execution.
-
-        Returns None when any operation in the stack requires the sequential
-        fallback path (non-execute methods, per-operation statement_config,
-        scripts, batch operations, COPY operations, or mapping parameters).
-        """
-        prepared: list[tuple[SQL, str, list[Any], bool]] = []
-        for operation in stack.operations:
-            if operation.method != "execute":
-                return None
-            if operation.keyword_arguments and "statement_config" in operation.keyword_arguments:
-                return None
-
-            kwargs = dict(operation.keyword_arguments) if operation.keyword_arguments else None
-            sql_statement = self.prepare_statement(
-                operation.statement, operation.arguments, statement_config=self.statement_config, kwargs=kwargs
-            )
-            if sql_statement.is_script or sql_statement.is_many or is_copy_operation(sql_statement.operation_type):
-                return None
-
-            sql, prepared_parameters = self._compiled_sql(sql_statement, self.statement_config)
-            if isinstance(prepared_parameters, Mapping):
-                return None
-
-            params = list(prepared_parameters) if isinstance(prepared_parameters, (list, tuple)) else []
-            is_dml_count = False
-            if not sql_statement.returns_rows() and sql_statement.operation_type in {"INSERT", "UPDATE", "DELETE"}:
-                try:
-                    count_sql = _dml_count_query(sql)
-                except SQLSpecError:
-                    return None
-                if count_sql is not None:
-                    sql = count_sql
-                    is_dml_count = True
-
-            prepared.append((sql_statement, sql, params, is_dml_count))
-        return prepared
-
-    async def _execute_stack_pipeline(
-        self, stack: "StatementStack", prepared_ops: "list[tuple[SQL, str, list[Any], bool]]"
-    ) -> "tuple[StackResult, ...]":
-        """Execute prepared stack operations through psqlpy's native Rust pipeline."""
-        results: list[StackResult] = []
-        started_transaction = False
-        queries: list[tuple[str, list[Any] | None]] = [(sql, params) for _, sql, params, _ in prepared_ops]
-
-        with StackExecutionObserver(self, stack, continue_on_error=False, native_pipeline=True):
-            try:
-                if not self._connection_in_transaction():
-                    await self.begin()
-                    started_transaction = True
-
-                transaction = self.connection.transaction()
-                exc_handler = self.handle_database_exceptions()
-                try:
-                    query_results = await self._run_with_exception_handler(
-                        exc_handler, transaction.pipeline, queries, True
-                    )
-                    self._check_pending_exception(exc_handler)
-                except Exception as exc:
-                    stack_error = StackExecutionError(
-                        0,
-                        describe_stack_statement(stack.operations[0].statement),
-                        exc,
-                        adapter=type(self).__name__,
-                        mode="fail-fast",
-                        native_pipeline=True,
-                    )
-                    raise stack_error from exc
-
-                assert query_results is not None
-                for index, ((sql_statement, _, _, is_dml_count), query_result) in enumerate(
-                    zip(prepared_ops, query_results, strict=False)
-                ):
-                    try:
-                        if sql_statement.returns_rows():
-                            dict_rows, column_names = collect_rows(query_result)
-                            execution_result = self.create_execution_result(
-                                self.connection,
-                                selected_data=dict_rows,
-                                column_names=column_names,
-                                data_row_count=len(dict_rows),
-                                is_select_result=True,
-                                row_format="dict",
-                            )
-                        elif is_dml_count:
-                            rows_affected = _extract_dml_count(query_result)
-                            execution_result = self.create_execution_result(
-                                self.connection, rowcount_override=rows_affected
-                            )
-                        else:
-                            rows_affected = extract_rows_affected(query_result)
-                            execution_result = self.create_execution_result(
-                                self.connection, rowcount_override=rows_affected
-                            )
-                    except Exception as exc:
-                        stack_error = StackExecutionError(
-                            index,
-                            describe_stack_statement(stack.operations[index].statement),
-                            exc,
-                            adapter=type(self).__name__,
-                            mode="fail-fast",
-                            native_pipeline=True,
-                        )
-                        raise stack_error from exc
-
-                    sql_result = self.build_statement_result(sql_statement, execution_result)
-                    results.append(StackResult.from_sql_result(sql_result))
-
-                if started_transaction:
-                    await self.commit()
-            except Exception:
-                if started_transaction:
-                    try:
-                        await self.rollback()
-                    except Exception as rollback_error:
-                        logger.debug("Rollback after psqlpy pipeline failure failed: %s", rollback_error)
-                raise
-
-        return tuple(results)
 
     async def select_to_storage(
         self,
@@ -626,19 +462,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         synchronously; the state is tracked via a flag toggled in begin/commit/rollback.
         """
         return self._transaction_active
-
-
-def _extract_dml_count(count_result: Any) -> int:
-    """Validate and extract the affected row count from a psqlpy DML count CTE query result."""
-    count_rows, _ = collect_rows(count_result)
-    if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
-        msg = "psqlpy DML row count query returned an invalid result"
-        raise SQLSpecError(msg)
-    rows_affected = count_rows[0][_DML_COUNT_COLUMN]
-    if type(rows_affected) is not int or rows_affected < 0:
-        msg = "psqlpy DML row count query returned an invalid count"
-        raise SQLSpecError(msg)
-    return rows_affected
 
 
 register_driver_profile("psqlpy", driver_profile)

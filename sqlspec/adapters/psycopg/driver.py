@@ -67,36 +67,11 @@ from sqlspec.utils.type_guards import is_readable, resolve_row_format
 
 if TYPE_CHECKING:
     from collections import abc
-    from typing import Protocol
 
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, Statement
+    from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
+    from sqlspec.core import ArrowResult
     from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-
-    class PsycopgPipelineDriver(Protocol):
-        """Protocol for psycopg pipeline driver methods used in stack execution."""
-
-        statement_config: "StatementConfig"
-
-        def prepare_statement(
-            self,
-            statement: "SQL | Statement | QueryBuilder",
-            parameters: Any,
-            *,
-            statement_config: "StatementConfig | None" = None,
-            kwargs: "dict[str, Any] | None" = None,
-        ) -> "SQL": ...
-
-        def prepare_driver_parameters(
-            self,
-            parameters: Any,
-            statement_config: "StatementConfig",
-            is_many: bool = False,
-            prepared_statement: Any | None = None,
-        ) -> Any: ...
-
-        def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
 __all__ = (
