@@ -336,3 +336,13 @@ Precision limits:
 - ``get_statistics`` maps the standard ADBC statistic keys 0-6 to their
   canonical names (``adbc.statistic.row_count`` and friends); driver-specific
   keys are reported numerically.
+
+FlightSQL connection options
+----------------------------
+
+FlightSQL connection configuration accepts ``grpc_max_message_size``,
+``query_timeout``, ``fetch_timeout``, ``tls_root_certs``, ``mtls_cert_chain``,
+``mtls_private_key``, ``with_cookie_middleware``, and ``headers``. These map
+to native ADBC database options; explicit ``db_kwargs`` entries take precedence.
+Timeouts are in seconds. Session options remain native connection options and
+can be supplied through ``conn_kwargs``.

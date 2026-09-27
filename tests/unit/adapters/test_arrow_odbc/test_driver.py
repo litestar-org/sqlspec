@@ -1001,10 +1001,15 @@ def test_mssql_prepared_pagination_reuses_compiler_metadata(monkeypatch: pytest.
     ]
 
 
-def test_arrow_odbc_execute_many_requires_native_bulk_ingestion() -> None:
-    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", FakeConnection()))
-    with pytest.raises(NotImplementedError, match="bulk_insert_arrow"):
-        driver.execute_many("UPDATE items SET name = ? WHERE id > ?", [("alpha", 0)])
+def test_arrow_odbc_execute_many_preserves_sql_and_reports_unknown_rowcount() -> None:
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("Any", connection))
+    result = driver.execute_many("UPDATE items SET name = ? WHERE id > ?", [("alpha", 0), ("beta", 2)])
+    assert connection.executed == [
+        ("UPDATE items SET name = ? WHERE id > ?", ["alpha", "0"]),
+        ("UPDATE items SET name = ? WHERE id > ?", ["beta", "2"]),
+    ]
+    assert result.rows_affected == -1
 
 
 @pytest.mark.parametrize("parameter_transformer", [False, True])

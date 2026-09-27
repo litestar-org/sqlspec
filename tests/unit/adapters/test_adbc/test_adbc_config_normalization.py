@@ -452,3 +452,33 @@ def test_adbc_config_resolves_database_aliases() -> None:
     pg_config = AdbcConfig(connection_config={"url": "postgresql://example.invalid/db"})
     assert pg_config.connection_config["uri"] == "postgresql://example.invalid/db"
     assert "url" not in pg_config.connection_config
+
+
+def test_flightsql_native_shortcuts_preserve_explicit_options() -> None:
+    explicit = {"adbc.flight.sql.rpc.call_header.x-token": "explicit", "adbc.flight.sql.rpc.timeout_seconds.query": "9"}
+    resolved = build_connection_config({
+        "driver_name": "flightsql",
+        "grpc_max_message_size": 1048576,
+        "query_timeout": 2.5,
+        "fetch_timeout": 1.5,
+        "tls_root_certs": "root",
+        "mtls_cert_chain": "chain",
+        "mtls_private_key": "key",
+        "with_cookie_middleware": True,
+        "headers": {"x-token": "shortcut", "x-trace": "trace"},
+        "db_kwargs": explicit,
+    })
+    assert resolved["db_kwargs"] == {
+        **explicit,
+        "adbc.flight.sql.client_option.with_max_msg_size": "1048576",
+        "adbc.flight.sql.rpc.timeout_seconds.fetch": "1.5",
+        "adbc.flight.sql.client_option.tls_root_certs": "root",
+        "adbc.flight.sql.client_option.mtls_cert_chain": "chain",
+        "adbc.flight.sql.client_option.mtls_private_key": "key",
+        "adbc.flight.sql.rpc.with_cookie_middleware": "true",
+        "adbc.flight.sql.rpc.call_header.x-trace": "trace",
+    }
+    assert explicit == {
+        "adbc.flight.sql.rpc.call_header.x-token": "explicit",
+        "adbc.flight.sql.rpc.timeout_seconds.query": "9",
+    }

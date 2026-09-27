@@ -18,6 +18,12 @@ Unreleased
   explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
   stream modes while retaining the atomic PENDING default.
 
+* Arrow ODBC supports row-oriented ``execute_many()`` with unknown affected-row
+  counts instead of counting parameter sets as modified rows.
+
+* ADBC FlightSQL connection shortcuts for TLS/mTLS, RPC timeouts, message
+  size, cookies and headers preserve explicit native ``db_kwargs`` overrides.
+
 * Added an IBM Db2 adapter for Db2 LUW 11.5 and later with sync
   (``Db2SyncConfig``) and async (``Db2AsyncConfig``) configurations built on
   ``ibm_db``. It includes connection pooling, catalog reflection, migrations,

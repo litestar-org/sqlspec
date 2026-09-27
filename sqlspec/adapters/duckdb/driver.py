@@ -660,7 +660,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 return None
             import pyarrow as pa
 
-            return pa.table({name: [row[index] for row in rows] for index, name in enumerate(column_names)})
+            return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
 
         return None
 

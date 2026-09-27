@@ -182,8 +182,20 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         return self.create_execution_result(cursor, rowcount_override=0)
 
     def dispatch_execute_many(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
-        msg = "arrow-odbc does not expose a row-oriented executemany API; use bulk_insert_arrow() for Arrow ingestion."
-        raise NotImplementedError(msg)
+        compiled_statement, parameter_sets = self._compiled_statement(statement, self.statement_config)
+        executed = False
+        for parameter_set in cast("Iterable[Any]", parameter_sets):
+            sql = compiled_statement.compiled_sql
+            if self._dialect == "mssql":
+                sql, parameter_set = _inline_mssql_pagination_parameters(
+                    sql, parameter_set, compiled_statement.parameter_profile, statement.statement_config
+                )
+            cursor.execute(
+                query=sql, parameters=_odbc_parameters(parameter_set, naive_utc_datetimes=self._dialect == "db2")
+            )
+            executed = True
+        # The native execute API supplies no affected-row count.
+        return self.create_execution_result(cursor, rowcount_override=-1 if executed else 0, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
