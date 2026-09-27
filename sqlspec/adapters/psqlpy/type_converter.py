@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from sqlspec.typing import PGVECTOR_INSTALLED
+from sqlspec.typing import PGVECTOR_INSTALLED, import_optional_attr
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection as Connection
@@ -14,16 +14,17 @@ def coerce_pgvector(value: Any) -> Any:
     """Coerce sequence or numpy array to psqlpy PgVector."""
     if value is None or not PGVECTOR_INSTALLED:
         return value
+    pg_vector_cls = import_optional_attr("psqlpy.extra_types", "PgVector")
+    if pg_vector_cls is None:
+        return value
     try:
-        from psqlpy.extra_types import PgVector
-
-        if isinstance(value, PgVector):
+        if isinstance(value, pg_vector_cls):
             return value
         if isinstance(value, (list, tuple)):
-            return PgVector(list(value))
+            return pg_vector_cls(list(value))
         if hasattr(value, "tolist"):
-            return PgVector(value.tolist())
-    except (ImportError, Exception):
+            return pg_vector_cls(value.tolist())
+    except Exception:
         return value
     return value
 

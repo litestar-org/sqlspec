@@ -4,7 +4,7 @@ import contextlib
 import datetime
 import re
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Final, NamedTuple
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -42,11 +42,10 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.core import SQL, ParameterStyleConfig, StackOperation
+    from sqlspec.core import ParameterStyleConfig
 
 __all__ = (
     "AsyncpgStreamSource",
-    "NormalizedStackOperation",
     "apply_driver_features",
     "build_connection_config",
     "build_postgres_extension_probe_names",
@@ -57,7 +56,6 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
-    "invoke_prepared_statement",
     "is_postgres_extension_active",
     "parse_status",
     "register_json_codecs",
@@ -74,17 +72,6 @@ logger = get_logger("sqlspec.adapters.asyncpg.core")
 _PGVECTOR_MISSING_LOGGED = False
 _JSONB_BINARY_VERSION = b"\x01"
 
-
-class NormalizedStackOperation(NamedTuple):
-    """Normalized execution metadata used for prepared stack operations."""
-
-    operation: "StackOperation"
-    statement: "SQL"
-    sql: str
-    parameters: "tuple[Any, ...] | dict[str, Any] | None"
-
-
-PREPARED_STATEMENT_CACHE_SIZE: Final[int] = 32
 _EXCEPTION_MAPPING_DISPATCHER = TypeDispatcher["tuple[str, type[SQLSpecError], str]"]()
 
 
@@ -168,37 +155,6 @@ def configure_parameter_serializers(
 
     effective_deserializer = deserializer or parameter_config.json_deserializer or from_json
     return parameter_config.replace(json_serializer=serializer, json_deserializer=effective_deserializer)
-
-
-async def invoke_prepared_statement(
-    prepared: Any, parameters: "tuple[Any, ...] | dict[str, Any] | list[Any] | None", *, fetch: bool
-) -> Any:
-    """Invoke an AsyncPG prepared statement with optional parameters.
-
-    Args:
-        prepared: AsyncPG prepared statement object.
-        parameters: Prepared parameters payload.
-        fetch: Whether to fetch rows.
-
-    Returns:
-        Query result or status message.
-    """
-    if parameters is None:
-        if fetch:
-            return await prepared.fetch()
-        await prepared.fetch()
-        return prepared.get_statusmsg()
-
-    if isinstance(parameters, dict):
-        if fetch:
-            return await prepared.fetch(**parameters)
-        await prepared.fetch(**parameters)
-        return prepared.get_statusmsg()
-
-    if fetch:
-        return await prepared.fetch(*parameters)
-    await prepared.fetch(*parameters)
-    return prepared.get_statusmsg()
 
 
 def build_statement_config(

@@ -5,7 +5,7 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 import psycopg as psycopg_module
 from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
@@ -44,8 +44,7 @@ if TYPE_CHECKING:
     from google.cloud.alloydb.connector import Connector as PsycopgAlloydbConnector
 
     from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, Statement, StatementConfig
+    from sqlspec.core import StatementConfig
 
     PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
@@ -83,7 +82,6 @@ __all__ = (
     "PsycopgNativeAsyncConnection",
     "PsycopgNativeAsyncCursor",
     "PsycopgNullConnectionPool",
-    "PsycopgPipelineDriver",
     "PsycopgProgrammingError",
     "PsycopgRowFactory",
     "PsycopgSQL",
@@ -137,31 +135,6 @@ class PsycopgAsyncCursor:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
                 await self.cursor.close()
-
-
-class PsycopgPipelineDriver(Protocol):
-    """Protocol for psycopg pipeline driver methods used in stack execution."""
-
-    statement_config: "StatementConfig"
-
-    def prepare_statement(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        parameters: Any,
-        *,
-        statement_config: "StatementConfig | None" = None,
-        kwargs: "dict[str, Any] | None" = None,
-    ) -> "SQL": ...
-
-    def prepare_driver_parameters(
-        self,
-        parameters: Any,
-        statement_config: "StatementConfig",
-        is_many: bool = False,
-        prepared_statement: Any | None = None,
-    ) -> Any: ...
-
-    def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
 class PsycopgSyncSessionContext:

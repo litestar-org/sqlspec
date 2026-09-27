@@ -7,9 +7,10 @@ import pytest
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyDatabaseError
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
-from sqlspec.adapters.psqlpy.core import PsqlpyStreamSource
+from sqlspec.adapters.psqlpy.core import _DML_COUNT_COLUMN, PsqlpyStreamSource
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.core import StatementStack
+from sqlspec.exceptions import SQLSpecError, StackExecutionError
 
 pytestmark = pytest.mark.anyio
 
@@ -205,3 +206,116 @@ async def test_load_from_arrow_decodes_json_text_for_json_columns() -> None:
 
     _table_name, records, _kwargs = connection.copy_calls[0]
     assert records == [(1, {"name": "alpha"}, '{"not": "json"}')]
+
+
+class _PipelineTransaction:
+    def __init__(
+        self,
+        pipeline_calls: "list[tuple[list[tuple[str, list[Any] | None]], bool]]",
+        results: "list[Any]",
+        error: "Exception | None" = None,
+    ) -> None:
+        self._pipeline_calls = pipeline_calls
+        self._results = results
+        self._error = error
+
+    async def pipeline(self, queries: "list[tuple[str, list[Any] | None]]", prepared: bool = True) -> "list[Any]":
+        self._pipeline_calls.append((queries, prepared))
+        if self._error is not None:
+            raise self._error
+        return self._results
+
+
+class _PipelineConnection(_FakeConnection):
+    def __init__(self, results: "list[Any] | None" = None, error: "Exception | None" = None) -> None:
+        super().__init__()
+        self.pipeline_calls: list[tuple[list[tuple[str, list[Any] | None]], bool]] = []
+        self.fetch_calls: list[tuple[str, Any]] = []
+        self.execute_many_calls: list[tuple[str, Any]] = []
+        self._results = results or []
+        self._error = error
+
+    def transaction(self) -> _PipelineTransaction:
+        return _PipelineTransaction(self.pipeline_calls, self._results, self._error)
+
+    async def fetch(self, sql: str, parameters: Any = None) -> Any:
+        self.fetch_calls.append((sql, parameters))
+        if _DML_COUNT_COLUMN in sql:
+            return SimpleNamespace(result=lambda: [{_DML_COUNT_COLUMN: 1}])
+        return SimpleNamespace(result=lambda: [{"id": 1}])
+
+    async def execute_many(self, sql: str, parameters: Any) -> None:
+        self.execute_many_calls.append((sql, parameters))
+
+
+async def test_execute_stack_uses_native_transaction_pipeline() -> None:
+    """Supported execute stacks should run through connection.transaction().pipeline."""
+    connection = _PipelineConnection(
+        results=[
+            SimpleNamespace(result=lambda: [{_DML_COUNT_COLUMN: 2}]),
+            SimpleNamespace(result=lambda: [{"id": 1, "name": "alpha"}]),
+        ]
+    )
+    driver = PsqlpyDriver(cast("Any", connection))
+    stack = (
+        StatementStack()
+        .push_execute("INSERT INTO items (name) VALUES ($1)", "alpha")
+        .push_execute("SELECT id, name FROM items WHERE name = $1", "alpha")
+    )
+
+    results = await driver.execute_stack(stack)
+
+    assert len(results) == 2
+    assert results[0].rows_affected == 2
+    assert results[1].result is not None
+    assert results[1].result.get_data() == [{"id": 1, "name": "alpha"}]
+    assert len(connection.pipeline_calls) == 1
+    queries, prepared = connection.pipeline_calls[0]
+    assert prepared is True
+    assert len(queries) == 2
+    assert _DML_COUNT_COLUMN in queries[0][0]
+    assert queries[0][1] == ["alpha"]
+    assert queries[1] == ("SELECT id, name FROM items WHERE name = $1", ["alpha"])
+    assert connection.statements == ["BEGIN", "COMMIT"]
+
+
+async def test_execute_stack_falls_back_when_continue_on_error_or_non_execute() -> None:
+    """Stacks with continue_on_error or non-execute operations must fall back to sequential execution."""
+    connection = _PipelineConnection()
+    driver = PsqlpyDriver(cast("Any", connection))
+
+    continue_stack = StatementStack().push_execute("SELECT 1")
+    await driver.execute_stack(continue_stack, continue_on_error=True)
+    assert connection.pipeline_calls == []
+    assert len(connection.fetch_calls) == 1
+
+    many_stack = StatementStack().push_execute_many("INSERT INTO items (name) VALUES ($1)", [("a",), ("b",)])
+    await driver.execute_stack(many_stack)
+    assert connection.pipeline_calls == []
+    assert len(connection.execute_many_calls) == 1
+
+
+async def test_execute_stack_falls_back_when_native_stack_disabled() -> None:
+    """Native stack disablement must bypass connection.transaction().pipeline."""
+    connection = _PipelineConnection()
+    driver = PsqlpyDriver(cast("Any", connection), driver_features={"stack_native_disabled": True})
+    stack = StatementStack().push_execute("SELECT 1")
+
+    await driver.execute_stack(stack)
+
+    assert connection.pipeline_calls == []
+    assert len(connection.fetch_calls) == 1
+
+
+async def test_execute_stack_native_pipeline_error_rolls_back_and_wraps() -> None:
+    """Pipeline failures should roll back owned transactions and raise StackExecutionError."""
+    connection = _PipelineConnection(error=PsqlpyDatabaseError("unique constraint violation"))
+    driver = PsqlpyDriver(cast("Any", connection))
+    stack = StatementStack().push_execute("INSERT INTO items (name) VALUES ($1)", "dup")
+
+    with pytest.raises(StackExecutionError) as exc_info:
+        await driver.execute_stack(stack)
+
+    assert exc_info.value.native_pipeline is True
+    assert connection.statements == ["BEGIN", "ROLLBACK"]
+    assert driver._connection_in_transaction() is False

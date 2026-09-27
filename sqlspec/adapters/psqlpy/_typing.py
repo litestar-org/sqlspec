@@ -16,32 +16,21 @@ class _PsqlpyUnavailableError(Exception):
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
 
-    from psqlpy import Connection as _PsqlpyConnection
+    from psqlpy import Connection as PsqlpyConnection
     from psqlpy import ConnectionPool as PsqlpyConnectionPool
-    from psqlpy import Listener as _PsqlpyListener
-    from psqlpy.exceptions import ConnectionExecuteError as _PsqlpyConnectionExecuteError
-    from psqlpy.exceptions import DatabaseError as _PsqlpyDatabaseError
-    from psqlpy.exceptions import DataError as _PsqlpyDataError
-    from psqlpy.exceptions import Error as _PsqlpyError
-    from psqlpy.exceptions import IntegrityError as _PsqlpyIntegrityError
-    from psqlpy.exceptions import NotSupportedError as _PsqlpyNotSupportedError
-    from psqlpy.exceptions import OperationalError as _PsqlpyOperationalError
+    from psqlpy import Listener as PsqlpyListener
+    from psqlpy.exceptions import ConnectionExecuteError as PsqlpyConnectionExecuteError
+    from psqlpy.exceptions import DatabaseError as PsqlpyDatabaseError
+    from psqlpy.exceptions import DataError as PsqlpyDataError
+    from psqlpy.exceptions import Error as PsqlpyError
+    from psqlpy.exceptions import IntegrityError as PsqlpyIntegrityError
+    from psqlpy.exceptions import NotSupportedError as PsqlpyNotSupportedError
+    from psqlpy.exceptions import OperationalError as PsqlpyOperationalError
     from psqlpy.extra_types import JSONB as PSQLPY_JSONB
 
     from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
     from sqlspec.core import StatementConfig
-
-    PsqlpyConnection: TypeAlias = _PsqlpyConnection
-    PsqlpyDataError: TypeAlias = _PsqlpyDataError
-    PsqlpyDatabaseError: TypeAlias = _PsqlpyDatabaseError
-    PsqlpyConnectionExecuteError: TypeAlias = _PsqlpyConnectionExecuteError
-    PsqlpyError: TypeAlias = _PsqlpyError
-    PsqlpyIntegrityError: TypeAlias = _PsqlpyIntegrityError
-    PsqlpyListener: TypeAlias = _PsqlpyListener
-    PsqlpyNotSupportedError: TypeAlias = _PsqlpyNotSupportedError
-    PsqlpyOperationalError: TypeAlias = _PsqlpyOperationalError
 
 
 if not TYPE_CHECKING:

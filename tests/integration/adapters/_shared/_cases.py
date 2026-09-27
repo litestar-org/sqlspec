@@ -744,13 +744,11 @@ ASYNC_DRIVER_CASES = (
         supports_connection_hook=True,
         config_factory_fixture="lifecycle_config_asyncpg",
         supports_connection_instance=True,
-        native_stack_parity_mode="standard",
         extra_assertions=(
             "explain_modifiers:postgres",
             "arrow_specifics:postgres",
             "execute_many_specifics:postgres",
             "param_codecs:asyncpg",
-            "statement_stack:native_fallback_parity",
             "streaming_native:asyncpg",
             "stream_error_close:pg",
         ),

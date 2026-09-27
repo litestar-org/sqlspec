@@ -3,8 +3,6 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from mypy_extensions import mypyc_attr
-
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.data_dictionary import (
     ColumnMetadata,
@@ -57,7 +55,6 @@ _COCKROACH_METADATA_DOMAINS = (
 _COCKROACH_SUPPORTED_DOMAINS = frozenset(_COCKROACH_METADATA_DOMAINS) - {"crdb_internal", "system"}
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
     """CockroachDB sync data dictionary."""
 
@@ -291,7 +288,6 @@ class CockroachPsycopgSyncDataDictionary(PsycopgSyncDataDictionary):
         )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class CockroachPsycopgAsyncDataDictionary(PsycopgAsyncDataDictionary):
     """CockroachDB async data dictionary."""
 

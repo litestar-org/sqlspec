@@ -3,8 +3,6 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from mypy_extensions import mypyc_attr
-
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -68,7 +66,6 @@ _POSTGRES_SYSTEM_METADATA_QUERIES = {
 }
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     """PostgreSQL-specific sync data dictionary."""
 
@@ -345,7 +342,6 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
         )
 
 
-@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     """PostgreSQL-specific async data dictionary."""
 

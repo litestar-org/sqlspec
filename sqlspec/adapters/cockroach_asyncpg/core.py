@@ -8,6 +8,7 @@ from mypy_extensions import mypyc_attr
 from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
+from sqlspec.adapters.asyncpg.core import build_connection_config as asyncpg_build_connection_config
 from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
@@ -69,8 +70,6 @@ class CockroachAsyncpgRetryConfig:
 
 def build_connection_config(config: "dict[str, Any]") -> "dict[str, Any]":
     """Prepare CockroachDB AsyncPG connection config, extracting multi-region server settings."""
-    from sqlspec.adapters.asyncpg.core import build_connection_config as asyncpg_build_connection_config
-
     result = asyncpg_build_connection_config(config)
     server_settings = dict(result.get("server_settings") or {})
     if "application_name" in result:

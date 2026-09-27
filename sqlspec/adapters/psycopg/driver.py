@@ -67,11 +67,36 @@ from sqlspec.utils.type_guards import is_readable, resolve_row_format
 
 if TYPE_CHECKING:
     from collections import abc
+    from typing import Protocol
 
-    from sqlspec.adapters.psycopg._typing import PsycopgPipelineDriver
-    from sqlspec.core import ArrowResult
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import ArrowResult, Statement
     from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+
+    class PsycopgPipelineDriver(Protocol):
+        """Protocol for psycopg pipeline driver methods used in stack execution."""
+
+        statement_config: "StatementConfig"
+
+        def prepare_statement(
+            self,
+            statement: "SQL | Statement | QueryBuilder",
+            parameters: Any,
+            *,
+            statement_config: "StatementConfig | None" = None,
+            kwargs: "dict[str, Any] | None" = None,
+        ) -> "SQL": ...
+
+        def prepare_driver_parameters(
+            self,
+            parameters: Any,
+            statement_config: "StatementConfig",
+            is_many: bool = False,
+            prepared_statement: Any | None = None,
+        ) -> Any: ...
+
+        def _compiled_sql(self, statement: "SQL", statement_config: "StatementConfig") -> "tuple[str, Any]": ...
 
 
 __all__ = (
@@ -286,11 +311,7 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
-        if pipeline_supported() and hasattr(self.connection, "pipeline") and not self._transaction_active:
-            with self.connection.pipeline():
-                cursor.executemany(sql, prepared_parameters)
-        else:
-            cursor.executemany(sql, prepared_parameters)
+        cursor.executemany(sql, prepared_parameters)
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -521,25 +542,19 @@ class PsycopgSyncDriver(PsycopgPipelineMixin, SyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         if arrow_table.num_rows > 0:
-            import pyarrow as pa
-
-            columns = list(arrow_table.column_names)
+            columns, records = self._arrow_table_to_rows(arrow_table)
+            if self._arrow_rows_need_preparation(arrow_table):
+                records = cast(
+                    "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                )
             copy_sql = build_copy_from_command(table, columns)
             exc_handler = self.handle_database_exceptions()
             with ExitStack() as stack:
                 stack.enter_context(exc_handler)
                 cursor = stack.enter_context(self.with_cursor(self.connection))
                 copy_ctx = stack.enter_context(cursor.copy(copy_sql))
-                needs_prep = self._arrow_rows_need_preparation(arrow_table)
-                for batch in arrow_table.to_batches():
-                    batch_table = pa.Table.from_batches([batch])
-                    _, records = self._arrow_table_to_rows(batch_table)
-                    if needs_prep:
-                        records = cast(
-                            "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                        )
-                    for record in records:
-                        copy_ctx.write_row(record)
+                for record in records:
+                    copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -811,11 +826,7 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             return self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
 
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
-        if pipeline_supported() and hasattr(self.connection, "pipeline") and not self._transaction_active:
-            async with self.connection.pipeline():
-                await cursor.executemany(sql, prepared_parameters)
-        else:
-            await cursor.executemany(sql, prepared_parameters)
+        await cursor.executemany(sql, prepared_parameters)
         affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
@@ -1051,25 +1062,19 @@ class PsycopgAsyncDriver(PsycopgPipelineMixin, AsyncDriverAdapterBase):
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         if arrow_table.num_rows > 0:
-            import pyarrow as pa
-
-            columns = list(arrow_table.column_names)
+            columns, records = self._arrow_table_to_rows(arrow_table)
+            if self._arrow_rows_need_preparation(arrow_table):
+                records = cast(
+                    "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                )
             copy_sql = build_copy_from_command(table, columns)
             exc_handler = self.handle_database_exceptions()
             async with AsyncExitStack() as stack:
                 await stack.enter_async_context(exc_handler)
                 cursor = await stack.enter_async_context(self.with_cursor(self.connection))
                 copy_ctx = await stack.enter_async_context(cursor.copy(copy_sql))
-                needs_prep = self._arrow_rows_need_preparation(arrow_table)
-                for batch in arrow_table.to_batches():
-                    batch_table = pa.Table.from_batches([batch])
-                    _, records = self._arrow_table_to_rows(batch_table)
-                    if needs_prep:
-                        records = cast(
-                            "list[Any]", self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-                        )
-                    for record in records:
-                        await copy_ctx.write_row(record)
+                for record in records:
+                    await copy_ctx.write_row(record)
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
         telemetry_payload = self._ingest_telemetry(arrow_table)

@@ -13,6 +13,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
+from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -104,34 +105,6 @@ PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(
 _DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
 _DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
 _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
-_PSQLPY_ACCEPTED_POOL_KWARGS: Final[frozenset[str]] = frozenset({
-    "dsn",
-    "username",
-    "password",
-    "host",
-    "hosts",
-    "port",
-    "ports",
-    "db_name",
-    "target_session_attrs",
-    "options",
-    "application_name",
-    "connect_timeout_sec",
-    "connect_timeout_nanosec",
-    "tcp_user_timeout_sec",
-    "tcp_user_timeout_nanosec",
-    "keepalives",
-    "keepalives_idle_sec",
-    "keepalives_idle_nanosec",
-    "keepalives_interval_sec",
-    "keepalives_interval_nanosec",
-    "keepalives_retries",
-    "load_balance_hosts",
-    "max_db_pool_size",
-    "conn_recycling_method",
-    "ssl_mode",
-    "ca_file",
-})
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
 _NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
@@ -200,32 +173,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     username = config.pop("username", None) or config.pop("user", None)
     if username is not None:
         config["username"] = username
-    max_size = config.pop("max_size", None) or config.pop("max_db_pool_size", None)
-    if max_size is not None:
-        config["max_db_pool_size"] = max_size
-    timeout = (
-        config.pop("connect_timeout_sec", None) or config.pop("connect_timeout", None) or config.pop("timeout", None)
-    )
-    if timeout is not None:
-        config["connect_timeout_sec"] = int(timeout)
-
-    valid_config: dict[str, Any] = {}
-    extra_params: dict[str, Any] = {}
-    for key, value in config.items():
-        if key in _PSQLPY_ACCEPTED_POOL_KWARGS:
-            valid_config[key] = value
-        else:
-            extra_params[key] = value
-
-    if extra_params and "dsn" in valid_config:
-        dsn_val = str(valid_config["dsn"])
-        if "?" in dsn_val:
-            query_suffix = "&" + "&".join(f"{k}={v}" for k, v in extra_params.items())
-            valid_config["dsn"] = dsn_val + query_suffix
-        elif dsn_val.startswith(("postgresql://", "postgres://")):
-            query_suffix = "?" + "&".join(f"{k}={v}" for k, v in extra_params.items())
-            valid_config["dsn"] = dsn_val + query_suffix
-    return valid_config
+    return config
 
 
 def apply_driver_features(
@@ -662,8 +610,6 @@ def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable
     if upper_cast in _TIMESTAMP_CASTS:
         return _coerce_timestamp_parameter(value)
     if upper_cast in _VECTOR_CASTS:
-        from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
-
         return coerce_pgvector(value)
     return value
 

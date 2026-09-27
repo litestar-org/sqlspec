@@ -128,12 +128,10 @@ def pipeline_supported() -> bool:
         return False
 
 
-def build_copy_from_command(table: str, columns: "list[str]", *, binary: bool = False) -> "PsycopgComposed":
-    """Build a COPY FROM STDIN command with optional binary format."""
+def build_copy_from_command(table: str, columns: "list[str]") -> "PsycopgComposed":
+    """Build a COPY FROM STDIN command."""
     table_identifier = _compose_table_identifier(table)
     column_sql = PsycopgSQL(", ").join([PsycopgIdentifier(column) for column in columns])
-    if binary:
-        return PsycopgSQL("COPY {} ({}) FROM STDIN WITH (FORMAT BINARY)").format(table_identifier, column_sql)
     return PsycopgSQL("COPY {} ({}) FROM STDIN").format(table_identifier, column_sql)
 
 
