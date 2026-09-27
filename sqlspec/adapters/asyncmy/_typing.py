@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import asyncmy as _asyncmy  # pyright: ignore
 from asyncmy import Connection  # pyright: ignore
 from asyncmy import errors as _asyncmy_errors  # pyright: ignore
-from asyncmy.connection import LoadLocalFile as _LoadLocalFile  # pyright: ignore
+from asyncmy.connection import LoadLocalFile  # pyright: ignore
 from asyncmy.connection import MySQLResult as _AsyncmyResult  # pyright: ignore
 from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
 from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
@@ -224,7 +224,7 @@ class _AsyncmyLocalInfileResult(_AsyncmyResult):
         if not self.connection._local_infile or os.fsdecode(request) != self._filename:
             msg = "MySQL requested an unexpected LOCAL INFILE payload."
             raise SQLSpecError(msg)
-        await _LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
+        await LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
         packet = await self.connection.read_packet()
         if not packet.is_ok_packet():
             msg = "MySQL did not acknowledge the LOCAL INFILE payload."
