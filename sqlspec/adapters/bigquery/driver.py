@@ -10,6 +10,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
+from sqlglot import exp
 
 from sqlspec.adapters.bigquery._typing import BIGQUERY_POLLING_DEFAULT_VALUE as POLLING_DEFAULT_VALUE
 from sqlspec.adapters.bigquery._typing import (
@@ -78,13 +79,7 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
-__all__ = (
-    "BigQueryCursor",
-    "BigQueryDriver",
-    "BigQueryDryRunResult",
-    "BigQueryExceptionHandler",
-    "BigQuerySessionContext",
-)
+__all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQuerySessionContext")
 
 logger = get_logger(__name__)
 _DATASET_TABLE_PARTS = 2
@@ -177,16 +172,13 @@ class BigQueryDriver(SyncDriverAdapterBase):
         self._session_id: str | None = None
         self._in_transaction: bool = False
 
-    @property
-    def session_id(self) -> str | None:
-        """Return the current BigQuery server-side session ID, if active."""
-        return self._session_id
-
     def _can_use_query_and_wait(
         self, statement: "SQL", job_config: "QueryJobConfig | None" = None, sql: str = ""
     ) -> bool:
         """Determine whether statement qualifies for query_and_wait execution."""
         if not self._use_query_and_wait:
+            return False
+        if self._in_transaction:
             return False
         if not hasattr(self.connection, "query_and_wait"):
             return False
@@ -205,7 +197,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
             effective_priority = getattr(self._default_query_job_config, "priority", None)
         if effective_priority and str(effective_priority).upper() == "BATCH":
             return False
-        return "EXPORT DATA OPTIONS" not in sql.upper()
+        return not isinstance(statement.expression, exp.Export) and not sql.lstrip().upper().startswith("EXPORT DATA")
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute single SQL statement with BigQuery data handling.
@@ -517,7 +509,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         return SyncRowStream(BigQueryStreamSource(self, sql, prepared_parameters, chunk_size))
 
-    def dry_run(
+    def _dry_run(
         self,
         statement: "Statement | QueryBuilder | SQL | str",
         *parameters: Any,
@@ -977,7 +969,11 @@ class BigQueryDriver(SyncDriverAdapterBase):
         types = BigQueryStorageWriteTypes
 
         resolved_stream_type = stream_type or self.driver_features.get("storage_write_stream_type", "COMMITTED")
-        is_committed = str(resolved_stream_type).upper() == "COMMITTED"
+        normalized_stream_type = str(resolved_stream_type).upper()
+        if normalized_stream_type not in {"COMMITTED", "PENDING"}:
+            msg = f"Unsupported storage_write_stream_type '{resolved_stream_type}'. Expected 'COMMITTED' or 'PENDING'."
+            raise ImproperConfigurationError(msg)
+        is_committed = normalized_stream_type == "COMMITTED"
 
         project, dataset, table_name = _resolve_storage_write_table_path(table, self.connection.project)
 

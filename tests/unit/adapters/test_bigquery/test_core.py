@@ -10,11 +10,13 @@ from typing import Any, cast
 import pytest
 from google.cloud.bigquery import ArrayQueryParameter, QueryJobConfig, ScalarQueryParameter, StructQueryParameter
 
+from sqlspec.adapters.bigquery.adk import BigQueryADKStore
 from sqlspec.adapters.bigquery.config import BigQueryConfig, BigQueryConnectionParams
 from sqlspec.adapters.bigquery.core import (
     _COPY_JOB_FIELDS,
     DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
+    _run_query_and_wait,
     build_profile,
     build_retry,
     collect_rows,
@@ -480,7 +482,6 @@ def test_batch_priority_bypasses_query_and_wait() -> None:
 
 def test_adk_store_uses_query_and_wait() -> None:
     """Verify BigQueryADKStore._run_query invokes client.query_and_wait."""
-    from sqlspec.adapters.bigquery.adk import BigQueryADKStore
 
     class _MockRowIterator:
         schema = [SimpleNamespace(name="id")]
@@ -566,7 +567,7 @@ def test_session_id_propagation_across_queries() -> None:
     driver = BigQueryDriver(cast(Any, connection), driver_features={"use_query_and_wait": False})
 
     driver.begin()
-    assert driver.session_id == "session_12345"
+    assert driver._session_id == "session_12345"
 
     subsequent_job = SimpleNamespace(
         statement_type="SELECT",
@@ -598,10 +599,10 @@ def test_multi_statement_transaction_lifecycle() -> None:
     connection.job = session_job
     driver = BigQueryDriver(cast(Any, connection))
 
-    assert driver.session_id is None
+    assert driver._session_id is None
     driver.begin()
     assert driver._connection_in_transaction() is True
-    assert driver.session_id == "txn_session_99"
+    assert driver._session_id == "txn_session_99"
 
     driver.commit()
     assert driver._connection_in_transaction() is False
@@ -618,8 +619,73 @@ def test_multi_statement_transaction_lifecycle() -> None:
     assert connection.queries[3][0] == "ROLLBACK TRANSACTION;"
 
 
+def test_commit_and_rollback_reset_in_transaction_on_failure() -> None:
+    """Verify failed commit or rollback still resets _in_transaction so subsequent begin works."""
+    connection = _RecordingConnection()
+    driver = BigQueryDriver(cast(Any, connection))
+
+    driver._in_transaction = True
+
+    def _fail_query(sql: str, **kwargs: Any) -> object:
+        msg = "simulated transport failure"
+        raise RuntimeError(msg)
+
+    setattr(connection, "query", _fail_query)
+
+    with pytest.raises(RuntimeError, match="simulated transport failure"):
+        driver.commit()
+    assert driver._connection_in_transaction() is False
+
+    driver._in_transaction = True
+    with pytest.raises(RuntimeError, match="simulated transport failure"):
+        driver.rollback()
+    assert driver._connection_in_transaction() is False
+
+
+def test_run_query_and_wait_omits_timeout_when_none() -> None:
+    """Verify _run_query_and_wait does not fall back to 30.0s when wait_timeout is None."""
+    row_iterator = SimpleNamespace(schema=[], total_rows=0)
+    connection = _RecordingInteractiveConnection(row_iterator=row_iterator)
+
+    _run_query_and_wait(
+        cast(Any, connection), "SELECT 1", None, default_job_config=None, json_serializer=to_json, wait_timeout=None
+    )
+    _, kwargs_none = connection.query_and_wait_calls[0]
+    assert "api_timeout" not in kwargs_none
+    assert "wait_timeout" not in kwargs_none
+
+    _run_query_and_wait(
+        cast(Any, connection), "SELECT 1", None, default_job_config=None, json_serializer=to_json, wait_timeout=45.0
+    )
+    _, kwargs_set = connection.query_and_wait_calls[1]
+    assert kwargs_set["api_timeout"] == 45.0
+    assert kwargs_set["wait_timeout"] == 45.0
+
+
+def test_can_use_query_and_wait_guards_transaction_and_export_ast() -> None:
+    """Verify _can_use_query_and_wait checks _in_transaction, create_session, and AST Export vs string literal."""
+    row_iterator = SimpleNamespace(schema=[SimpleNamespace(name="txt")], total_rows=1)
+    connection = _RecordingInteractiveConnection(row_iterator=row_iterator)
+    driver = BigQueryDriver(cast(Any, connection))
+
+    literal_stmt = driver.prepare_statement("SELECT 'EXPORT DATA OPTIONS' AS txt")
+    literal_sql, _ = driver._compiled_sql(literal_stmt, driver.statement_config)
+    assert driver._can_use_query_and_wait(literal_stmt, sql=literal_sql) is True
+
+    export_sql = "EXPORT DATA OPTIONS(uri='gs://bucket/*.parquet', format='PARQUET') AS SELECT 1"
+    export_stmt = driver.prepare_statement(export_sql)
+    assert driver._can_use_query_and_wait(export_stmt, sql=export_sql) is False
+
+    create_session_cfg = QueryJobConfig()
+    create_session_cfg.create_session = True
+    assert driver._can_use_query_and_wait(literal_stmt, job_config=create_session_cfg, sql=literal_sql) is False
+
+    driver._in_transaction = True
+    assert driver._can_use_query_and_wait(literal_stmt, sql=literal_sql) is False
+
+
 def test_driver_dry_run_returns_cost_and_schema() -> None:
-    """Verify driver.dry_run executes with dry_run=True and extracts metrics without calling result()."""
+    """Verify driver._dry_run executes with dry_run=True and extracts metrics without calling result()."""
     dry_run_job = SimpleNamespace(
         total_bytes_processed=10 * (1024**4),
         schema=[
@@ -633,7 +699,7 @@ def test_driver_dry_run_returns_cost_and_schema() -> None:
     connection.job = dry_run_job
     driver = BigQueryDriver(cast(Any, connection))
 
-    res = driver.dry_run("SELECT user_id, email FROM analytics.users")
+    res = driver._dry_run("SELECT user_id, email FROM analytics.users")
 
     assert res["total_bytes_processed"] == 10 * (1024**4)
     assert res["estimated_cost_usd"] == 62.5
@@ -648,7 +714,7 @@ def test_driver_dry_run_returns_cost_and_schema() -> None:
 
 
 def test_governance_config_passed_to_job_config() -> None:
-    """Verify governance parameters copy into default_query_job_config."""
+    """Verify governance parameters copy into _default_query_job_config."""
     params = BigQueryConnectionParams(
         project="test-proj",
         labels={"team": "data-platform", "env": "prod"},
@@ -657,11 +723,11 @@ def test_governance_config_passed_to_job_config() -> None:
         max_slots=500,
     )
     config = BigQueryConfig(connection_config=params)
-    assert config.default_query_job_config is not None
-    assert config.default_query_job_config.labels == {"team": "data-platform", "env": "prod"}
-    assert config.default_query_job_config.priority == "BATCH"
-    assert getattr(config.default_query_job_config, "reservation", None) == "projects/test-proj/reservations/prod-res"
-    assert getattr(config.default_query_job_config, "max_slots", None) == 500
+    assert config._default_query_job_config is not None
+    assert config._default_query_job_config.labels == {"team": "data-platform", "env": "prod"}
+    assert config._default_query_job_config.priority == "BATCH"
+    assert getattr(config._default_query_job_config, "reservation", None) == "projects/test-proj/reservations/prod-res"
+    assert getattr(config._default_query_job_config, "max_slots", None) == 500
 
 
 def test_parameter_struct_and_empty_array_typed_parameter() -> None:
@@ -709,7 +775,7 @@ def test_struct_parameter_nested_and_varied_field_types() -> None:
 
 
 def test_driver_dry_run_with_parameters_labels_and_table_formats() -> None:
-    """Verify dry_run converts query parameters, merges default labels, and formats table references."""
+    """Verify _dry_run converts query parameters, merges default labels, and formats table references."""
     dry_run_job = SimpleNamespace(
         total_bytes_processed=1024**4,
         schema=[SimpleNamespace(name="id", field_type="INT64", mode="NULLABLE")],
@@ -721,7 +787,7 @@ def test_driver_dry_run_with_parameters_labels_and_table_formats() -> None:
     setattr(connection, "default_query_job_config", QueryJobConfig(labels={"env": "staging"}))
     driver = BigQueryDriver(cast(Any, connection))
 
-    res = driver.dry_run("SELECT id FROM analytics.users WHERE id = :id", {"id": 42})
+    res = driver._dry_run("SELECT id FROM analytics.users WHERE id = :id", {"id": 42})
     assert res["referenced_tables"] == ["analytics.users", "raw_table_ref"]
     _, kwargs = connection.queries[0]
     job_config = kwargs["job_config"]
@@ -798,8 +864,6 @@ def test_script_execution_split_mode_and_transaction_double_begin() -> None:
 
 def test_adk_store_run_query_empty_schema_and_fallback() -> None:
     """Verify BigQueryADKStore._run_query handles empty schema and non-query_and_wait fallback."""
-    from sqlspec.adapters.bigquery.adk.store import BigQueryADKStore
-
     empty_schema_client = SimpleNamespace(
         query_and_wait=lambda sql, **kwargs: SimpleNamespace(schema=[], __iter__=lambda self: iter([]))
     )

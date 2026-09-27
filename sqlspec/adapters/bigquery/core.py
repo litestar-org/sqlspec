@@ -72,7 +72,6 @@ COST_PER_TERABYTE_USD: float = 6.25
 
 __all__ = (
     "COST_PER_TERABYTE_USD",
-    "BigQueryDryRunResult",
     "BigQueryStreamSource",
     "apply_driver_features",
     "build_arrow_write_stream_payload",
@@ -1245,9 +1244,9 @@ def _run_query_and_wait(
     final_job_config.query_parameters = create_parameters(parameters, json_serializer)
 
     query_kwargs: dict[str, Any] = {"job_config": final_job_config, "retry": retry, "job_retry": job_retry}
-    effective_timeout = wait_timeout if wait_timeout is not None else 30.0
-    query_kwargs["api_timeout"] = effective_timeout
-    query_kwargs["wait_timeout"] = effective_timeout
+    if wait_timeout is not None:
+        query_kwargs["api_timeout"] = wait_timeout
+        query_kwargs["wait_timeout"] = wait_timeout
     if page_size is not None:
         query_kwargs["page_size"] = page_size
     if max_results is not None:
