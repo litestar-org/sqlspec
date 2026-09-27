@@ -11,6 +11,7 @@ from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAio,
     MysqlConnectorAsyncConnection,
     MysqlConnectorAsyncCursor,
+    MysqlConnectorAsyncPool,
     MysqlConnectorAsyncSessionContext,
     MysqlConnectorConnectionPool,
     MysqlConnectorMysqlModule,
@@ -25,7 +26,7 @@ from sqlspec.adapters.mysqlconnector.driver import (
     MysqlConnectorSyncDriver,
     MysqlConnectorSyncExceptionHandler,
 )
-from sqlspec.config import ExtensionConfigs, NoPoolAsyncConfig, SyncDatabaseConfig
+from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import (
     AsyncPoolConnectionContext,
@@ -172,6 +173,10 @@ class MysqlConnectorPoolParams(MysqlConnectorSyncConnectionParams):
 class MysqlConnectorAsyncConnectionParams(_MysqlConnectorBaseConnectionParams):
     """MysqlConnector async connection parameters."""
 
+    pool_name: NotRequired[str]
+    pool_size: NotRequired[int]
+    pool_reset_session: NotRequired[bool]
+
 
 class MysqlConnectorDriverFeatures(TypedDict):
     """MysqlConnector driver feature flags.
@@ -183,7 +188,8 @@ class MysqlConnectorDriverFeatures(TypedDict):
     on_connection_create: Callback executed when a connection is acquired.
      For sync: Callable[[MysqlConnectorSyncConnection], None]
      For async: Callable[[MysqlConnectorAsyncConnection], Awaitable[None]]
-     Called exactly once per physical connection using WeakSet tracking.
+     Called once per physical connection for sync connections. Async pooled
+     connections invoke the callback again after native session reset.
     enable_events: Enable database event channel support.
      Defaults to True when extension_config["events"] is configured.
     events_backend: Event channel backend selection.
@@ -275,7 +281,7 @@ class MysqlConnectorAsyncConnectionContext(AsyncPoolConnectionContext):
     __slots__ = ()
 
     async def __aenter__(self) -> MysqlConnectorAsyncConnection:
-        self._connection = await self._config.create_connection()
+        self._connection = await self._config._acquire_async_connection()
         return cast("MysqlConnectorAsyncConnection", self._connection)
 
     async def __aexit__(
@@ -291,7 +297,7 @@ class _MysqlConnectorAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
     __slots__ = ()
 
     async def acquire_connection(self) -> MysqlConnectorAsyncConnection:
-        self._connection = await self._config.create_connection()
+        self._connection = await self._config._acquire_async_connection()
         return cast("MysqlConnectorAsyncConnection", self._connection)
 
     async def release_connection(self, _conn: MysqlConnectorAsyncConnection, **kwargs: Any) -> None:
@@ -370,7 +376,7 @@ class MysqlConnectorSyncConfig(
         )
 
     def _ensure_connection(self, connection: "MysqlConnectorSyncConnection") -> None:
-        """Ensure connection callback has been called exactly once for this connection."""
+        """Initialize connection state after creation or a native session reset."""
         if self._user_connection_hook is None:
             return
         underlying = getattr(connection, "_cnx", None) or connection
@@ -433,7 +439,9 @@ class MysqlConnectorSyncConfig(
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
 
 
-class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection, MysqlConnectorAsyncDriver]):
+class MysqlConnectorAsyncConfig(
+    AsyncDatabaseConfig[MysqlConnectorAsyncConnection, "MysqlConnectorAsyncPool", MysqlConnectorAsyncDriver]
+):
     """Configuration for mysql-connector async MySQL connections."""
 
     driver_type: ClassVar[type[MysqlConnectorAsyncDriver]] = MysqlConnectorAsyncDriver
@@ -483,6 +491,8 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
             msg = "enable_local_infile_bulk_load requires local_infile=True or allow_local_infile=True in connection_config."
             raise ImproperConfigurationError(msg)
 
+        self._initialized_connections: WeakSet[Any] = WeakSet()
+
         super().__init__(
             connection_config=self.connection_config,
             connection_instance=connection_instance,
@@ -495,9 +505,65 @@ class MysqlConnectorAsyncConfig(NoPoolAsyncConfig[MysqlConnectorAsyncConnection,
             **kwargs,
         )
 
+    async def _create_pool(self) -> "MysqlConnectorAsyncPool":
+        if MysqlConnectorAsyncPool is None:
+            msg = "Async connection pooling requires mysql-connector-python 9.4 or later"
+            raise ImproperConfigurationError(msg)
+        config = dict(self.connection_config)
+        pool_name = config.pop("pool_name", None)
+        pool_size = config.pop("pool_size", 5)
+        pool_reset = config.pop("pool_reset_session", True)
+        pool = MysqlConnectorAsyncPool(
+            pool_name=pool_name, pool_size=pool_size, pool_reset_session=pool_reset, **config
+        )
+        try:
+            await pool.initialize_pool()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await pool.close_pool()
+            raise
+        return pool
+
+    async def _close_pool(self) -> None:
+        if self.connection_instance is not None:
+            await self.connection_instance.close_pool()
+            self.connection_instance = None
+
+    async def _ensure_connection(self, connection: "MysqlConnectorAsyncConnection") -> None:
+        """Initialize connection state after creation or a native session reset."""
+        if self._user_connection_hook is None:
+            return
+        underlying = getattr(connection, "_cnx", None)
+        if underlying is not None and self.connection_config.get("pool_reset_session", True):
+            await self._user_connection_hook(connection)
+            return
+        underlying = underlying or connection
+        if underlying not in self._initialized_connections:
+            await self._user_connection_hook(connection)
+            self._initialized_connections.add(underlying)
+
+    async def _acquire_async_connection(self) -> MysqlConnectorAsyncConnection:
+        """Acquire and initialize an async mysql-connector connection from pool."""
+        if (
+            MysqlConnectorAsyncPool is None
+            and self.connection_instance is None
+            and not any(key in self.connection_config for key in _POOL_ONLY_CONFIG_KEYS)
+        ):
+            return await self.create_connection()
+        pool = await self.provide_pool()
+        connection = cast("MysqlConnectorAsyncConnection", await pool.get_connection())
+        try:
+            await self._ensure_connection(connection)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await connection.close()
+            raise
+        return connection
+
     async def create_connection(self) -> MysqlConnectorAsyncConnection:
         """Open and initialize a standalone connection owned by the caller."""
-        connection = await mysqlconnector_aio.connect(**self.connection_config)
+        config = {key: value for key, value in self.connection_config.items() if key not in _POOL_ONLY_CONFIG_KEYS}
+        connection = await mysqlconnector_aio.connect(**config)
         try:
             autocommit = self.connection_config.get("autocommit")
             if autocommit is not None:
