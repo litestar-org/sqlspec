@@ -1,10 +1,13 @@
+=========
 Changelog
+=========
 
 All notable SQLSpec changes are summarized here. Entries are grouped by release
 and focus on user-visible behavior, public API changes, compatibility notes, and
 important operational fixes.
 
 Recent Updates
+==============
 
 Unreleased
 ----------
@@ -14,9 +17,9 @@ Unreleased
 * BigQuery supports native query resource controls,
   explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
   stream modes while retaining the atomic PENDING default.
-* SQL Server Arrow loading accepts native record batch readers and BulkCopy
-  options while retaining name-based mappings and DELETE overwrite behavior.
-* Pymssql connection typing includes native encryption settings.
+* The mssql-python adapter can load Arrow streams with native BulkCopy options. Columns
+  map by name by default, and overwrite still uses DELETE.
+* Pymssql connection types include native encryption settings.
 
 * Arrow ODBC runs ``execute_many()`` one row at a time. It reports an unknown
   row count since the native driver does not return the number of changed rows.
@@ -44,6 +47,15 @@ Unreleased
   and its Litestar session, events queue, and Google ADK stores.
 
 **Fixed:**
+
+* The mssql-python adapter runs scripts and schema changes without a prepare
+  step when no values are bound. Arrow read failures use SQLSpec error types.
+* ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
+  question marks in quoted identifiers, literals, and comments.
+
+* Arrow ODBC pagination reuses compiled placeholder positions instead of
+  parsing SQL again. ADBC keeps bound values in its ADK store queries.
+  DuckDB Arrow loads keep sparse dictionary fields and quote table names.
 
 * Builder results keep CTE trees independent, and column pruning no longer
   exposes its cached expression to mutation. SQL generation avoids redundant
@@ -82,13 +94,6 @@ Unreleased
   hints and plain comments. Sequence statements keep qualified names and
   ``IF NOT EXISTS`` guards. Cached row converters refresh when the configured
   JSON deserializer changes.
-
-* ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
-  question marks in quoted identifiers, literals, and comments.
-
-* Arrow ODBC pagination reuses compiled placeholder positions instead of
-  parsing SQL again. ADBC keeps bound values in its ADK store queries.
-  DuckDB Arrow loads keep sparse dictionary fields and quote table names.
 
 * Psycopg reads COPY files in chunks, not all at once. ADK stores use
   RETURNING to cut round trips. Psqlpy closes a connection if setup fails.
@@ -2277,6 +2282,7 @@ v0.24.0 - Builder consolidation
 * Refactored builder code to reduce duplication.
 
 Previous Versions
+=================
 
 For releases before ``v0.24.0``, see the repository tag history and GitHub
 release records.
