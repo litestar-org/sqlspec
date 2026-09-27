@@ -16,6 +16,9 @@ def test_tokenlist_column_in_create_table() -> None:
     """Verify TOKENLIST column and generated column with TOKENIZE_FULLTEXT."""
     sql = "CREATE TABLE Albums (Id INT64, Content STRING(MAX), Tokens TOKENLIST AS (TOKENIZE_FULLTEXT(Content)) STORED) PRIMARY KEY (Id)"
     parsed = parse_one(sql, dialect="spanner")
+    userdefined_types = [dt for dt in parsed.find_all(exp.DataType) if dt.this == exp.DataType.Type.USERDEFINED]
+    assert len(userdefined_types) == 1
+    assert userdefined_types[0].args.get("kind") == "TOKENLIST"
     rendered = parsed.sql(dialect="spanner")
     assert "TOKENLIST" in rendered
     assert "TOKENIZE_FULLTEXT(Content)" in rendered

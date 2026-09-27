@@ -7,20 +7,14 @@ is accepted on parse and normalized to the canonical row deletion policy so
 generation always emits valid GoogleSQL.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from sqlglot import exp
 from sqlglot.dialects.bigquery import BigQuery
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.dialects.spanner._generators import SpannerGenerator
-from sqlspec.dialects.spanner._parsers import (
-    SpannerParser,
-    attach_create_property,
-    attach_hints,
-    extract_interleave_property,
-    normalize_spanner_tokens,
-)
+from sqlspec.dialects.spanner._parsers import SpannerParser, attach_hints, normalize_spanner_tokens
 
 if TYPE_CHECKING:
     from sqlglot.tokenizer_core import Token
@@ -47,17 +41,8 @@ class Spanner(BigQuery):
     Generator = SpannerGenerator
 
     def parse(self, sql: str, **opts: Any) -> list[exp.Expr | None]:
-        """Parse Spanner SQL statements, attaching hints and repairing CREATE TABLE statements."""
+        """Parse Spanner SQL statements and attach hints."""
         expressions = super().parse(sql, **opts)
-        if len(expressions) == 1 and isinstance(expressions[0], exp.Command):
-            repaired_sql, interleave_property = extract_interleave_property(sql)
-            if interleave_property is not None:
-                reparsed = BigQuery.parse(self, repaired_sql, **opts)
-                if len(reparsed) == 1 and isinstance(reparsed[0], exp.Create):
-                    expressions = cast(
-                        "list[exp.Expr | None]", [attach_create_property(reparsed[0], interleave_property)]
-                    )
-
         for expression in expressions:
             if expression is not None:
                 attach_hints(expression)

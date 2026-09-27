@@ -570,7 +570,7 @@ def _bq_datatype_transform(generator: Any, expression: exp.DataType) -> str:
             return "FLOAT32"
         if type_value == exp.DataType.Type.DOUBLE:
             return "FLOAT64"
-        if type_value == exp.DataType.Type.USERDEFINED and not expression.args.get("kind"):
+        if type_value == exp.DataType.Type.USERDEFINED and expression.args.get("kind") == "TOKENLIST":
             return "TOKENLIST"
     if _original_bq_datatype_transform is not None:
         return str(_original_bq_datatype_transform(generator, expression))
@@ -689,6 +689,25 @@ def _spangres_anonymous_transform(generator: Any, expression: exp.Anonymous) -> 
     return str(generator.anonymous_sql(expression))
 
 
+def _build_function_fallback_transform(expected_dialect: str, original: Any) -> Any:
+    def _transform(generator: Any, expression: exp.Expr) -> str:
+        if _get_dialect_name(generator) == expected_dialect:
+            return str(generator.function_fallback_sql(expression))
+        if original is not None:
+            return str(original(generator, expression))
+        return str(generator.function_fallback_sql(expression))
+
+    return _transform
+
+
+_original_bq_cosine_distance_transform = BigQueryGenerator.TRANSFORMS.get(CosineDistance)
+_original_bq_euclidean_distance_transform = BigQueryGenerator.TRANSFORMS.get(EuclideanDistance)
+_original_bq_dot_product_transform = BigQueryGenerator.TRANSFORMS.get(DotProduct)
+_original_bq_search_transform = BigQueryGenerator.TRANSFORMS.get(Search)
+_original_pg_cosine_distance_transform = PostgresGenerator.TRANSFORMS.get(CosineDistance)
+_original_pg_euclidean_distance_transform = PostgresGenerator.TRANSFORMS.get(EuclideanDistance)
+_original_pg_dot_product_transform = PostgresGenerator.TRANSFORMS.get(DotProduct)
+
 BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
 BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
 BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
@@ -701,10 +720,16 @@ BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
 BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
 BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
 BigQueryGenerator.TRANSFORMS[exp.Anonymous] = _spanner_anonymous_transform
-BigQueryGenerator.TRANSFORMS[CosineDistance] = lambda s, e: str(s.function_fallback_sql(e))
-BigQueryGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: str(s.function_fallback_sql(e))
-BigQueryGenerator.TRANSFORMS[DotProduct] = lambda s, e: str(s.function_fallback_sql(e))
-BigQueryGenerator.TRANSFORMS[Search] = lambda s, e: str(s.function_fallback_sql(e))
+BigQueryGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
+    "Spanner", _original_bq_cosine_distance_transform
+)
+BigQueryGenerator.TRANSFORMS[EuclideanDistance] = _build_function_fallback_transform(
+    "Spanner", _original_bq_euclidean_distance_transform
+)
+BigQueryGenerator.TRANSFORMS[DotProduct] = _build_function_fallback_transform(
+    "Spanner", _original_bq_dot_product_transform
+)
+BigQueryGenerator.TRANSFORMS[Search] = _build_function_fallback_transform("Spanner", _original_bq_search_transform)
 
 PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
 PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
@@ -712,9 +737,15 @@ PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
 PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
 PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
 PostgresGenerator.TRANSFORMS[exp.Anonymous] = _spangres_anonymous_transform
-PostgresGenerator.TRANSFORMS[CosineDistance] = lambda s, e: str(s.function_fallback_sql(e))
-PostgresGenerator.TRANSFORMS[EuclideanDistance] = lambda s, e: str(s.function_fallback_sql(e))
-PostgresGenerator.TRANSFORMS[DotProduct] = lambda s, e: str(s.function_fallback_sql(e))
+PostgresGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
+    "Spangres", _original_pg_cosine_distance_transform
+)
+PostgresGenerator.TRANSFORMS[EuclideanDistance] = _build_function_fallback_transform(
+    "Spangres", _original_pg_euclidean_distance_transform
+)
+PostgresGenerator.TRANSFORMS[DotProduct] = _build_function_fallback_transform(
+    "Spangres", _original_pg_dot_product_transform
+)
 
 invalidate_generator_dispatch(BigQueryGenerator, PostgresGenerator)
 

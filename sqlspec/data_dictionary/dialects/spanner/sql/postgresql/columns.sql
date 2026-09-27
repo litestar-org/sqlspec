@@ -2,7 +2,7 @@
 -- dialect: spanner
 SELECT
     table_catalog,
-    table_schema,
+    table_schema AS schema_name,
     table_name,
     column_name,
     ordinal_position,
@@ -20,7 +20,7 @@ ORDER BY table_schema, table_name, ordinal_position;
 -- dialect: spanner
 SELECT
     table_catalog,
-    table_schema,
+    table_schema AS schema_name,
     table_name,
     column_name,
     ordinal_position,

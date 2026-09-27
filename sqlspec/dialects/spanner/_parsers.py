@@ -11,7 +11,6 @@ All clauses normalize to the canonical property nodes defined alongside the
 generators, so either dialect can re-render them.
 """
 
-import re
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlglot import exp
@@ -39,10 +38,8 @@ if TYPE_CHECKING:
 __all__ = (
     "SpangresParser",
     "SpannerParser",
-    "attach_create_property",
     "attach_hints",
     "build_interleave_property",
-    "extract_interleave_property",
     "normalize_spanner_tokens",
     "parse_hint_expression",
     "register_spanner_property_parsers",
@@ -50,17 +47,6 @@ __all__ = (
 
 _PROPERTY_PARSERS_REGISTERED_ATTR: Final[str] = "_sqlspec_spanner_property_parsers"
 _SPANNER_DIALECT_NAMES: Final[frozenset[str]] = frozenset({"Spangres", "Spanner"})
-
-_INTERLEAVE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"""
-    ,?\s*\bINTERLEAVE\s+IN\s+
-    (?P<parent_keyword>PARENT\s+)?
-    (?P<parent>.+?)
-    (?:\s+ON\s+DELETE\s+(?P<on_delete>CASCADE|NO\s+ACTION))?
-    (?=\s*,?\s*(?:ROW\s+DELETION\s+POLICY|TTL)\b|\s*$)
-    """,
-    re.IGNORECASE | re.DOTALL | re.VERBOSE,
-)
 
 
 def build_interleave_property(parent: exp.Expr, on_delete: str | None = None, in_parent: bool = True) -> exp.Property:
@@ -71,32 +57,6 @@ def build_interleave_property(parent: exp.Expr, on_delete: str | None = None, in
     if on_delete is not None:
         values.append(exp.Literal.string(_normalize_on_delete_value(on_delete)))
     return exp.Property(this=exp.Literal.string(_INTERLEAVE_NAME), value=exp.Tuple(expressions=values))
-
-
-def extract_interleave_property(sql: str) -> tuple[str, exp.Property | None]:
-    """Strip an INTERLEAVE clause out of raw DDL, returning the repaired SQL and property."""
-    match = _INTERLEAVE_PATTERN.search(sql)
-    if match is None:
-        return sql, None
-
-    parent = exp.to_table(match.group("parent").strip())
-    on_delete = match.group("on_delete")
-    in_parent = match.group("parent_keyword") is not None
-    interleave_property = build_interleave_property(parent, on_delete, in_parent=in_parent)
-    repaired_sql = f"{sql[: match.start()]} {sql[match.end() :]}".strip()
-    return repaired_sql, interleave_property
-
-
-def attach_create_property(create: exp.Create, property_expression: exp.Property) -> exp.Create:
-    """Insert a property at the front of a CREATE statement's property list."""
-    properties = create.args.get("properties")
-    if isinstance(properties, exp.Properties):
-        expressions = list(properties.expressions)
-        expressions.insert(0, property_expression)
-        properties.set("expressions", expressions)
-    else:
-        create.set("properties", exp.Properties(expressions=[property_expression]))
-    return create
 
 
 def _normalize_on_delete_value(on_delete: str) -> str:
@@ -169,6 +129,20 @@ def _parse_ttl(parser: Any) -> exp.Property | None:
     return _build_row_deletion_property(column, interval)
 
 
+def _parse_primary_key_property(parser: Any) -> Any:
+    """Parse table-level ``PRIMARY KEY (col [ASC|DESC], ...)`` property in Spanner DDL."""
+    if not parser._match(TokenType.L_PAREN, advance=False):
+        return parser._parse_primary_key(in_props=True)
+    expressions = parser._parse_wrapped_csv(lambda: parser._parse_ordered(parser._parse_field))
+    return parser.expression(
+        exp.PrimaryKey(
+            expressions=expressions,
+            options=parser._parse_key_constraint_options(),
+            include=parser._parse_index_params(),
+        )
+    )
+
+
 def _build_property_entry(handler: Any, original: Any) -> Any:
     def _entry(parser: Any, **kwargs: Any) -> Any:
         if _is_spanner_parser(parser):
@@ -189,6 +163,7 @@ def register_spanner_property_parsers() -> None:
         property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
         for key, handler in (
             ("INTERLEAVE", _parse_interleave),
+            ("PRIMARY KEY", _parse_primary_key_property),
             ("ROW", _parse_row_deletion_policy),
             ("TTL", _parse_ttl),
         ):
@@ -211,6 +186,34 @@ def _build_search(args: list[Any], dialect: Any) -> exp.Expr:
     if dialect is not None and type(dialect).__name__ == "Spanner":
         return Search.from_arg_list(args)
     return exp.Anonymous(this="SEARCH", expressions=args)
+
+
+def _build_cosine_distance(args: list[Any], dialect: Any) -> exp.Expr:
+    """Build a Spanner/Spangres CosineDistance node or fall back to Anonymous."""
+    if dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES:
+        return CosineDistance.from_arg_list(args)
+    return exp.Anonymous(this="COSINE_DISTANCE", expressions=args)
+
+
+def _build_euclidean_distance(args: list[Any], dialect: Any) -> exp.Expr:
+    """Build a Spanner/Spangres EuclideanDistance node or fall back to Anonymous."""
+    if dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES:
+        return EuclideanDistance.from_arg_list(args)
+    return exp.Anonymous(this="EUCLIDEAN_DISTANCE", expressions=args)
+
+
+def _build_dot_product(args: list[Any], dialect: Any) -> exp.Expr:
+    """Build a Spanner/Spangres DotProduct node or fall back to Anonymous."""
+    if dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES:
+        return DotProduct.from_arg_list(args)
+    return exp.Anonymous(this="DOT_PRODUCT", expressions=args)
+
+
+def _convert_userdefined_type(data_type: exp.DataType) -> exp.DataType:
+    """Assign explicit TOKENLIST kind to unparameterized USERDEFINED data types in Spanner."""
+    if not data_type.args.get("kind"):
+        data_type.set("kind", "TOKENLIST")
+    return data_type
 
 
 def _parse_options_properties(parser: Any) -> exp.Properties | None:
@@ -482,20 +485,25 @@ def _bq_parse_drop(self: Any) -> exp.Drop | exp.Command:
     return cast("exp.Drop | exp.Command", self._parse_drop())
 
 
-BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = CosineDistance.from_arg_list
-BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = EuclideanDistance.from_arg_list
-BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = DotProduct.from_arg_list
+BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
+BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
+BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
 BigQueryParser.FUNCTIONS["SEARCH"] = _build_search
 
 BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
+
+BigQueryParser.TYPE_CONVERTERS = {
+    **BigQueryParser.TYPE_CONVERTERS,
+    exp.DataType.Type.USERDEFINED: _convert_userdefined_type,
+}
 
 BigQueryParser.STATEMENT_PARSERS[TokenType.CREATE] = _bq_parse_create
 BigQueryParser.STATEMENT_PARSERS[TokenType.ALTER] = _bq_parse_alter
 BigQueryParser.STATEMENT_PARSERS[TokenType.DROP] = _bq_parse_drop
 
-PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = CosineDistance.from_arg_list
-PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = EuclideanDistance.from_arg_list
-PostgresParser.FUNCTIONS["DOT_PRODUCT"] = DotProduct.from_arg_list
+PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
+PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
+PostgresParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
 
 PostgresParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
 

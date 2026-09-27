@@ -2,7 +2,7 @@
 -- dialect: spanner
 SELECT
     table_catalog,
-    table_schema,
+    table_schema AS schema_name,
     table_name,
     table_type
 FROM information_schema.tables
@@ -14,7 +14,7 @@ ORDER BY table_schema, table_name;
 -- dialect: spanner
 SELECT
     table_catalog,
-    table_schema,
+    table_schema AS schema_name,
     table_name,
     table_type
 FROM information_schema.tables

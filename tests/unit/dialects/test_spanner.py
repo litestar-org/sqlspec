@@ -100,6 +100,18 @@ def test_interleave_create_repairs_command_fallback() -> None:
     expression = parse_one(OFFICIAL_INTERLEAVE_DDL, dialect="spanner")
     assert isinstance(expression, exp.Create)
     assert "INTERLEAVE IN PARENT Singers ON DELETE CASCADE" in expression.sql(dialect="spanner")
+    assert not hasattr(_parsers, "_INTERLEAVE_PATTERN")
+    assert not hasattr(_parsers, "extract_interleave_property")
+
+    ordered_pk_ddl = (
+        "CREATE TABLE Albums (SingerId INT64 NOT NULL, AlbumId INT64 NOT NULL) "
+        "PRIMARY KEY (SingerId, AlbumId DESC), INTERLEAVE IN PARENT Singers ON DELETE CASCADE"
+    )
+    ordered_expr = parse_one(ordered_pk_ddl, dialect="spanner")
+    assert isinstance(ordered_expr, exp.Create)
+    assert "PRIMARY KEY (SingerId, AlbumId DESC), INTERLEAVE IN PARENT Singers ON DELETE CASCADE" in ordered_expr.sql(
+        dialect="spanner"
+    )
 
 
 def test_inline_primary_key_style_still_parses() -> None:

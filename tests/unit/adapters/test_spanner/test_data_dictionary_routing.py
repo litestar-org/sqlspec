@@ -52,37 +52,46 @@ def test_spanner_data_dictionary_default_mode() -> None:
 
 
 def test_get_tables_routes_to_googlesql() -> None:
-    """get_tables executes query containing GoogleSQL fields."""
+    """get_tables executes query containing GoogleSQL fields and TableMetadata aliases."""
     dictionary = SpannerDataDictionary()
     driver = MockSpannerDriver()
     tables = dictionary.get_tables(cast(Any, driver))
 
     assert len(tables) == 1
     query_sql = str(driver.last_query)
+    assert "TABLE_SCHEMA AS schema_name" in query_sql
+    assert "TABLE_NAME AS table_name" in query_sql
+    assert "TABLE_TYPE AS table_type" in query_sql
     assert "ROW_DELETION_POLICY_EXPRESSION" in query_sql
     assert "SPANNER_STATE" in query_sql
 
 
 def test_get_columns_routes_to_googlesql() -> None:
-    """get_columns executes query containing GoogleSQL column extensions."""
+    """get_columns executes query containing GoogleSQL column extensions and ColumnMetadata aliases."""
     dictionary = SpannerDataDictionary()
     driver = MockSpannerDriver()
     columns = dictionary.get_columns(cast(Any, driver), table="users")
 
     assert len(columns) == 1
     query_sql = str(driver.last_query)
-    assert "SPANNER_TYPE" in query_sql
+    assert "TABLE_SCHEMA AS schema_name" in query_sql
+    assert "COLUMN_NAME AS column_name" in query_sql
+    assert "SPANNER_TYPE AS data_type" in query_sql
     assert "IS_STORED" in query_sql
 
 
 def test_get_indexes_routes_to_googlesql() -> None:
-    """get_indexes executes query containing GoogleSQL index extensions."""
+    """get_indexes executes query containing GoogleSQL index extensions and IndexMetadata aliases."""
     dictionary = SpannerDataDictionary()
     driver = MockSpannerDriver()
     indexes = dictionary.get_indexes(cast(Any, driver), table="users")
 
     assert len(indexes) == 1
     query_sql = str(driver.last_query)
+    assert "i.INDEX_NAME AS index_name" in query_sql
+    assert "i.TABLE_NAME AS table_name" in query_sql
+    assert "i.IS_UNIQUE AS is_unique" in query_sql
+    assert "AS columns" in query_sql
     assert "INDEX_STATE" in query_sql
     assert "IS_NULL_FILTERED" in query_sql
 
@@ -100,9 +109,14 @@ def test_get_foreign_keys_routes_to_googlesql() -> None:
 
 
 def test_get_query_explicit_mode_override() -> None:
-    """Explicit mode override routes to PostgreSQL query templates."""
+    """Explicit mode override routes to PostgreSQL query templates with expected aliases."""
     dictionary = SpannerDataDictionary()
     query = dictionary.get_query("tables", "by_schema", mode="postgresql")
 
     assert "table_catalog" in query.raw_sql
+    assert "table_schema AS schema_name" in query.raw_sql
     assert ":schema_name::text" in query.raw_sql
+
+    index_query = dictionary.get_query("indexes", "by_schema", mode="postgresql")
+    assert "i.index_name AS index_name" in index_query.raw_sql
+    assert "AS columns" in index_query.raw_sql
