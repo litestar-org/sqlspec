@@ -30,3 +30,9 @@ def test_null_json_param_types() -> None:
     params = {"meta": TypedParameter(None, dict)}
     types = infer_spanner_param_types(params)
     assert types["meta"].code == TypeCode.JSON
+
+
+def test_infer_boolean_array_param_types() -> None:
+    types = infer_spanner_param_types({"flags": [True, False]})
+    assert types["flags"].code == TypeCode.ARRAY
+    assert types["flags"].array_element_type.code == TypeCode.BOOL
