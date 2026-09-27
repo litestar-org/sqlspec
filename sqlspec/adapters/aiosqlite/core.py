@@ -61,7 +61,6 @@ __all__ = (
     "execute_fetchall_with_description",
     "execute_fetchall_with_metadata",
     "execute_many_on_worker_thread",
-    "execute_script_on_worker_thread",
     "extension_pragma_statements",
     "format_identifier",
     "normalize_execute_many_parameters",
@@ -325,16 +324,15 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 
 
 class AiosqliteStreamSource:
-    """Compiled async chunk source streaming dict or tuple rows from an aiosqlite cursor via ``fetchmany``."""
+    """Compiled async chunk source streaming dict rows from an aiosqlite cursor via ``fetchmany``."""
 
-    __slots__ = ("_as_dict", "_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, as_dict: bool = True) -> None:
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._as_dict = as_dict
         self._cursor: Any = None
         self._column_names: list[str] | None = None
 
@@ -349,16 +347,12 @@ class AiosqliteStreamSource:
         self._cursor = cursor
         await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
 
-    async def fetch_chunk(self) -> "list[Any]":
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = await self._driver._run_with_exception_handler(
-            handler, self._cursor.fetchmany, self._chunk_size
-        )
+        rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
-        if not self._as_dict:
-            return rows
         if self._column_names is None:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
@@ -672,28 +666,9 @@ def _execute_many_on_worker_thread(connection: "AiosqliteConnection", sql: str, 
             cast("Any", cursor).close()
 
 
-def _execute_script_on_worker_thread(
-    connection: "AiosqliteConnection", statements: "Sequence[str]", parameters: Any
-) -> tuple[int, int]:
-    """Execute multi-statement SQL script on the worker thread."""
-    raw_connection = connection._conn
-    cursor = raw_connection.cursor()
-    normalized_params = normalize_execute_parameters(parameters)
-    successful_count = 0
-    try:
-        for stmt in statements:
-            cursor.execute(stmt, normalized_params)
-            successful_count += 1
-        return len(statements), successful_count
-    finally:
-        with contextlib.suppress(Exception):
-            cursor.close()
-
-
 execute_and_resolve_metadata = _execute_and_resolve_metadata
 execute_fetchall_with_metadata = _execute_fetchall_with_metadata
 execute_many_on_worker_thread = _execute_many_on_worker_thread
-execute_script_on_worker_thread = _execute_script_on_worker_thread
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":

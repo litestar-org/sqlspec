@@ -253,3 +253,33 @@ def test_execute_many_thin_path_checks_all_rows_beyond_sample_threshold() -> Non
         )
         is False
     )
+
+
+def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pyarrow as pa
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE target (value INTEGER)")
+    driver = SqliteDriver(
+        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
+    batches_prepared = 0
+
+    def prepare(parameters: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal batches_prepared
+        batches_prepared += 1
+        if batches_prepared == 2:
+            raise ValueError("conversion failed")
+        return parameters
+
+    monkeypatch.setattr(SqliteDriver, "_arrow_rows_need_preparation", lambda *args: True)
+    monkeypatch.setattr(
+        SqliteDriver, "prepare_driver_parameters", lambda self, *args, **kwargs: prepare(*args, **kwargs)
+    )
+    try:
+        with pytest.raises(ValueError, match="conversion failed"):
+            driver.load_from_arrow("target", pa.table({"value": list(range(10001))}))
+        assert connection.in_transaction is False
+        assert connection.execute("SELECT COUNT(*) FROM target").fetchone() == (0,)
+    finally:
+        connection.close()

@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """AIOSQLite adapter type definitions.
 
 This module contains type aliases and classes that are excluded from mypyc
@@ -5,28 +6,37 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
+import sqlite3
 import sqlite3 as aiosqlite_sqlite_module
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any
 
+import aiosqlite
 import aiosqlite as aiosqlite_module
-from aiosqlite import Connection as AiosqliteConnection
-from aiosqlite import Cursor as AiosqliteRawCursor
-from aiosqlite import Error as AiosqliteError
+from typing_extensions import TypeAliasType
 
-AiosqliteConnectionFactory: TypeAlias = type[aiosqlite_sqlite_module.Connection]
+_AiosqliteConnection = aiosqlite.Connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
+    from typing import TypeAlias
 
     from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver
     from sqlspec.core import StatementConfig
+
+    AiosqliteConnection: TypeAlias = _AiosqliteConnection
+    AiosqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
+    AiosqliteRawCursor: TypeAlias = aiosqlite.Cursor
+
+if not TYPE_CHECKING:
+    AiosqliteConnection = _AiosqliteConnection
+    AiosqliteConnectionFactory = TypeAliasType("AiosqliteConnectionFactory", type[sqlite3.Connection])
+    AiosqliteRawCursor = aiosqlite.Cursor
 
 __all__ = (
     "AiosqliteConnection",
     "AiosqliteConnectionFactory",
     "AiosqliteCursor",
-    "AiosqliteError",
     "AiosqliteRawCursor",
     "AiosqliteSessionContext",
     "aiosqlite_module",

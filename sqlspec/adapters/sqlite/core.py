@@ -311,14 +311,13 @@ def normalize_execute_parameters(parameters: Any) -> Any:
 class SqliteStreamSource:
     """Compiled chunk source streaming dict rows from a SQLite cursor via ``fetchmany``."""
 
-    __slots__ = ("_as_dict", "_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
+    __slots__ = ("_chunk_size", "_column_names", "_cursor", "_driver", "_parameters", "_sql")
 
-    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, as_dict: bool = True) -> None:
+    def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int) -> None:
         self._driver = driver
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
-        self._as_dict = as_dict
         self._cursor: Any = None
         self._column_names: list[str] | None = None
 
@@ -331,7 +330,7 @@ class SqliteStreamSource:
             cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
         self._driver._check_pending_exception(handler)
 
-    def fetch_chunk(self) -> "list[Any]":
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         rows: list[Any] = []
         with handler:
@@ -339,8 +338,6 @@ class SqliteStreamSource:
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
-        if not self._as_dict:
-            return rows
         if self._column_names is None:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)

@@ -378,3 +378,14 @@ def test_enable_wal_reraises_other_operational_errors() -> None:
     with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
         pool_module._enable_wal(connection)
     assert connection.execute.call_count == 1
+
+
+def test_memory_pool_replaces_a_closed_connection() -> None:
+    pool = SqliteConnectionPool({"database": ":memory:"}, health_check_interval=-1)
+    try:
+        with pool.get_connection() as connection:
+            connection.close()
+        with pool.get_connection() as replacement:
+            assert replacement.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        pool.close()

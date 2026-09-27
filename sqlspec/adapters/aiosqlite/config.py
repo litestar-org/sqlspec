@@ -48,7 +48,6 @@ __all__ = (
     "AiosqliteDriverFeatures",
     "AiosqliteFunctionConfig",
     "AiosqlitePoolParams",
-    "AiosqliteWindowFunctionConfig",
 )
 
 logger = get_logger("sqlspec.adapters.aiosqlite")
@@ -110,14 +109,6 @@ class AiosqliteAggregateConfig(TypedDict):
     aggregate_class: "type[Any]"
 
 
-class AiosqliteWindowFunctionConfig(TypedDict):
-    """User-defined aiosqlite window function registration."""
-
-    name: str
-    narg: int
-    window_class: "type[Any]"
-
-
 class AiosqliteDriverFeatures(TypedDict):
     """Aiosqlite driver feature configuration.
 
@@ -147,9 +138,6 @@ class AiosqliteDriverFeatures(TypedDict):
      Each entry must include name and func. Callable values are plain sync callables.
     custom_aggregates: Register SQL aggregates with step/finalize classes.
      Each entry must include name, narg, and aggregate_class.
-    custom_window_functions: Register user-defined aggregate window functions.
-     Each entry must include name, narg, and window_class.
-    default_transaction_mode: Default SQLite transaction mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
     authorizer_callback: sqlite3 authorizer hook run during statement compilation on the worker thread.
     trace_callback: sqlite3 trace hook run for executed statements on the worker thread.
     progress_handler: sqlite3 progress hook run every progress_handler_interval VM opcodes.
@@ -173,8 +161,6 @@ class AiosqliteDriverFeatures(TypedDict):
     custom_functions: "NotRequired[Sequence[AiosqliteFunctionConfig]]"
     custom_collations: "NotRequired[Sequence[AiosqliteCollationConfig]]"
     custom_aggregates: "NotRequired[Sequence[AiosqliteAggregateConfig]]"
-    custom_window_functions: "NotRequired[Sequence[AiosqliteWindowFunctionConfig]]"
-    default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
     authorizer_callback: "NotRequired[Callable[[int, str | None, str | None, str | None, str | None], int]]"
     trace_callback: "NotRequired[Callable[[str], None]]"
     progress_handler: "NotRequired[Callable[[], int | None]]"
@@ -191,7 +177,6 @@ _RUNTIME_FEATURE_KEYS = (
     "custom_aggregates",
     "custom_collations",
     "custom_functions",
-    "custom_window_functions",
     "extensions",
     "pragmas",
     "progress_handler",
@@ -363,7 +348,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             "AiosqliteFunctionConfig": AiosqliteFunctionConfig,
             "AiosqlitePoolParams": AiosqlitePoolParams,
             "AiosqliteSessionContext": AiosqliteSessionContext,
-            "AiosqliteWindowFunctionConfig": AiosqliteWindowFunctionConfig,
             "Literal": Literal,
             "PathLike": PathLike,
         })
@@ -482,9 +466,6 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
     _validate_entries(runtime_setup.get("custom_collations", ()), ("name", "func"), "custom_collations")
     _validate_entries(
         runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
-    )
-    _validate_entries(
-        runtime_setup.get("custom_window_functions", ()), ("name", "narg", "window_class"), "custom_window_functions"
     )
 
     interval = runtime_setup.get("progress_handler_interval")

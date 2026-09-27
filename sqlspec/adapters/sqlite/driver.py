@@ -1,7 +1,7 @@
 """SQLite driver implementation."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -53,8 +53,6 @@ if TYPE_CHECKING:
     from sqlspec.typing import StatementParameters
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
-
-T = TypeVar("T")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -237,21 +235,15 @@ class SqliteDriver(SyncDriverAdapterBase):
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
+    def begin(self) -> None:
         """Begin a database transaction.
-
-        Args:
-            mode: Transaction lock mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
-                Defaults to configured driver feature or SQLite default (DEFERRED).
 
         Raises:
             SQLSpecError: If transaction cannot be started
         """
-        transaction_mode = mode or self.driver_features.get("default_transaction_mode")
         try:
             if not self.connection.in_transaction:
-                stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
-                self.connection.execute(stmt)
+                self.connection.execute("BEGIN")
         except sqlite3.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -308,14 +300,12 @@ class SqliteDriver(SyncDriverAdapterBase):
         """
         return SqliteCursor(connection)
 
-    def dispatch_select_stream(
-        self, statement: "SQL", chunk_size: int, as_dict: bool = True
-    ) -> "SyncRowStream[Any] | None":
+    def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
         """Return a native SQLite row stream backed by chunked ``fetchmany``."""
         if not statement.returns_rows():
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size, as_dict=as_dict))
+        return SyncRowStream(SqliteStreamSource(self, sql, prepared_parameters, chunk_size))
 
     def handle_database_exceptions(self) -> "SqliteExceptionHandler":
         """Handle database-specific exceptions and wrap them appropriately.
@@ -352,7 +342,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
-        batch_size: int = 10000,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
@@ -367,12 +356,12 @@ class SqliteDriver(SyncDriverAdapterBase):
         owns_transaction = not self.connection.in_transaction
         try:
             if owns_transaction:
-                self.begin("IMMEDIATE")
+                self.connection.execute("BEGIN IMMEDIATE")
             if overwrite:
                 statement = f"DELETE FROM {format_identifier(table)}"
                 with self.with_cursor(self.connection) as cursor:
                     cursor.execute(statement)
-            for batch in arrow_table.to_batches(max_chunksize=batch_size):
+            for batch in arrow_table.to_batches(max_chunksize=10000):
                 pydict = batch.to_pydict()
                 records = list(zip(*[pydict[col] for col in columns], strict=False))
                 if records:
@@ -385,10 +374,12 @@ class SqliteDriver(SyncDriverAdapterBase):
                         cursor.executemany(insert_sql, cast("Any", prepared_records))
             if owns_transaction:
                 self.commit()
-        except sqlite3.Error as exc:
+        except BaseException as exc:
             if owns_transaction:
                 self.rollback()
-            raise create_mapped_exception(exc) from exc
+            if isinstance(exc, sqlite3.Error):
+                raise create_mapped_exception(exc) from exc
+            raise
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table

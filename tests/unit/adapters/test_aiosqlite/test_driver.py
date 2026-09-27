@@ -401,18 +401,3 @@ async def test_aiosqlite_autocommit_mode_skips_statement_without_open_transactio
     assert connection.statements == []
     assert connection.commit_calls == 0
     assert connection.rollback_calls == 0
-
-
-async def test_aiosqlite_begin_honors_explicit_and_default_transaction_mode() -> None:
-    """AiosqliteDriver.begin should honor explicit mode and driver_features default_transaction_mode."""
-    connection = _AsyncAutocommitConnection(in_transaction=False, autocommit=False)
-    driver = AiosqliteDriver(
-        connection=cast("Any", connection),
-        statement_config=default_statement_config,
-        driver_features={"default_transaction_mode": "DEFERRED"},
-    )
-
-    await driver.begin()
-    await driver.begin(mode="EXCLUSIVE")
-
-    assert connection.statements == ["BEGIN DEFERRED", "BEGIN EXCLUSIVE"]

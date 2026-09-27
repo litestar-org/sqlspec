@@ -220,11 +220,7 @@ class SqliteConnectionPool:
 
         last_used = getattr(self._thread_local, "last_used", 0.0)
         idle_time = now - last_used
-        if (
-            not self._is_memory_db
-            and idle_time > self._health_check_interval
-            and not self._is_connection_alive(cast("SqliteConnection", conn))
-        ):
+        if idle_time > self._health_check_interval and not self._is_connection_alive(cast("SqliteConnection", conn)):
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -361,11 +357,6 @@ def _apply_runtime_setup(connection: SqliteConnection, runtime_setup: "dict[str,
         connection.create_aggregate(
             aggregate_config["name"], aggregate_config["narg"], aggregate_config["aggregate_class"]
         )
-
-    create_window_fn = getattr(connection, "create_window_function", None)
-    if create_window_fn is not None:
-        for window_config in runtime_setup.get("custom_window_functions", ()):
-            create_window_fn(window_config["name"], window_config["narg"], window_config["window_class"])
 
     for collation_config in runtime_setup.get("custom_collations", ()):
         connection.create_collation(collation_config["name"], collation_config["func"])
