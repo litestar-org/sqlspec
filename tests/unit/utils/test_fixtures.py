@@ -15,7 +15,7 @@ import zipfile
 from datetime import time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import UUID
 
@@ -755,7 +755,7 @@ def test_export_replaces_other_fixture_variants_of_the_table(tmp_path: Path) -> 
         ("users;drop.json", "[]", ["users;drop"], "Invalid table name"),
         ("users.jsonl", "", None, "more than one fixture file"),
         ("users.json", '[{"id": 1, "name) VALUES (1); --": "x"}]', None, "Invalid column name"),
-        ("users.json", '[{"id": 1}, {"id": 2, "name": "extra"}]', None, "do not match"),
+        ("users.json", '[{"id": 1}, {}]', None, "at least one column"),
         ("users.json", "[1, 2]", None, "must be an object"),
         ("users.json", "[{}]", None, "at least one column"),
         ("users.json", '{"id": 1}', None, "JSON array"),
@@ -1039,14 +1039,15 @@ def test_postgres_upsert_with_only_identity_and_key_columns_does_nothing_on_conf
 
 
 def test_conflict_keys_for_tables_not_loaded_raise(tmp_path: Path) -> None:
-    """Conflict keys must name tables that are being loaded, spelled exactly."""
+    """Conflict keys for unloaded tables are ignored while loaded tables still upsert."""
     (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
     driver = _postgres_mock_driver([])
 
-    with pytest.raises(ValueError, match=r"not loaded: 'Users', 'posts'"):
-        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"Users": ["id"], "posts": ["id"]})
+    counts = load_table_fixtures_sync(driver, tmp_path, conflict_keys={"users": "id", "Users": ["id"], "posts": ["id"]})
 
-    driver.execute_many.assert_not_called()
+    assert counts == {"users": 2}
+    statement = driver.execute_many.call_args.args[0].to_statement().sql
+    assert 'ON CONFLICT("id") DO UPDATE SET "name" = "excluded"."name"' in statement
 
 
 def test_export_without_primary_key_orders_by_every_column(tmp_path: Path) -> None:
@@ -1328,3 +1329,259 @@ def test_interval_and_time_with_time_zone_columns_are_decoded(tmp_path: Path) ->
             "seconds": timedelta(seconds=30),
         }
     ]
+
+
+def test_export_load_roundtrip_duckdb_json_scalars_and_objects(tmp_path: Path) -> None:
+    """DuckDB JSON columns with scalars, objects, arrays, and NULLs export without double-encoding and reload cleanly."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "json_test.duckdb")})
+    export_dir = tmp_path / "exported"
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE app_config (id INTEGER PRIMARY KEY, key VARCHAR NOT NULL, val JSON)")
+        driver.execute(
+            "INSERT INTO app_config VALUES "
+            "(1, 'theme', '\"console\"'::JSON), "
+            "(2, 'enabled', 'true'::JSON), "
+            "(3, 'count', '42'::JSON), "
+            "(4, 'meta', '{\"nested\": true}'::JSON), "
+            "(5, 'tags', '[\"a\", \"b\"]'::JSON), "
+            "(6, 'empty', NULL)"
+        )
+        before = driver.select("SELECT * FROM app_config ORDER BY id")
+
+        export_table_fixtures_sync(driver, export_dir, ["app_config"], compress=False, jsonl=True)
+        exported_rows = [json.loads(line) for line in (export_dir / "app_config.jsonl").read_text().splitlines()]
+        assert exported_rows == [
+            {"id": 1, "key": "theme", "val": "console"},
+            {"id": 2, "key": "enabled", "val": True},
+            {"id": 3, "key": "count", "val": 42},
+            {"id": 4, "key": "meta", "val": {"nested": True}},
+            {"id": 5, "key": "tags", "val": ["a", "b"]},
+            {"id": 6, "key": "empty", "val": None},
+        ]
+
+        driver.execute("DELETE FROM app_config")
+        counts = load_table_fixtures_sync(driver, export_dir, conflict_keys={"app_config": "id"})
+        after = driver.select("SELECT * FROM app_config ORDER BY id")
+
+        assert counts == {"app_config": 6}
+        assert [json.loads(row["val"]) if row["val"] is not None else None for row in after] == [
+            json.loads(row["val"]) if row["val"] is not None else None for row in before
+        ]
+    config.close_pool()
+
+
+async def test_export_decodes_json_and_jsonb_string_cells_with_fallback_async(tmp_path: Path) -> None:
+    """Async export decodes valid JSON string cells on json/jsonb columns and preserves non-JSON strings."""
+    driver = AsyncMock()
+    driver.statement_config.dialect = "postgres"
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": "id", "data_type": "integer", "is_primary": True},
+        {"column_name": "payload", "data_type": "jsonb", "is_primary": False},
+        {"column_name": "raw_json", "data_type": "json", "is_primary": False},
+    ]
+    driver.select.return_value = [
+        {"id": 1, "payload": '{"a": 1}', "raw_json": '"scalar"'},
+        {"id": 2, "payload": "not-valid-json", "raw_json": None},
+    ]
+
+    await export_table_fixtures_async(driver, tmp_path, ["events"], compress=False)
+
+    exported = json.loads((tmp_path / "events.json").read_text())
+    assert exported == [
+        {"id": 1, "payload": {"a": 1}, "raw_json": "scalar"},
+        {"id": 2, "payload": "not-valid-json", "raw_json": None},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_json_text"),
+    [
+        ("console", '"console"'),
+        ("true", '"true"'),
+        (True, "true"),
+        (42, "42"),
+        ({"k": "v"}, '{"k":"v"}'),
+        ([1, 2], "[1,2]"),
+        ('{"k": "v"}', '{"k":"v"}'),
+        ("  [1, 2] ", "[1,2]"),
+        ("{not valid json", '"{not valid json"'),
+    ],
+)
+def test_encode_json_column_value_handles_scalars_and_legacy_pre_encoded_strings(
+    raw_value: Any, expected_json_text: str
+) -> None:
+    """JSON column encoding serializes scalars and structures without double-encoding legacy JSON object/array strings."""
+    encoded = fixture_module._encode_json_column_value(raw_value)
+    assert json.loads(encoded) == json.loads(expected_json_text)
+
+
+def test_conflict_keys_accepts_bare_string_and_ignores_unloaded_tables(tmp_path: Path) -> None:
+    """Bare string conflict_keys normalize to single-column tuples and unloaded tables are ignored."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        load_table_fixtures_sync(driver, tmp_path)
+
+        updated = [{"id": 1, "name": "Alice Updated"}, {"id": 2, "name": "Bob"}]
+        (tmp_path / "users.json").write_text(json.dumps(updated), encoding="utf-8")
+        counts = load_table_fixtures_sync(
+            driver, tmp_path, conflict_keys={"users": "id", "unloaded_table": "key", "other_table": ["a", "b"]}
+        )
+
+        assert counts == {"users": 2}
+        assert _normalized(driver.select("SELECT * FROM users")) == updated
+    config.close_pool()
+
+
+async def test_conflict_keys_accepts_bare_string_and_ignores_unloaded_tables_async(tmp_path: Path) -> None:
+    """Async loader normalizes bare string conflict_keys and ignores unloaded tables."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with config.provide_session() as driver:
+        await driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        await load_table_fixtures_async(driver, tmp_path)
+
+        updated = [{"id": 1, "name": "Alice Async"}, {"id": 2, "name": "Bob"}]
+        (tmp_path / "users.json").write_text(json.dumps(updated), encoding="utf-8")
+        counts = await load_table_fixtures_async(
+            driver, tmp_path, conflict_keys={"users": "id", "unloaded_table": "key"}
+        )
+
+        assert counts == {"users": 2}
+        assert _normalized(await driver.select("SELECT * FROM users")) == updated
+    await config.close_pool()
+
+
+def test_conflict_keys_rejects_empty_and_bytes_values(tmp_path: Path) -> None:
+    """Empty sequences, empty strings, and bytes in conflict_keys raise before any statement runs."""
+    (tmp_path / "users.json").write_text(json.dumps(USER_ROWS), encoding="utf-8")
+    driver = _postgres_mock_driver([])
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"users": []})
+    with pytest.raises(ValueError, match="Invalid column name"):
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"users": ""})
+    with pytest.raises(TypeError, match="not bytes"):
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys=cast("Any", {"users": b"id"}))
+
+
+def test_load_table_fixtures_supports_sparse_rows(tmp_path: Path) -> None:
+    """Sparse JSONL and JSON rows normalize across the ordered union of columns with None defaults."""
+    sparse_lines = [
+        json.dumps({"id": 1, "name": "Alice"}),
+        json.dumps({"id": 2, "name": "Bob", "bio": "Engineer"}),
+        json.dumps({"id": 3, "role": "admin"}),
+    ]
+    (tmp_path / "profiles.jsonl").write_text("\n".join(sparse_lines) + "\n", encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE profiles (id INTEGER PRIMARY KEY, name TEXT, bio TEXT, role TEXT)")
+
+        counts = load_table_fixtures_sync(driver, tmp_path)
+
+        assert counts == {"profiles": 3}
+        rows = driver.select("SELECT * FROM profiles ORDER BY id")
+        assert rows == [
+            {"id": 1, "name": "Alice", "bio": None, "role": None},
+            {"id": 2, "name": "Bob", "bio": "Engineer", "role": None},
+            {"id": 3, "name": None, "bio": None, "role": "admin"},
+        ]
+    config.close_pool()
+
+
+def test_ignore_unknown_columns_strips_extra_columns_and_skips_when_none_remain(tmp_path: Path) -> None:
+    """ignore_unknown_columns drops columns missing from table metadata and skips insert if all are unknown."""
+    (tmp_path / "users.json").write_text(
+        json.dumps([{"id": 1, "name": "Alice", "legacy_flag": True}, {"id": 2, "name": "Bob", "extra": "x"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "obsolete.json").write_text(json.dumps([{"old_a": 1, "old_b": 2}]), encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        driver.execute("CREATE TABLE obsolete (id INTEGER PRIMARY KEY)")
+
+        counts = load_table_fixtures_sync(
+            driver, tmp_path, table_order=["users", "obsolete"], ignore_unknown_columns=True
+        )
+
+        assert counts == {"users": 2, "obsolete": 0}
+        assert _normalized(driver.select("SELECT * FROM users")) == USER_ROWS
+        assert driver.select("SELECT * FROM obsolete") == []
+    config.close_pool()
+
+
+async def test_ignore_unknown_columns_async(tmp_path: Path) -> None:
+    """Async loader supports ignore_unknown_columns and still rejects rows with only generated columns."""
+    (tmp_path / "users.json").write_text(json.dumps([{"id": 1, "name": "Alice", "removed_col": 99}]), encoding="utf-8")
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with config.provide_session() as driver:
+        await driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+
+        counts = await load_table_fixtures_async(driver, tmp_path, ignore_unknown_columns=True)
+
+        assert counts == {"users": 1}
+        assert await driver.select("SELECT * FROM users") == [{"id": 1, "name": "Alice"}]
+    await config.close_pool()
+
+    (tmp_path / "users.json").write_text(json.dumps([{"doubled": 2}]), encoding="utf-8")
+    mock_driver = _postgres_mock_driver([
+        {"column_name": "id", "data_type": "integer", "is_primary": True},
+        {"column_name": "doubled", "data_type": "integer", "generated_kind": "s"},
+    ])
+    with pytest.raises(ValueError, match="only contain generated columns"):
+        load_table_fixtures_sync(mock_driver, tmp_path, ignore_unknown_columns=True)
+
+
+def test_exclude_update_columns_omits_columns_from_upsert_and_falls_back_to_do_nothing(tmp_path: Path) -> None:
+    """exclude_update_columns preserves specified columns on conflict and falls back to DO NOTHING when all are excluded."""
+    initial = [{"id": 1, "name": "Alice", "created_at": "2024-01-01"}]
+    updated = [{"id": 1, "name": "Alice Updated", "created_at": "2099-01-01"}]
+    (tmp_path / "users.json").write_text(json.dumps(initial), encoding="utf-8")
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        driver.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)")
+        load_table_fixtures_sync(driver, tmp_path)
+
+        (tmp_path / "users.json").write_text(json.dumps(updated), encoding="utf-8")
+        load_table_fixtures_sync(driver, tmp_path, conflict_keys={"users": "id"}, exclude_update_columns=["created_at"])
+        assert driver.select("SELECT * FROM users") == [{"id": 1, "name": "Alice Updated", "created_at": "2024-01-01"}]
+
+        second_update = [{"id": 1, "name": "Ignored Name", "created_at": "2099-01-01"}]
+        (tmp_path / "users.json").write_text(json.dumps(second_update), encoding="utf-8")
+        load_table_fixtures_sync(
+            driver,
+            tmp_path,
+            conflict_keys={"users": "id"},
+            exclude_update_columns={"users": ["name", "created_at"], "other_table": "created_at"},
+        )
+        assert driver.select("SELECT * FROM users") == [{"id": 1, "name": "Alice Updated", "created_at": "2024-01-01"}]
+    config.close_pool()
+
+
+async def test_exclude_update_columns_async_and_validation(tmp_path: Path) -> None:
+    """Async loader supports per-table bare string exclude_update_columns and validates invalid inputs."""
+    (tmp_path / "users.json").write_text(
+        json.dumps([{"id": 1, "name": "Alice", "created_at": "2024-01-01"}]), encoding="utf-8"
+    )
+    config = AiosqliteConfig(connection_config={"database": ":memory:"})
+    async with config.provide_session() as driver:
+        await driver.execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        await load_table_fixtures_async(driver, tmp_path)
+
+        (tmp_path / "users.json").write_text(
+            json.dumps([{"id": 1, "name": "Alicia", "created_at": "2099-01-01"}]), encoding="utf-8"
+        )
+        await load_table_fixtures_async(
+            driver, tmp_path, conflict_keys={"users": "id"}, exclude_update_columns={"users": "created_at"}
+        )
+        assert await driver.select("SELECT * FROM users") == [{"id": 1, "name": "Alicia", "created_at": "2024-01-01"}]
+
+        with pytest.raises(TypeError, match="exclude_update_columns"):
+            await load_table_fixtures_async(driver, tmp_path, exclude_update_columns="created_at")
+        with pytest.raises(ValueError, match="Invalid column name"):
+            await load_table_fixtures_async(driver, tmp_path, exclude_update_columns=["bad col"])
+    await config.close_pool()
