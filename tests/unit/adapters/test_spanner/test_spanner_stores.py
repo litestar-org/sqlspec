@@ -3,10 +3,13 @@
 from typing import Any
 from unittest.mock import MagicMock
 
-from sqlspec.adapters.spanner.adk import SpannerSyncADKStore
+from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
+from sqlspec.adapters.spanner.adk import SpannerSyncADKMemoryStore, SpannerSyncADKStore
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.adapters.spanner.litestar import SpannerSyncStore
+from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_json
+from sqlspec.core import TypedParameter
 
 
 def _context_manager_yielding(value: Any) -> Any:
@@ -21,7 +24,7 @@ def _context_manager_yielding(value: Any) -> Any:
 
 
 def test_adk_store_run_write_routes_through_provide_session() -> None:
-    """Verify that SpannerSyncADKStore._run_write executes via config.provide_session."""
+    """Verify that SpannerSyncADKStore._run_write executes via config.provide_session(transaction=True)."""
     config = MagicMock(spec=SpannerSyncConfig)
     executed_statements: list[tuple[str, Any]] = []
 
@@ -39,12 +42,12 @@ def test_adk_store_run_write_routes_through_provide_session() -> None:
     ]
     store._run_write(statements)
 
-    config.provide_session.assert_called_once()
+    config.provide_session.assert_called_once_with(transaction=True)
     assert len(executed_statements) == 2
 
 
 def test_litestar_store_writes_route_through_provide_session() -> None:
-    """Verify that SpannerSyncStore write operations execute via config.provide_session."""
+    """Verify that SpannerSyncStore write operations execute via config.provide_session(transaction=True)."""
     config = MagicMock(spec=SpannerSyncConfig)
     config.extension_config = {"litestar": {"session_table": "sessions"}}
     executed_sqls: list[str] = []
@@ -65,23 +68,24 @@ def test_litestar_store_writes_route_through_provide_session() -> None:
 
     store._set("session_1", b"payload", expires_in=3600)
     assert config.provide_session.call_count == 1
+    config.provide_session.assert_called_with(transaction=True)
 
     store._delete("session_1")
     assert config.provide_session.call_count == 2
+    config.provide_session.assert_called_with(transaction=True)
 
     store._delete_all()
     assert config.provide_session.call_count == 3
+    config.provide_session.assert_called_with(transaction=True)
 
     expired_count = store._delete_expired()
     assert config.provide_session.call_count == 4
+    config.provide_session.assert_called_with(transaction=True)
     assert expired_count == 1
 
 
 def test_litestar_store_single_base64_roundtrip() -> None:
     """Verify SpannerSyncStore passes raw bytes to driver.execute and decodes wire bytes once on _get."""
-    from sqlspec.adapters.spanner.type_converter import bytes_to_spanner
-    from sqlspec.core import TypedParameter
-
     config = MagicMock(spec=SpannerSyncConfig)
     config.extension_config = {"litestar": {"session_table": "sessions"}}
     captured_params: list[dict[str, Any]] = []
@@ -101,6 +105,7 @@ def test_litestar_store_single_base64_roundtrip() -> None:
 
     store = SpannerSyncStore(config=config)
     store._set("session_1", b"raw-payload", expires_in=None)
+    config.provide_session.assert_called_once_with(transaction=True)
 
     assert len(captured_params) == 1
     assert captured_params[0]["data"] == b"raw-payload"
@@ -113,11 +118,6 @@ def test_litestar_store_single_base64_roundtrip() -> None:
 
 def test_adk_memory_store_write_and_decode_json() -> None:
     """Verify SpannerSyncADKMemoryStore prepares JSON/null write params and unwraps JsonObject."""
-    from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
-    from sqlspec.adapters.spanner.adk import SpannerSyncADKMemoryStore
-    from sqlspec.adapters.spanner.type_converter import spanner_json
-    from sqlspec.core import TypedParameter
-
     config = MagicMock(spec=SpannerSyncConfig)
     config.extension_config = {"adk": {"enable_memory": True}}
     captured_params: list[dict[str, Any]] = []
@@ -142,6 +142,7 @@ def test_adk_memory_store_write_and_decode_json() -> None:
             {"content_json": param_types.JSON, "metadata_json": param_types.JSON, "owner_id": param_types.STRING},
         )
     ])
+    config.provide_session.assert_called_once_with(transaction=True)
 
     assert len(captured_params) == 1
     assert captured_params[0]["content_json"] == {"text": "hi"}
@@ -155,6 +156,8 @@ def test_adk_memory_store_write_and_decode_json() -> None:
         {"session_id": "s1"},
         {"session_id": param_types.STRING},
     )
+    assert config.provide_session.call_count == 2
+    config.provide_session.assert_called_with(transaction=True)
     assert deleted == 5
 
     decoded = store._decode_json(spanner_json({"k": "v"}))

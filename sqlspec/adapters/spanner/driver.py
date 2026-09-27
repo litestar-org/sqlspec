@@ -239,18 +239,36 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def commit(self) -> None:
-        if isinstance(self.connection, SpannerTransaction) or supports_write(self.connection):
-            writer = cast("_SpannerWriteProtocol", self.connection)
-            if getattr(writer, "committed", None) is not None:
-                return
-            if callable(getattr(writer, "commit", None)):
-                writer.commit()
+        writer = cast("_SpannerWriteProtocol", self.connection)
+        if not (
+            isinstance(self.connection, SpannerTransaction)
+            or supports_write(self.connection)
+            or callable(getattr(writer, "commit", None))
+        ):
+            return
+        if getattr(writer, "rolled_back", False) or getattr(writer, "committed", None) is not None:
+            return
+        if (
+            getattr(writer, "_transaction_id", None) is not None
+            or bool(getattr(writer, "_mutations", None))
+            or (not hasattr(writer, "_transaction_id") and not hasattr(writer, "_mutations"))
+        ) and callable(getattr(writer, "commit", None)):
+            writer.commit()
 
     def rollback(self) -> None:
-        if isinstance(self.connection, SpannerTransaction) or supports_write(self.connection):
-            writer = cast("_SpannerWriteProtocol", self.connection)
-            if callable(getattr(writer, "rollback", None)):
-                writer.rollback()
+        writer = cast("_SpannerWriteProtocol", self.connection)
+        if not (
+            isinstance(self.connection, SpannerTransaction)
+            or supports_write(self.connection)
+            or callable(getattr(writer, "rollback", None))
+        ):
+            return
+        if getattr(writer, "rolled_back", False) or getattr(writer, "committed", None) is not None:
+            return
+        if (getattr(writer, "_transaction_id", None) is not None or not hasattr(writer, "_transaction_id")) and (
+            callable(getattr(writer, "rollback", None))
+        ):
+            writer.rollback()
 
     def create_savepoint(self, name: str) -> None:
         """Raise because Spanner does not support savepoints.
@@ -298,7 +316,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             return database
         return None
 
-    def execute_partitioned_dml(
+    def _execute_partitioned_dml(
         self,
         statement: "SQL | str",
         *parameters: Any,
@@ -516,12 +534,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
 
         if overwrite:
-            self.execute_partitioned_dml(f"DELETE FROM {table} WHERE TRUE")
+            self._execute_partitioned_dml(f"DELETE FROM {table} WHERE TRUE")
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             chunks = self._chunk_mutation_rows(columns, records)
-            if self.driver_features.get("enable_batch_write_api") and not overwrite:
+            if self.driver_features.get("enable_batch_write_api"):
                 self._batch_write_mutations(table, columns, chunks)
             else:
                 conn = self.connection

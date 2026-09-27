@@ -225,7 +225,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             for sql, params, types in statements:
                 driver.execute(sql, _prepare_spanner_write_params(params, types))
 
@@ -634,7 +634,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             result = driver.execute(sql, params)
             return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
@@ -644,7 +644,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             result = driver.execute(sql, params)
             return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
@@ -654,7 +654,7 @@ class SpannerSyncADKStore(BaseSyncADKStore[SpannerSyncConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params["app_name"] = app_name
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             result = driver.execute(sql, params)
             return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 
@@ -900,12 +900,12 @@ class SpannerSyncADKMemoryStore(BaseSyncADKMemoryStore[SpannerSyncConfig]):
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             for sql, params, types in statements:
                 driver.execute(sql, _prepare_spanner_write_params(params, types))
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             result = driver.execute(sql, _prepare_spanner_write_params(params, types))
             return int(getattr(result, "rows_affected", getattr(result, "rowcount", 0)))
 

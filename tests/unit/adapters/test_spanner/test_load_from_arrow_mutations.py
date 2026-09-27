@@ -1,6 +1,7 @@
 """Spanner load_from_arrow mutations transport (insert_or_update)."""
 
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
@@ -22,8 +23,6 @@ class _FakeTransaction:
         self.insert_or_update_calls: list[tuple[str, list[str], list[list[Any]]]] = []
         self.execute_update_calls: list[str] = []
         self.committed = None
-        from unittest.mock import MagicMock
-
         self._database = MagicMock()
         self._database.execute_partitioned_dml.return_value = 0
 

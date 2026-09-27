@@ -140,7 +140,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
             if self._shard_count > 1:
                 update_sql = f"{update_sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
             params = self._build_params(key, new_expires)
-            with self._config.provide_session() as driver:
+            with self._config.provide_session(transaction=True) as driver:
                 driver.execute(update_sql, params)
 
         return spanner_to_bytes(data)
@@ -164,7 +164,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         VALUES (@session_id, @data, @expires_at, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP())
         """
 
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             result = driver.execute(update_sql, params)
             rows_affected = getattr(result, "rows_affected", None)
             has_rows = rows_affected > 0 if isinstance(rows_affected, int) else bool(getattr(result, "rowcount", None))
@@ -176,12 +176,12 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         if self._shard_count > 1:
             sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})"
         params = {"session_id": key}
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             driver.execute(sql, params)
 
     def _delete_all(self) -> None:
         sql = f"DELETE FROM {self._table_name} WHERE TRUE"
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             driver.execute(sql)
 
     def _exists(self, key: str) -> bool:
@@ -217,7 +217,7 @@ class SpannerSyncStore(BaseSQLSpecStore["SpannerSyncConfig"]):
         DELETE FROM {self._table_name}
         WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP()
         """
-        with self._config.provide_session() as driver:
+        with self._config.provide_session(transaction=True) as driver:
             result = driver.execute(sql)
             rows_affected = getattr(result, "rows_affected", None)
             if isinstance(rows_affected, int):

@@ -180,7 +180,7 @@ class TypedParameter:
         self, value: Any, original_type: "type | str | None" = None, semantic_name: "str | None" = None
     ) -> None:
         self.value = value
-        self.original_type = original_type or type(value)
+        self.original_type: Any = original_type or type(value)
         self.semantic_name = semantic_name
         self._hash: int | None = None
 

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.spanner import _typing as spanner_typing
 from sqlspec.adapters.spanner._typing import SpannerConnection
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
 from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.spanner._typing import SpannerDirectedReadOptions as DirectedReadOptions
     from sqlspec.adapters.spanner._typing import SpannerEncryptionConfig as EncryptionConfig
     from sqlspec.adapters.spanner._typing import SpannerExecuteSqlRequest as ExecuteSqlRequest
+    from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
     from sqlspec.adapters.spanner._typing import SpannerRequestOptions as RequestOptions
     from sqlspec.adapters.spanner._typing import SpannerRetry as Retry
     from sqlspec.config import ExtensionConfigs
@@ -215,23 +217,18 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
     def __enter__(self) -> SpannerConnection:
         database = self._config.get_database()
         if self._transaction:
-            manager = getattr(database, "sessions_manager", None)
-            if manager is not None and hasattr(manager, "get_session"):
-                self._session = manager.get_session(TransactionType.READ_WRITE)
-                try:
-                    txn = self._session.transaction()
-                    txn.__enter__()
-                    self._connection = cast("SpannerConnection", txn)
-                except Exception:
-                    manager.put_session(self._session)
-                    self._session = None
-                    raise
-                else:
-                    return self._connection
-            txn = database.transaction()
-            self._session = txn
-            self._connection = cast("SpannerConnection", txn.__enter__())
-            return self._connection
+            manager = cast("Any", database).sessions_manager
+            self._session = manager.get_session(TransactionType.READ_WRITE)
+            try:
+                txn = self._session.transaction()
+                txn.__enter__()
+                self._connection = cast("SpannerConnection", txn)
+            except Exception:
+                manager.put_session(self._session)
+                self._session = None
+                raise
+            else:
+                return self._connection
         self._session = cast("Any", database).snapshot(multi_use=True)
         self._connection = cast("SpannerConnection", self._session.__enter__())
         return self._connection
@@ -242,33 +239,18 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
         if self._transaction and self._connection:
             txn = cast("Any", self._connection)
             try:
+                rolled_back = bool(getattr(txn, "rolled_back", False))
+                committed = getattr(txn, "committed", None)
+                txn_id = getattr(txn, "_transaction_id", None)
+                mutations = cast("list[Any] | None", getattr(txn, "_mutations", None))
                 if exc_type is None:
-                    try:
-                        txn_id = txn._transaction_id
-                    except AttributeError:
-                        txn_id = None
-                    mutations = cast("list[Any] | None", getattr(txn, "_mutations", None))
-                    try:
-                        committed = txn.committed
-                    except AttributeError:
-                        committed = None
-                    if committed is None and (txn_id is not None or bool(mutations)):
+                    if not rolled_back and committed is None and (txn_id is not None or bool(mutations)):
                         txn.commit()
-                else:
-                    try:
-                        rollback_txn_id = txn._transaction_id
-                    except AttributeError:
-                        rollback_txn_id = None
-                    if rollback_txn_id is not None:
-                        txn.rollback()
+                elif not rolled_back and committed is None and txn_id is not None:
+                    txn.rollback()
             finally:
                 if self._session:
-                    db = self._config.get_database()
-                    manager = getattr(db, "sessions_manager", None)
-                    if manager is not None and hasattr(manager, "put_session"):
-                        manager.put_session(self._session)
-                    elif hasattr(self._session, "__exit__"):
-                        self._session.__exit__(exc_type, exc_val, exc_tb)
+                    cast("Any", self._config.get_database()).sessions_manager.put_session(self._session)
         elif self._session:
             self._session.__exit__(exc_type, exc_val, exc_tb)
 
@@ -341,9 +323,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         if enable_multiplexed and "pool_type" not in self.connection_config:
             self.connection_config["pool_type"] = None
         elif not enable_multiplexed and "pool_type" not in self.connection_config:
-            from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
-
-            self.connection_config["pool_type"] = PingingPool
+            self.connection_config["pool_type"] = spanner_typing.SpannerPingingPool
             self.connection_config.setdefault("ping_interval", 1800)
 
         statement_config = statement_config or default_statement_config
@@ -365,11 +345,9 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self._database: Database | None = None
 
     def _get_client(self) -> "Client":
-        from sqlspec.adapters.spanner._typing import SpannerClient as Client
-
         if self._client is None:
             client_kwargs = self._connection_kwargs_for(_CLIENT_CONFIG_FIELDS)
-            self._client = Client(**client_kwargs)
+            self._client = spanner_typing.SpannerClient(**client_kwargs)
         return self._client
 
     def get_database(self) -> "Database":
@@ -413,11 +391,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return cast("SpannerConnection", self.get_database().snapshot(multi_use=True))  # type: ignore[no-untyped-call]
 
     def _create_pool(self) -> "AbstractSessionPool":
-        from sqlspec.adapters.spanner._typing import SpannerAbstractSessionPool as AbstractSessionPool
-        from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
-        from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
-        from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
-
         instance_id = self.connection_config.get("instance_id")
         database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:
@@ -427,18 +400,18 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         raw_pool_type = self.connection_config.get("pool_type")
         pool_type: type[AbstractSessionPool | PingingPool]
         if raw_pool_type is None or raw_pool_type == "multiplexed":
-            pool_type = PingingPool
+            pool_type = spanner_typing.SpannerPingingPool
         else:
             pool_type = cast("type[AbstractSessionPool]", raw_pool_type)
 
         labels = self.connection_config.get("session_labels", self.connection_config.get("labels"))
         pool_kwargs: dict[str, Any] = self._pool_base_kwargs(labels=cast("dict[str, str] | None", labels))
-        if issubclass(pool_type, PingingPool):
+        if issubclass(pool_type, spanner_typing.SpannerPingingPool):
             self.connection_config.setdefault("ping_interval", 1800)
             pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "ping_interval"}))
-        elif issubclass(pool_type, FixedSizePool):
+        elif issubclass(pool_type, spanner_typing.SpannerFixedSizePool):
             pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "max_age_minutes"}))
-        elif issubclass(pool_type, BurstyPool):
+        elif issubclass(pool_type, spanner_typing.SpannerBurstyPool):
             target_size = self.connection_config.get("target_size", self.connection_config.get("size"))
             if target_size is not None:
                 pool_kwargs["target_size"] = target_size

@@ -527,6 +527,81 @@ def test_transaction_context_does_not_commit_empty_transaction() -> None:
     assert db.session_obj.txn.rollback_calls == 0
 
 
+def test_transaction_context_and_driver_respect_rolled_back_state() -> None:
+    """Explicit driver.rollback() must prevent auto-commit or duplicate rollback on exit."""
+
+    class _Txn:
+        def __init__(self) -> None:
+            self._transaction_id: str | None = "txn-1"
+            self._mutations: list[object] = [object()]
+            self.committed: object | None = None
+            self.rolled_back = False
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def commit(self) -> None:
+            self.commit_calls += 1
+            self.committed = object()
+
+        def rollback(self) -> None:
+            if self.rolled_back:
+                msg = "Transaction already rolled back."
+                raise ValueError(msg)
+            self.rollback_calls += 1
+            self.rolled_back = True
+
+    class _Session:
+        def __init__(self) -> None:
+            self.txn = _Txn()
+
+        def transaction(self) -> _Txn:
+            return self.txn
+
+    class _SessionsManager:
+        def __init__(self, session: _Session) -> None:
+            self.session = session
+            self.returned = 0
+
+        def get_session(self, _transaction_type: object) -> _Session:
+            return self.session
+
+        def put_session(self, _session: object) -> None:
+            self.returned += 1
+
+    class _DB:
+        def __init__(self) -> None:
+            self.session_obj = _Session()
+            self.sessions_manager = _SessionsManager(self.session_obj)
+
+    db = _DB()
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    setattr(config, "get_database", lambda: db)
+
+    with config.provide_session(transaction=True) as driver:
+        driver.rollback()
+        driver.rollback()
+        driver.commit()
+
+    assert db.session_obj.txn.rollback_calls == 1
+    assert db.session_obj.txn.commit_calls == 0
+
+    db_err = _DB()
+    setattr(config, "get_database", lambda: db_err)
+    with pytest.raises(RuntimeError, match="abort"), config.provide_session(transaction=True) as driver:
+        driver.rollback()
+        msg = "abort"
+        raise RuntimeError(msg)
+
+    assert db_err.session_obj.txn.rollback_calls == 1
+    assert db_err.session_obj.txn.commit_calls == 0
+
+
 def test_provide_session_uses_batch_when_transaction_requested() -> None:
     """Driver should receive transaction connection when transaction=True."""
 
