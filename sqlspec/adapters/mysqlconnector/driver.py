@@ -53,7 +53,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
@@ -117,7 +117,7 @@ class MysqlConnectorSyncExceptionHandler(BaseSyncExceptionHandler):
 class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector sync library."""
 
-    __slots__ = ("_data_dictionary", "_json_deserializer", "_json_serializer")
+    __slots__ = ("_data_dictionary", "_json_deserializer")
     dialect = "mysql"
 
     def __init__(
@@ -135,9 +135,6 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         self._data_dictionary: MysqlConnectorSyncDataDictionary | None = None
         self._json_deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
-        )
-        self._json_serializer: Callable[[Any], str] = cast(
-            "Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)
         )
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
@@ -363,7 +360,7 @@ class MysqlConnectorAsyncExceptionHandler(BaseAsyncExceptionHandler):
 class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
     """MySQL/MariaDB database driver using mysql-connector async library."""
 
-    __slots__ = ("_data_dictionary", "_json_deserializer", "_json_serializer")
+    __slots__ = ("_data_dictionary", "_json_deserializer")
     dialect = "mysql"
 
     def __init__(
@@ -381,9 +378,6 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         self._data_dictionary: MysqlConnectorAsyncDataDictionary | None = None
         self._json_deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
-        )
-        self._json_serializer: Callable[[Any], str] = cast(
-            "Callable[[Any], str]", self.driver_features.get("json_serializer", to_json)
         )
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":

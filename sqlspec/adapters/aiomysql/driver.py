@@ -45,7 +45,7 @@ from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
 
 if TYPE_CHECKING:
@@ -120,7 +120,7 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
     and transaction management.
     """
 
-    __slots__ = ("_data_dictionary", "_json_deserializer", "_json_serializer")
+    __slots__ = ("_data_dictionary", "_json_deserializer")
     dialect = "mysql"
 
     def __init__(
@@ -139,9 +139,6 @@ class AiomysqlDriver(AsyncDriverAdapterBase):
         features = driver_features or {}
         self._json_deserializer: Callable[[Any], Any] = cast(
             "Callable[[Any], Any]", features.get("json_deserializer", from_json)
-        )
-        self._json_serializer: Callable[[Any], str] = cast(
-            "Callable[[Any], str]", features.get("json_serializer", to_json)
         )
 
     async def _execute_cache_hit(

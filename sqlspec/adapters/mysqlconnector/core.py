@@ -3,8 +3,6 @@
 import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
-from mysql.connector.conversion import MySQLConverter
-
 from sqlspec.adapters import mysql_common
 from sqlspec.adapters.mysql_common import (
     bool_to_int,
@@ -36,7 +34,6 @@ if TYPE_CHECKING:
 __all__ = (
     "MysqlConnectorAsyncStreamSource",
     "MysqlConnectorSyncStreamSource",
-    "SQLSpecMySQLConverter",
     "apply_driver_features",
     "build_insert_statement",
     "build_load_data_statement",
@@ -64,27 +61,7 @@ __all__ = (
 _MYSQL_ACCESS_ERROR_DISPATCH = mysql_common.MYSQL_ACCESS_ERROR_DISPATCH
 _MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common.MYSQL_CONNECTION_ERROR_DISPATCH
 _MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common.MYSQL_CONSTRAINT_ERROR_DISPATCH
-_MYSQL_MIGRATION_ERROR_CODES = mysql_common.MYSQL_MIGRATION_ERROR_CODES
-_MYSQL_SQLSTATE_EXACT_DISPATCH = mysql_common.MYSQL_SQLSTATE_EXACT_DISPATCH
-_MYSQL_SQLSTATE_PREFIX_DISPATCH = mysql_common.MYSQL_SQLSTATE_PREFIX_DISPATCH
 _MYSQL_TRANSACTION_ERROR_DISPATCH = mysql_common.MYSQL_TRANSACTION_ERROR_DISPATCH
-
-
-class SQLSpecMySQLConverter(MySQLConverter):
-    """Custom converter that deserializes JSON columns directly during packet decoding."""
-
-    def __init__(self, *args: Any, deserializer: "Callable[[Any], Any]" = from_json, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._deserializer = deserializer
-
-    def _json_to_python(self, value: Any, dsc: Any = None) -> Any:
-        raw = super()._json_to_python(value, dsc)
-        if raw is not None and isinstance(raw, (str, bytes)):
-            try:
-                return self._deserializer(raw)
-            except Exception:
-                return raw
-        return raw
 
 
 class MysqlConnectorSyncStreamSource:

@@ -242,6 +242,7 @@ exclude = [
   "sqlspec/extensions/events/_store.py",    # Adapter-local event stores subclass this base
   "sqlspec/extensions/adk/converters.py",   # Optional ADK Pydantic model reconstruction stays interpreted
   "sqlspec/adapters/**/data_dictionary.py", # Cross-module inheritance causes mypyc segfaults
+  "sqlspec/data_dictionary/dialects/mysql/dictionary.py", # Cross-module inheritance causes mypyc segfaults
   "sqlspec/utils/arrow_helpers.py",         # Arrow operations cause segfaults when compiled
   "sqlspec/core/_pagination.py",            # @dataclass mutates class at def time; annotations must survive mypyc for Litestar OpenAPI (#419)
 ]
@@ -288,6 +289,7 @@ include = [
   "sqlspec/extensions/adk/_types.py",              # ADK session/event record types
   "sqlspec/extensions/adk/memory/_types.py",       # ADK memory record types
   "sqlspec/extensions/adk/artifact/_types.py",     # ADK artifact record types
+  "sqlspec/adapters/mysql_common.py",              # Shared MySQL-family adapter helpers
   "sqlspec/adapters/**/core.py",                   # Adapter compiled helpers
   "sqlspec/adapters/**/type_converter.py",         # All adapters type converters
   "sqlspec/adapters/oracledb/_param_types.py",     # Slot-based LOB/JSON parameter wrappers

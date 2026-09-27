@@ -272,13 +272,18 @@ def _deserialize_json_value(value: Any, deserializer: "Callable[[Any], Any]", *,
         return value
     if isinstance(value, (bytes, bytearray, memoryview)):
         try:
-            return deserializer(bytes(value).decode("utf-8"))
+            raw_bytes = bytes(value) if isinstance(value, (bytearray, memoryview)) else value
+            return deserializer(raw_bytes)
         except Exception:
+            if logger is not None:
+                logger.debug("Failed to deserialize JSON column", exc_info=True)
             return value
     if isinstance(value, str):
         try:
             return deserializer(value)
         except Exception:
+            if logger is not None:
+                logger.debug("Failed to deserialize JSON column", exc_info=True)
             return value
     return value
 
@@ -309,17 +314,26 @@ def _deserialize_json_tuple_rows(
     *,
     logger: Any | None = None,
 ) -> "list[tuple[Any, ...]]":
-    """Deserialize JSON fields in tuple rows using direct tuple reconstruction."""
+    """Deserialize JSON fields in tuple rows using sparse index iteration and lazy row mutation."""
     if not json_indexes:
         return rows if isinstance(rows, list) else list(rows)
-    indexes_set = frozenset(json_indexes)
-    return [
-        tuple(
-            _deserialize_json_value(val, deserializer, logger=logger) if i in indexes_set and val is not None else val
-            for i, val in enumerate(row)
-        )
-        for row in rows
-    ]
+    result: list[tuple[Any, ...]] = []
+    for row in rows:
+        row_len = len(row)
+        row_list: list[Any] | None = None
+        for idx in json_indexes:
+            if idx >= row_len:
+                continue
+            raw_val = row[idx]
+            if raw_val is None:
+                continue
+            decoded = _deserialize_json_value(raw_val, deserializer, logger=logger)
+            if decoded is not raw_val:
+                if row_list is None:
+                    row_list = list(row)
+                row_list[idx] = decoded
+        result.append(tuple(row_list) if row_list is not None else row)
+    return result
 
 
 def collect_stream_rows(

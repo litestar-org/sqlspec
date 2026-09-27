@@ -6,9 +6,8 @@ import threading
 import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
-from weakref import WeakSet
 
-from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection
+from sqlspec.adapters.pymysql._typing import PyMysqlConnect, PyMysqlConnection, PyMysqlServerStatus
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
@@ -59,7 +58,7 @@ class PyMysqlConnectionPool:
         self._connection_parameters = connection_parameters
         self._connection_factory = connection_factory
         self._thread_local = threading.local()
-        self._connection_registry: WeakSet[PyMysqlConnection] = WeakSet()
+        self._connection_registry: set[PyMysqlConnection] = set()
         self._generation = 0
         self._registry_lock = threading.Lock()
         self._recycle_seconds = recycle_seconds
@@ -188,6 +187,8 @@ class PyMysqlConnectionPool:
             with contextlib.suppress(Exception):
                 self._close_thread_connection()
             raise
+        else:
+            self.release(connection)
 
     def close(self) -> None:
         """Close every connection this pool opened, on any thread."""
@@ -205,7 +206,7 @@ class PyMysqlConnectionPool:
 
     def release(self, connection: PyMysqlConnection) -> None:
         """Release connection back to the pool, sanitizing transactions."""
-        if bool(getattr(connection, "server_status", 0) & 1):
+        if bool(getattr(connection, "server_status", 0) & PyMysqlServerStatus.SERVER_STATUS_IN_TRANS):
             with contextlib.suppress(Exception):
                 connection.rollback()
 

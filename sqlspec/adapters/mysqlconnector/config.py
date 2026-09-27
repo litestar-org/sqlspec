@@ -378,9 +378,10 @@ class MysqlConnectorSyncConfig(
         """Ensure connection callback has been called exactly once for this connection."""
         if self._user_connection_hook is None:
             return
-        if connection not in self._initialized_connections:
+        underlying = getattr(connection, "_cnx", None) or connection
+        if underlying not in self._initialized_connections:
             self._user_connection_hook(connection)
-            self._initialized_connections.add(connection)
+            self._initialized_connections.add(underlying)
 
     def _acquire_sync_connection(self) -> MysqlConnectorSyncConnection:
         """Acquire and initialize a sync mysql-connector connection."""
@@ -523,9 +524,10 @@ class MysqlConnectorAsyncConfig(
         """Ensure connection callback has been called exactly once for this connection."""
         if self._user_connection_hook is None:
             return
-        if connection not in self._initialized_connections:
+        underlying = getattr(connection, "_cnx", None) or connection
+        if underlying not in self._initialized_connections:
             await self._user_connection_hook(connection)
-            self._initialized_connections.add(connection)
+            self._initialized_connections.add(underlying)
 
     async def _acquire_async_connection(self) -> MysqlConnectorAsyncConnection:
         """Acquire and initialize an async mysql-connector connection from pool."""

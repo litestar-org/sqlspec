@@ -41,10 +41,7 @@ __all__ = ("MySQLAsyncDataDictionary", "MySQLSyncDataDictionary")
 
 
 def _get_driver_cache_key(driver: Any) -> int:
-    """Resolve a durable cache key for engine version caching across sessions."""
-    config = getattr(driver, "connection_config", None)
-    if config is not None:
-        return id(config)
+    """Resolve a cache key for engine version caching."""
     return id(driver)
 
 
