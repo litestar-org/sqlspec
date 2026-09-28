@@ -23,10 +23,6 @@ def test_event_queue_store_uses_tsql_column_types_and_idempotency() -> None:
     assert "available_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME()" in ddl
     assert "IF NOT EXISTS (SELECT 1 FROM sys.indexes" in ddl
     assert "OBJECT_ID(N'[dbo].[sqlspec_event_queue]')" in ddl
-    wrapped_no_space = store._wrap_create_statement(
-        "CREATE INDEX idx_events_channel_status ON app_events(channel, status, available_at)", "index"
-    )
-    assert "OBJECT_ID(N'[dbo].[app_events]')" in wrapped_no_space
 
 
 def test_event_queue_store_drop_uses_object_id_guard() -> None:
@@ -40,3 +36,15 @@ def test_event_queue_store_drop_uses_object_id_guard() -> None:
 
 def test_object_name_preserves_bracket_quoted_dots() -> None:
     assert _object_name("[dbo.schema].[sqlspec.event.queue]") == "[dbo.schema].[sqlspec.event.queue]"
+
+
+def test_event_queue_guards_use_configured_schema_and_index() -> None:
+    store = MssqlPythonEventQueueStore(cast(MssqlPythonConfig, _config({"events": {"queue_table": "app.app_events"}})))
+    statements = store.create_statements()
+    assert "OBJECT_ID(N'[app].[app_events]', N'U')" in statements[0]
+    assert "name = N'idx_app_app_events_channel_status'" in statements[1]
+    assert "OBJECT_ID(N'[app].[app_events]')" in statements[1]
+    assert "ON app.app_events(channel, status, available_at)" in statements[1]
+    assert store.drop_statements() == [
+        "IF OBJECT_ID(N'[app].[app_events]', N'U') IS NOT NULL DROP TABLE app.app_events;"
+    ]

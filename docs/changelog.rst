@@ -48,6 +48,9 @@ Unreleased
 
 **Fixed:**
 
+* SQL Server event queue DDL guards use the configured table and index names.
+  Arrow ODBC index checks no longer include column text in the table name.
+
 * Arrow read failures in the mssql-python adapter use SQLSpec error types.
 * ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
   question marks in quoted identifiers, literals, and comments.
