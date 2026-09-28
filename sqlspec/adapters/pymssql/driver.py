@@ -269,10 +269,10 @@ class PymssqlDriver(SyncDriverAdapterBase):
         if self._migration_schema_restore is None:
             return
         user_name, previous_schema = self._migration_schema_restore
-        self._migration_schema_restore = None
         with self.with_cursor(self.connection) as cursor:
             cursor.execute(_alter_default_schema_sql(user_name, previous_schema))
         self.connection.commit()
+        self._migration_schema_restore = None
 
     def has_schema(self, schema: str) -> bool:
         """Return whether the specified schema exists."""

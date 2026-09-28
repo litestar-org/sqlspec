@@ -1,6 +1,10 @@
 # pyright: reportArgumentType=false
 """Unit tests for Oracle row materialization helpers."""
 
+from inspect import isawaitable
+
+import pytest
+
 from sqlspec.adapters.oracledb.core import collect_async_rows, collect_sync_rows, resolve_row_metadata
 
 
@@ -133,3 +137,15 @@ def test_resolve_row_metadata_cache_contract_still_holds_after_single_pass_rewri
     assert second_names is first_names
     assert first_requires_lob is second_requires_lob
     assert cache[id(description)][0] is description
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_collect_rows_coerces_lob_returned_for_non_lob_metadata(asynchronous: bool) -> None:
+    rows = [(_ReadableValue("custom output"),)]
+    description = [("PAYLOAD", _TypeCode("DB_TYPE_VARCHAR"))]
+    collect = collect_async_rows if asynchronous else collect_sync_rows
+    result = collect(rows, description, {})
+    data, column_names = await result if isawaitable(result) else result
+
+    assert data == [("custom output",)]
+    assert column_names == ["PAYLOAD"]

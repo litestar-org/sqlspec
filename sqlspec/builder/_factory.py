@@ -118,7 +118,7 @@ def build_copy_statement(
     expression = _build_copy_expression(
         direction=direction, table=table, location=location, columns=columns, options=options
     )
-    rendered = expression.sql(dialect=_normalize_copy_dialect(dialect))
+    rendered = expression.sql(dialect=_normalize_copy_dialect(dialect), copy=False)
     return SQL(rendered)
 
 

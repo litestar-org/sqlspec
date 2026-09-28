@@ -93,7 +93,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
-    __slots__ = ("_data_dictionary", "_pending_execute_options", "_row_plan_cache")
+    __slots__ = ("_data_dictionary", "_pending_execute_options", "_row_plan_cache", "_row_plan_deserializer")
 
     def __init__(
         self,
@@ -109,6 +109,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._data_dictionary: SpannerDataDictionary | None = None
         self._pending_execute_options: _PerCallExecuteOptions | None = None
         self._row_plan_cache: dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]] = {}
+        self._row_plan_deserializer = cast("Callable[[str], Any]", features.get("json_deserializer", from_json))
 
     def dispatch_execute(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
@@ -599,6 +600,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def _resolve_row_plan(self, fields: Any) -> "tuple[list[str], tuple[tuple[int, Any], ...] | None]":
         json_deserializer = cast("Callable[[str], Any]", self.driver_features.get("json_deserializer", from_json))
+        if json_deserializer is not self._row_plan_deserializer:
+            self._row_plan_cache.clear()
+            self._row_plan_deserializer = json_deserializer
         return resolve_row_plan(fields, self._row_plan_cache, json_deserializer=json_deserializer)
 
 

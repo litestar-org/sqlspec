@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 from sqlspec.adapters.oracledb.migrations import OracleAsyncMigrationTracker, OracleSyncMigrationTracker
+from sqlspec.core import StatementConfig
 from sqlspec.driver import AsyncDriverAdapterBase, SyncDriverAdapterBase
 from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 
@@ -108,6 +109,19 @@ def test_oracle_tracker_preserves_mixed_case_qualified_tracking_table() -> None:
     assert tracker.version_table == '"AppOwner"."DdlMigrations"'
     assert tracker.version_table_schema == "AppOwner"
     assert tracker.version_table_name == "DdlMigrations"
+
+
+@pytest.mark.parametrize("tracker_type", [OracleSyncMigrationTracker, OracleAsyncMigrationTracker])
+def test_oracle_tracking_ddl_preserves_explicit_case(tracker_type: Any) -> None:
+    tracker = tracker_type(version_table_name='"app"."Migration Tracker"')
+    ddl = tracker._tracking_table_ddl().to_statement(StatementConfig(dialect="oracle"))
+
+    assert tracker.version_table == '"app"."Migration Tracker"'
+    assert tracker.version_table_name == "Migration Tracker"
+    assert tracker.version_table_schema == "app"
+    assert ddl.sql.startswith('CREATE TABLE "app"."Migration Tracker" (')
+    query = tracker._current_version_query().to_statement(StatementConfig(dialect="oracle"))
+    assert 'FROM "app"."Migration Tracker"' in query.sql
 
 
 def test_oracle_sync_tracker_introspects_unmodified_table_name_with_schema() -> None:

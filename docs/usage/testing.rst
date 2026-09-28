@@ -299,8 +299,8 @@ functionality for asynchronous drivers:
 - **Exact names:** table and column names are quoted in every statement, so they
   must match the database spelling exactly, including case. Reserved words such
   as ``order`` work as table or column names. On PostgreSQL, unqualified tables
-  resolve through the session's search path. The query builder renders Oracle
-  names unquoted.
+  resolve through the session's search path. On Oracle, explicitly quoted table
+  names keep their spelling; ordinary column names follow uppercase folding.
 - **Column types:** before inserting, the loader reads the table's columns from
   the driver's data dictionary on PostgreSQL-family, MySQL, DuckDB, and SQLite
   drivers and converts these JSON values:
@@ -317,9 +317,15 @@ functionality for asynchronous drivers:
   - strings and numbers in ``numeric``/``decimal`` columns to ``Decimal``;
   - strings in ``uuid`` columns to ``UUID``;
   - base64 strings in ``bytea``, ``blob``, ``tinyblob``, ``mediumblob``,
-    ``longblob``, ``binary``, and ``varbinary`` columns to bytes (the only
-    conversion on SQLite);
-  - values of PostgreSQL and MySQL ``json``/``jsonb`` columns to JSON text.
+    ``longblob``, ``binary``, and ``varbinary`` columns to bytes;
+  - values of PostgreSQL, MySQL, DuckDB, and SQLite ``json``/``jsonb`` columns
+    to JSON text. SQLite converts only binary and JSON columns.
+
+  Write JSON column values directly in the fixture. Use an object for an object,
+  an array for an array, and a string for a string. Strings such as ``"true"``
+  and ``"[1]"`` remain strings. The loader does not decode their contents again.
+  Convert pre-encoded object or array strings in older fixtures to JSON objects
+  or arrays before loading them.
 
   Every other value is passed to the driver as decoded from JSON. That includes
   ``BIT`` columns (including MySQL ``BIT``),
@@ -333,8 +339,13 @@ functionality for asynchronous drivers:
   contain them still load. Other databases are not checked for them, so SQL Server
   computed columns and Oracle virtual columns are exported and loaded like any
   other column.
-- **Upserts:** ``conflict_keys`` maps a table to the columns of a unique
-  constraint; every entry must name a table being loaded, spelled exactly. Rows
+- **Sparse rows:** rows can have different keys. Missing keys become ``None``
+  within the table's combined set of columns. With ``ignore_unknown_columns=True``,
+  keys absent from the table's column metadata are omitted; names must match
+  exactly, including case.
+- **Upserts:** ``conflict_keys`` maps a table to one column name or a sequence
+  of column names forming a unique constraint. Entries for tables outside the
+  current load are ignored, so one mapping can serve several subset loads. Rows
   for that table update the non-key columns of existing rows instead of failing;
   PostgreSQL ``GENERATED ALWAYS`` identity columns are never updated, and a table
   with nothing left to update skips the conflicting row. PostgreSQL-family,
@@ -343,7 +354,9 @@ functionality for asynchronous drivers:
   the table. ``VALUES()`` is deprecated since MySQL 8.0.20 but kept because
   MariaDB does not support the row-alias form. Other dialects raise
   ``ValueError`` before any statement runs. Without conflict keys, a duplicate
-  row raises the database's integrity error.
+  row raises the database's integrity error. Pass ``exclude_update_columns``
+  as a sequence of column names or a per-table mapping to keep those columns
+  unchanged on conflict; their values are still used for new rows.
 - **Identity columns:** on PostgreSQL, values for ``GENERATED ALWAYS`` identity
   columns are inserted with ``OVERRIDING SYSTEM VALUE``. CockroachDB does not
   accept explicit values for ``GENERATED ALWAYS`` columns; use

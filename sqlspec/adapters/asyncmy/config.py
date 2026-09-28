@@ -1,6 +1,5 @@
 """Asyncmy database configuration."""
 
-import asyncio
 import contextlib
 import inspect
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
@@ -239,7 +238,7 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
         try:
             ensure_conn = self._config._ensure_connection
             await ensure_conn(connection)
-        except Exception:
+        except BaseException:
             self._contexts.pop(id(connection), None)
             with contextlib.suppress(Exception):
                 await ctx.__aexit__(None, None, None)
@@ -273,7 +272,7 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
         try:
             ensure_conn = self._config._ensure_connection
             await ensure_conn(connection)
-        except Exception:
+        except BaseException:
             self._connection = None
             self._ctx = None
             with contextlib.suppress(Exception):
@@ -391,12 +390,7 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Close the actual async connection pool."""
         if self.connection_instance:
             self.connection_instance.close()
-            with contextlib.suppress(Exception):
-                try:
-                    await asyncio.wait_for(self.connection_instance.wait_closed(), timeout=5.0)
-                except (TimeoutError, asyncio.TimeoutError):
-                    if hasattr(self.connection_instance, "terminate"):
-                        self.connection_instance.terminate()
+            await self.connection_instance.wait_closed()
             self.connection_instance = None
 
     async def create_connection(self) -> AsyncmyConnection:

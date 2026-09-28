@@ -18,10 +18,19 @@ __all__ = (
 )
 
 
-def add_sysibm_dual(expression: exp.Select) -> exp.Select:
-    """Add FROM SYSIBM.SYSDUMMY1 to SELECT statements lacking a FROM clause."""
+def add_sysibm_dual(expression: exp.Select, *, copy: bool = True) -> exp.Select:
+    """Add FROM SYSIBM.SYSDUMMY1 to SELECT statements lacking a FROM clause.
+
+    Args:
+        expression: SELECT expression to render.
+        copy: Copy before modification unless the caller owns the expression.
+
+    Returns:
+        The SELECT expression with a FROM clause.
+    """
     if expression.args.get("from_") is None:
-        expression = expression.copy()
+        if copy:
+            expression = expression.copy()
         expression.set(
             "from_", exp.From(this=exp.Table(this=exp.to_identifier("SYSDUMMY1"), db=exp.to_identifier("SYSIBM")))
         )
@@ -131,9 +140,15 @@ def render_ilike(generator: Any, expression: exp.ILike) -> str:
 
 
 def render_posstr(generator: Any, expression: exp.StrPosition) -> str:
-    """Map string position functions to Db2 POSSTR(haystack, needle)."""
+    """Render string searches without discarding start or occurrence arguments."""
     this = generator.sql(expression, "this")
     substr = generator.sql(expression, "substr")
+    position = generator.sql(expression, "position")
+    occurrence = generator.sql(expression, "occurrence")
+    if occurrence:
+        return f"LOCATE_IN_STRING({this}, {substr}, {position or '1'}, {occurrence})"
+    if position:
+        return f"LOCATE({substr}, {this}, {position})"
     return f"POSSTR({this}, {substr})"
 
 

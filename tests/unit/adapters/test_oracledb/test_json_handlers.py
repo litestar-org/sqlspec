@@ -1,6 +1,7 @@
 """Unit tests for Oracle native JSON type handlers."""
 
 import inspect
+from functools import partial
 from unittest.mock import Mock
 
 import pytest
@@ -565,3 +566,29 @@ def test_chained_handlers_are_signature_introspectable() -> None:
 
     input_handler = chain_input_handler(Mock(return_value=None), None)
     assert len(inspect.signature(input_handler).parameters) == 3
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_handler_registration_preserves_unrelated_partial(direction: str) -> None:
+    inner = Mock(return_value="claimed")
+    fallback = partial(Mock(return_value="fallback"), inner)
+    factory = chain_input_handler if direction == "input" else chain_output_handler
+    arguments = (Mock(), "value", 1) if direction == "input" else (Mock(), Mock())
+
+    handler = factory(inner, fallback)
+
+    assert handler(*arguments) == "claimed"
+    inner.assert_called_once_with(*arguments)
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+def test_handler_registration_is_idempotent(direction: str) -> None:
+    inner = Mock(return_value=None)
+    fallback = Mock(return_value="fallback")
+    factory = chain_input_handler if direction == "input" else chain_output_handler
+    arguments = (Mock(), "value", 1) if direction == "input" else (Mock(), Mock())
+    handler = factory(inner, factory(inner, fallback))
+
+    assert handler(*arguments) == "fallback"
+    inner.assert_called_once_with(*arguments)
+    fallback.assert_called_once_with(*arguments)

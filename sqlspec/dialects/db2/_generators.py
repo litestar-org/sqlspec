@@ -161,9 +161,8 @@ def _convert_limit_to_fetch(query: exp.Expr) -> exp.Expr:
     """Convert an exp.Limit clause to an exp.Fetch clause for Db2."""
     limit = query.args.get("limit")
     if isinstance(limit, exp.Limit):
-        query = query.copy()
         direction = "NEXT" if query.args.get("offset") else "FIRST"
-        fetch = exp.Fetch(direction=direction, count=exp.maybe_copy(limit.expression))
+        fetch = exp.Fetch(direction=direction, count=limit.expression)
         query.set("limit", fetch)
     return query
 
@@ -171,14 +170,20 @@ def _convert_limit_to_fetch(query: exp.Expr) -> exp.Expr:
 def select_sql(generator: "generator.Generator", expression: exp.Select) -> str:
     """Render a SELECT with a Db2 dummy table, FETCH pagination and statement tail."""
     detached, locks, tail_args = _detach_statement_tail(expression)
-    select = cast("exp.Select", _convert_limit_to_fetch(add_sysibm_dual(cast("exp.Select", detached))))
+    if detached is expression and (
+        expression.args.get("from_") is None or isinstance(expression.args.get("limit"), exp.Limit)
+    ):
+        detached = expression.copy()
+    select = cast("exp.Select", _convert_limit_to_fetch(add_sysibm_dual(cast("exp.Select", detached), copy=False)))
     return _with_statement_tail(generator.select_sql(select), render_statement_tail(generator, tail_args, locks))
 
 
 def set_operation_sql(generator: "generator.Generator", expression: exp.SetOperation) -> str:
     """Render UNION, INTERSECT or EXCEPT followed by the Db2 statement tail."""
     detached, locks, tail_args = _detach_statement_tail(expression)
-    operation = cast("exp.SetOperation", _convert_limit_to_fetch(cast("exp.SetOperation", detached)))
+    if detached is expression and isinstance(expression.args.get("limit"), exp.Limit):
+        detached = expression.copy()
+    operation = cast("exp.SetOperation", _convert_limit_to_fetch(detached))
     return _with_statement_tail(generator.set_operations(operation), render_statement_tail(generator, tail_args, locks))
 
 
@@ -259,7 +264,7 @@ def date_add_sql(
 
 
 def str_position_sql(generator: "generator.Generator", expression: exp.StrPosition) -> str:
-    """Render a string position search with Db2 POSSTR."""
+    """Render a string position search with the matching native Db2 function."""
     return render_posstr(generator, expression)
 
 

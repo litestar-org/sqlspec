@@ -7,10 +7,10 @@ import pytest
 from sqlspec import StatementStack
 from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.core import (
-    _normalize_execute_many_parameters_async,
-    _normalize_execute_many_parameters_sync,
     build_pipeline_stack_result,
     default_statement_config,
+    normalize_execute_many_parameters_async,
+    normalize_execute_many_parameters_sync,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
@@ -242,20 +242,20 @@ async def test_async_pipeline_gate_accepts_thin_26ai(monkeypatch: pytest.MonkeyP
 
 def test_normalize_execute_many_normalize_execute_many_parameters_sync_tuple_to_list() -> None:
     parameters = ({"x": 1}, {"x": 2})
-    result = _normalize_execute_many_parameters_sync(parameters)
+    result = normalize_execute_many_parameters_sync(parameters)
     assert result == [{"x": 1}, {"x": 2}]
     assert isinstance(result, list)
 
 
 def test_normalize_execute_many_normalize_execute_many_parameters_async_tuple_to_list() -> None:
     parameters = ({"x": 1}, {"x": 2})
-    result = _normalize_execute_many_parameters_async(parameters)
+    result = normalize_execute_many_parameters_async(parameters)
     assert result == [{"x": 1}, {"x": 2}]
     assert isinstance(result, list)
 
 
 @pytest.mark.parametrize(
-    "normalizer", [_normalize_execute_many_parameters_sync, _normalize_execute_many_parameters_async]
+    "normalizer", [normalize_execute_many_parameters_sync, normalize_execute_many_parameters_async]
 )
 def test_normalize_execute_many_normalize_execute_many_parameters_passes_empty_through(
     normalizer: Callable[[object], object],

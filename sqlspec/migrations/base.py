@@ -114,12 +114,11 @@ class BaseMigrationTracker(Generic[DriverT]):
         else:
             resolved_schema_identifier = embedded_schema_identifier
 
-        bare_name, embedded_schema = self._split_version_table(version_table_name)
-        resolved_schema = resolved_schema_identifier.name if resolved_schema_identifier is not None else embedded_schema
-        self.version_table_name = bare_name
-        self.version_table_schema = resolved_schema
+        self.version_table_name = table_identifier.name
+        self.version_table_schema = resolved_schema_identifier.name if resolved_schema_identifier is not None else None
         self.version_table = self._qualify_version_table(
-            table_identifier.sql(), resolved_schema_identifier.sql() if resolved_schema_identifier is not None else None
+            table_identifier.sql(copy=False),
+            resolved_schema_identifier.sql(copy=False) if resolved_schema_identifier is not None else None,
         )
         self._output_policy = {"use_logger": False, "echo": True, "summary_only": False}
 
@@ -175,7 +174,9 @@ class BaseMigrationTracker(Generic[DriverT]):
 
     def _qualify_version_table(self, version_table_name: str, version_table_schema: str | None) -> str:
         """Return the tracker table name, qualified with schema when configured."""
-        return _parse_ddl_table(version_table_name, schema=version_table_schema).sql()
+        if version_table_schema:
+            return f"{version_table_schema}.{version_table_name}"
+        return version_table_name
 
     def _tracking_table_builder(self) -> "CreateTable":
         """Return a CREATE TABLE builder for the tracker table."""

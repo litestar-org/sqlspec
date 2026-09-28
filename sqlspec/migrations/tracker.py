@@ -223,7 +223,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         from sqlspec.migrations.schema import SchemaTarget, ensure_schema_sync
 
         try:
-            target = SchemaTarget(self.version_table_name, self._tracking_table_ddl(), self.version_table_schema)
+            target = SchemaTarget(self.version_table, self._tracking_table_ddl())
             result = ensure_schema_sync(driver, [target], manage_schema=True, create_schema=False, assume_existing=True)
             added_columns = result.added_columns.get(target.identity, [])
             if not added_columns:
@@ -449,7 +449,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async
 
         try:
-            target = SchemaTarget(self.version_table_name, self._tracking_table_ddl(), self.version_table_schema)
+            target = SchemaTarget(self.version_table, self._tracking_table_ddl())
             result = await ensure_schema_async(
                 driver, [target], manage_schema=True, create_schema=False, assume_existing=True
             )

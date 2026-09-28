@@ -143,6 +143,38 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
     return exp.maybe_parse(column_input) or exp.column(str(column_input))  # pyright: ignore[reportArgumentType]
 
 
+def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
+    """Distinguish supplied table quotes from quoting added by optimization."""
+    if not any(quote in source for quote in ('"', "`", "[")):
+        return table
+    remaining = source.strip()
+    for identifier in table.parts:
+        if not isinstance(identifier, exp.Identifier) or not remaining:
+            break
+        name = identifier.name
+        opening = remaining[0]
+        if opening in ('"', "`", "["):
+            closing = "]" if opening == "[" else opening
+            spelling = opening + name.replace(closing, closing * 2) + closing
+            if not remaining.startswith(spelling):
+                # SQLGlot's permissive fallback can retain literal quote delimiters.
+                if not (name.startswith(opening) and name.endswith(closing) and remaining.startswith(name)):
+                    break
+                spelling = name
+                identifier.set("this", name[1:-1].replace(closing * 2, closing))
+            identifier.set("quoted", True)
+            identifier.meta["sqlspec_explicit_table_quote"] = True
+        else:
+            spelling = name
+            if not remaining.startswith(spelling):
+                break
+        remaining = remaining[len(spelling) :].lstrip()
+        if not remaining.startswith("."):
+            break
+        remaining = remaining[1:].lstrip()
+    return table
+
+
 def parse_table_expression(
     table_input: str, explicit_alias: "str | None" = None, dialect: "DialectType | None" = None
 ) -> exp.Expr:
@@ -156,7 +188,8 @@ def parse_table_expression(
         parts = table_input.strip().split(None, 1)
         if len(parts) == ALIAS_PARTS_EXPECTED_COUNT:
             base_table, alias = parts
-            return exp.to_table(base_table, alias=alias, dialect=dialect)
+            if _is_simple_identifier(base_table):
+                return exp.to_table(base_table, alias=alias, dialect=dialect)
 
     if _is_simple_identifier(table_input):
         return exp.to_table(table_input, alias=explicit_alias, dialect=dialect)
@@ -167,11 +200,13 @@ def parse_table_expression(
             from_clause = parsed.find(exp.From)
             if from_clause is not None:
                 table_expr = from_clause.this
+                if isinstance(table_expr, exp.Table):
+                    _mark_explicit_table_quotes(table_expr, table_input)
                 if explicit_alias:
                     return exp.alias_(table_expr, explicit_alias)
                 return table_expr  # type: ignore[no-any-return]
 
-    return exp.to_table(table_input, alias=explicit_alias, dialect=dialect)
+    return _mark_explicit_table_quotes(exp.to_table(table_input, alias=explicit_alias, dialect=dialect), table_input)
 
 
 def parse_order_expression(order_input: str | exp.Expr) -> exp.Expr:

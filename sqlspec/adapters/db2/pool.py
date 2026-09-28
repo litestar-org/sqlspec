@@ -122,7 +122,12 @@ class Db2SyncConnectionPool:
         connection = ibm_db_dbi.connect(self._dsn, "", "", "", "", {ibm_db_dbi.SQL_ATTR_AUTOCOMMIT: autocommit_mode})
 
         if self._on_connection_create is not None:
-            self._on_connection_create(connection)
+            try:
+                self._on_connection_create(connection)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                raise
 
         return connection
 
@@ -433,6 +438,13 @@ class Db2AsyncConnectionPool:
         except BaseException:
             semaphore.release()
             raise
+        if self._closed:
+            try:
+                await self._close_connection(record.connection)
+            finally:
+                semaphore.release()
+            msg = "Db2 async connection pool is closed"
+            raise DatabaseConnectionError(msg)
         self._checked_out[id(record.connection)] = record
         return record.connection
 
@@ -496,8 +508,12 @@ class Db2AsyncConnectionPool:
         """Pop a reusable idle connection, or open a new one when none is left."""
         while self._idle:
             record = self._idle.pop()
-            if await self._is_reusable(record):
-                return record
+            try:
+                if await self._is_reusable(record):
+                    return record
+            except BaseException:
+                await self._close_connection(record.connection)
+                raise
             await self._close_connection(record.connection)
         connection = await self.new_connection()
         now = time.monotonic()

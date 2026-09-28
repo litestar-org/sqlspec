@@ -1386,6 +1386,9 @@ async def test_export_decodes_json_and_jsonb_string_cells_with_fallback_async(tm
 
     await export_table_fixtures_async(driver, tmp_path, ["events"], compress=False)
 
+    query = driver.select.call_args.args[0].build().sql
+    assert 'CAST("events"."payload" AS TEXT) AS "payload"' in query
+    assert 'CAST("events"."raw_json" AS TEXT) AS "raw_json"' in query
     exported = json.loads((tmp_path / "events.json").read_text())
     assert exported == [
         {"id": 1, "payload": {"a": 1}, "raw_json": "scalar"},
@@ -1402,16 +1405,16 @@ async def test_export_decodes_json_and_jsonb_string_cells_with_fallback_async(tm
         (42, "42"),
         ({"k": "v"}, '{"k":"v"}'),
         ([1, 2], "[1,2]"),
-        ('{"k": "v"}', '{"k":"v"}'),
-        ("  [1, 2] ", "[1,2]"),
+        ('{"k": "v"}', json.dumps('{"k": "v"}')),
+        ("  [1, 2] ", json.dumps("  [1, 2] ")),
         ("{not valid json", '"{not valid json"'),
     ],
 )
-def test_encode_json_column_value_handles_scalars_and_legacy_pre_encoded_strings(
-    raw_value: Any, expected_json_text: str
-) -> None:
-    """JSON column encoding serializes scalars and structures without double-encoding legacy JSON object/array strings."""
-    encoded = fixture_module._encode_json_column_value(raw_value)
+def test_fixture_json_conversion_preserves_scalar_types(raw_value: Any, expected_json_text: str) -> None:
+    """Fixture values represent JSON values, including strings that look like objects or arrays."""
+    decoder = fixture_module._column_value_decoder("duckdb", "json")
+    assert callable(decoder)
+    encoded = decoder(raw_value)
     assert json.loads(encoded) == json.loads(expected_json_text)
 
 
@@ -1585,3 +1588,42 @@ async def test_exclude_update_columns_async_and_validation(tmp_path: Path) -> No
         with pytest.raises(ValueError, match="Invalid column name"):
             await load_table_fixtures_async(driver, tmp_path, exclude_update_columns=["bad col"])
     await config.close_pool()
+
+
+@pytest.mark.parametrize("config_type", [SqliteConfig, DuckDBConfig])
+def test_json_fixture_roundtrip_preserves_string_scalar_types(
+    tmp_path: Path, config_type: type[SqliteConfig] | type[DuckDBConfig]
+) -> None:
+    values = ["true", "42", "null", "[1, 2]", '{"key": 1}', True, 42, [1, 2], {"key": 1}, None]
+    config = config_type(connection_config={"database": ":memory:"})
+    try:
+        with config.provide_session() as driver:
+            driver.execute("CREATE TABLE json_values (id INTEGER PRIMARY KEY, payload JSON)")
+            driver.execute_many(
+                "INSERT INTO json_values (id, payload) VALUES (:id, :payload)",
+                [
+                    {"id": index, "payload": None if value is None else json.dumps(value)}
+                    for index, value in enumerate(values)
+                ],
+            )
+            export_table_fixtures_sync(driver, tmp_path, ["json_values"], compress=False)
+            assert [row["payload"] for row in json.loads((tmp_path / "json_values.json").read_text())] == values
+            driver.execute("DELETE FROM json_values")
+            load_table_fixtures_sync(driver, tmp_path)
+            loaded = driver.select("SELECT CAST(payload AS TEXT) AS payload FROM json_values ORDER BY id")
+            assert [None if row["payload"] is None else json.loads(row["payload"]) for row in loaded] == values
+    finally:
+        config.close_pool()
+
+
+def test_ignore_unknown_fixture_columns_uses_exact_quoted_names(tmp_path: Path) -> None:
+    (tmp_path / "users.json").write_text(json.dumps([{"id": 1, "Name": "wrong column"}]), encoding="utf-8")
+    driver = MagicMock()
+    driver.statement_config.dialect = "postgres"
+    driver.data_dictionary.get_columns.return_value = [
+        {"column_name": "id", "data_type": "integer", "is_primary": True},
+        {"column_name": "name", "data_type": "text", "is_primary": False},
+    ]
+
+    assert load_table_fixtures_sync(driver, tmp_path, ignore_unknown_columns=True) == {"users": 1}
+    assert driver.execute_many.call_args.args[1] == [{"id": 1}]

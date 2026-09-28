@@ -1,5 +1,6 @@
 """Unit tests for mysql-connector configuration modernization."""
 
+import asyncio
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
@@ -392,3 +393,63 @@ def test_build_connection_config_normalizes_aliases() -> None:
     assert "db" not in cfg
     assert cfg["user"] == "alias_user"
     assert cfg["database"] == "alias_db"
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("hook failed"), asyncio.CancelledError()])
+async def test_async_connection_closes_when_initialization_fails(
+    monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    from sqlspec.adapters.mysqlconnector import config as config_module
+
+    connection = MagicMock()
+    connection.set_autocommit = AsyncMock()
+    connection.close = AsyncMock()
+    monkeypatch.setattr(config_module.mysqlconnector_aio, "connect", AsyncMock(return_value=connection))
+    config = MysqlConnectorAsyncConfig(driver_features={"on_connection_create": AsyncMock(side_effect=failure)})
+
+    with pytest.raises(type(failure)):
+        await config.create_connection()
+
+    connection.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("reset_session, calls", [(True, 2), (False, 1)])
+async def test_async_pool_reinitializes_reset_sessions(reset_session: bool, calls: int) -> None:
+    physical = MagicMock()
+    connection = MagicMock(_cnx=physical)
+    connection.close = AsyncMock()
+    pool = MagicMock(get_connection=AsyncMock(return_value=connection))
+    hook = AsyncMock()
+    config = MysqlConnectorAsyncConfig(
+        connection_config={"pool_reset_session": reset_session},
+        connection_instance=pool,
+        driver_features={"on_connection_create": hook},
+    )
+    assert await config._acquire_async_connection() is connection
+    assert await config._acquire_async_connection() is connection
+    assert hook.await_count == calls
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("hook failed"), asyncio.CancelledError()])
+async def test_async_pool_returns_connection_after_hook_failure(failure: BaseException) -> None:
+    connection = MagicMock()
+    connection.close = AsyncMock()
+    config = MysqlConnectorAsyncConfig(
+        connection_instance=MagicMock(get_connection=AsyncMock(return_value=connection)),
+        driver_features={"on_connection_create": AsyncMock(side_effect=failure)},
+    )
+    with pytest.raises(type(failure)):
+        await config._acquire_async_connection()
+    connection.close.assert_awaited_once()
+
+
+async def test_async_pool_unavailable_preserves_standalone_connections(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlspec.adapters.mysqlconnector import config as config_module
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    monkeypatch.setattr(config_module, "MysqlConnectorAsyncPool", None)
+    connection = MagicMock(close=AsyncMock())
+    monkeypatch.setattr(config_module.mysqlconnector_aio, "connect", AsyncMock(return_value=connection))
+    assert await MysqlConnectorAsyncConfig()._acquire_async_connection() is connection
+    with pytest.raises(ImproperConfigurationError, match=r"9\.4"):
+        await MysqlConnectorAsyncConfig(connection_config={"pool_size": 2})._acquire_async_connection()

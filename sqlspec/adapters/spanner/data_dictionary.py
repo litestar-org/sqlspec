@@ -1,6 +1,5 @@
 """Spanner metadata queries using INFORMATION_SCHEMA."""
 
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
@@ -30,6 +29,8 @@ from sqlspec.data_dictionary import (
 from sqlspec.driver import SyncDataDictionaryBase
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 
 __all__ = ("SpannerDataDictionary",)
@@ -80,15 +81,12 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         super().__init__()
         self.mode = _normalize_spanner_metadata_mode(mode)
 
-    def get_query(self, domain: str, operation: str, *, mode: str | None = None) -> SQL:
+    def get_query(self, domain: str, operation: str, *, mode: "str | None" = None) -> SQL:
         """Return an exact domain query for this dialect."""
         resolved_mode = self.mode if mode is None else _normalize_spanner_metadata_mode(mode)
-        query = super().get_query(domain, operation, mode=resolved_mode)
-        if not isinstance(query, SQL):
-            query = cast("SQL", query)
-        return query
+        return super().get_query(domain, operation, mode=resolved_mode)
 
-    def get_version(self, driver: "SpannerSyncDriver | None" = None) -> VersionInfo | None:
+    def get_version(self, driver: "SpannerSyncDriver | None" = None) -> "VersionInfo | None":
         """Get Spanner version information.
 
         Args:
@@ -126,7 +124,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         _ = driver
         return self.get_dialect_config().get_optimal_type(type_category)
 
-    def get_tables(self, driver: "SpannerSyncDriver", schema: str | None = None) -> list[TableMetadata]:
+    def get_tables(self, driver: "SpannerSyncDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables using INFORMATION_SCHEMA."""
         schema_name = self.resolve_schema(schema)
         self._log_schema_introspect(driver, schema_name=schema_name, table_name=None, operation="tables")
@@ -135,8 +133,8 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         )
 
     def get_columns(
-        self, driver: "SpannerSyncDriver", table: str | None = None, schema: str | None = None
-    ) -> list[ColumnMetadata]:
+        self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
@@ -156,8 +154,8 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         )
 
     def get_indexes(
-        self, driver: "SpannerSyncDriver", table: str | None = None, schema: str | None = None
-    ) -> list[IndexMetadata]:
+        self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[IndexMetadata]":
         """Get index metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
         if table is None:
@@ -177,8 +175,8 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         )
 
     def get_foreign_keys(
-        self, driver: "SpannerSyncDriver", table: str | None = None, schema: str | None = None
-    ) -> list[ForeignKeyMetadata]:
+        self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
+    ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
         schema_name = self.resolve_schema(schema)
         if table is None:
@@ -202,7 +200,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
 
     def get_constraints(
-        self, driver: "SpannerSyncDriver", table: str | None = None, schema: str | None = None
+        self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> MetadataResult:
         """Get constraint metadata for a table or schema."""
         schema_name = self.resolve_schema(schema)
@@ -219,7 +217,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         return self._build_domain_result("constraints", rows)
 
     def get_sequences(
-        self, driver: "SpannerSyncDriver", schema: str | None = None, sequence_name: str | None = None
+        self, driver: "SpannerSyncDriver", schema: "str | None" = None, sequence_name: "str | None" = None
     ) -> MetadataResult:
         """Get sequence metadata."""
         schema_name = self.resolve_schema(schema)
@@ -232,7 +230,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         return self._build_domain_result("sequences", rows)
 
     def get_change_streams(
-        self, driver: "SpannerSyncDriver", schema: str | None = None, stream_name: str | None = None
+        self, driver: "SpannerSyncDriver", schema: "str | None" = None, stream_name: "str | None" = None
     ) -> MetadataResult:
         """Get change stream metadata."""
         schema_name = self.resolve_schema(schema)
@@ -279,7 +277,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         )
 
     def get_metadata_capabilities(
-        self, driver: Any, domains: Sequence[str] | None = None, *, mode: str | None = None
+        self, driver: Any, domains: "Sequence[str] | None" = None, *, mode: "str | None" = None
     ) -> MetadataCapabilityProfile:
         """Get Spanner data-dictionary capability profile."""
         _ = driver
@@ -294,7 +292,7 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         self,
         driver: Any,
         object_name: str,
-        schema: str | None = None,
+        schema: "str | None" = None,
         *,
         object_type: str = "table",
         include_dependencies: bool = True,
@@ -364,7 +362,7 @@ def _spanner_capability_for_domain(domain: str, *, mode: str) -> MetadataCapabil
     return MetadataCapability.unsupported(domain)
 
 
-def _normalize_spanner_metadata_mode(mode: str | None) -> str:
+def _normalize_spanner_metadata_mode(mode: "str | None") -> str:
     normalized = (mode or "googlesql").lower()
     if normalized in {"googlesql", "google_sql", "spanner_googlesql"}:
         return "googlesql"
@@ -373,7 +371,7 @@ def _normalize_spanner_metadata_mode(mode: str | None) -> str:
     return normalized
 
 
-def _get_spanner_ddl_statements(driver: Any) -> tuple[str, ...]:
+def _get_spanner_ddl_statements(driver: Any) -> "tuple[str, ...]":
     database = _get_spanner_database(driver)
     if database is None:
         return ()
@@ -407,7 +405,7 @@ def _get_spanner_database_admin_api(database: Any) -> Any:
     return getattr(client, "database_admin_api", None)
 
 
-def _select_spanner_ddl_for_object(statements: tuple[str, ...], object_name: str) -> str:
+def _select_spanner_ddl_for_object(statements: "tuple[str, ...]", object_name: str) -> str:
     normalized_name = object_name.lower()
     for statement in statements:
         if normalized_name in statement.lower():

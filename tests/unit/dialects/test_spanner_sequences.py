@@ -1,5 +1,6 @@
 """Unit tests for Cloud Spanner Sequences (CREATE, ALTER, DROP, GET_NEXT_SEQUENCE_VALUE)."""
 
+import pytest
 from sqlglot import exp, parse_one
 
 
@@ -82,3 +83,14 @@ def test_get_next_sequence_value_in_parenthesized_expressions() -> None:
     spangres_sql = "SELECT GET_NEXT_SEQUENCE_VALUE(SEQUENCE customer_seq)"
     parsed_spangres = parse_one(spangres_sql, dialect="spangres")
     assert "GET_NEXT_SEQUENCE_VALUE(SEQUENCE customer_seq)" in parsed_spangres.sql(dialect="spangres")
+
+
+@pytest.mark.parametrize("dialect", ["spanner", "spangres"])
+def test_qualified_sequence_value(dialect: str) -> None:
+    sql = "SELECT GET_NEXT_SEQUENCE_VALUE(SEQUENCE catalog.seq)"
+    assert parse_one(sql, dialect=dialect).sql(dialect=dialect) == sql
+
+
+def test_create_sequence_if_not_exists() -> None:
+    sql = "CREATE SEQUENCE IF NOT EXISTS catalog.seq OPTIONS (sequence_kind = 'bit_reversed_positive')"
+    assert parse_one(sql, dialect="spanner").sql(dialect="spanner") == sql

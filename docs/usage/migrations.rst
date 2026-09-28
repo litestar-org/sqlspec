@@ -278,7 +278,10 @@ raises ``MigrationError`` before any DDL is issued.
        ``sys.schemas``. The previous default schema is restored after each
        migration (a failed transactional migration rolls the switch back).
        SQL Server refuses to alter the default schema of the ``dbo`` database
-       user (what ``sa`` maps to), so connect with a dedicated login. Because
+       user (what ``sa`` maps to). Use a dedicated migration login and database
+       user. ``ALTER USER`` changes the database user's default schema across
+       connections; it is not a session-local setting. Do not run migrations
+       alongside other work or migrations that share that database user. Because
        the restore is committed, a failed non-transactional migration on a
        connection with autocommit disabled also commits the statements that
        succeeded before the failure.

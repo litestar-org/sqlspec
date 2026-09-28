@@ -6,7 +6,7 @@ was added to fix QueryBuilder parameter handling issues.
 """
 
 import contextlib
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlglot import exp
@@ -319,3 +319,27 @@ def test_cached_static_expression_respects_copy_flag() -> None:
     assert "tbl" not in result.sql
     assert "tbl" not in repeat.sql
     assert repeat.parameters == {"val": 456}
+
+
+@pytest.mark.parametrize("static", [False, True])
+def test_cross_dialect_render_preserves_owned_and_cached_ast(static: bool) -> None:
+    expression = exp.select("a", "b").from_("items").distinct("a").order_by("a", "b")
+    builder = Select(dialect="postgres", enable_optimization=False)
+    builder.set_expression(expression)
+    expected = expression.sql(dialect="postgres")
+    cache_key = "cross-dialect-render-isolation"
+    cache = get_cache()
+    cache.delete_expression(cache_key)
+    try:
+        if static:
+            builder.build_static_expression(cache_key=cache_key, expression_factory=lambda: expression, dialect="mysql")
+            cached = cast("exp.Expr", cache.get_expression(cache_key))
+            assert cached.sql(dialect="postgres") == expected
+            rendered = builder.build_static_expression(cache_key=cache_key, dialect="postgres")
+        else:
+            builder.build(dialect="mysql")
+            rendered = builder.build(dialect="postgres")
+        assert expression.sql(dialect="postgres") == expected
+        assert "DISTINCT ON" in rendered.sql
+    finally:
+        cache.delete_expression(cache_key)

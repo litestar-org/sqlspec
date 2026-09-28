@@ -290,7 +290,7 @@ class SelectClauseMixin:
                 msg = "Subquery builder has no expression to include in FROM clause."
                 raise SQLBuilderError(msg)
 
-            subquery_copy = subquery_expression.copy()
+            subquery_copy = subquery_expression if isinstance(table, QueryBuilder) else subquery_expression.copy()
             base_builder = cast("QueryBuilder", builder)
             param_mapping = base_builder._merge_cte_parameters(alias or "subquery", table.parameters)
             if param_mapping:

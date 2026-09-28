@@ -8,7 +8,11 @@ from sqlglot import exp
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._parsing_utils import extract_expression, extract_sql_object_expression
+from sqlspec.builder._parsing_utils import (
+    _mark_explicit_table_quotes,
+    extract_expression,
+    extract_sql_object_expression,
+)
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.protocols import SQLBuilderProtocol
 from sqlspec.utils.serializers import schema_dump
@@ -54,7 +58,7 @@ class DeleteFromClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", exp.to_table(table))
+        current_expr.set("this", _mark_explicit_table_quotes(exp.to_table(table), table))
         return self
 
 
@@ -76,7 +80,7 @@ class InsertIntoClauseMixin:
             raise SQLBuilderError(msg)
 
         assert current_expr is not None
-        current_expr.set("this", exp.to_table(table))
+        current_expr.set("this", _mark_explicit_table_quotes(exp.to_table(table), table))
         return self
 
 
@@ -251,7 +255,7 @@ class UpdateTableClauseMixin:
 
         assert current_expr is not None
 
-        table_expr: exp.Expr = exp.to_table(table_name, alias=alias)
+        table_expr: exp.Expr = _mark_explicit_table_quotes(exp.to_table(table_name, alias=alias), table_name)
         current_expr.set("this", table_expr)
         return self
 
@@ -388,7 +392,13 @@ class UpdateFromClauseMixin:
                 msg = "Subquery builder has no expression to include in FROM clause."
                 raise SQLBuilderError(msg)
 
-            subquery_copy = raw_expression.copy() if hasattr(raw_expression, "copy") else raw_expression
+            subquery_copy = (
+                raw_expression
+                if isinstance(table, QueryBuilder)
+                else raw_expression.copy()
+                if hasattr(raw_expression, "copy")
+                else raw_expression
+            )
             base_builder = cast("QueryBuilder", self)
             builder_alias = getattr(table, "alias_name", None) or getattr(table, "alias", None)
             if not isinstance(builder_alias, str):
@@ -407,10 +417,11 @@ class UpdateFromClauseMixin:
                 if alias:
                     cols: list[str] = []
                     existing_alias = subquery_copy.args.get("alias")
+                    source_columns = getattr(table, "columns", None)
                     if existing_alias and existing_alias.args.get("columns"):
                         cols = [c.name for c in existing_alias.args["columns"]]
-                    elif hasattr(table, "columns") and isinstance(table.columns, (list, tuple)):
-                        cols = [str(c) for c in table.columns]
+                    elif isinstance(source_columns, (list, tuple)):
+                        cols = [str(c) for c in source_columns]
                     table_expr = exp.alias_(subquery_copy, alias, table=cols or False)
                 else:
                     table_expr = subquery_copy

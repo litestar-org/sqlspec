@@ -53,7 +53,7 @@ _TABLE_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9
 _POSTGRES_DIALECTS: Final["frozenset[str]"] = frozenset({"postgres", "postgresql"})
 _MYSQL_DIALECTS: Final["frozenset[str]"] = frozenset({"mariadb", "mysql"})
 _ON_CONFLICT_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "postgres", "sqlite"})
-_JSON_VALUE_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "mysql", "postgres"})
+_JSON_VALUE_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "mysql", "postgres", "sqlite"})
 _JSON_TYPE_NAMES: Final["frozenset[str]"] = frozenset({"json", "jsonb"})
 _METADATA_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "mysql", "postgres", "sqlite"})
 _BINARY_TYPES: Final["frozenset[str]"] = frozenset({
@@ -259,9 +259,9 @@ def load_table_fixtures_sync(
     DuckDB ``[months, days, nanoseconds]`` interval lists to interval text; strings and
     numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
     ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
-    PostgreSQL, MySQL, and DuckDB json and jsonb values to JSON text. SQLite only converts
-    binary columns. All other values, including array elements and durations with year or
-    month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
+    PostgreSQL, MySQL, DuckDB, and SQLite json and jsonb values to JSON text. SQLite
+    only converts binary and JSON columns. All other values, including array elements
+    and durations with year or month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
     of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS`` identity
     columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and are never
     updated by upserts.
@@ -363,9 +363,9 @@ async def load_table_fixtures_async(
     DuckDB ``[months, days, nanoseconds]`` interval lists to interval text; strings and
     numbers in numeric and decimal columns to ``Decimal``; strings in uuid columns to
     ``UUID``; base64 strings in bytea, blob, binary, and varbinary columns to bytes; and
-    PostgreSQL, MySQL, and DuckDB json and jsonb values to JSON text. SQLite only converts
-    binary columns. All other values, including array elements and durations with year or
-    month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
+    PostgreSQL, MySQL, DuckDB, and SQLite json and jsonb values to JSON text. SQLite
+    only converts binary and JSON columns. All other values, including array elements
+    and durations with year or month parts such as ``P1M``, are passed to the driver as decoded from JSON. Values
     of generated columns are ignored. On PostgreSQL, ``GENERATED ALWAYS`` identity
     columns receive the loaded values through ``OVERRIDING SYSTEM VALUE`` and are never
     updated by upserts.
@@ -961,8 +961,8 @@ def _drop_generated_values(
     generated = _generated_column_names(columns)
     unknown: set[str] = set()
     if ignore_unknown_columns:
-        known_lower = {column.name.lower() for column in columns}
-        unknown = {key for key in rows[0] if key.lower() not in known_lower}
+        known = {column.name for column in columns}
+        unknown = set(rows[0]) - known
     to_drop = (generated & set(rows[0])) | unknown
     if not to_drop:
         return
@@ -1077,29 +1077,16 @@ def _decode_uuid(value: Any) -> Any:
     return convert_uuid(value) if isinstance(value, str) else value
 
 
-def _encode_json_column_value(value: Any) -> str:
-    """Encode a JSON column value to JSON text, preserving legacy pre-encoded JSON object/array strings."""
-    if isinstance(value, str) and value.strip()[:1] in {"{", "["}:
-        try:
-            decoded = decode_json(value)
-        except (ValueError, TypeError):
-            pass
-        else:
-            if isinstance(decoded, (dict, list)):
-                return encode_json(decoded)
-    return encode_json(value)
-
-
 def _column_value_decoder(family: str, data_type: str) -> "Callable[[Any], Any] | None":
     """Return the converter from a JSON value to the driver value for a column type, if any."""
     if data_type.endswith("]"):
         return None
     if data_type in _BINARY_TYPES or data_type.startswith(("binary(", "varbinary(")):
         return _decode_bytes
+    if data_type in _JSON_TYPE_NAMES:
+        return encode_json if family in _JSON_VALUE_FAMILIES else None
     if family == "sqlite":
         return None
-    if data_type in _JSON_TYPE_NAMES:
-        return _encode_json_column_value if family in _JSON_VALUE_FAMILIES else None
     if data_type.startswith(("timestamp", "datetime")):
         return _decode_datetime
     if data_type == "date":
@@ -1195,7 +1182,9 @@ def _table_insert_statement(
         )
     if family != "postgres" or always_identity.isdisjoint(columns):
         return statement
-    return insert_expression.sql(dialect=dialect).replace(") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1)
+    return insert_expression.sql(dialect=dialect, copy=False).replace(
+        ") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1
+    )
 
 
 def _insert_table_rows_sync(
@@ -1261,7 +1250,26 @@ def _table_export_query(dialect: "DialectType", table: str, table_columns: "list
         column.name for column in table_columns if _is_orderable_type(column.data_type)
     ]
     order_by = [_quoted_identifier_sql(name) for name in order_columns] or ["1"]
-    return Select("*", dialect=dialect).from_(_quoted_table_name(table)).order_by(*order_by)
+    projections: list[exp.Expr] = []
+    if any(column.data_type in _JSON_TYPE_NAMES for column in table_columns):
+        for column in table_columns:
+            expression = exp.Column(this=_quoted_identifier(column.name))
+            if column.data_type in _JSON_TYPE_NAMES:
+                # Normalize native JSON decoding across drivers before reading scalar strings.
+                projections.append(
+                    exp.Alias(
+                        this=exp.Cast(this=expression, to=exp.DataType(this=exp.DataType.Type.TEXT)),
+                        alias=_quoted_identifier(column.name),
+                    )
+                )
+            else:
+                projections.append(expression)
+    return (
+        Select(dialect=dialect)
+        .select(*(projections or [exp.Star()]))
+        .from_(_quoted_table_name(table))
+        .order_by(*order_by)
+    )
 
 
 def _sequence_resync_enabled(resync_sequences: bool, dialect_name: str, family: str) -> bool:

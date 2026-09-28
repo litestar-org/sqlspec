@@ -335,7 +335,7 @@ def _build_storage_copy_sql(sql: str, file_format: str) -> str | None:
     if file_format == "csv":
         options.append(exp.CopyParameter(this=exp.Var(this="HEADER"), expression=exp.Boolean(this=True)))
     return exp.Copy(this=exp.Subquery(this=statements[0]), kind=False, files=[exp.Placeholder()], params=options).sql(
-        dialect="duckdb"
+        dialect="duckdb", copy=False
     )
 
 
@@ -366,7 +366,9 @@ def _build_storage_read_sql(table: str, uri: str, file_format: str) -> str | Non
             exp.Kwarg(this=exp.Var(this="hive_partitioning"), expression=exp.Boolean(this=False)),
         ],
     )
-    return exp.Insert(this=target, expression=exp.select("*").from_(reader)).sql(dialect="duckdb")
+    return exp.Insert(this=target, expression=exp.select("*").from_(reader, copy=False)).sql(
+        dialect="duckdb", copy=False
+    )
 
 
 def _resolve_native_storage_target(

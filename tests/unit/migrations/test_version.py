@@ -364,7 +364,8 @@ def test_parse_extension_stem_round_trips_through_parse_version() -> None:
     assert parsed.sequence == 1
 
 
-def test_quoted_and_schema_qualified_version_table_ddl_and_tracker() -> None:
+@pytest.mark.parametrize("table_name,schema_name", [("Tracker", "App"), ("Migration Tracker", "App Schema")])
+def test_quoted_and_schema_qualified_version_table_ddl_and_tracker(table_name: str, schema_name: str) -> None:
     """Quoted and schema-qualified version_table identifiers render valid SQL without doubled quotes."""
     pg_config = StatementConfig(dialect="postgres")
 
@@ -388,18 +389,21 @@ def test_quoted_and_schema_qualified_version_table_ddl_and_tracker() -> None:
     assert '""' not in alter_stmt.sql
 
     for tracker in (
-        SyncMigrationTracker(version_table_name='"App"."Tracker"'),
-        SyncMigrationTracker(version_table_name='"Tracker"', version_table_schema='"App"'),
+        SyncMigrationTracker(version_table_name=f'"{schema_name}"."{table_name}"'),
+        SyncMigrationTracker(version_table_name=f'"{table_name}"', version_table_schema=f'"{schema_name}"'),
     ):
-        assert tracker.version_table_name == "Tracker"
-        assert tracker.version_table_schema == "App"
-        assert tracker.version_table == '"App"."Tracker"'
+        qualified = f'"{schema_name}"."{table_name}"'
+        assert tracker.version_table_name == table_name
+        assert tracker.version_table_schema == schema_name
+        assert tracker.version_table == qualified
+        version_query = tracker._current_version_query().to_statement(pg_config)  # pyright: ignore[reportPrivateUsage]
+        assert f"FROM {qualified}" in version_query.sql
 
         ddl_builder = tracker._tracking_table_ddl()  # pyright: ignore[reportPrivateUsage]
         ddl_sql = str(ddl_builder)
         pg_ddl_sql = ddl_builder.to_statement(pg_config).sql
-        assert 'CREATE TABLE IF NOT EXISTS "App"."Tracker"' in ddl_sql
-        assert 'CREATE TABLE IF NOT EXISTS "App"."Tracker"' in pg_ddl_sql
+        assert f"CREATE TABLE IF NOT EXISTS {qualified}" in ddl_sql
+        assert f"CREATE TABLE IF NOT EXISTS {qualified}" in pg_ddl_sql
         assert '""' not in ddl_sql
         assert '""' not in pg_ddl_sql
 
@@ -411,11 +415,11 @@ def test_quoted_and_schema_qualified_version_table_ddl_and_tracker() -> None:
 
         tracker.ensure_tracking_table(driver)
 
-        driver.data_dictionary.get_columns.assert_called_once_with(driver, "Tracker", schema="App")
+        driver.data_dictionary.get_columns.assert_called_once_with(driver, table_name, schema=schema_name)
         assert driver.execute.call_count == 2
         alter_builder = driver.execute.call_args_list[1].args[0]
         alter_rendered = alter_builder.to_statement(pg_config).sql
-        assert 'ALTER TABLE "App"."Tracker" ADD COLUMN' in alter_rendered
+        assert f"ALTER TABLE {qualified} ADD COLUMN" in alter_rendered
         assert '""' not in alter_rendered
 
 

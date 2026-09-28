@@ -162,18 +162,18 @@ class Db2SyncSessionContext:
         from sqlspec.adapters.db2.driver import Db2SyncDriver
 
         self._connection = self._acquire_connection()
-        self._driver = Db2SyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        if self._begin_transaction:
-            try:
+        try:
+            self._driver = Db2SyncDriver(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            if self._begin_transaction:
                 self._driver.begin()
-            except BaseException as exc:
-                self._release_connection(self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__)
-                self._connection = None
-                self._driver = None
-                raise
-        return self._prepare_driver(self._driver)
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -282,20 +282,18 @@ class Db2AsyncSessionContext:
         from sqlspec.adapters.db2.driver import Db2AsyncDriver
 
         self._connection = await self._acquire_connection()
-        self._driver = Db2AsyncDriver(
-            connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
-        )
-        if self._begin_transaction:
-            try:
+        try:
+            self._driver = Db2AsyncDriver(
+                connection=self._connection,
+                statement_config=self._statement_config,
+                driver_features=self._driver_features,
+            )
+            if self._begin_transaction:
                 await self._driver.begin()
-            except BaseException as exc:
-                await self._release_connection(
-                    self._connection, exc_type=type(exc), exc_val=exc, exc_tb=exc.__traceback__
-                )
-                self._connection = None
-                self._driver = None
-                raise
-        return self._prepare_driver(self._driver)
+            return self._prepare_driver(self._driver)
+        except BaseException as exc:
+            await self.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"

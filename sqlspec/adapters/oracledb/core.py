@@ -74,7 +74,6 @@ __all__ = (
     "build_profile",
     "build_statement_config",
     "build_truncate_statement",
-    "client_is_thin_mode",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
@@ -86,6 +85,8 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "normalize_column_names",
+    "normalize_execute_many_parameters_async",
+    "normalize_execute_many_parameters_sync",
     "resolve_row_metadata",
     "resolve_rowcount",
     "supports_df_batches",
@@ -156,14 +157,6 @@ def connection_is_thin(connection: object) -> bool:
     return bool(thin)
 
 
-def client_is_thin_mode() -> bool:
-    """Return whether python-oracledb is currently in Thin mode."""
-    is_thin = getattr(oracledb_module, "is_thin_mode", None)
-    if callable(is_thin):
-        return bool(is_thin())
-    return True
-
-
 def supports_direct_path_load(connection: object) -> bool:
     """Return whether a connection supports direct path load.
 
@@ -232,7 +225,7 @@ def normalize_column_names(column_names: "list[str]", driver_features: "dict[str
     return normalized
 
 
-def _normalize_execute_many_parameters_sync(parameters: Any) -> Any:
+def normalize_execute_many_parameters_sync(parameters: Any) -> Any:
     """Normalize parameters for Oracle executemany calls.
 
     Args:
@@ -246,7 +239,7 @@ def _normalize_execute_many_parameters_sync(parameters: Any) -> Any:
     return parameters
 
 
-def _normalize_execute_many_parameters_async(parameters: Any) -> Any:
+def normalize_execute_many_parameters_async(parameters: Any) -> Any:
     """Normalize parameters for Oracle async executemany calls.
 
     Args:
@@ -370,7 +363,7 @@ def coerce_many_parameters_sync(
     version_cache: Any = None,
 ) -> Any:
     """Coerce every parameter row prepared for synchronous ``executemany``."""
-    normalized = _normalize_execute_many_parameters_sync(parameters)
+    normalized = normalize_execute_many_parameters_sync(parameters)
     if not normalized:
         return normalized
     json_binding_state = _OracleJsonBindingState(connection, version_cache)
@@ -404,7 +397,7 @@ async def coerce_many_parameters_async(
     version_cache: Any = None,
 ) -> Any:
     """Coerce every parameter row prepared for asynchronous ``executemany``."""
-    normalized = _normalize_execute_many_parameters_async(parameters)
+    normalized = normalize_execute_many_parameters_async(parameters)
     if not normalized:
         return normalized
     json_binding_state = _OracleJsonBindingState(connection, version_cache)
@@ -870,7 +863,10 @@ def collect_sync_rows(
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
     if not requires_lob_coercion:
-        return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
+        first_row = fetched_data[0]
+        first_row_tuple = first_row if isinstance(first_row, tuple) else tuple(first_row)
+        if not _row_requires_lob_coercion(first_row_tuple):
+            return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
 
     data: list[tuple[Any, ...]] = []
     for row in fetched_data:
@@ -918,7 +914,10 @@ async def collect_async_rows(
     if requires_lob_coercion is None:
         requires_lob_coercion = _description_requires_lob_coercion(description)
     if not requires_lob_coercion:
-        return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
+        first_row = fetched_data[0]
+        first_row_tuple = first_row if isinstance(first_row, tuple) else tuple(first_row)
+        if not _row_requires_lob_coercion(first_row_tuple):
+            return cast("list[tuple[Any, ...]]", fetched_data), resolved_column_names
 
     data: list[tuple[Any, ...]] = []
     for row in fetched_data:

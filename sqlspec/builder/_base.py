@@ -39,6 +39,7 @@ __all__ = ("BuiltQuery", "ExpressionBuilder", "QueryBuilder")
 MAX_PARAMETER_COLLISION_ATTEMPTS = 1000
 PARAMETER_INDEX_PATTERN = re.compile(r"^param_(?P<index>\d+)$")
 _UPPER_FOLDING_DIALECTS: Final[frozenset[str]] = frozenset({"oracle", "db2"})
+_UNQUOTED_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][\w$#]*$")
 
 
 logger = get_logger(__name__)
@@ -258,11 +259,11 @@ class QueryBuilder:
         final_expression: exp.Expr = base_expression
         existing_with = final_expression.args.get("with_")
         if existing_with is None:
-            final_expression.set("with_", exp.With(expressions=list(self._with_ctes.values())))
+            final_expression.set("with_", exp.With(expressions=[cte.copy() for cte in self._with_ctes.values()]))
         else:
             for cte_node in self._with_ctes.values():
                 if cte_node not in existing_with.expressions:
-                    existing_with.append("expressions", cte_node)
+                    existing_with.append("expressions", cte_node.copy())
 
         if any(cte.meta.get("recursive") for cte in self._with_ctes.values()):
             final_expression.args["with_"].set("recursive", True)
@@ -291,9 +292,8 @@ class QueryBuilder:
                 self._raise_cte_query_error(
                     alias, f"expression must be a Select or Values, got {type(query_expr).__name__}"
                 )
-            cte_select_expression: exp.Expr = query_expr.copy()
+            cte_select_expression: exp.Expr = query_expr
             if isinstance(cte_select_expression, exp.Values) and cte_select_expression.args.get("alias"):
-                cte_select_expression = cte_select_expression.copy()
                 cte_select_expression.set("alias", None)
             param_mapping = self._merge_cte_parameters(alias, query.parameters)
             if param_mapping:
@@ -315,7 +315,6 @@ class QueryBuilder:
                 )
             cte_duck_expression: exp.Expr = raw_query_expr.copy()
             if isinstance(cte_duck_expression, exp.Values) and cte_duck_expression.args.get("alias"):
-                cte_duck_expression = cte_duck_expression.copy()
                 cte_duck_expression.set("alias", None)
             if hasattr(raw_query, "parameters"):
                 param_mapping = self._merge_cte_parameters(alias, raw_query.parameters)
@@ -628,7 +627,7 @@ class QueryBuilder:
         Returns:
             BuiltQuery: A dataclass containing the SQL string and parameters.
         """
-        final_expression = self._build_final_expression()
+        final_expression = self._build_final_expression(copy=True)
         self._validate_update_from(final_expression, _resolve_dialect(dialect, self.dialect))
 
         if self.enable_optimization and isinstance(final_expression, exp.Expr):
@@ -647,7 +646,9 @@ class QueryBuilder:
                 identify = self._should_identify(target_dialect)
                 if normalized_expression.find(exp.Lock) and target_dialect != "db2":
                     register_lock_generator(target_dialect)
-                sql_string = normalized_expression.sql(dialect=target_dialect, pretty=True, identify=identify)
+                sql_string = normalized_expression.sql(
+                    dialect=target_dialect, pretty=True, identify=identify, copy=False
+                )
                 sql_string = self._strip_merge_target_quotes(sql_string)
             else:
                 sql_string = str(final_expression)
@@ -1093,7 +1094,7 @@ class QueryBuilder:
         return str(dialect).lower() in _UPPER_FOLDING_DIALECTS
 
     def _unquote_identifiers(self, expression: exp.Expr) -> exp.Expr:
-        """Return a copy of the expression with identifier quoting removed.
+        """Remove generated quoting while preserving explicit table identifiers.
 
         Upper-folding dialects resolve quoted lowercase names case-sensitively, so quoting is
         removed to keep lookups aligned with how unquoted DDL created the objects.
@@ -1186,7 +1187,7 @@ class QueryBuilder:
 
         target_dialect = str(dialect) if dialect else self.dialect_name
         identify = self._should_identify(target_dialect)
-        sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify)
+        sql_string = expr.sql(dialect=target_dialect, pretty=True, identify=identify, copy=not copy)
         return BuiltQuery(
             sql=sql_string,
             parameters=parameters.copy() if parameters else {},
@@ -1260,6 +1261,10 @@ class _PlaceholderReplacer:
 
 
 def _unquote_identifier(node: exp.Expr) -> exp.Expr:
-    if isinstance(node, exp.Identifier):
+    if (
+        isinstance(node, exp.Identifier)
+        and not node.meta.get("sqlspec_explicit_table_quote")
+        and _UNQUOTED_IDENTIFIER_PATTERN.fullmatch(node.name)
+    ):
         node.set("quoted", False)
     return node

@@ -1708,8 +1708,8 @@ class CommonDriverAttributesMixin:
                 subquery_expr.set("order", None)
                 subquery_expr.set("limit", None)
                 subquery_expr.set("offset", None)
-                subquery = subquery_expr.subquery(alias="grouped_data")
-                count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+                subquery = subquery_expr.subquery(alias="grouped_data", copy=False)
+                count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery, copy=False)
             else:
                 # Direct count from source
                 count_expr = exp.select(exp.Count(this=exp.Star()))
@@ -1726,7 +1726,7 @@ class CommonDriverAttributesMixin:
                     if tables:
                         first_table = tables[0]
                         # Create new FROM clause with the found table
-                        count_expr = count_expr.from_(first_table.copy())
+                        count_expr = count_expr.from_(first_table.copy(), copy=False)
 
                 # Copy JOIN clauses
                 joins = expr.args.get("joins")
@@ -1760,8 +1760,8 @@ class CommonDriverAttributesMixin:
         count_source.set("order", None)
         count_source.set("limit", None)
         count_source.set("offset", None)
-        subquery = count_source.subquery(alias="total_query")
-        count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery)
+        subquery = count_source.subquery(alias="total_query", copy=False)
+        count_expr = exp.select(exp.Count(this=exp.Star())).from_(subquery, copy=False)
         if cte is not None:
             count_expr.set("with_", cte.copy())
         # Filter out pagination parameters (limit/offset) captured before compile()
@@ -1808,8 +1808,8 @@ class CommonDriverAttributesMixin:
             if cte:
                 expr_copy.set("with_", None)
             # Wrap set operation in subquery, then select all columns + count window
-            subquery = expr_copy.subquery(alias="__set_op_subq")
-            modified_expr = exp.select(exp.Column(this=exp.Star())).from_(subquery)
+            subquery = expr_copy.subquery(alias="__set_op_subq", copy=False)
+            modified_expr = exp.select(exp.Column(this=exp.Star())).from_(subquery, copy=False)
             count_window = exp.Window(this=exp.Count(this=exp.Star()))
             aliased_count = exp.alias_(count_window, alias)
             modified_expr = modified_expr.select(aliased_count, copy=False)

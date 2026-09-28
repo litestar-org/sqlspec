@@ -13,7 +13,6 @@ SELECT
     generation_expression
 FROM information_schema.columns
 WHERE (:schema_name::text IS NULL OR table_schema = :schema_name)
-  AND (:table_name::text IS NULL OR table_name = :table_name)
 ORDER BY table_schema, table_name, ordinal_position;
 
 -- name: by_table

@@ -1,8 +1,10 @@
 """OracleDB configuration tests covering driver kwargs and typed options."""
 
 from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from ssl import TLSVersion
 from typing import Any, cast, get_args, get_origin, get_type_hints
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from oracledb import AuthMode, PoolGetMode, Purity
@@ -17,6 +19,7 @@ from sqlspec.adapters.oracledb.config import (
     OraclePoolParams,
     OracleSyncConfig,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 class _StubConnection:
@@ -249,3 +252,91 @@ def test_oracle_config_normalizes_aliases() -> None:
     assert async_config.connection_config["user"] == "scott"
     assert "connection_string" not in async_config.connection_config
     assert "username" not in async_config.connection_config
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_pool_close_preserves_native_borrowed_connection_guard(asynchronous: bool) -> None:
+    pool = Mock()
+    close = AsyncMock if asynchronous else Mock
+    pool.close = close(side_effect=RuntimeError("connections remain checked out"))
+    config = OracleAsyncConfig(connection_instance=pool) if asynchronous else OracleSyncConfig(connection_instance=pool)
+
+    with pytest.raises(RuntimeError, match="checked out"):
+        result = config._close_pool()
+        if isawaitable(result):
+            await result
+
+    pool.close.assert_called_once_with()
+    assert config.connection_instance is pool
+
+
+@pytest.mark.parametrize("options", [{"thick_mode": True}, {"lib_dir": "/oracle/lib"}, {"soda_metadata_cache": True}])
+@pytest.mark.parametrize("thin_mode", [False, True])
+def test_sync_pool_initializes_requested_thick_mode(
+    options: dict[str, Any], thin_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initialize = Mock()
+    create_pool = Mock()
+    monkeypatch.setattr(oracle_config_module.oracledb, "init_oracle_client", initialize)
+    monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: thin_mode)
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool", create_pool)
+    config = OracleSyncConfig(connection_config={**options, "config_dir": "/oracle/config"})
+
+    assert config._create_pool() is create_pool.return_value
+
+    expected = {"config_dir": "/oracle/config"}
+    if "lib_dir" in options:
+        expected["lib_dir"] = options["lib_dir"]
+    assert initialize.call_args_list == ([call(**expected)] if thin_mode else [])
+    assert create_pool.call_args.kwargs == {
+        **{key: value for key, value in options.items() if key not in {"thick_mode", "lib_dir"}},
+        "config_dir": "/oracle/config",
+        "session_callback": config._init_connection,
+    }
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_explicit_thin_mode_is_consumed(asynchronous: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    initialize = Mock()
+    create_pool = Mock()
+    monkeypatch.setattr(oracle_config_module.oracledb, "init_oracle_client", initialize)
+    monkeypatch.setattr(oracle_config_module.oracledb, "is_thin_mode", lambda: True)
+    monkeypatch.setattr(
+        oracle_config_module.oracledb, "create_pool_async" if asynchronous else "create_pool", create_pool
+    )
+    config_type = OracleAsyncConfig if asynchronous else OracleSyncConfig
+    config = config_type(connection_config={"thick_mode": False})
+    result = config._create_pool()
+    result = await result if isawaitable(result) else result
+
+    assert result is create_pool.return_value
+    initialize.assert_not_called()
+    assert create_pool.call_args.kwargs == {"session_callback": config._init_connection}
+
+
+@pytest.mark.parametrize("options", [{"thick_mode": True}, {"lib_dir": "/oracle/lib"}])
+async def test_async_pool_rejects_thick_mode(options: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    initialize = Mock()
+    create_pool = Mock()
+    monkeypatch.setattr(oracle_config_module.oracledb, "init_oracle_client", initialize)
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool_async", create_pool)
+    config = OracleAsyncConfig(connection_config=options)
+
+    with pytest.raises(ImproperConfigurationError, match="only supports Thin mode"):
+        await config._create_pool()
+
+    initialize.assert_not_called()
+    create_pool.assert_not_called()
+
+
+async def test_async_soda_option_does_not_initialize_thick_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    initialize = Mock()
+    create_pool = Mock()
+    monkeypatch.setattr(oracle_config_module.oracledb, "init_oracle_client", initialize)
+    monkeypatch.setattr(oracle_config_module.oracledb, "create_pool_async", create_pool)
+    config = OracleAsyncConfig(connection_config={"soda_metadata_cache": True})
+
+    assert await config._create_pool() is create_pool.return_value
+
+    initialize.assert_not_called()
+    assert create_pool.call_args.kwargs["soda_metadata_cache"] is True

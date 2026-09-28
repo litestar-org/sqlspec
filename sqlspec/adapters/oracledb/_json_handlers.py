@@ -119,35 +119,16 @@ def json_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> A
     return _output_type_handler(cursor, metadata)
 
 
-def _has_input_handler(handler: Any, target_inner: Any) -> bool:
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
     current = handler
     while current is not None:
         if current is target_inner:
             return True
-        if isinstance(current, partial):
-            args = current.args
-            if args and args[0] is target_inner:
-                return True
-            if len(args) > 1:
-                current = args[1]
-                continue
-        break
-    return False
-
-
-def _has_output_handler(handler: Any, target_inner: Any) -> bool:
-    current = handler
-    while current is not None:
-        if current is target_inner:
+        if not isinstance(current, partial) or current.func is not chain_function:
+            return False
+        inner, current = current.args
+        if inner is target_inner:
             return True
-        if isinstance(current, partial):
-            args = current.args
-            if args and args[0] is target_inner:
-                return True
-            if len(args) > 1:
-                current = args[1]
-                continue
-        break
     return False
 
 
@@ -171,15 +152,19 @@ def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
 
 
 def chain_input_handler(inner: Any, fallback: "Any | None") -> Any:
-    """Build an input type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_input_handler(fallback, inner):
+    """Build an input type handler that chains ``inner`` to ``fallback``.
+
+    A partial keeps the signature introspectable when compiled with mypyc;
+    python-oracledb uses it to select the handler calling convention.
+    """
+    if fallback is not None and _has_handler(fallback, inner, _chained_input_handler):
         return fallback
     return partial(_chained_input_handler, inner, fallback)
 
 
 def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
     """Build an output type handler that chains ``inner`` to ``fallback``."""
-    if fallback is not None and _has_output_handler(fallback, inner):
+    if fallback is not None and _has_handler(fallback, inner, _chained_output_handler):
         return fallback
     return partial(_chained_output_handler, inner, fallback)
 

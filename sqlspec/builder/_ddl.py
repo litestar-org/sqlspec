@@ -12,7 +12,7 @@ from sqlglot.errors import ParseError
 from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
-from sqlspec.builder._parsing_utils import _normalize_dialect, parse_table_expression
+from sqlspec.builder._parsing_utils import _mark_explicit_table_quotes, _normalize_dialect
 from sqlspec.builder._select import Select
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import SQLBuilderError
@@ -1653,29 +1653,20 @@ def _parse_column_type(name: str | None, dtype: str, dialect: "DialectType | Non
         raise SQLBuilderError(msg) from exc
 
 
-_MIN_QUOTED_IDENTIFIER_LENGTH = 2
-
-
 def _parse_ddl_identifier(name: str, dialect: "DialectType | None" = None) -> exp.Identifier:
     """Parse a DDL identifier, preserving explicit SQL quoting without double-wrapping."""
     stripped = name.strip()
     if not stripped:
         return exp.to_identifier(name)
-    parsed = parse_table_expression(stripped, dialect=dialect)
-    if isinstance(parsed, exp.Table) and isinstance(parsed.this, exp.Identifier) and not parsed.args.get("db"):
+    parsed = _mark_explicit_table_quotes(exp.to_table(stripped, dialect=dialect), stripped)
+    if isinstance(parsed.this, exp.Identifier) and not parsed.args.get("db"):
         return parsed.this
-    if len(stripped) >= _MIN_QUOTED_IDENTIFIER_LENGTH and stripped[0] == stripped[-1] == '"':
-        return exp.Identifier(this=stripped[1:-1].replace('""', '"'), quoted=True)
     return exp.to_identifier(name)
 
 
 def _parse_ddl_table(table_name: str, schema: "str | None" = None, dialect: "DialectType | None" = None) -> exp.Table:
     """Parse a DDL table reference, preserving quoted table and schema identifiers."""
-    parsed = parse_table_expression(table_name, dialect=dialect)
-    if isinstance(parsed, exp.Table):
-        table = parsed.copy()
-    else:
-        table = exp.Table(this=_parse_ddl_identifier(table_name, dialect=dialect))
+    table = _mark_explicit_table_quotes(exp.to_table(table_name, dialect=dialect), table_name)
     if schema:
         table.set("db", _parse_ddl_identifier(schema, dialect=dialect))
     return table

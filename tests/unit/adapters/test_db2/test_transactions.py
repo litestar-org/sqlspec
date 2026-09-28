@@ -339,3 +339,21 @@ async def test_begin_requires_ibm_db(db2_mode: DriverMode, monkeypatch: pytest.M
 
     with pytest.raises(MissingDependencyError):
         await db2_mode.call(driver.begin)
+
+
+@pytest.mark.anyio
+async def test_session_setup_failure_rolls_back_and_releases(fake_ibm_db: FakeModules, db2_mode: DriverMode) -> None:
+    connection = _registered_connection(fake_ibm_db)
+    released: list[tuple[object, object]] = []
+    context = db2_mode.session_context(connection, released, begin_transaction=True)
+
+    def fail_prepare(_driver: object) -> None:
+        raise RuntimeError("driver preparation failed")
+
+    context._prepare_driver = fail_prepare
+    with pytest.raises(RuntimeError, match="driver preparation failed"):
+        async with db2_mode.enter(context):
+            pytest.fail("Session setup must propagate the preparation error")
+    assert connection.rollbacks == 1
+    assert connection.autocommit is True
+    assert released == [(connection, RuntimeError)]

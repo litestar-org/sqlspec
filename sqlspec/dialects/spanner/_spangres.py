@@ -7,13 +7,15 @@ POLICY`` form is accepted on parse and normalized to the canonical policy
 node so generation always emits the valid PostgreSQL-dialect ``TTL`` form.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
 
 from sqlspec.dialects.spanner._generators import SpangresGenerator
 from sqlspec.dialects.spanner._parsers import SpangresParser, attach_hints
+
+if TYPE_CHECKING:
+    from sqlglot import exp
 
 __all__ = ("Spangres",)
 
@@ -24,7 +26,7 @@ class Spangres(Postgres):
     Parser = SpangresParser
     Generator = SpangresGenerator
 
-    def parse(self, sql: str, **opts: Any) -> list[exp.Expr | None]:
+    def parse(self, sql: str, **opts: Any) -> "list[exp.Expr | None]":
         """Parse Spangres SQL statements and attach hints."""
         expressions = super().parse(sql, **opts)
         for expression in expressions:
@@ -32,7 +34,7 @@ class Spangres(Postgres):
                 attach_hints(expression)
         return expressions
 
-    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> list[exp.Expr | None]:
+    def parse_into(self, expression_type: Any, sql: str, **opts: Any) -> "list[exp.Expr | None]":
         """Parse into specific expression type with attached hints."""
         expressions = super().parse_into(expression_type, sql, **opts)
         for expression in expressions:

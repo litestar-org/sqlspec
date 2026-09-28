@@ -659,3 +659,23 @@ def test_set_operation_support_apply_offset_rejects_non_select_non_set_operation
     update_expr = exp.update("users", {"name": exp.Literal.string("test")})
     with pytest.raises(SQLSpecError, match="OFFSET only valid for SELECT"):
         apply_offset(update_expr, 5)
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "sqlite"])
+def test_column_pruning_cache_isolates_returned_expression(dialect: str) -> None:
+    source = sqlglot.parse_one("SELECT a FROM (SELECT a, b FROM items) AS nested")
+    original = source.sql()
+    cache_key = "prune-return-isolation"
+    cache = get_cache()
+    cache.delete_optimized(cache_key, dialect)
+    try:
+        first = apply_column_pruning(source, dialect=dialect, cache_key=cache_key)
+        expected = first.sql(dialect=dialect)
+        first.set("limit", exp.Limit(expression=exp.Literal.number(7)))
+        second = apply_column_pruning(source, dialect=dialect, cache_key=cache_key)
+        assert second.sql(dialect=dialect) == expected
+        second.set("offset", exp.Offset(expression=exp.Literal.number(3)))
+        assert apply_column_pruning(source, dialect=dialect, cache_key=cache_key).sql(dialect=dialect) == expected
+        assert source.sql() == original
+    finally:
+        cache.delete_optimized(cache_key, dialect)

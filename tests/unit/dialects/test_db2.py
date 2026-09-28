@@ -174,3 +174,42 @@ def test_set_operation_pagination() -> None:
         "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id LIMIT 3 OFFSET 2", read="postgres", write="db2"
     )[0]
     assert result == "SELECT id FROM a UNION ALL SELECT id FROM b ORDER BY id OFFSET 2 ROWS FETCH NEXT 3 ROWS ONLY"
+
+
+def test_locate_preserves_native_start_argument() -> None:
+    sql = "SELECT LOCATE('x', 'x-x', 3) FROM SYSIBM.SYSDUMMY1"
+    assert parse_one(sql, dialect="db2").sql(dialect="db2") == sql
+
+
+def test_string_position_preserves_occurrence() -> None:
+    expression = exp.StrPosition(
+        this=exp.Literal.string("x-x-x"),
+        substr=exp.Literal.string("x"),
+        position=exp.Literal.number(2),
+        occurrence=exp.Literal.number(2),
+    )
+    assert expression.sql(dialect="db2") == "LOCATE_IN_STRING('x-x-x', 'x', 2, 2)"
+
+
+def test_db2_direct_generation_preserves_query_and_pagination_ownership() -> None:
+    from sqlspec.dialects.db2._generators import select_sql, set_operation_sql
+    from sqlspec.dialects.db2._transforms import add_sysibm_dual
+
+    select = parse_one("SELECT 1 LIMIT 2", read="postgres")
+    assert isinstance(select, exp.Select)
+    select.set("sqlspec_db2_isolation", "UR")
+    snapshot = select.copy()
+    dialect = DB2()
+    assert select_sql(dialect.generator(), select) == "SELECT 1 FROM SYSIBM.SYSDUMMY1 FETCH FIRST 2 ROWS ONLY WITH UR"
+    assert select == snapshot
+    assert select.args["limit"].expression.parent is select.args["limit"]
+    assert add_sysibm_dual(select) is not select
+    assert select == snapshot
+
+    union = parse_one("SELECT 1 UNION SELECT 2 LIMIT 3", read="postgres")
+    assert isinstance(union, exp.SetOperation)
+    union_snapshot = union.copy()
+    assert set_operation_sql(dialect.generator(), union).endswith("FETCH FIRST 3 ROWS ONLY")
+    assert union == union_snapshot
+    assert union.args["limit"].expression.parent is union.args["limit"]
+    assert union.sql(dialect="db2") == set_operation_sql(dialect.generator(), union)

@@ -25,12 +25,7 @@ from sqlspec.adapters.oracledb._typing import OraclePurity as Purity
 from sqlspec.adapters.oracledb._typing import oracledb_module as oracledb
 from sqlspec.adapters.oracledb._uuid_handlers import register_uuid_handlers
 from sqlspec.adapters.oracledb._vector_handlers import register_numpy_handlers
-from sqlspec.adapters.oracledb.core import (
-    apply_driver_features,
-    build_connection_config,
-    client_is_thin_mode,
-    default_statement_config,
-)
+from sqlspec.adapters.oracledb.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, resolve_oracle_connection_major
 from sqlspec.adapters.oracledb.driver import (
     OracleAsyncDriver,
@@ -47,16 +42,15 @@ from sqlspec.driver import (
     SyncPoolConnectionContext,
     SyncPoolSessionFactory,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
-from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
 
-logger = get_logger("sqlspec.adapters.oracledb.config")
 
 __all__ = (
     "OracleAsyncConfig",
@@ -141,6 +135,8 @@ class OracleConnectionParams(TypedDict):
 class OraclePoolParams(OracleConnectionParams):
     """OracleDB pool parameters."""
 
+    thick_mode: NotRequired[bool]
+    lib_dir: NotRequired[str]
     pool_class: NotRequired[type[Any]]
     params: NotRequired[oracledb.PoolParams]
     min: NotRequired[int]
@@ -286,20 +282,6 @@ class _OracleSyncSessionConnectionHandler(SyncPoolSessionFactory):
         self._conn = None
 
 
-def _ensure_thick_mode(*, lib_dir: "str | None" = None, config_dir: "str | None" = None) -> None:
-    """Initialize python-oracledb thick mode automatically if requested."""
-    if not client_is_thin_mode():
-        return
-    init_oracle_client = getattr(oracledb, "init_oracle_client", None)
-    if callable(init_oracle_client):
-        kwargs: dict[str, Any] = {}
-        if lib_dir is not None:
-            kwargs["lib_dir"] = lib_dir
-        if config_dir is not None:
-            kwargs["config_dir"] = config_dir
-        init_oracle_client(**kwargs)
-
-
 class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConnectionPool", OracleSyncDriver]):
     """Configuration for Oracle synchronous database connections."""
 
@@ -428,17 +410,15 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def _create_pool(self) -> "OracleSyncConnectionPool":
         """Create the actual connection pool."""
         config = dict(self.connection_config)
-
         thick_mode = config.pop("thick_mode", False)
         lib_dir = config.pop("lib_dir", None)
-        config_dir = config.get("config_dir")
-        if thick_mode or lib_dir is not None or config.get("soda_metadata_cache"):
-            _ensure_thick_mode(lib_dir=lib_dir, config_dir=config_dir)
-
-        if config.get("soda_metadata_cache") and client_is_thin_mode():
-            logger.warning(
-                "soda_metadata_cache requires python-oracledb Thick mode; SODA operations are unsupported in Thin mode."
-            )
+        if (thick_mode or lib_dir is not None or config.get("soda_metadata_cache")) and oracledb.is_thin_mode():
+            client_config = {}
+            if lib_dir is not None:
+                client_config["lib_dir"] = lib_dir
+            if config.get("config_dir") is not None:
+                client_config["config_dir"] = config["config_dir"]
+            oracledb.init_oracle_client(**client_config)
 
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
@@ -488,10 +468,7 @@ class OracleSyncConfig(SyncDatabaseConfig[OracleSyncConnection, "OracleSyncConne
     def _close_pool(self) -> None:
         """Close the actual connection pool."""
         if self.connection_instance:
-            try:
-                self.connection_instance.close(force=True)
-            except TypeError:
-                self.connection_instance.close()
+            self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()
 
@@ -634,17 +611,11 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     async def _create_pool(self) -> "OracleAsyncConnectionPool":
         """Create the actual async connection pool."""
         config = dict(self.connection_config)
-
         thick_mode = config.pop("thick_mode", False)
         lib_dir = config.pop("lib_dir", None)
-        config_dir = config.get("config_dir")
-        if thick_mode or lib_dir is not None or config.get("soda_metadata_cache"):
-            _ensure_thick_mode(lib_dir=lib_dir, config_dir=config_dir)
-
-        if config.get("soda_metadata_cache") and client_is_thin_mode():
-            logger.warning(
-                "soda_metadata_cache requires python-oracledb Thick mode; SODA operations are unsupported in Thin mode."
-            )
+        if thick_mode or lib_dir is not None:
+            msg = "OracleAsyncConfig only supports Thin mode; use OracleSyncConfig for Thick mode."
+            raise ImproperConfigurationError(msg)
 
         config.pop("threaded", None)
         config["session_callback"] = self._init_connection
@@ -695,9 +666,6 @@ class OracleAsyncConfig(AsyncDatabaseConfig[OracleAsyncConnection, "OracleAsyncC
     async def _close_pool(self) -> None:
         """Close the actual async connection pool."""
         if self.connection_instance:
-            try:
-                await self.connection_instance.close(force=True)
-            except TypeError:
-                await self.connection_instance.close()
+            await self.connection_instance.close()
             self.connection_instance = None
         self._oracle_version_cache.reset()

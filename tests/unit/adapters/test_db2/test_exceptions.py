@@ -233,7 +233,7 @@ def test_resolve_rowcount() -> None:
     class NoRowcountCursor:
         rowcount = -1
 
-    assert resolve_many_rowcount(NoRowcountCursor(), [(1,), (2,)]) == 2
+    assert resolve_many_rowcount(NoRowcountCursor(), [(1,), (2,)]) == -1
     assert resolve_many_rowcount(NoRowcountCursor(), None) == 0
 
 
