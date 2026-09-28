@@ -1,23 +1,26 @@
 """AIOSQLite driver implementation for async SQLite operations."""
 
 import asyncio
+import contextlib
+import inspect
 import random
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import (
     AiosqliteStreamSource,
-    _execute_and_resolve_metadata,
-    _execute_fetchall_with_metadata,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    end_transaction,
+    execute_and_resolve_metadata,
+    execute_fetchall_with_metadata,
+    execute_many_on_worker_thread,
     format_identifier,
-    normalize_execute_many_parameters,
     normalize_execute_parameters,
     resolve_rowcount,
     run_on_worker_thread,
@@ -53,6 +56,9 @@ __all__ = (
     "AiosqliteRawCursor",
     "AiosqliteSessionContext",
 )
+
+_execute_and_resolve_metadata = execute_and_resolve_metadata
+_execute_fetchall_with_metadata = execute_fetchall_with_metadata
 
 
 class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
@@ -147,11 +153,11 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self._invalidate_rowid_target_cache(statement.operation_type)
 
         try:
-            await cursor.executemany(sql, normalize_execute_many_parameters(prepared_parameters))
+            affected_rows = await run_on_worker_thread(
+                self.connection, execute_many_on_worker_thread, self.connection, sql, prepared_parameters
+            )
         finally:
             self._invalidate_rowid_target_cache(statement.operation_type)
-
-        affected_rows = resolve_rowcount(cursor)
 
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
@@ -194,30 +200,49 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             and self.observability.is_idle
             and self._can_use_execute_many_thin_path(statement, parameters, config)
         ):
+            cursor = None
             try:
                 cursor = await self.connection.executemany(statement, parameters)
+                rowcount = cursor.rowcount
+                affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
+                operation = self._resolve_dml_operation_type(statement)
+                self._invalidate_rowid_target_cache(operation)
+                return DMLResult(operation, affected_rows)
             except (aiosqlite.Error, sqlite3.Error) as exc:
                 raise create_mapped_exception(exc) from exc
-
-            rowcount = cursor.rowcount
-            affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
-            operation = self._resolve_dml_operation_type(statement)
-            self._invalidate_rowid_target_cache(operation)
-            return DMLResult(operation, affected_rows)
+            finally:
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        close_result = cursor.close()
+                        if inspect.isawaitable(close_result):
+                            await close_result
         return await super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    async def begin(self) -> None:
-        """Begin a database transaction."""
+    async def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
+        """Begin a database transaction.
+
+        Args:
+            mode: Transaction locking mode (DEFERRED, IMMEDIATE, EXCLUSIVE).
+                Falls back to ``driver_features['default_transaction_mode']``,
+                or ``IMMEDIATE`` when neither is set.
+        """
+        transaction_mode = (
+            mode if mode is not None else self.driver_features.get("default_transaction_mode", "IMMEDIATE")
+        )
+        stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
+        if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
+            msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
+            raise ValueError(msg)
         try:
             if not self.connection.in_transaction:
-                await self.connection.execute("BEGIN IMMEDIATE")
+                await self.connection.execute(stmt)
         except aiosqlite.Error as e:
-            await _retry_begin_with_backoff(self.connection, e)
+            await _retry_begin_with_backoff(self.connection, e, statement=stmt)
 
     async def commit(self) -> None:
         """Commit the current transaction."""
         try:
-            await self.connection.commit()
+            await end_transaction(self.connection, commit=True)
         except aiosqlite.Error as e:
             msg = f"Failed to commit transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -225,7 +250,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
     async def rollback(self) -> None:
         """Rollback the current transaction."""
         try:
-            await self.connection.rollback()
+            await end_transaction(self.connection, commit=False)
         except aiosqlite.Error as e:
             msg = f"Failed to rollback transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -273,38 +298,48 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
+        batch_size: int = 10000,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
         """Load Arrow data into SQLite using batched inserts."""
-
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            msg = "batch_size must be a positive integer"
+            raise ValueError(msg)
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        prepared_records = (
-            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-            if records and self._arrow_rows_need_preparation(arrow_table)
-            else records
-        )
+        columns = arrow_table.column_names
+        insert_sql = build_insert_statement(table, columns)
+        needs_prep = self._arrow_rows_need_preparation(arrow_table)
+
         owns_transaction = not self.connection.in_transaction
         try:
             if owns_transaction:
-                await self.connection.execute("BEGIN IMMEDIATE")
+                await self.begin()
             if overwrite:
                 statement = f"DELETE FROM {format_identifier(table)}"
                 async with self.with_cursor(self.connection) as cursor:
                     await cursor.execute(statement)
-            if records:
-                insert_sql = build_insert_statement(table, columns)
-                async with self.with_cursor(self.connection) as cursor:
-                    await cursor.executemany(insert_sql, cast("Any", prepared_records))
+            for batch in arrow_table.to_batches(max_chunksize=batch_size):
+                pydict = batch.to_pydict()
+                records = list(zip(*(pydict[col] for col in columns), strict=False))
+                if records:
+                    prepared_records = (
+                        self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                        if needs_prep
+                        else records
+                    )
+                    async with self.with_cursor(self.connection) as cursor:
+                        await cursor.executemany(insert_sql, cast("Any", prepared_records))
             if owns_transaction:
-                await self.connection.commit()
-        except (aiosqlite.Error, sqlite3.Error) as exc:
+                await self.commit()
+        except BaseException as exc:
             if owns_transaction:
-                await self.connection.rollback()
-            raise create_mapped_exception(exc) from exc
+                await self.rollback()
+            if isinstance(exc, (aiosqlite.Error, sqlite3.Error)):
+                raise create_mapped_exception(exc) from exc
+            raise
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -528,9 +563,13 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
 
 
 async def _retry_begin_with_backoff(
-    connection: "AiosqliteConnection", initial_error: aiosqlite.Error, max_retries: int = 3
+    connection: "AiosqliteConnection",
+    initial_error: aiosqlite.Error,
+    max_retries: int = 3,
+    *,
+    statement: str = "BEGIN IMMEDIATE",
 ) -> None:
-    """Retry ``BEGIN IMMEDIATE`` after SQLite reports a busy connection.
+    """Retry transaction start after SQLite reports a busy connection.
 
     Aiosqlite surfaces SQLite lock contention through ``aiosqlite.Error``. Preserve
     the existing bounded exponential-backoff behavior for every native error and
@@ -540,6 +579,7 @@ async def _retry_begin_with_backoff(
         connection: Aiosqlite connection used to retry the transaction start.
         initial_error: Error raised by the first transaction-start attempt.
         max_retries: Maximum number of retry attempts.
+        statement: SQL statement used to start the transaction.
 
     Raises:
         SQLSpecError: If every retry attempt fails.
@@ -548,7 +588,7 @@ async def _retry_begin_with_backoff(
         delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
         await asyncio.sleep(delay)
         try:
-            await connection.execute("BEGIN IMMEDIATE")
+            await connection.execute(statement)
         except aiosqlite.Error:
             if attempt == max_retries - 1:
                 break

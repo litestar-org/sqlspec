@@ -1,7 +1,9 @@
 """AIOSQLite adapter compiled helpers."""
 
 import contextlib
+import re
 import sys
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -33,7 +35,7 @@ from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_co
 from sqlspec.utils.type_guards import has_lastrowid, has_rowcount, has_sqlite_error
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
     from sqlspec.core.compiler import OperationType
@@ -41,8 +43,10 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 __all__ = (
+    "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "AiosqliteStreamSource",
     "apply_driver_features",
+    "apply_extension_pragmas",
     "build_connection_config",
     "build_insert_statement",
     "build_profile",
@@ -51,12 +55,18 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "end_transaction",
+    "execute_and_resolve_metadata",
     "execute_and_resolve_rowcount",
     "execute_fetchall_with_description",
+    "execute_fetchall_with_metadata",
+    "execute_many_on_worker_thread",
+    "extension_pragma_statements",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
+    "render_pragmas",
     "require_python_version",
     "resolve_lastrowid",
     "resolve_rowcount",
@@ -66,6 +76,14 @@ __all__ = (
 
 _TIME_TO_ISO = time_iso_convert
 _DECIMAL_TO_STRING = build_decimal_converter(mode="string")
+_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
+_EXTENSION_PRAGMA_PROFILE = (
+    "PRAGMA foreign_keys = ON",
+    "PRAGMA cache_size = -64000",
+    "PRAGMA mmap_size = 30000000",
+    "PRAGMA journal_size_limit = 67108864",
+)
 
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
@@ -81,20 +99,82 @@ SQLITE_LOCKED_CODE = 6
 SQLITE_INTERRUPT_CODE = 9
 SQLITE_PERM_CODE = 3
 SQLITE_READONLY_CODE = 8
+SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT = sys.version_info >= (3, 12)
 SQLITE_DATABASE_LIST_MIN_COLUMNS = 2
 SQLITE_TABLE_LIST_MIN_COLUMNS = 5
 SQLITE_TABLE_INFO_MIN_COLUMNS = 2
 SQLITE_ROWID_ALIASES = ("rowid", "_rowid_", "oid")
 
 
+def _end_transaction_on_worker(raw_conn: Any, *, commit: bool, supports_autocommit: bool) -> None:
+    """End an open transaction on a sqlite3 connection on the worker thread."""
+    if supports_autocommit and getattr(raw_conn, "autocommit", False) is True:
+        if getattr(raw_conn, "in_transaction", False):
+            cursor = raw_conn.execute("COMMIT" if commit else "ROLLBACK")
+            with contextlib.suppress(Exception):
+                cursor.close()
+        return
+    if commit:
+        raw_conn.commit()
+    else:
+        raw_conn.rollback()
+
+
+def _read_transaction_state_on_worker(raw_conn: Any) -> "tuple[bool, bool]":
+    """Read sqlite3 autocommit and in_transaction state on the worker thread."""
+    return getattr(raw_conn, "autocommit", False) is True, bool(getattr(raw_conn, "in_transaction", False))
+
+
+async def end_transaction(
+    connection: "AiosqliteConnection | Any", *, commit: bool, supports_autocommit: "bool | None" = None
+) -> None:
+    """End an open transaction on an aiosqlite connection.
+
+    Connection.commit and Connection.rollback are no-ops while the underlying
+    sqlite3 connection runs in autocommit mode, so the statement is issued
+    directly there.
+
+    Args:
+        connection: Connection whose transaction should end.
+        commit: Whether to commit rather than roll back.
+        supports_autocommit: Whether this runtime's sqlite3 exposes autocommit.
+    """
+    if supports_autocommit is None:
+        supports_autocommit = SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
+    raw_conn = getattr(connection, "_conn", None)
+    if isinstance(raw_conn, sqlite3.Connection) and callable(getattr(connection, "_execute", None)):
+        conn_dict = getattr(connection, "__dict__", None)
+        has_method_override = isinstance(conn_dict, dict) and any(
+            key in conn_dict for key in ("commit", "rollback", "execute")
+        )
+        if not has_method_override:
+            await run_on_worker_thread(
+                connection, _end_transaction_on_worker, raw_conn, commit=commit, supports_autocommit=supports_autocommit
+            )
+            return
+        autocommit, in_transaction = await run_on_worker_thread(connection, _read_transaction_state_on_worker, raw_conn)
+    else:
+        autocommit = getattr(raw_conn, "autocommit", False) is True or getattr(connection, "autocommit", False) is True
+        in_transaction = (
+            bool(getattr(raw_conn, "in_transaction", False))
+            if raw_conn is not None
+            else bool(getattr(connection, "in_transaction", False))
+        )
+    if supports_autocommit and autocommit:
+        if in_transaction:
+            await connection.execute("COMMIT" if commit else "ROLLBACK")
+        return
+    if commit:
+        await connection.commit()
+    else:
+        await connection.rollback()
+
+
 async def run_on_worker_thread(
     connection: "AiosqliteConnection", function: "Callable[..., _T]", *args: Any, **kwargs: Any
 ) -> _T:
     """Execute a sqlite3 callable on the aiosqlite worker thread."""
-    execute = cast(
-        "Callable[..., Awaitable[_T]]",
-        connection._execute,  # pyright: ignore[reportPrivateUsage]
-    )
+    execute = cast("Callable[..., Awaitable[_T]]", connection._execute)
     return await execute(function, *args, **kwargs)
 
 
@@ -368,8 +448,6 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     ):
         return _create_aiosqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
 
-    # SQLITE_BUSY means another process has the database locked
-    # SQLITE_LOCKED means another connection has the table/rows locked
     if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
         return _create_aiosqlite_error(error, error_code, DeadlockError, "database busy")
     if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
@@ -377,13 +455,11 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
     if "locked" in error_msg or "busy" in error_msg:
         return _create_aiosqlite_error(error, error_code or 0, DeadlockError, "database locked")
 
-    # Query interruption (timeout-like behavior)
     if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_aiosqlite_error(error, error_code, OperationCancelledError, "query interrupted")
     if "interrupt" in error_msg:
         return _create_aiosqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
 
-    # Permission errors
     if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_aiosqlite_error(error, error_code, PermissionDeniedError, "permission denied")
     if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
@@ -439,7 +515,7 @@ def build_profile() -> "DriverParameterProfile":
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
-            bool: _bool_to_int,
+            bool: int,
             datetime: _TIME_TO_ISO,
             date: _TIME_TO_ISO,
             Decimal: _DECIMAL_TO_STRING,
@@ -482,6 +558,54 @@ def apply_driver_features(
     return statement_config, features
 
 
+def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
+    extension_config = cast("dict[str, Any]", config.extension_config)
+    settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
+    profile = settings.get("pragma_profile", False)
+    if not isinstance(profile, bool):
+        msg = f"extension_config['{extension_name}']['pragma_profile'] must be a boolean"
+        raise ImproperConfigurationError(msg)
+    statements: list[str] = list(_EXTENSION_PRAGMA_PROFILE) if profile else []
+    overrides = settings.get("pragma_overrides")
+    if overrides is None:
+        return tuple(statements)
+    if not isinstance(overrides, Mapping):
+        msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
+        raise ImproperConfigurationError(msg)
+    try:
+        statements.extend(f"PRAGMA {name} = {value}" for name, value in render_pragmas(overrides))
+    except ImproperConfigurationError as exc:
+        msg = str(exc).replace(
+            "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
+        )
+        raise ImproperConfigurationError(msg) from exc
+    return tuple(statements)
+
+
+async def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
+    for statement in statements:
+        await connection.execute(statement)
+
+
+def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
+    rendered: list[tuple[str, str]] = []
+    for pragma_name, pragma_value in pragmas.items():
+        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
+            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
+            raise ImproperConfigurationError(msg)
+        if isinstance(pragma_value, bool):
+            rendered_value = "1" if pragma_value else "0"
+        elif isinstance(pragma_value, int):
+            rendered_value = str(pragma_value)
+        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
+            rendered_value = pragma_value
+        else:
+            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
+            raise ImproperConfigurationError(msg)
+        rendered.append((pragma_name, rendered_value))
+    return rendered
+
+
 def _execute_fetchall_with_metadata(
     connection: "AiosqliteConnection",
     sql: str,
@@ -491,7 +615,7 @@ def _execute_fetchall_with_metadata(
     eligibility_cache: "dict[tuple[str | None, str], bool]",
 ) -> "tuple[list[Any], Any, int, int | None]":
     """Execute a query and return rows plus execution metadata on the worker thread."""
-    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    raw_connection = connection._conn
     cursor = cast("Any", raw_connection.execute(sql, normalize_execute_parameters(parameters)))
     try:
         fetched_data = cursor.fetchall()
@@ -514,7 +638,7 @@ def _execute_and_resolve_metadata(
     eligibility_cache: "dict[tuple[str | None, str], bool]",
 ) -> "tuple[int, int | None]":
     """Execute a statement and resolve rowcount and lastrowid on the worker thread."""
-    raw_connection = connection._conn  # pyright: ignore[reportPrivateUsage]
+    raw_connection = connection._conn
     cursor = raw_connection.execute(sql, normalize_execute_parameters(parameters))
     try:
         rowcount = (
@@ -526,6 +650,25 @@ def _execute_and_resolve_metadata(
     finally:
         with contextlib.suppress(Exception):
             cast("Any", cursor).close()
+
+
+def _execute_many_on_worker_thread(connection: "AiosqliteConnection", sql: str, parameters: Any) -> int:
+    """Execute SQL with multiple parameter sets on the worker thread."""
+    raw_connection = connection._conn
+    cursor = raw_connection.cursor()
+    try:
+        cursor.executemany(sql, normalize_execute_many_parameters(parameters))
+        return (
+            cursor.rowcount if has_rowcount(cursor) and isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            cast("Any", cursor).close()
+
+
+execute_and_resolve_metadata = _execute_and_resolve_metadata
+execute_fetchall_with_metadata = _execute_fetchall_with_metadata
+execute_many_on_worker_thread = _execute_many_on_worker_thread
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
@@ -687,10 +830,6 @@ def _create_aiosqlite_error(
     exc = error_class(msg)
     exc.__cause__ = cast("BaseException", error)
     return exc
-
-
-def _bool_to_int(value: bool) -> int:
-    return int(value)
 
 
 driver_profile = build_profile()

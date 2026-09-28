@@ -1,7 +1,5 @@
 """Aiosqlite database configuration."""
 
-import re
-from collections.abc import Mapping
 from os import PathLike
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
@@ -14,7 +12,12 @@ from sqlspec.adapters.aiosqlite._typing import (
     AiosqliteCursor,
     AiosqliteSessionContext,
 )
-from sqlspec.adapters.aiosqlite.core import apply_driver_features, build_connection_config, default_statement_config
+from sqlspec.adapters.aiosqlite.core import (
+    apply_driver_features,
+    build_connection_config,
+    default_statement_config,
+    render_pragmas,
+)
 from sqlspec.adapters.aiosqlite.driver import AiosqliteDriver, AiosqliteExceptionHandler
 from sqlspec.adapters.aiosqlite.pool import (
     AiosqliteConnectionPool,
@@ -31,7 +34,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -45,6 +48,7 @@ __all__ = (
     "AiosqliteDriverFeatures",
     "AiosqliteFunctionConfig",
     "AiosqlitePoolParams",
+    "AiosqliteWindowFunctionConfig",
 )
 
 logger = get_logger("sqlspec.adapters.aiosqlite")
@@ -106,6 +110,14 @@ class AiosqliteAggregateConfig(TypedDict):
     aggregate_class: "type[Any]"
 
 
+class AiosqliteWindowFunctionConfig(TypedDict):
+    """User-defined aiosqlite window function registration."""
+
+    name: str
+    narg: int
+    window_class: "type[Any]"
+
+
 class AiosqliteDriverFeatures(TypedDict):
     """Aiosqlite driver feature configuration.
 
@@ -135,6 +147,9 @@ class AiosqliteDriverFeatures(TypedDict):
      Each entry must include name and func. Callable values are plain sync callables.
     custom_aggregates: Register SQL aggregates with step/finalize classes.
      Each entry must include name, narg, and aggregate_class.
+    custom_window_functions: Register user-defined aggregate window functions.
+     Each entry must include name, narg, and window_class.
+    default_transaction_mode: Default SQLite transaction mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
     authorizer_callback: sqlite3 authorizer hook run during statement compilation on the worker thread.
     trace_callback: sqlite3 trace hook run for executed statements on the worker thread.
     progress_handler: sqlite3 progress hook run every progress_handler_interval VM opcodes.
@@ -158,6 +173,8 @@ class AiosqliteDriverFeatures(TypedDict):
     custom_functions: "NotRequired[Sequence[AiosqliteFunctionConfig]]"
     custom_collations: "NotRequired[Sequence[AiosqliteCollationConfig]]"
     custom_aggregates: "NotRequired[Sequence[AiosqliteAggregateConfig]]"
+    custom_window_functions: "NotRequired[Sequence[AiosqliteWindowFunctionConfig]]"
+    default_transaction_mode: NotRequired[Literal["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]]
     authorizer_callback: "NotRequired[Callable[[int, str | None, str | None, str | None, str | None], int]]"
     trace_callback: "NotRequired[Callable[[str], None]]"
     progress_handler: "NotRequired[Callable[[], int | None]]"
@@ -168,14 +185,13 @@ class AiosqliteDriverFeatures(TypedDict):
     extensions: "NotRequired[Sequence[str]]"
 
 
-_PRAGMA_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_PRAGMA_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_.\-]+$")
 _ROW_FACTORY_LITERALS = frozenset({"dict", "row", "tuple"})
 _RUNTIME_FEATURE_KEYS = (
     "authorizer_callback",
     "custom_aggregates",
     "custom_collations",
     "custom_functions",
+    "custom_window_functions",
     "extensions",
     "pragmas",
     "progress_handler",
@@ -183,12 +199,6 @@ _RUNTIME_FEATURE_KEYS = (
     "row_factory",
     "text_factory",
     "trace_callback",
-)
-_EXTENSION_PRAGMA_PROFILE = (
-    "PRAGMA foreign_keys = ON",
-    "PRAGMA cache_size = -64000",
-    "PRAGMA mmap_size = 30000000",
-    "PRAGMA journal_size_limit = 67108864",
 )
 
 
@@ -353,6 +363,7 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             "AiosqliteFunctionConfig": AiosqliteFunctionConfig,
             "AiosqlitePoolParams": AiosqlitePoolParams,
             "AiosqliteSessionContext": AiosqliteSessionContext,
+            "AiosqliteWindowFunctionConfig": AiosqliteWindowFunctionConfig,
             "Literal": Literal,
             "PathLike": PathLike,
         })
@@ -440,54 +451,6 @@ class AiosqliteConfig(AsyncDatabaseConfig["AiosqliteConnection", AiosqliteConnec
             self.connection_instance = None
 
 
-def _extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str, ...]":
-    extension_config = cast("dict[str, Any]", config.extension_config)
-    settings = cast("dict[str, Any]", extension_config.get(extension_name, {}))
-    profile = settings.get("pragma_profile", False)
-    if not isinstance(profile, bool):
-        msg = f"extension_config['{extension_name}']['pragma_profile'] must be a boolean"
-        raise ImproperConfigurationError(msg)
-    statements: list[str] = list(_EXTENSION_PRAGMA_PROFILE) if profile else []
-    overrides = settings.get("pragma_overrides")
-    if overrides is None:
-        return tuple(statements)
-    if not isinstance(overrides, Mapping):
-        msg = f"extension_config['{extension_name}']['pragma_overrides'] must be a mapping of PRAGMA names to values"
-        raise ImproperConfigurationError(msg)
-    try:
-        statements.extend(f"PRAGMA {name} = {value}" for name, value in _render_pragmas(overrides))
-    except ImproperConfigurationError as exc:
-        msg = str(exc).replace(
-            "driver_features['pragmas']", f"extension_config['{extension_name}']['pragma_overrides']"
-        )
-        raise ImproperConfigurationError(msg) from exc
-    return tuple(statements)
-
-
-async def _apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
-    for statement in statements:
-        await connection.execute(statement)
-
-
-def _render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
-    rendered: list[tuple[str, str]] = []
-    for pragma_name, pragma_value in pragmas.items():
-        if not isinstance(pragma_name, str) or _PRAGMA_NAME_PATTERN.match(pragma_name) is None:
-            msg = f"Invalid PRAGMA name in driver_features['pragmas']: {pragma_name!r}"
-            raise ImproperConfigurationError(msg)
-        if isinstance(pragma_value, bool):
-            rendered_value = "1" if pragma_value else "0"
-        elif isinstance(pragma_value, int):
-            rendered_value = str(pragma_value)
-        elif isinstance(pragma_value, str) and _PRAGMA_VALUE_PATTERN.match(pragma_value) is not None:
-            rendered_value = pragma_value
-        else:
-            msg = f"Invalid PRAGMA value for {pragma_name!r} in driver_features['pragmas']: {pragma_value!r}"
-            raise ImproperConfigurationError(msg)
-        rendered.append((pragma_name, rendered_value))
-    return rendered
-
-
 def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:
     for entry in entries:
         for required_key in required_keys:
@@ -505,7 +468,7 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
         return None
 
     if "pragmas" in runtime_setup:
-        runtime_setup["pragmas"] = _render_pragmas(runtime_setup["pragmas"])
+        runtime_setup["pragmas"] = render_pragmas(runtime_setup["pragmas"])
 
     row_factory = runtime_setup.get("row_factory")
     if row_factory is not None and not isinstance(row_factory, str) and not callable(row_factory):
@@ -519,6 +482,9 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
     _validate_entries(runtime_setup.get("custom_collations", ()), ("name", "func"), "custom_collations")
     _validate_entries(
         runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
+    )
+    _validate_entries(
+        runtime_setup.get("custom_window_functions", ()), ("name", "narg", "window_class"), "custom_window_functions"
     )
 
     interval = runtime_setup.get("progress_handler_interval")

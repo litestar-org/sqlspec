@@ -17,6 +17,9 @@ Unreleased
 * BigQuery supports native query resource controls,
   explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
   stream modes while retaining the atomic PENDING default.
+* SQLite and aiosqlite can register custom window functions on Python 3.11
+  and later when the SQLite runtime supports them. Choose a transaction lock
+  mode or set the batch size for Arrow imports. Defaults stay the same.
 
 * Arrow ODBC runs ``execute_many()`` one row at a time. It reports an unknown
   row count since the native driver does not return the number of changed rows.
@@ -44,6 +47,9 @@ Unreleased
   and its Litestar session, events queue, and Google ADK stores.
 
 **Fixed:**
+
+* SQLite pools replace lost in-memory connections. Arrow imports roll back
+  writes on failure or cancellation when the adapter owns the transaction.
 
 * Builder results keep CTE trees independent, and column pruning no longer
   exposes its cached expression to mutation. SQL generation avoids redundant

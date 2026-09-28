@@ -21,7 +21,7 @@ class CustomConnection(sqlite3.Connection):
 
 def _annotation_contains(annotation: object, expected: object) -> bool:
     """Return whether an annotation tree contains the expected object."""
-    if annotation is expected:
+    if annotation is expected or annotation == expected:
         return True
     return any(_annotation_contains(arg, expected) for arg in get_args(annotation))
 
@@ -235,6 +235,11 @@ def test_custom_collation_entry_requires_keys() -> None:
 def test_custom_aggregate_entry_requires_keys() -> None:
     with pytest.raises(ImproperConfigurationError, match="custom_aggregates"):
         AiosqliteConfig(driver_features={"custom_aggregates": [{"name": "agg", "narg": 1}]})
+
+
+def test_custom_window_function_entry_requires_keys() -> None:
+    with pytest.raises(ImproperConfigurationError, match="custom_window_functions"):
+        AiosqliteConfig(driver_features={"custom_window_functions": [{"name": "win", "narg": 1}]})
 
 
 def test_progress_handler_interval_must_be_positive() -> None:

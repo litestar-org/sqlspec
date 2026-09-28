@@ -1,6 +1,9 @@
 """SQLite driver implementation."""
 
-from typing import TYPE_CHECKING, Any, cast
+import contextlib
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.sqlite._typing import SqliteCursor, SqliteSessionContext
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
@@ -19,32 +22,40 @@ from sqlspec.adapters.sqlite.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
-from sqlspec.core import ArrowResult, ParameterStyle, TypedParameter, get_cache_config, register_driver_profile
-from sqlspec.core.result import DMLResult
-from sqlspec.driver import (
-    BaseSyncExceptionHandler,
-    SyncDriverAdapterBase,
-    SyncRowStream,
+from sqlspec.core.cache import get_cache_config
+from sqlspec.core.parameters._registry import register_driver_profile
+from sqlspec.core.parameters._types import ParameterStyle, TypedParameter
+from sqlspec.core.result._base import ArrowResult, DMLResult
+from sqlspec.driver._common import (
+    CachedQuery,
+    ExecutionResult,
     parameter_value_needs_processing,
     type_coercion_fallbacks,
 )
+from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
+from sqlspec.driver._stream import SyncRowStream
+from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from sqlglot.dialects.dialect import DialectType
+
     from sqlspec.adapters.sqlite._typing import SqliteConnection
-    from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.builder._base import QueryBuilder
     from sqlspec.core.compiler import OperationType
-    from sqlspec.driver import CachedQuery, ExecutionResult
-    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.core.filters import StatementFilter
+    from sqlspec.core.result._base import SQLResult
+    from sqlspec.core.statement import SQL, Statement, StatementConfig
+    from sqlspec.storage.pipeline import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import StatementParameters
 
 __all__ = ("SqliteCursor", "SqliteDriver", "SqliteExceptionHandler", "SqliteSessionContext")
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SqliteExceptionHandler(BaseSyncExceptionHandler):
     """Context manager for handling SQLite database exceptions.
 
@@ -67,6 +78,7 @@ class SqliteExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class SqliteDriver(SyncDriverAdapterBase):
     """SQLite driver implementation.
 
@@ -75,7 +87,7 @@ class SqliteDriver(SyncDriverAdapterBase):
     """
 
     __slots__ = ("_data_dictionary", "_rowid_target_cache")
-    dialect = "sqlite"
+    dialect: "DialectType | None" = "sqlite"
 
     def __init__(
         self,
@@ -207,27 +219,40 @@ class SqliteDriver(SyncDriverAdapterBase):
             and self.observability.is_idle
             and self._can_use_execute_many_thin_path(statement, parameters, config)
         ):
+            cursor = None
             try:
                 cursor = self.connection.executemany(statement, parameters)
+                affected_rows = resolve_rowcount(cursor)
             except sqlite3.Error as exc:
                 raise create_mapped_exception(exc) from exc
+            finally:
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        cursor.close()
 
-            rowcount = cursor.rowcount
-            affected_rows = rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
             operation = self._resolve_dml_operation_type(statement)
             self._invalidate_rowid_target_cache(operation)
             return DMLResult(operation, affected_rows)
         return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
 
-    def begin(self) -> None:
+    def begin(self, mode: "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'] | None" = None) -> None:
         """Begin a database transaction.
+
+        Args:
+            mode: Transaction lock mode (DEFERRED, IMMEDIATE, or EXCLUSIVE).
+                Defaults to configured driver feature or SQLite default (DEFERRED).
 
         Raises:
             SQLSpecError: If transaction cannot be started
         """
+        transaction_mode = mode if mode is not None else self.driver_features.get("default_transaction_mode")
+        if transaction_mode is not None and transaction_mode not in {"DEFERRED", "IMMEDIATE", "EXCLUSIVE"}:
+            msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
+            raise ValueError(msg)
         try:
             if not self.connection.in_transaction:
-                self.connection.execute("BEGIN")
+                stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
+                self.connection.execute(stmt)
         except sqlite3.Error as e:
             msg = f"Failed to begin transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -239,7 +264,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         no-ops, so a manually started transaction has to be ended with an
         explicit statement.
         """
-        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and self.connection.autocommit is True
+        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and getattr(self.connection, "autocommit", None) is True
 
     def commit(self) -> None:
         """Commit the current transaction.
@@ -312,7 +337,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         **kwargs: Any,
     ) -> "StorageBridgeJob":
         """Execute a query and write Arrow-compatible output to storage (sync)."""
-
         self._require_capability("arrow_export_enabled")
         arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
         sync_pipeline = self._storage_pipeline()
@@ -327,20 +351,21 @@ class SqliteDriver(SyncDriverAdapterBase):
         table: str,
         source: "ArrowResult | Any",
         *,
+        batch_size: int = 10000,
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
     ) -> "StorageBridgeJob":
-        """Load Arrow data into SQLite using batched inserts."""
-
+        """Load Arrow data into SQLite using chunked batched inserts."""
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            msg = "batch_size must be a positive integer"
+            raise ValueError(msg)
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        prepared_records = (
-            self.prepare_driver_parameters(records, self.statement_config, is_many=True)
-            if records and self._arrow_rows_need_preparation(arrow_table)
-            else records
-        )
+        columns = arrow_table.column_names
+        insert_sql = build_insert_statement(table, columns)
+        needs_prep = self._arrow_rows_need_preparation(arrow_table)
+
         owns_transaction = not self.connection.in_transaction
         try:
             if owns_transaction:
@@ -349,16 +374,25 @@ class SqliteDriver(SyncDriverAdapterBase):
                 statement = f"DELETE FROM {format_identifier(table)}"
                 with self.with_cursor(self.connection) as cursor:
                     cursor.execute(statement)
-            if records:
-                insert_sql = build_insert_statement(table, columns)
-                with self.with_cursor(self.connection) as cursor:
-                    cursor.executemany(insert_sql, cast("Any", prepared_records))
+            for batch in arrow_table.to_batches(max_chunksize=batch_size):
+                pydict = batch.to_pydict()
+                records = list(zip(*[pydict[col] for col in columns], strict=False))
+                if records:
+                    prepared_records = (
+                        self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                        if needs_prep
+                        else records
+                    )
+                    with self.with_cursor(self.connection) as cursor:
+                        cursor.executemany(insert_sql, cast("Any", prepared_records))
             if owns_transaction:
-                self.connection.commit()
-        except sqlite3.Error as exc:
+                self.commit()
+        except BaseException as exc:
             if owns_transaction:
-                self.connection.rollback()
-            raise create_mapped_exception(exc) from exc
+                self.rollback()
+            if isinstance(exc, sqlite3.Error):
+                raise create_mapped_exception(exc) from exc
+            raise
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -406,6 +440,7 @@ class SqliteDriver(SyncDriverAdapterBase):
         This bypasses cursor context-manager overhead for repeated cached
         statements while preserving driver exception mapping behavior.
         """
+        cursor = None
         direct_statement: SQL | None = None
         returns_rows = cached.operation_profile.returns_rows
         self._invalidate_rowid_target_cache(cached.operation_type)
@@ -430,14 +465,16 @@ class SqliteDriver(SyncDriverAdapterBase):
 
             fetched_data = cursor.fetchall()
             affected_rows = resolve_rowcount(cursor)
-            last_inserted_id = resolve_lastrowid(
-                self.connection,
-                cursor,
-                cached.operation_type,
-                affected_rows,
-                cached.processed_state.parsed_expression,
-                self._rowid_target_cache,
-            )
+            last_inserted_id = None
+            if cached.operation_type != "SELECT":
+                last_inserted_id = resolve_lastrowid(
+                    self.connection,
+                    cursor,
+                    cached.operation_type,
+                    affected_rows,
+                    cached.processed_state.parsed_expression,
+                    self._rowid_target_cache,
+                )
             description = cursor.description
             column_names = [col[0] for col in description] if description else []
             row_format = resolve_row_format(fetched_data)
@@ -455,10 +492,13 @@ class SqliteDriver(SyncDriverAdapterBase):
             )
             return self.build_statement_result(direct_statement, execution_result)
         finally:
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    cursor.close()
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
         msg = "unreachable"
-        raise AssertionError(msg)  # pragma: no cover
+        raise AssertionError(msg)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:
@@ -493,7 +533,7 @@ class SqliteDriver(SyncDriverAdapterBase):
 
     @staticmethod
     def _thin_path_parameters_are_eligible(
-        parameters: "list[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
+        parameters: "Sequence[StatementParameters]", type_coercion_map: "dict[type, Any] | None"
     ) -> bool:
         """Validate parameter payload for the SQLite execute-many thin path."""
         first_sequence = SqliteDriver._as_sequence_parameter_set(parameters[0])
@@ -506,7 +546,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         has_type_coercion = bool(coercion_map)
         fallback_items = type_coercion_fallbacks(coercion_map) if coercion_map else ()
 
-        # Common benchmark shape: list[tuple[value]]
         if row_len == 1:
             if has_type_coercion and coercion_map is not None:
                 for param_set in parameters:

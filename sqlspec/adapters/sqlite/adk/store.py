@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.sqlite._typing import sqlite_module as sqlite3
-from sqlspec.adapters.sqlite.config import _render_pragmas
+from sqlspec.adapters.sqlite.core import end_transaction, render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -84,7 +84,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
-        """Synchronous implementation of create_tables."""
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
@@ -112,7 +111,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Returns:
             Created session record.
         """
-        """Synchronous implementation of create_session."""
         now = datetime.now(timezone.utc)
         now_julian = _datetime_to_julian(now)
         state_json = to_json(state)
@@ -135,7 +133,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(sql, params)
-            conn.commit()
+            end_transaction(conn, commit=True)
 
         return StoredSession(
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
@@ -155,7 +153,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Returns:
             Session record or None if not found.
         """
-        """Synchronous implementation of get_session."""
         params = (app_name, user_id, session_id)
         update_params: tuple[Any, ...]
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
@@ -181,7 +178,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 self._apply_pragmas(conn)
                 if update_sql:
                     conn.execute(update_sql, update_params)
-                    conn.commit()
+                    end_transaction(conn, commit=True)
                 cursor = conn.execute(sql, params)
                 row = cursor.fetchone()
 
@@ -210,7 +207,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
         """
-        """Synchronous implementation of update_session_state."""
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
         state_json = to_json(state)
 
@@ -223,7 +219,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
-            conn.commit()
+            end_transaction(conn, commit=True)
 
     def list_sessions(
         self,
@@ -286,13 +282,12 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             user_id: User identifier.
             session_id: Session identifier.
         """
-        """Synchronous implementation of delete_session."""
         sql = f"DELETE FROM {self._session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
 
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(sql, (app_name, user_id, session_id))
-            conn.commit()
+            end_transaction(conn, commit=True)
 
     def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
@@ -300,7 +295,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Args:
             event_record: Event record to store.
         """
-        """Synchronous implementation of append_event."""
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
         event_data_json = to_json(event_record["event_data"])
 
@@ -324,7 +318,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                     event_data_json,
                 ),
             )
-            conn.commit()
+            end_transaction(conn, commit=True)
 
     def append_event_and_update_state(
         self,
@@ -352,7 +346,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
             app_state: App-scoped state snapshot to upsert when changed.
             user_state: User-scoped state snapshot to upsert when changed.
         """
-        """Synchronous implementation of append_event_and_update_state."""
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
         event_data_json = to_json(event_record["event_data"])
         now_julian = _datetime_to_julian(datetime.now(timezone.utc))
@@ -410,13 +403,13 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                     if user_state is not None:
                         conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
             except Exception:
-                conn.rollback()
+                end_transaction(conn, commit=False)
                 raise
             else:
                 if row is None:
-                    conn.rollback()
+                    end_transaction(conn, commit=False)
                 else:
-                    conn.commit()
+                    end_transaction(conn, commit=True)
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
@@ -451,7 +444,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         Returns:
             List of event records ordered by timestamp ASC.
         """
-        """Synchronous implementation of get_events."""
         if limit == 0:
             return []
 
@@ -497,7 +489,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         """Delete events older than the given timestamp."""
-        """Synchronous implementation of delete_expired_events."""
         sql = f"DELETE FROM {self._events_table} WHERE timestamp < ?"
         params: list[Any] = [_datetime_to_julian(before)]
         if app_name is not None:
@@ -509,7 +500,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 self._apply_pragmas(conn)
                 cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                conn.commit()
+                end_transaction(conn, commit=True)
                 return deleted_count
         except sqlite3.OperationalError as exc:
             if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
@@ -529,7 +520,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 self._apply_pragmas(conn)
                 cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                conn.commit()
+                end_transaction(conn, commit=True)
                 return deleted_count
         except sqlite3.OperationalError as exc:
             if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
@@ -538,7 +529,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         """Delete user state rows whose update_time predates the given threshold."""
-        """Synchronous implementation of delete_idle_user_states."""
         sql = f"DELETE FROM {self._user_state_table} WHERE update_time < ?"
         params: list[Any] = [_datetime_to_julian(updated_before)]
         if app_name is not None:
@@ -550,7 +540,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
                 self._apply_pragmas(conn)
                 cursor = conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                conn.commit()
+                end_transaction(conn, commit=True)
                 return deleted_count
         except sqlite3.OperationalError as exc:
             if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
@@ -559,7 +549,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         """Return app-scoped state for an application."""
-        """Synchronous implementation of get_app_state."""
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = ?"
 
         try:
@@ -575,7 +564,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state for an application user."""
-        """Synchronous implementation of get_user_state."""
         sql = f"""
         SELECT state
         FROM {self._user_state_table}
@@ -595,7 +583,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        """Synchronous implementation of upsert_app_state."""
         sql = f"""
         INSERT INTO {self._app_state_table} (app_name, state, update_time)
         VALUES (?, ?, ?)
@@ -607,11 +594,10 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
-            conn.commit()
+            end_transaction(conn, commit=True)
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        """Synchronous implementation of upsert_user_state."""
         sql = f"""
         INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
         VALUES (?, ?, ?, ?)
@@ -623,11 +609,10 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
-            conn.commit()
+            end_transaction(conn, commit=True)
 
     def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
-        """Synchronous implementation of get_metadata."""
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = ?"
 
         try:
@@ -643,7 +628,6 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        """Synchronous implementation of set_metadata."""
         sql = f"""
         INSERT INTO {self._metadata_table} (key, value)
         VALUES (?, ?)
@@ -653,7 +637,7 @@ class SqliteADKStore(BaseSyncADKStore["SqliteConfig"]):
         with self._config.provide_connection() as conn:
             self._apply_pragmas(conn)
             conn.execute(sql, (key, value))
-            conn.commit()
+            end_transaction(conn, commit=True)
 
     def _apply_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile for this connection.
@@ -798,7 +782,6 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         self._fts_options = _fts_options(config)
 
     def create_tables(self) -> None:
-        """Create tables if they don't exist."""
         """Create the memory table and indexes if they don't exist.
 
         Skips table creation if memory store is disabled.
@@ -815,7 +798,6 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             driver.execute_script(self._memory_table_ddl())
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
-        """Bulk insert memory entries with deduplication."""
         """Bulk insert memory entries with deduplication.
 
         Uses INSERT OR IGNORE to skip duplicates based on event_id
@@ -838,26 +820,25 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         if not entries:
             return 0
 
-        inserted_count = 0
         with self._config.provide_connection() as conn:
             self._enable_foreign_keys(conn)
 
-            for entry in entries:
-                timestamp_julian = _datetime_to_julian(entry["timestamp"])
-                inserted_at_julian = _datetime_to_julian(entry["inserted_at"])
-                content_json_str = to_json(entry["content_json"])
-                metadata_json_str = to_json(entry["metadata_json"]) if entry["metadata_json"] else None
-                scope = entry.get("scope", "user")
-
-                if self._owner_id_column_name:
-                    sql = f"""
-                    INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, scope, event_id, author,
-                     {self._owner_id_column_name}, timestamp, content_json,
-                     content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
-                    params: tuple[Any, ...] = (
+            params_list: list[tuple[Any, ...]] = []
+            if self._owner_id_column_name:
+                sql = f"""
+                INSERT OR IGNORE INTO {self._memory_table}
+                (id, session_id, app_name, user_id, scope, event_id, author,
+                 {self._owner_id_column_name}, timestamp, content_json,
+                 content_text, metadata_json, inserted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                for entry in entries:
+                    timestamp_julian = _datetime_to_julian(entry["timestamp"])
+                    inserted_at_julian = _datetime_to_julian(entry["inserted_at"])
+                    content_json_str = to_json(entry["content_json"])
+                    metadata_json_str = to_json(entry["metadata_json"]) if entry["metadata_json"] else None
+                    scope = entry.get("scope", "user")
+                    params_list.append((
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
@@ -871,15 +852,21 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                         entry["content_text"],
                         metadata_json_str,
                         inserted_at_julian,
-                    )
-                else:
-                    sql = f"""
-                    INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, scope, event_id, author,
-                     timestamp, content_json, content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
-                    params = (
+                    ))
+            else:
+                sql = f"""
+                INSERT OR IGNORE INTO {self._memory_table}
+                (id, session_id, app_name, user_id, scope, event_id, author,
+                 timestamp, content_json, content_text, metadata_json, inserted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                for entry in entries:
+                    timestamp_julian = _datetime_to_julian(entry["timestamp"])
+                    inserted_at_julian = _datetime_to_julian(entry["inserted_at"])
+                    content_json_str = to_json(entry["content_json"])
+                    metadata_json_str = to_json(entry["metadata_json"]) if entry["metadata_json"] else None
+                    scope = entry.get("scope", "user")
+                    params_list.append((
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
@@ -892,13 +879,11 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                         entry["content_text"],
                         metadata_json_str,
                         inserted_at_julian,
-                    )
+                    ))
 
-                cursor = conn.execute(sql, params)
-                if cursor.rowcount > 0:
-                    inserted_count += 1
-
-            conn.commit()
+            cursor = conn.executemany(sql, params_list)
+            inserted_count = cursor.rowcount if cursor.rowcount >= 0 else len(params_list)
+            end_transaction(conn, commit=True)
 
         return inserted_count
 
@@ -921,7 +906,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
         if self._use_fts:
             try:
                 return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
         return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
 
@@ -933,7 +918,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             self._enable_foreign_keys(conn)
             cursor = conn.execute(sql, (session_id,))
             deleted_count = cursor.rowcount
-            conn.commit()
+            end_transaction(conn, commit=True)
 
         return deleted_count
 
@@ -954,7 +939,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             self._enable_foreign_keys(conn)
             cursor = conn.execute(sql, tuple(params))
             deleted_count = cursor.rowcount
-            conn.commit()
+            end_transaction(conn, commit=True)
 
         return deleted_count
 
@@ -1116,7 +1101,7 @@ def _pragma_overrides(config: "SqliteConfig") -> "list[tuple[str, str]]":
         msg = "extension_config['adk']['pragma_overrides'] must be a mapping of PRAGMA names to values"
         raise ImproperConfigurationError(msg)
     try:
-        return _render_pragmas(pragma_overrides)
+        return render_pragmas(pragma_overrides)
     except ImproperConfigurationError as exc:
         msg = str(exc).replace("driver_features['pragmas']", "extension_config['adk']['pragma_overrides']")
         raise ImproperConfigurationError(msg) from exc
