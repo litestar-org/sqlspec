@@ -215,7 +215,7 @@ def test_tsql_event_store_create_and_drop_statements() -> None:
         ),
         (
             "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_app_events_channel_status' AND object_id = "
-            "OBJECT_ID(N'[dbo].[app_events(channel,]')) BEGIN CREATE INDEX idx_app_events_channel_status ON "
+            "OBJECT_ID(N'[dbo].[app_events]')) BEGIN CREATE INDEX idx_app_events_channel_status ON "
             "app_events(channel, status, available_at); END"
         ),
     ]

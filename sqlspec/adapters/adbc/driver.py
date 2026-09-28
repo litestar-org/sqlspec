@@ -257,7 +257,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         try:
             if not prepared_parameters:
-                cursor._rowcount = 0  # pyright: ignore[reportPrivateUsage]
                 row_count = 0
             elif isinstance(prepared_parameters, (list, tuple)) and prepared_parameters:
                 parameter_count = len(prepared_parameters)
@@ -496,7 +495,8 @@ class AdbcDriver(SyncDriverAdapterBase):
                 cursor = cursor_manager.__enter__()
                 try:
                     sql, driver_params = self._compiled_sql(prepared_statement, config)
-                    cursor.execute(sql, driver_params or ())
+                    execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, driver_params)
+                    cursor.execute(sql, parameters=execute_parameters)
                     fetch_record_batch = getattr(cursor, "fetch_record_batch", None)
                     if fetch_record_batch is None:
                         arrow_table = cursor.fetch_arrow_table()
@@ -512,6 +512,7 @@ class AdbcDriver(SyncDriverAdapterBase):
                     else:
                         reader = fetch_record_batch()
                 except Exception:
+                    handle_postgres_rollback(self._dialect_name, cursor, logger)
                     cursor_manager.__exit__(None, None, None)
                     cursor = None
                     raise
@@ -537,8 +538,13 @@ class AdbcDriver(SyncDriverAdapterBase):
                 raise DatabaseConnectionError(msg)
 
             sql, driver_params = self._compiled_sql(prepared_statement, config)
-            cursor.execute(sql, driver_params or ())
-            arrow_table = cursor.fetch_arrow_table()
+            execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, driver_params)
+            try:
+                cursor.execute(sql, parameters=execute_parameters)
+                arrow_table = cursor.fetch_arrow_table()
+            except Exception:
+                handle_postgres_rollback(self._dialect_name, cursor, logger)
+                raise
 
             arrow_result = build_arrow_result_from_table(
                 prepared_statement,

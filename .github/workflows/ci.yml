@@ -370,7 +370,17 @@ jobs:
             rustfs/rustfs:latest
             rustfs/rc:latest
           )
-          printf '%s\n' "${images[@]}" | xargs -P 4 -I{} docker pull {}
+          printf '%s\n' "${images[@]}" | xargs -P 4 -I{} bash -c '
+            for attempt in 1 2 3; do
+              if docker pull "$1"; then
+                exit 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                sleep "$((attempt * 2))"
+              fi
+            done
+            exit 1
+          ' _ {}
           mkdir -p /tmp/docker-images
           docker save "${images[@]}" -o /tmp/docker-images/sqlspec-test-images.tar
 

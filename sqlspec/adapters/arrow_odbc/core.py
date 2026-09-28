@@ -442,16 +442,23 @@ def build_statement_config(*, dialect: str = "sqlite", json_serializer: "Any" = 
     )
 
 
+def _identity(value: Any) -> Any:
+    return value
+
+
+_CUSTOM_TYPE_COERCIONS: Final["dict[type, Callable[[Any], Any]]"] = {
+    bool: _identity,
+    int: _identity,
+    float: _identity,
+    str: _identity,
+    bytes: _identity,
+    **build_uuid_coercions(native=False),
+}
+
+
 def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for arrow-odbc."""
-    return {
-        bool: _identity,
-        int: _identity,
-        float: _identity,
-        str: _identity,
-        bytes: _identity,
-        **build_uuid_coercions(native=False),
-    }
+    return dict(_CUSTOM_TYPE_COERCIONS)
 
 
 def _extract_sqlstate(message: str) -> "str | None":
@@ -538,10 +545,6 @@ def db2_timestamp_text(value: "datetime | None") -> "str | None":
     if value.tzinfo is not None:
         value = value.astimezone(timezone.utc).replace(tzinfo=None)
     return value.isoformat(sep=" ", timespec="microseconds")
-
-
-def _identity(value: Any) -> Any:
-    return value
 
 
 def _is_sql_server_diagnostic(message: str) -> bool:

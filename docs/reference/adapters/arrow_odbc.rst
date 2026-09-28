@@ -168,3 +168,11 @@ Use these types inside ``extension_config["adk"]``.
 .. autoclass:: sqlspec.adapters.arrow_odbc.adk.ArrowOdbcADKConfig
    :members:
    :show-inheritance:
+
+Row-oriented batch execution
+----------------------------
+
+``execute_many()`` executes each parameter set through the native execute API
+without rewriting SQL. Nonempty batches report an unknown affected-row count
+(``-1``); empty batches report zero. Use ``bulk_insert_arrow()`` for native
+Arrow bulk ingestion.

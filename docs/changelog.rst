@@ -18,6 +18,12 @@ Unreleased
   explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
   stream modes while retaining the atomic PENDING default.
 
+* Arrow ODBC runs ``execute_many()`` one row at a time. It reports an unknown
+  row count since the native driver does not return the number of changed rows.
+
+* ADBC FlightSQL adds options for TLS/mTLS, RPC timeouts, message size, cookies
+  and headers. Values set in native ``db_kwargs`` take precedence.
+
 * Added an IBM Db2 adapter for Db2 LUW 11.5 and later with sync
   (``Db2SyncConfig``) and async (``Db2AsyncConfig``) configurations built on
   ``ibm_db``. It includes connection pooling, catalog reflection, migrations,
@@ -31,6 +37,13 @@ Unreleased
   and its Litestar session, events queue, and Google ADK stores.
 
 **Fixed:**
+
+* ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
+  question marks in quoted identifiers, literals, and comments.
+
+* Arrow ODBC pagination reuses compiled placeholder positions instead of
+  parsing SQL again. ADBC keeps bound values in its ADK store queries.
+  DuckDB Arrow loads keep sparse dictionary fields and quote table names.
 
 * Builder upserts emit ``MERGE`` for the ``db2`` dialect.
 * The arrow-odbc adapter detects the SQL dialect from the ODBC driver name

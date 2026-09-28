@@ -18,6 +18,7 @@ from sqlspec.adapters.duckdb.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    format_identifier,
     normalize_execute_parameters,
     resolve_rowcount,
 )
@@ -375,26 +376,25 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 arrow_reader = (
                     cursor.to_arrow_reader(batch_size) if batch_size is not None else cursor.to_arrow_reader()
                 )
-                return build_arrow_result_from_reader(
+                arrow_result = build_arrow_result_from_reader(
                     prepared_statement,
                     arrow_reader,
                     return_format=return_format,
                     batch_size=batch_size,
                     arrow_schema=arrow_schema,
                 )
+            else:
+                arrow_table = cursor.to_arrow_table()
 
-            arrow_table = cursor.to_arrow_table()
+                arrow_result = build_arrow_result_from_table(
+                    prepared_statement,
+                    arrow_table,
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
 
-            arrow_result = build_arrow_result_from_table(
-                prepared_statement,
-                arrow_table,
-                return_format=return_format,
-                batch_size=batch_size,
-                arrow_schema=arrow_schema,
-            )
-
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
+        self._check_pending_exception(exc_handler)
 
         if arrow_result is None:
             msg = "Unreachable"
@@ -475,13 +475,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         else:
             arrow_table = self._coerce_arrow_table(source_data)
             arrow_source = arrow_table
+        table_name = format_identifier(table)
         temp_view = f"_sqlspec_arrow_{uuid4().hex}"
         if overwrite:
-            self.connection.execute(f"TRUNCATE TABLE {table}")
+            self.connection.execute(f"TRUNCATE TABLE {table_name}")
         self.connection.register(temp_view, arrow_source)
         inserted_rows = 0
         try:
-            insert_result = self.connection.execute(f"INSERT INTO {table} SELECT * FROM {temp_view}")
+            insert_result = self.connection.execute(f"INSERT INTO {table_name} SELECT * FROM {temp_view}")
             inserted_rows = _resolve_duckdb_inserted_rows(insert_result)
         finally:
             with contextlib.suppress(Exception):
@@ -659,7 +660,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 return None
             import pyarrow as pa
 
-            return pa.table({name: [row[index] for row in rows] for index, name in enumerate(column_names)})
+            return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
 
         return None
 

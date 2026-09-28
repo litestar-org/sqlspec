@@ -37,6 +37,7 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.utils.serializers import to_json
+from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount
 from sqlspec.utils.uuids import uuid_from_string
@@ -56,9 +57,30 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "format_identifier",
     "normalize_execute_parameters",
     "resolve_rowcount",
 )
+
+
+def format_identifier(identifier: str) -> str:
+    """Format an identifier with safe double-quote escaping.
+
+    Args:
+        identifier: Raw table or schema-qualified identifier string.
+
+    Returns:
+        Properly quoted identifier string.
+
+    Raises:
+        SQLSpecError: If the identifier is empty.
+    """
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts = split_qualified_identifier(cleaned, quote_chars='"')
+    return ".".join(quote_identifier(part) for part in parts)
 
 
 _TIME_TO_ISO = time_iso_convert

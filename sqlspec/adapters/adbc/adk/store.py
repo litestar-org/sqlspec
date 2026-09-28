@@ -1,10 +1,16 @@
 """ADBC ADK store for Google Agent Development Kit session/event storage."""
 
 import contextlib
-import re
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from sqlspec.adapters.adbc.core import (
+    driver_kind_from_driver_name,
+    is_shared_object_driver,
+    resolve_dialect_from_config,
+)
+from sqlspec.core.parameters._validator import PARAMETER_REGEX
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -34,6 +40,21 @@ ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
     "does not exist",
     "table with name",
 )
+
+
+@lru_cache(maxsize=256)
+def _postgresql_store_sql(sql: str) -> str:
+    """Cache positional SQL conversion without changing quoted or commented text."""
+    segments: list[str] = []
+    last_end = 0
+    index = 0
+    for match in PARAMETER_REGEX.finditer(sql):
+        if match.lastgroup == "qmark":
+            index += 1
+            segments.extend((sql[last_end : match.start()], f"${index}"))
+            last_end = match.end()
+    segments.append(sql[last_end:])
+    return "".join(segments)
 
 
 class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
@@ -192,15 +213,28 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         Returns:
             Dialect identifier for DDL generation.
         """
-        driver_name = self._config.connection_config.get("driver_name", "").lower()
+        driver_name = self._config.connection_config.get("driver_name", "")
+        if (
+            isinstance(driver_name, str)
+            and driver_name
+            and driver_kind_from_driver_name(driver_name) is None
+            and not is_shared_object_driver(driver_name)
+        ):
+            logger.warning(
+                "Unknown ADBC driver: %s. Using generic SQL dialect. "
+                "Consider using a direct adapter for better performance.",
+                driver_name,
+            )
+            return DIALECT_GENERIC
 
-        if "postgres" in driver_name:
+        resolved = resolve_dialect_from_config(self._config.connection_config)
+        if resolved == "postgres":
             return DIALECT_POSTGRESQL
-        if "sqlite" in driver_name:
+        if resolved == "sqlite":
             return DIALECT_SQLITE
-        if "duckdb" in driver_name:
+        if resolved == "duckdb":
             return DIALECT_DUCKDB
-        if "snowflake" in driver_name:
+        if resolved == "snowflake":
             return DIALECT_SNOWFLAKE
 
         logger.warning(
@@ -605,14 +639,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Return SQL with dialect-appropriate positional placeholders."""
         if self._dialect != DIALECT_POSTGRESQL:
             return sql
-        index = 0
-
-        def replace_placeholder(_match: Any) -> str:
-            nonlocal index
-            index += 1
-            return f"${index}"
-
-        return re.sub(r"\?", replace_placeholder, sql)
+        return _postgresql_store_sql(sql)
 
     def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
         """Execute parameterized SQL using the current ADBC dialect's placeholder style."""
@@ -1308,17 +1335,42 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return self._delete_entries_older_than(days, app_name, scope)
 
     def _detect_dialect(self) -> str:
-        driver_name = self._config.connection_config.get("driver_name", "").lower()
-        if "postgres" in driver_name:
+        driver_name = self._config.connection_config.get("driver_name", "")
+        if (
+            isinstance(driver_name, str)
+            and driver_name
+            and driver_kind_from_driver_name(driver_name) is None
+            and not is_shared_object_driver(driver_name)
+        ):
+            logger.warning("Unknown ADBC driver: %s. Using generic SQL dialect.", driver_name)
+            return DIALECT_GENERIC
+
+        resolved = resolve_dialect_from_config(self._config.connection_config)
+        if resolved == "postgres":
             return DIALECT_POSTGRESQL
-        if "sqlite" in driver_name:
+        if resolved == "sqlite":
             return DIALECT_SQLITE
-        if "duckdb" in driver_name:
+        if resolved == "duckdb":
             return DIALECT_DUCKDB
-        if "snowflake" in driver_name:
+        if resolved == "snowflake":
             return DIALECT_SNOWFLAKE
         logger.warning("Unknown ADBC driver: %s. Using generic SQL dialect.", driver_name)
         return DIALECT_GENERIC
+
+    def _format_sql(self, sql: str) -> str:
+        """Return SQL with dialect-appropriate positional placeholders."""
+        if self._dialect != DIALECT_POSTGRESQL:
+            return sql
+        return _postgresql_store_sql(sql)
+
+    def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
+        """Execute parameterized SQL using the current ADBC dialect's placeholder style."""
+        return cursor.execute(self._format_sql(sql), params)
+
+    def _json_placeholder(self) -> str:
+        if self._dialect == DIALECT_POSTGRESQL:
+            return "?::jsonb"
+        return "?"
 
     def _serialize_json_field(self, value: Any) -> "str | None":
         if value is None:
@@ -1484,6 +1536,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
         inserted_count = 0
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
+        json_placeholder = self._json_placeholder()
 
         if self._owner_id_column_name:
             if use_returning:
@@ -1493,7 +1546,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     {self._owner_id_column_name}, timestamp, content_json, content_text,
                     metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, {json_placeholder}, ?, {json_placeholder}, ?
                 ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
                 """
             else:
@@ -1503,7 +1556,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     {self._owner_id_column_name}, timestamp, content_json, content_text,
                     metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, {json_placeholder}, ?, {json_placeholder}, ?
                 )
                 """
         elif use_returning:
@@ -1512,7 +1565,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     id, session_id, app_name, user_id, scope, event_id, author,
                     timestamp, content_json, content_text, metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, {json_placeholder}, ?, {json_placeholder}, ?
                 ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
                 """
         else:
@@ -1521,7 +1574,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                     id, session_id, app_name, user_id, scope, event_id, author,
                     timestamp, content_json, content_text, metadata_json, inserted_at
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, {json_placeholder}, ?, {json_placeholder}, ?
                 )
                 """
 
@@ -1564,12 +1617,12 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                             self._encode_timestamp(entry["inserted_at"]),
                         )
                     if use_returning:
-                        cursor.execute(sql, params)
+                        self._execute(cursor, sql, params)
                         if cursor.fetchone():
                             inserted_count += 1
                     else:
                         try:
-                            cursor.execute(sql, params)
+                            self._execute(cursor, sql, params)
                             inserted_count += 1
                         except Exception as exc:
                             exc_str = str(exc).lower()
@@ -1615,7 +1668,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    cursor.execute(sql, (*scope_params, pattern, effective_limit))
+                    self._execute(cursor, sql, (*scope_params, pattern, effective_limit))
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
@@ -1636,7 +1689,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (session_id,))
+                self._execute(cursor, sql, (session_id,))
                 if use_returning:
                     deleted_rows = cursor.fetchall()
                     conn.commit()
@@ -1665,7 +1718,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, tuple(params))
+                self._execute(cursor, sql, tuple(params))
                 if use_returning:
                     deleted_rows = cursor.fetchall()
                     conn.commit()
