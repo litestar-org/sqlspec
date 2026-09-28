@@ -776,8 +776,14 @@ class Merge(
             dialect_name = None
         if dialect_name:
             dialect_name = dialect_name.lower()
-        self._move_oracle_when_conditions(dialect_name)
-        return super().build(dialect=dialect)
+        original_expression = self._expression
+        if dialect_name == "oracle" and original_expression is not None:
+            self._expression = original_expression.copy()
+        try:
+            self._move_oracle_when_conditions(dialect_name)
+            return super().build(dialect=dialect)
+        finally:
+            self._expression = original_expression
 
     def _move_oracle_when_conditions(self, dialect_name: str | None) -> None:
         """Normalize WHEN clause conditions for dialect quirks.

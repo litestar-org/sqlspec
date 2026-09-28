@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from typing_extensions import Self
+
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
 from sqlspec.adapters.oracledb.litestar import OracleSyncStore
@@ -15,6 +17,16 @@ class _FakeCursor:
         self.rows = list(rows or [])
         self.executed: list[tuple[str, dict[str, Any] | None]] = []
         self.rowcount = 0
+        self.closed = False
+
+    def __enter__(self) -> "Self":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.closed = True
 
     def execute(self, sql: str, parameters: "dict[str, Any] | None" = None) -> None:
         self.executed.append((sql, parameters))

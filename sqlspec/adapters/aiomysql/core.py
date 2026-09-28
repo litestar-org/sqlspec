@@ -84,10 +84,14 @@ class AiomysqlStreamSource:
         self._driver._check_pending_exception(handler)
 
     async def _start(self) -> None:
-        cursor = await self._driver.connection.cursor(AiomysqlSSCursor)
-        self._cursor = cursor
-        await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-        self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        try:
+            cursor = await self._driver.connection.cursor(AiomysqlSSCursor)
+            self._cursor = cursor
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        except BaseException:
+            await self.close(error=True)
+            raise
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()

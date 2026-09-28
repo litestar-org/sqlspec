@@ -8,9 +8,12 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 import pymysql
+from pymysql import MySQLError as PyMysqlMySQLError
+from pymysql.connections import Connection as PyMysqlConnection
 from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
 from pymysql.constants import SERVER_STATUS as _PYMYSQL_SERVER_STATUS
 from pymysql.cursors import RE_INSERT_VALUES as PYMYSQL_INSERT_VALUES_PATTERN
+from pymysql.cursors import Cursor as PyMysqlRawCursor
 from pymysql.cursors import DictCursor as PyMysqlDictCursor
 from pymysql.cursors import SSCursor as PyMysqlSSCursor
 
@@ -33,19 +36,22 @@ if TYPE_CHECKING:
         SERVER_STATUS_IN_TRANS: int
 
     PyMysqlConnect: TypeAlias = type["PyMysqlConnection"]
-    PyMysqlConnection: TypeAlias = pymysql.connections.Connection
     PyMysqlFieldType: TypeAlias = PyMysqlFieldTypeProtocol
-    PyMysqlMySQLError: TypeAlias = pymysql.MySQLError
-    PyMysqlRawCursor: TypeAlias = pymysql.cursors.Cursor
     PyMysqlServerStatus: TypeAlias = PyMysqlServerStatusProtocol
 
 if not TYPE_CHECKING:
     PyMysqlConnect = pymysql.connect
-    PyMysqlConnection = pymysql.connections.Connection
     PyMysqlFieldType = _PYMYSQL_FIELD_TYPE
-    PyMysqlMySQLError = pymysql.MySQLError
-    PyMysqlRawCursor = pymysql.cursors.Cursor
     PyMysqlServerStatus = _PYMYSQL_SERVER_STATUS
+
+    def _pymysql_cloud_sql_connector(*args: Any, **kwargs: Any) -> Any:
+        connector_cls = import_optional_attr("google.cloud.sql.connector", "Connector")
+        if connector_cls is None:
+            msg = "Cannot import 'Connector' from 'google.cloud.sql.connector'"
+            raise ImportError(msg)
+        return connector_cls(*args, **kwargs)
+
+    PyMysqlCloudSqlConnector = _pymysql_cloud_sql_connector
 
 
 __all__ = (
@@ -128,22 +134,3 @@ class PyMysqlSessionContext:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
-
-
-_LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
-    "PyMysqlCloudSqlConnector": ("google.cloud.sql.connector", "Connector")
-}
-
-
-def __getattr__(name: str) -> Any:
-    """Resolve optional driver symbols only when a consumer requests them."""
-    target = _LAZY_DRIVER_EXPORTS.get(name)
-    if target is None:
-        msg = f"module {__name__!r} has no attribute {name!r}"
-        raise AttributeError(msg)
-    module_name, attribute = target
-    value = import_optional_attr(module_name, attribute)
-    if value is None:
-        msg = f"Cannot import {attribute!r} from {module_name!r}"
-        raise ImportError(msg)
-    return value

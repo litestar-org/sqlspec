@@ -252,13 +252,9 @@ class Db2SyncConnectionPool:
         _ = connection
 
     def size(self) -> int:
-        """Return the count of active connections allocated to the current thread."""
-        try:
-            _ = self._thread_local.connection
-        except AttributeError:
-            return 0
-        else:
-            return 1
+        """Return the total number of active connections registered across all threads."""
+        with self._registry_lock:
+            return len(self._connection_registry)
 
     def checked_out(self) -> int:
         """Return the number of checked out connections from the perspective of this thread."""

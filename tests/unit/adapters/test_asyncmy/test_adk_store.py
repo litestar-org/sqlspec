@@ -215,3 +215,104 @@ async def test_asyncmy_list_sessions_rejects_invalid_options(options: "dict[str,
         await store.list_sessions("app", **options)
 
     assert cursor.calls == []
+
+
+async def test_asyncmy_adk_memory_store_insert_and_search_json_handling() -> None:
+    """AsyncmyADKMemoryStore handles missing author, metadata_json=None, and deserializes JSON strings."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    now = datetime.now(tz=timezone.utc)
+    cursor = MagicMock()
+    cursor.rowcount = 1
+    cursor.execute = AsyncMock()
+    cursor.description = [
+        ("id",),
+        ("session_id",),
+        ("app_name",),
+        ("user_id",),
+        ("scope",),
+        ("event_id",),
+        ("author",),
+        ("timestamp",),
+        ("content_json",),
+        ("content_text",),
+        ("metadata_json",),
+        ("inserted_at",),
+    ]
+    cursor.fetchall = AsyncMock(
+        return_value=[
+            (
+                "mem-1",
+                "sess-1",
+                "app",
+                "user-1",
+                "user",
+                "evt-1",
+                None,
+                now,
+                '{"text": "hello"}',
+                "hello",
+                '{"source": "unit"}',
+                now,
+            )
+        ]
+    )
+    cursor.__aenter__ = AsyncMock(return_value=cursor)
+    cursor.__aexit__ = AsyncMock(return_value=None)
+    conn = MagicMock()
+    conn.cursor = MagicMock(return_value=cursor)
+    conn.commit = AsyncMock()
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=None)
+    config = _mock_config({"owner_id_column": "owner_id INT NULL"})
+    config.provide_connection = lambda *_a, **_k: conn
+    store = AsyncmyADKMemoryStore(config)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user-1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+
+    inserted = await store.insert_memory_entries([entry], owner_id=99)
+    records = await store.search_entries("hello", "app", "user-1")
+
+    assert inserted == 1
+    insert_params = cursor.execute.call_args_list[0].args[1]
+    assert insert_params[6] is None
+    assert insert_params[11] is None
+    assert len(records) == 1
+    assert records[0]["content_json"] == {"text": "hello"}
+    assert records[0]["metadata_json"] == {"source": "unit"}
+
+
+async def test_asyncmy_stream_source_closes_cursor_when_execute_raises() -> None:
+    """AsyncmyStreamSource.start() closes the cursor if execute() fails."""
+    from unittest.mock import AsyncMock
+
+    from sqlspec.adapters.asyncmy.core import AsyncmyStreamSource
+
+    cursor = MagicMock()
+    cursor.execute = AsyncMock(side_effect=RuntimeError("execute boom"))
+    cursor.close = AsyncMock()
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = MagicMock(connection=connection)
+    driver._run_with_exception_handler = lambda _handler, fn: fn()
+    source = AsyncmyStreamSource(driver, "SELECT 1", (), 100, set())
+
+    with pytest.raises(RuntimeError, match="execute boom"):
+        await source.start()
+
+    cursor.close.assert_awaited_once()
+    assert source._cursor is None

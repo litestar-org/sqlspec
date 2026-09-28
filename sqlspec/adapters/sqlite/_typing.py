@@ -22,8 +22,7 @@ if TYPE_CHECKING:
     SqliteConnection: TypeAlias = _SqliteConnection
     SqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
     SqliteRawCursor: TypeAlias = sqlite3.Cursor
-
-if not TYPE_CHECKING:
+else:
     SqliteConnection = _SqliteConnection
     SqliteConnectionFactory = type[sqlite3.Connection]
     SqliteRawCursor = sqlite3.Cursor

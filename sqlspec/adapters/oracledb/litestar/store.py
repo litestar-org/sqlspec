@@ -145,31 +145,31 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"session_id": key})
-            row = await cursor.fetchone()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"session_id": key})
+                row = await cursor.fetchone()
 
-            if row is None:
-                return None
+                if row is None:
+                    return None
 
-            data_blob, expires_at = row
+                data_blob, expires_at = row
 
-            if renew_for is not None and expires_at is not None:
-                expires_in_seconds = _oracle_expiry_seconds(renew_for)
-                if expires_in_seconds is not None:
-                    update_sql = f"""
-                    UPDATE {self._table_name}
-                    SET expires_at = CASE
-                            WHEN :expires_in_seconds IS NULL THEN NULL
-                            ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
-                        END,
-                        updated_at = SYSTIMESTAMP
-                    WHERE session_id = :session_id
-                    """
-                    await cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
-                    await conn.commit()
+                if renew_for is not None and expires_at is not None:
+                    expires_in_seconds = _oracle_expiry_seconds(renew_for)
+                    if expires_in_seconds is not None:
+                        update_sql = f"""
+                        UPDATE {self._table_name}
+                        SET expires_at = CASE
+                                WHEN :expires_in_seconds IS NULL THEN NULL
+                                ELSE SYSTIMESTAMP + NUMTODSINTERVAL(:expires_in_seconds, 'SECOND')
+                            END,
+                            updated_at = SYSTIMESTAMP
+                        WHERE session_id = :session_id
+                        """
+                        await cursor.execute(update_sql, {"expires_in_seconds": expires_in_seconds, "session_id": key})
+                        await conn.commit()
 
-            return await _read_blob_async(data_blob)
+                return await _read_blob_async(data_blob)
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -211,9 +211,11 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             bind_data: Any = await conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(
+                    sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds}
+                )
+                await conn.commit()
 
     async def delete(self, key: str) -> None:
         """Delete a session by key.
@@ -225,9 +227,9 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"session_id": key})
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"session_id": key})
+                await conn.commit()
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
@@ -235,9 +237,9 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql)
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql)
+                await conn.commit()
         self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
@@ -257,10 +259,10 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"session_id": key})
-            result = await cursor.fetchone()
-            return result is not None
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"session_id": key})
+                result = await cursor.fetchone()
+                return result is not None
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -278,25 +280,25 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"session_id": key})
-            row = await cursor.fetchone()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"session_id": key})
+                row = await cursor.fetchone()
 
-            if row is None or row[0] is None:
-                return None
+                if row is None or row[0] is None:
+                    return None
 
-            expires_at, db_now = row
+                expires_at, db_now = row
 
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if db_now.tzinfo is None:
-                db_now = db_now.replace(tzinfo=timezone.utc)
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if db_now.tzinfo is None:
+                    db_now = db_now.replace(tzinfo=timezone.utc)
 
-            if expires_at <= db_now:
-                return 0
+                if expires_at <= db_now:
+                    return 0
 
-            delta = expires_at - db_now
-            return int(delta.total_seconds())
+                delta = expires_at - db_now
+                return int(delta.total_seconds())
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -308,13 +310,13 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql)
-            count = cursor.rowcount if cursor.rowcount is not None else 0
-            await conn.commit()
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+            with conn.cursor() as cursor:
+                await cursor.execute(sql)
+                count = cursor.rowcount if cursor.rowcount is not None else 0
+                await conn.commit()
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
 
     def _table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL with optimized schema.
@@ -568,8 +570,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"session_id": key})
             row = cursor.fetchone()
 
@@ -628,16 +629,15 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
 
         with self._config.provide_connection() as conn:
             bind_data: Any = conn.createlob(DB_TYPE_BLOB, data) if len(data) > ORACLE_SMALL_BLOB_LIMIT else data
-            cursor = conn.cursor()
-            cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
-            conn.commit()
+            with conn.cursor() as cursor:
+                cursor.execute(sql, {"session_id": key, "data": bind_data, "expires_in_seconds": expires_in_seconds})
+                conn.commit()
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
         sql = f"DELETE FROM {self._table_name} WHERE session_id = :session_id"
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"session_id": key})
             conn.commit()
 
@@ -645,8 +645,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of delete_all."""
         sql = f"DELETE FROM {self._table_name}"
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql)
             conn.commit()
         self._log_delete_all()
@@ -659,8 +658,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         AND (expires_at IS NULL OR expires_at > SYSTIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"session_id": key})
             result = cursor.fetchone()
             return result is not None
@@ -672,8 +670,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         WHERE session_id = :session_id
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"session_id": key})
             row = cursor.fetchone()
 
@@ -697,8 +694,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         """Synchronous implementation of delete_expired."""
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= SYSTIMESTAMP"
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql)
             count = cursor.rowcount if cursor.rowcount is not None else 0
             conn.commit()

@@ -662,11 +662,14 @@ def _dml_count_query(sql: str) -> str | None:
     """Build a PostgreSQL query that returns an exact count for one DML statement."""
     try:
         expression = sqlglot.parse_one(sql, dialect="postgres")
-    except ParseError as error:
-        msg = f"Unable to build psqlpy DML row count query: {error}"
-        raise SQLSpecError(msg) from error
+    except ParseError:
+        return None
 
-    if not isinstance(expression, (exp.Insert, exp.Update, exp.Delete)) or expression.args.get("returning"):
+    if (
+        not isinstance(expression, (exp.Insert, exp.Update, exp.Delete))
+        or expression.args.get("returning")
+        or expression.args.get("with_")
+    ):
         return None
 
     used_aliases = {cte.alias_or_name for cte in expression.find_all(exp.CTE)}

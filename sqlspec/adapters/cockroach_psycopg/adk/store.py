@@ -140,6 +140,7 @@ _ADK_MEMORY_TABLE_DDL_TEMPLATE_3 = (
     "            session_id VARCHAR(128) NOT NULL,\n"
     "            app_name VARCHAR(128) NOT NULL,\n"
     "            user_id VARCHAR(128) NOT NULL,\n"
+    "            scope VARCHAR(16) NOT NULL DEFAULT 'user',\n"
     "            event_id VARCHAR(128) NOT NULL UNIQUE,\n"
     "            author VARCHAR(256){1},\n"
     "            timestamp TIMESTAMPTZ NOT NULL,\n"
@@ -261,7 +262,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        should_touch = renew_for is not None and self._calculate_expires_at(renew_for) is not None
+        if should_touch:
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
@@ -279,6 +281,8 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql.encode(), (app_name, user_id, session_id))
                 row = await cur.fetchone()
+                if should_touch:
+                    await conn.commit()
 
             if row is None:
                 return None
@@ -748,7 +752,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
     ) -> "StoredSession | None":
         """Get session by ID."""
-        if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+        should_touch = renew_for is not None and self._calculate_expires_at(renew_for) is not None
+        if should_touch:
             sql = f"""
             UPDATE {self._session_table}
             SET update_time = CURRENT_TIMESTAMP
@@ -766,6 +771,8 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(sql.encode(), (app_name, user_id, session_id))
                 row = cur.fetchone()
+                if should_touch:
+                    conn.commit()
 
             if row is None:
                 return None
@@ -841,7 +848,6 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
 
     def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session."""
-        """Synchronous implementation of append_event."""
         self._insert_event(event_record)
 
     def append_event_and_update_state(
@@ -1435,6 +1441,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                     cur.execute(query, _build_insert_params(entry))
                 if cur.rowcount and cur.rowcount > 0:
                     inserted_count += cur.rowcount
+            conn.commit()
         return inserted_count
 
     def search_entries(

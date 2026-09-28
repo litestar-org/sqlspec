@@ -227,6 +227,7 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
     def _close_pool(self) -> None:
         if self.connection_instance is not None:
             self.connection_instance.close()
+            self.connection_instance = None
 
 
 def _apply_json_serializer_override(statement_config: Any, features_dict: dict[str, Any]) -> Any:

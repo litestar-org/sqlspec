@@ -29,8 +29,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     DuckDBConnection: TypeAlias = _DuckDBConnection
-
-if not TYPE_CHECKING:
+else:
     DuckDBConnection = _DuckDBConnection
 
 __all__ = (

@@ -240,8 +240,9 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         except MssqlPythonError as exc:
             msg = f"Failed to rollback transaction: {exc}"
             raise SQLSpecError(msg) from exc
-        self._transaction_active = False
-        self._restore_connection_autocommit()
+        finally:
+            self._transaction_active = False
+            self._restore_connection_autocommit()
 
     def with_cursor(self, connection: "MssqlPythonConnection") -> "MssqlPythonCursor":
         return MssqlPythonCursor(connection)

@@ -343,12 +343,12 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
                             entry["user_id"],
                             entry.get("scope", "user"),
                             entry["event_id"],
-                            entry["author"],
+                            entry.get("author"),
                             owner_id,
                             entry["timestamp"],
                             to_json(entry["content_json"]),
                             entry["content_text"],
-                            to_json(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
                             entry["inserted_at"],
                         )
                     else:
@@ -359,11 +359,11 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
                             entry["user_id"],
                             entry.get("scope", "user"),
                             entry["event_id"],
-                            entry["author"],
+                            entry.get("author"),
                             entry["timestamp"],
                             to_json(entry["content_json"]),
                             entry["content_text"],
-                            to_json(entry["metadata_json"]),
+                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
                             entry["inserted_at"],
                         )
                     cursor.execute(sql, params)
@@ -420,6 +420,9 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         records: list[StoredMemory] = []
         for row in rows:
             record = cast("StoredMemory", dict(zip(columns, row, strict=False)))
+            record["content_json"] = _json_dict(record.get("content_json"))
+            metadata_val = record.get("metadata_json")
+            record["metadata_json"] = _json_dict(metadata_val) if metadata_val is not None else None
             record["embedding"] = None
             records.append(record)
         return records

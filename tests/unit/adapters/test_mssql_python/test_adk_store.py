@@ -245,9 +245,9 @@ def test_mssql_python_adk_memory_store_drop_table_sql() -> None:
     assert store._drop_memory_table_sql() == ["DROP TABLE IF EXISTS [dbo].[adk_memory]"]
 
 
-@pytest.mark.parametrize("major", [16, 17])
-def test_sync_store_defaults_to_driver_supported_json_storage(major: int) -> None:
-    """Server JSON availability does not imply native driver JSON support."""
+@pytest.mark.parametrize(("major", "expected_type"), [(16, "NVARCHAR(MAX)"), (17, "JSON")])
+def test_sync_store_defaults_to_driver_supported_json_storage(major: int, expected_type: str) -> None:
+    """When native_json is unset, DDL lazily queries server version for JSON column support."""
     from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 
     config = _mock_config()
@@ -255,8 +255,51 @@ def test_sync_store_defaults_to_driver_supported_json_storage(major: int) -> Non
     driver.data_dictionary.get_version.return_value = MssqlVersionInfo(major=major)
     store = MssqlPythonADKStore(config)
 
+    assert f"state {expected_type} NOT NULL" in store._sessions_table_ddl()
+    config.provide_session.assert_called_once()
+
+
+def test_sync_store_can_force_fallback_json_from_extension_config() -> None:
+    """Explicit native_json=False uses NVARCHAR(MAX) without opening a session."""
+    config = _mock_config({"native_json": False})
+    store = MssqlPythonADKStore(config)
+
     assert "state NVARCHAR(MAX) NOT NULL" in store._sessions_table_ddl()
     config.provide_session.assert_not_called()
+
+
+def test_mssql_python_adk_memory_store_insert_handles_none_metadata_and_missing_author() -> None:
+    """insert_memory_entries binds None for metadata_json=None and missing author."""
+    from datetime import datetime, timezone
+
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.rowcount = 1
+    store = MssqlPythonADKMemoryStore(config)
+    now = datetime.now(tz=timezone.utc)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user-1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+
+    inserted = store.insert_memory_entries([entry])
+
+    assert inserted == 1
+    params = cursor.execute.call_args.args[1]
+    assert params[6] is None
+    assert params[10] is None
 
 
 def test_disabled_memory_store_rejects_operations_without_connecting() -> None:

@@ -424,7 +424,7 @@ def attach_hints(expression: exp.Expr) -> None:
         comments = getattr(node, "comments", None)
         if not comments:
             continue
-        hint_comments = [c for c in comments if c.strip().startswith("@")]
+        hint_comments = [c for c in comments if c.strip().startswith("@") and "=" in c.strip()[1:]]
         for hc in hint_comments:
             hint = parse_hint_expression(hc)
             target_table: exp.Table | None = None

@@ -10,6 +10,7 @@ from typing import Any
 
 __all__ = (
     "HOT_SURFACE_CLASSIFICATIONS",
+    "PRESERVED_EXCLUSIONS",
     "build_inventory",
     "classify_module",
     "classify_surface",
@@ -17,6 +18,7 @@ __all__ = (
     "list_sqlspec_modules",
     "load_mypyc_patterns",
     "main",
+    "validate_inventory",
 )
 
 try:
@@ -73,35 +75,47 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "compile_now",
         "reason": "Uses importlib.resources instead of direct __file__ path discovery.",
     },
-    "sqlspec/data_dictionary/dialects/postgres.py": {
+    "sqlspec/data_dictionary/dialects/postgres/config.py": {
         "classification": "compile_now",
         "reason": "Shared Postgres JSON type helper for ADBC-as-Postgres, asyncpg, psqlpy, and psycopg dictionaries.",
     },
-    "sqlspec/data_dictionary/dialects/sqlite.py": {
+    "sqlspec/data_dictionary/dialects/sqlite/config.py": {
         "classification": "compile_now",
         "reason": "Shared SQLite JSON and feature-list helpers for sqlite, aiosqlite, and ADBC-as-SQLite dictionaries.",
     },
-    "sqlspec/data_dictionary/dialects/mysql.py": {
+    "sqlspec/data_dictionary/dialects/mysql/config.py": {
         "classification": "compile_now",
         "reason": "Shared MySQL JSON type helper for mysqlconnector, pymysql, aiomysql, asyncmy, and ADBC-as-MySQL dictionaries.",
     },
-    "sqlspec/data_dictionary/dialects/cockroachdb.py": {
+    "sqlspec/data_dictionary/dialects/mysql/dictionary.py": {
+        "classification": "hard_block",
+        "reason": "Cross-module data-dictionary inheritance stays interpreted to avoid mypyc segfaults.",
+    },
+    "sqlspec/data_dictionary/dialects/cockroachdb/config.py": {
         "classification": "compile_now",
         "reason": "Shared CockroachDB JSON type helper for cockroach_asyncpg, cockroach_psycopg, and ADBC-as-Cockroach dictionaries.",
     },
-    "sqlspec/data_dictionary/dialects/duckdb.py": {
+    "sqlspec/data_dictionary/dialects/db2/config.py": {
+        "classification": "compile_now",
+        "reason": "Db2 data-dictionary dialect configuration and feature helpers compile with the dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/duckdb/config.py": {
         "classification": "compile_now",
         "reason": "DuckDB data-dictionary dialect configuration is in the compiled dialect surface.",
     },
-    "sqlspec/data_dictionary/dialects/oracle.py": {
+    "sqlspec/data_dictionary/dialects/mssql/config.py": {
+        "classification": "compile_now",
+        "reason": "Shared SQL Server version, feature, and JSON helpers compile with the dialect surface.",
+    },
+    "sqlspec/data_dictionary/dialects/oracle/config.py": {
         "classification": "compile_now",
         "reason": "Shared Oracle version, JSON, feature, and table-list helpers for oracledb sync and async dictionaries.",
     },
-    "sqlspec/data_dictionary/dialects/spanner.py": {
+    "sqlspec/data_dictionary/dialects/spanner/config.py": {
         "classification": "compile_now",
         "reason": "Spanner data-dictionary dialect configuration is in the compiled dialect surface.",
     },
-    "sqlspec/data_dictionary/dialects/bigquery.py": {
+    "sqlspec/data_dictionary/dialects/bigquery/config.py": {
         "classification": "compile_now",
         "reason": "Shared BigQuery INFORMATION_SCHEMA formatting helpers for native BigQuery and ADBC-as-BigQuery dictionaries.",
     },
@@ -125,9 +139,17 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
         "classification": "hard_block",
         "reason": "SQLGlot tokenizer/dialect subclass module fails native class import under mypyc; compiled helpers stay in _generators/_operators.",
     },
+    "sqlspec/dialects/spanner/_expressions.py": {
+        "classification": "keep_interpreted",
+        "reason": "Spanner SQLGlot AST expression builders remain interpreted alongside the dialect subclasses.",
+    },
     "sqlspec/dialects/spanner/_generators.py": {
         "classification": "compile_now",
         "reason": "Spanner SQL rendering helpers compile with the custom Spanner dialect surface.",
+    },
+    "sqlspec/dialects/spanner/_parsers.py": {
+        "classification": "compile_now",
+        "reason": "Spanner PROPERTY_PARSERS entries compile as explicit-argument callables.",
     },
     "sqlspec/dialects/spanner/_spangres.py": {
         "classification": "hard_block",
@@ -143,6 +165,10 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
     "sqlspec/dialects/db2/_parsers.py": {"classification": "compile_now", "reason": "Db2 AST normalisation helpers."},
     "sqlspec/dialects/db2/_transforms.py": {"classification": "compile_now", "reason": "Db2 render helper functions."},
+    "sqlspec/adapters/mysql_common.py": {
+        "classification": "compile_now",
+        "reason": "Shared MySQL-family adapter helpers compile with the adapter core surface.",
+    },
     "sqlspec/extensions/events/_models.py": {
         "classification": "compile_now",
         "reason": "EventMessage has concrete datetime annotations and slot dataclass layout compatible with mypyc.",
@@ -295,6 +321,24 @@ HOT_SURFACE_CLASSIFICATIONS: dict[str, dict[str, str]] = {
     },
 }
 
+PRESERVED_EXCLUSIONS: frozenset[str] = frozenset({
+    "sqlspec/dialects/postgres/_paradedb.py",
+    "sqlspec/dialects/postgres/_pg_textsearch.py",
+    "sqlspec/dialects/postgres/_pgvector.py",
+    "sqlspec/dialects/spanner/_expressions.py",
+    "sqlspec/dialects/spanner/_spangres.py",
+    "sqlspec/dialects/spanner/_spanner.py",
+    "sqlspec/utils/arrow_helpers.py",
+    "sqlspec/storage/_arrow_payload.py",
+    "sqlspec/adapters/**/data_dictionary.py",
+    "sqlspec/data_dictionary/dialects/mysql/dictionary.py",
+    "sqlspec/migrations/commands.py",
+    "sqlspec/extensions/events/_store.py",
+    "sqlspec/extensions/adk/converters.py",
+    "sqlspec/config.py",
+    "sqlspec/core/_pagination.py",
+})
+
 
 def load_mypyc_patterns(root: Path) -> tuple[list[str], list[str]]:
     """Load mypyc include/exclude glob patterns from pyproject.toml."""
@@ -419,31 +463,35 @@ def build_inventory(root: Path | None = None) -> dict[str, Any]:
             "status": "compiled",
             "classification": "compile_now",
         },
-        "preserved_exclusions": sorted(
-            pattern
-            for pattern in exclude_patterns
-            if pattern
-            in {
-                "sqlspec/dialects/postgres/_paradedb.py",
-                "sqlspec/dialects/postgres/_pg_textsearch.py",
-                "sqlspec/dialects/postgres/_pgvector.py",
-                "sqlspec/dialects/spanner/_spangres.py",
-                "sqlspec/dialects/spanner/_spanner.py",
-                "sqlspec/utils/arrow_helpers.py",
-                "sqlspec/storage/_arrow_payload.py",
-                "sqlspec/adapters/**/data_dictionary.py",
-                "sqlspec/observability/_formatting.py",
-                "sqlspec/migrations/commands.py",
-                "sqlspec/extensions/events/_channel.py",
-                "sqlspec/extensions/events/_models.py",
-                "sqlspec/extensions/events/_queue.py",
-                "sqlspec/extensions/events/_store.py",
-                "sqlspec/extensions/adk/converters.py",
-                "sqlspec/config.py",
-            }
-        ),
+        "preserved_exclusions": sorted(pattern for pattern in exclude_patterns if pattern in PRESERVED_EXCLUSIONS),
         "hot_surfaces": hot_surfaces,
     }
+
+
+def validate_inventory(root: Path | None = None) -> list[str]:
+    """Validate that hot-surface classifications and preserved exclusions match pyproject.toml."""
+    project_root = root or Path(__file__).resolve().parents[2]
+    include_patterns, exclude_patterns = load_mypyc_patterns(project_root)
+    module_set = set(list_sqlspec_modules(project_root))
+    exclude_set = set(exclude_patterns)
+    errors: list[str] = []
+
+    for module_path, details in sorted(HOT_SURFACE_CLASSIFICATIONS.items()):
+        if module_path not in module_set:
+            errors.append(f"hot surface module does not exist: {module_path}")
+            continue
+        status = classify_module(module_path, include_patterns, exclude_patterns)
+        classification = details["classification"]
+        if classification == "compile_now" and status != "compiled":
+            errors.append(f"hot surface marked compile_now is not compiled: {module_path}")
+        elif classification != "compile_now" and status == "compiled":
+            errors.append(f"hot surface marked {classification} is compiled: {module_path}")
+
+    errors.extend(
+        f"preserved exclusion missing from pyproject.toml: {pattern}"
+        for pattern in sorted(PRESERVED_EXCLUSIONS - exclude_set)
+    )
+    return errors
 
 
 def format_markdown(inventory: dict[str, Any]) -> str:
@@ -495,7 +543,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=Path(__file__).resolve().parents[2],
         help="Project root containing pyproject.toml and sqlspec/.",
     )
+    parser.add_argument(
+        "--check", action="store_true", help="Verify that hot surfaces and preserved exclusions match pyproject.toml."
+    )
     args = parser.parse_args(argv)
+
+    if args.check:
+        errors = validate_inventory(args.root)
+        if errors:
+            for error in errors:
+                sys.stderr.write(f"{error}\n")
+            return 1
 
     inventory = build_inventory(args.root)
     if args.format == "markdown":

@@ -250,10 +250,11 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         except Db2Error as exc:
             msg = f"Failed to rollback Db2 transaction: {exc}"
             raise SQLSpecError(msg) from exc
-        self._transaction_active = False
-        self._restore_connection_autocommit()
+        finally:
+            self._transaction_active = False
+            self._restore_connection_autocommit()
 
-    def release_open_work(self, *, autocommit_baseline: bool) -> None:
+    def _release_open_work(self, *, autocommit_baseline: bool) -> None:
         """Roll back work left open before the connection is returned to its pool.
 
         A transaction started by this driver is always rolled back; on a connection whose
@@ -554,10 +555,11 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         except Db2Error as exc:
             msg = f"Failed to rollback Db2 transaction: {exc}"
             raise SQLSpecError(msg) from exc
-        self._transaction_active = False
-        await self._restore_connection_autocommit()
+        finally:
+            self._transaction_active = False
+            await self._restore_connection_autocommit()
 
-    async def release_open_work(self, *, autocommit_baseline: bool) -> None:
+    async def _release_open_work(self, *, autocommit_baseline: bool) -> None:
         """Roll back work left open before the connection is returned to its pool.
 
         A transaction started by this driver is always rolled back; on a connection whose

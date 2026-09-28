@@ -7,6 +7,7 @@ from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnection, PsqlpyCursor, PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
 from sqlspec.adapters.psqlpy.core import apply_driver_features, build_connection_config, default_statement_config
 from sqlspec.adapters.psqlpy.driver import PsqlpyDriver, PsqlpyExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
@@ -25,7 +26,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
 
-    from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
     from sqlspec.core import StatementConfig
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
@@ -304,8 +304,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
 
     async def _create_pool(self) -> "ConnectionPool":
         """Create the actual async connection pool."""
-        from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionPool as ConnectionPool
-
         return ConnectionPool(**build_connection_config(self.connection_config))
 
     async def _close_pool(self) -> None:

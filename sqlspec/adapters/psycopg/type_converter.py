@@ -9,6 +9,8 @@ does not pay importlib dispatch cost per connection.
 
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.psycopg._typing import PsycopgProgrammingError as ProgrammingError
+from sqlspec.adapters.psycopg._typing import psycopg_errors as errors
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional
 
@@ -33,8 +35,6 @@ def register_pgvector_sync(connection: "Connection[Any]") -> None:
     Args:
         connection: Psycopg sync connection.
     """
-    from sqlspec.adapters.psycopg._typing import PsycopgProgrammingError as ProgrammingError
-
     pgvector_psycopg = _pgvector_psycopg
     if pgvector_psycopg is None:
         return
@@ -58,8 +58,6 @@ async def register_pgvector_async(connection: "AsyncConnection[Any]") -> None:
     Args:
         connection: Psycopg async connection.
     """
-    from sqlspec.adapters.psycopg._typing import PsycopgProgrammingError as ProgrammingError
-
     pgvector_psycopg = _pgvector_psycopg
     if pgvector_psycopg is None:
         return
@@ -84,8 +82,6 @@ def _is_missing_vector_error(error: Exception) -> bool:
     Returns:
         True if error indicates vector type not found.
     """
-    from sqlspec.adapters.psycopg._typing import psycopg_errors as errors
-
     message = str(error).lower()
     return (
         "vector type not found" in message

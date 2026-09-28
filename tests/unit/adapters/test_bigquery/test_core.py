@@ -498,6 +498,23 @@ def test_script_execution_runs_as_single_unsplit_job() -> None:
     assert result.successful_statements == 1
 
 
+def test_script_execution_counts_multiple_statements() -> None:
+    """Verify dispatch_execute_script reports the split statement count for multi-statement scripts."""
+    connection = _RecordingConnection()
+    script_job = SimpleNamespace(
+        statement_type="SCRIPT", num_dml_affected_rows=3, statistics=None, result=lambda **kwargs: None
+    )
+    connection.job = script_job
+    driver = BigQueryDriver(cast(Any, connection))
+
+    script_sql = "INSERT INTO t VALUES (1); INSERT INTO t VALUES (2); INSERT INTO t VALUES (3);"
+    result = driver.dispatch_execute_script(cast(Any, connection), driver.prepare_statement(script_sql))
+
+    assert result.is_script_result is True
+    assert result.statement_count == 3
+    assert result.successful_statements == 3
+
+
 def test_script_preserves_bound_parameters() -> None:
     """Verify scripts retain native parameter binding without reparsing."""
     connection = _RecordingConnection()

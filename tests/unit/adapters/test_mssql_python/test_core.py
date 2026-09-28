@@ -258,17 +258,23 @@ def test_parse_odbc_connection_string_edge_cases() -> None:
 
 
 def test_extract_error_number_from_attribute() -> None:
-    """extract_error_number retrieves native integer attribute 'number'."""
+    """extract_error_number retrieves native integer attribute 'number' and skips 0."""
 
     class CustomError(Exception):
         number = 2627
 
+    class ZeroError(Exception):
+        number = 0
+
     assert extract_error_number(CustomError("duplicate key")) == 2627
+    assert extract_error_number(ZeroError("Msg 2627, Level 14, State 1")) == 2627
+    assert extract_error_number(ZeroError("Plain error")) is None
 
 
 def test_extract_error_number_from_args_tuple() -> None:
-    """extract_error_number extracts integer from exception args."""
+    """extract_error_number extracts integer from exception args and skips 0."""
     assert extract_error_number(Exception(1205, "Deadlock found")) == 1205
+    assert extract_error_number(Exception(0, "Msg 1205, Level 13, State 1")) == 1205
 
 
 def test_extract_error_number_from_string_regex() -> None:

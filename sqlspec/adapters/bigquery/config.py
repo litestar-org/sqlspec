@@ -247,9 +247,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if "default_query_job_config" not in self.connection_config:
             self._setup_default_job_config()
 
-        # Fired directly in create_connection (the client-construction path) like every other adapter,
-        # rather than bridged through the observability lifecycle dispatcher (which only runs under the
-        # SQLSpec registry wrapper, not bare config.provide_session()).
         self._user_connection_hook = user_connection_hook
 
         super().__init__(
@@ -265,9 +262,9 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         )
 
         self.driver_features = driver_features
-        self.driver_features["_storage_write_client_provider"] = self.provide_storage_write_client
+        self.driver_features["_storage_write_client_provider"] = self._provide_storage_write_client
 
-    def provide_storage_write_client(self, connection: "BigQueryConnection") -> Any:
+    def _provide_storage_write_client(self, connection: "BigQueryConnection") -> Any:
         """Return the shared BigQuery Storage Write client, creating it on first use.
 
         Args:

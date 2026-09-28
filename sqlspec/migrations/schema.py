@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from sqlglot import exp, parse
+from sqlglot import TokenType, exp, parse, tokenize
 
 from sqlspec.builder._ddl import AlterTable, CreateTable, _parse_ddl_identifier, _parse_ddl_table
 
@@ -400,16 +400,28 @@ def _extract_create_table_statement(create_statement: str) -> "str | None":
     start = upper_statement.find("CREATE TABLE")
     if start < 0:
         return None
-    opening = create_statement.find("(", start)
-    if opening < 0:
+    prefix = create_statement[:start].rstrip()
+    if prefix.endswith("'"):
+        quote_pos = create_statement.rfind("'", 0, start)
+        try:
+            string_tokens = tokenize(create_statement[quote_pos:])
+        except Exception:
+            return None
+        if not string_tokens or string_tokens[0].token_type != TokenType.STRING:
+            return None
+        sql = string_tokens[0].text
+    else:
+        sql = create_statement[start:]
+    try:
+        tokens = tokenize(sql)
+    except Exception:
         return None
     depth = 0
-    for index in range(opening, len(create_statement)):
-        character = create_statement[index]
-        if character == "(":
+    for token in tokens:
+        if token.token_type == TokenType.L_PAREN:
             depth += 1
-        elif character == ")":
+        elif token.token_type == TokenType.R_PAREN and depth > 0:
             depth -= 1
             if depth == 0:
-                return create_statement[start : index + 1].replace("''", "'")
+                return sql[: token.end + 1]
     return None

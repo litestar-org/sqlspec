@@ -31,8 +31,7 @@ if TYPE_CHECKING:
     AdbcConnection: TypeAlias = _AdbcConnection
     AdbcRawCursor: TypeAlias = _AdbcRawCursor
     AdbcNativeError: TypeAlias = _AdbcNativeError
-
-if not TYPE_CHECKING:
+else:
     AdbcConnection = _AdbcConnection
     AdbcRawCursor = _AdbcRawCursor
     AdbcNativeError = _AdbcNativeError

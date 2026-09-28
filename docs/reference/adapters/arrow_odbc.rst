@@ -10,8 +10,8 @@ PostgreSQL, MySQL, or other ODBC sources and the Arrow ecosystem.
 SQL Server coverage is exercised in CI against SQL Server 2022 through
 ``pytest-databases`` and Microsoft ODBC Driver 18. The shared contract matrix
 verifies native Arrow reads, Arrow reader/batch output, and Arrow bulk ingest
-for this adapter. Row-oriented ``execute_many()`` is intentionally unsupported;
-use ``load_from_arrow()`` for bulk writes.
+for this adapter. Use ``load_from_arrow()`` or ``bulk_insert_arrow()`` for
+native Arrow bulk writes, or ``execute_many()`` for row-oriented batches.
 
 The adapter exports a table-backed events queue store, a Litestar session
 store, and Google ADK session/event and memory stores. They support SQL Server

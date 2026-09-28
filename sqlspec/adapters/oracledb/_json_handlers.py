@@ -36,6 +36,7 @@ handler returns ``None`` for values it does not own.
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from sqlspec.adapters.oracledb._param_types import OracleJson
 from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_BLOB,
     DB_TYPE_CHAR,
@@ -67,6 +68,7 @@ __all__ = (
     "is_json_payload",
     "json_converter_in_blob",
     "json_converter_in_clob",
+    "json_converter_in_native",
     "json_converter_out_blob",
     "json_converter_out_clob",
     "json_converter_out_oson",
@@ -78,13 +80,24 @@ __all__ = (
 _JSON_STRING_TYPE_CODES = (DB_TYPE_VARCHAR, DB_TYPE_CHAR, DB_TYPE_NVARCHAR, DB_TYPE_NCHAR)
 
 
+def json_converter_in_native(value: Any) -> Any:
+    """Unwrap an explicit ``OracleJson`` marker before ``DB_TYPE_JSON`` binding."""
+    if isinstance(value, OracleJson):
+        return value.value
+    return value
+
+
 def json_converter_in_clob(value: Any) -> str:
     """Serialize a Python value to a JSON string for CLOB binding."""
+    if isinstance(value, OracleJson):
+        value = value.value
     return to_json(value)
 
 
 def json_converter_in_blob(value: Any) -> bytes:
     """Serialize a Python value to UTF-8 JSON bytes for BLOB binding."""
+    if isinstance(value, OracleJson):
+        value = value.value
     return to_json(value, as_bytes=True)
 
 
@@ -172,14 +185,16 @@ def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
 def is_json_payload(value: Any) -> bool:
     """Return True if the value should be claimed by the JSON input handler.
 
-    ``dict`` and ``tuple``/``list`` of dicts are claimed. Sequences whose first
-    element is a number are NOT claimed — those are vector embeddings and
-    belong to the vector handler.
+    ``OracleJson``, ``dict``, and ``tuple``/``list`` of dicts are claimed.
+    Unwrapped sequences whose first element is a number are NOT claimed — those
+    are vector embeddings and belong to the vector handler.
 
-    An empty sequence is ambiguous (could be empty vector or empty list) and
-    defers to the next handler in the chain. Sequences of numbers (vector
-    embeddings) are rejected.
+    An unwrapped empty sequence is ambiguous (could be empty vector or empty
+    list) and defers to the next handler in the chain. Sequences of numbers
+    (vector embeddings) are rejected unless wrapped in ``OracleJson``.
     """
+    if isinstance(value, OracleJson):
+        return True
     if isinstance(value, dict):
         return True
     if isinstance(value, (list, tuple)):
@@ -198,10 +213,14 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     server_major = resolve_oracle_connection_major(cursor.connection)
 
     if server_major is None:
+        if isinstance(value, OracleJson):
+            return cursor.var(DB_TYPE_JSON, arraysize=arraysize, inconverter=json_converter_in_native)
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
 
     storage = resolve_oracle_json_storage(server_major)
     if storage == ORACLE_JSON_STORAGE_NATIVE:
+        if isinstance(value, OracleJson):
+            return cursor.var(DB_TYPE_JSON, arraysize=arraysize, inconverter=json_converter_in_native)
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
     if storage == ORACLE_JSON_STORAGE_BLOB_JSON:
         return cursor.var(DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)

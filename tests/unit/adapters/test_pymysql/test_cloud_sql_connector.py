@@ -109,7 +109,7 @@ def test_cloud_sql_setup_strips_direct_connection_parameters(mock_cloud_sql_modu
         pool = config._create_pool()
 
     mock_cloud_sql_module.assert_called_once()
-    assert config.get_cloud_sql_connector() is mock_connector
+    assert config._get_cloud_sql_connector() is mock_connector
     assert pool._connection_factory is not None
     assert "host" not in pool._connection_parameters
     assert "port" not in pool._connection_parameters
@@ -195,4 +195,4 @@ def test_cloud_sql_connector_cleanup(mock_cloud_sql_module: MagicMock) -> None:
         config._close_pool()
 
     mock_connector.close.assert_called_once()
-    assert config.get_cloud_sql_connector() is None
+    assert config._get_cloud_sql_connector() is None

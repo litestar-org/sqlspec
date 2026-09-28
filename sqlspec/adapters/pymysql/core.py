@@ -81,10 +81,14 @@ class PymysqlStreamSource:
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
         with handler:
-            cursor = self._driver.connection.cursor(PyMysqlSSCursor)
-            self._cursor = cursor
-            cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            try:
+                cursor = self._driver.connection.cursor(PyMysqlSSCursor)
+                self._cursor = cursor
+                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+                self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+            except BaseException:
+                self.close(error=True)
+                raise
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":

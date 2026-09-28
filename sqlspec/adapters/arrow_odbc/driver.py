@@ -28,15 +28,20 @@ from sqlspec.core import (
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.typing import import_optional
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
+    import pyarrow as pa
+
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, ParameterProfile, Statement, StatementConfig, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
+else:
+    pa = import_optional("pyarrow")
 
 __all__ = ("ArrowOdbcCursor", "ArrowOdbcDriver", "ArrowOdbcExceptionHandler", "resolve_dialect_from_dbms_name")
 
@@ -194,7 +199,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 query=sql, parameters=_odbc_parameters(parameter_set, naive_utc_datetimes=self._dialect == "db2")
             )
             executed = True
-        # The native execute API supplies no affected-row count.
         return self.create_execution_result(cursor, rowcount_override=-1 if executed else 0, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
@@ -375,7 +379,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     def bulk_insert_arrow(self, target_table: str, source: Any, *, chunk_size: int | None = None) -> None:
         """Insert an Arrow table or reader into a database table."""
         ensure_pyarrow()
-        import pyarrow as pa
 
         resolved_chunk_size = chunk_size or self._chunk_size()
         exc_handler = self.handle_database_exceptions()
@@ -467,8 +470,6 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     def _normalize_reader(self, reader: "ArrowRecordBatchReader") -> "ArrowRecordBatchReader":
         """Wrap a record batch reader so its schema and batches carry normalized column names."""
-        import pyarrow as pa
-
         schema = reader.schema
         names = normalize_column_names(schema.names, self._lowercase_column_names)
         if names == schema.names:
@@ -556,7 +557,6 @@ def _inline_mssql_pagination_parameters(
             or statement_config.parameter_config.output_transformer is not None
         )
     ):
-        # Output transformers run after profile construction and can shift offsets.
         parameter_info = tuple(ParameterValidator(cache_max_size=0).extract_parameters(sql))
     positions = {parameter.position: parameter.ordinal for parameter in parameter_info}
     replacements: list[tuple[int, str]] = []
@@ -620,7 +620,6 @@ def _odbc_parameters(parameters: Any, *, naive_utc_datetimes: bool = False) -> "
 
 def _reader_to_table(reader: Any) -> Any:
     ensure_pyarrow()
-    import pyarrow as pa
 
     if isinstance(reader, pa.Table):
         return reader
@@ -637,7 +636,6 @@ def _reader_to_table(reader: Any) -> Any:
 
 def _to_pyarrow_reader(reader: object) -> "ArrowRecordBatchReader":
     ensure_pyarrow()
-    import pyarrow as pa
 
     if isinstance(reader, pa.RecordBatchReader):
         return reader
@@ -659,7 +657,6 @@ def _to_pyarrow_reader(reader: object) -> "ArrowRecordBatchReader":
 
 def _table_to_reader(table: Any, chunk_size: int) -> Any:
     ensure_pyarrow()
-    import pyarrow as pa
 
     return pa.RecordBatchReader.from_batches(table.schema, table.to_batches(max_chunksize=chunk_size))
 

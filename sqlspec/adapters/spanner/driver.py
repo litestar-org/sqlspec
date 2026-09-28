@@ -213,10 +213,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         coerced_params = self._coerce_params(script_params)
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
+        dialect_str = str(self.dialect) if self.dialect else "spanner"
         for index, stmt in enumerate(statements):
             try:
-                parsed = _sqlglot.parse_one(stmt)
-                is_select = isinstance(parsed, _sqlglot_exp.Select)
+                parsed = _sqlglot.parse_one(stmt, read=dialect_str)
+                is_select = isinstance(parsed, _sqlglot_exp.Query)
             except Exception:
                 is_select = stmt.upper().strip().startswith("SELECT")
             if not is_select and not is_transaction:
@@ -445,7 +446,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
 
         if overwrite:
-            delete_sql = f"DELETE FROM {table} WHERE TRUE"
+            dialect_str = str(self.dialect) if self.dialect else "spanner"
+            table_sql = _sqlglot_exp.to_table(table, dialect=dialect_str).sql(dialect=dialect_str, identify=True)
+            delete_sql = f"DELETE FROM {table_sql} WHERE TRUE"
             if isinstance(self.connection, SpannerTransaction):
                 writer = cast("_SpannerWriteProtocol", self.connection)
                 writer.execute_update(delete_sql)

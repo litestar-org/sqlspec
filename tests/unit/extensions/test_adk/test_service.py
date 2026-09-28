@@ -19,6 +19,8 @@ import pytest
 if importlib.util.find_spec("google.genai") is None or importlib.util.find_spec("google.adk") is None:
     pytest.skip("google-adk not installed", allow_module_level=True)
 
+from google.adk.errors import StaleSessionError
+from google.adk.errors.session_not_found_error import SessionNotFoundError
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from google.adk.sessions.base_session_service import GetSessionConfig
@@ -612,18 +614,17 @@ async def test_get_user_state_strips_user_prefixes() -> None:
 
 @pytest.mark.anyio
 async def test_append_event_raises_on_stale_marker() -> None:
-    """append_event raises ValueError when _storage_update_marker doesn't match storage."""
+    """append_event raises StaleSessionError when _storage_update_marker doesn't match storage."""
     from sqlspec.extensions.adk.converters import compute_update_marker
 
     store = StaleDetectionStore(stale_marker=True)
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session()
-    # Set a marker that won't match the advanced update_time
     session._storage_update_marker = compute_update_marker(store._session_record["update_time"])  # type: ignore[arg-type]
 
     event = _make_event()
 
-    with pytest.raises(ValueError, match="modified in storage"):
+    with pytest.raises(StaleSessionError, match="modified in storage"):
         await service.append_event(session, event)
 
     assert not store.append_event_and_update_state_called
@@ -631,16 +632,15 @@ async def test_append_event_raises_on_stale_marker() -> None:
 
 @pytest.mark.anyio
 async def test_append_event_raises_on_stale_timestamp() -> None:
-    """append_event raises ValueError when storage update_time > session.last_update_time."""
+    """append_event raises StaleSessionError when storage update_time > session.last_update_time."""
     store = StaleDetectionStore(stale_timestamp=True)
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
-    # Session loaded with an older timestamp; marker is None (timestamp fallback)
     session = _make_session()
-    session._storage_update_marker = None  # force timestamp-based check
+    session._storage_update_marker = None
 
     event = _make_event()
 
-    with pytest.raises(ValueError, match="modified in storage"):
+    with pytest.raises(StaleSessionError, match="modified in storage"):
         await service.append_event(session, event)
 
     assert not store.append_event_and_update_state_called
@@ -648,13 +648,13 @@ async def test_append_event_raises_on_stale_timestamp() -> None:
 
 @pytest.mark.anyio
 async def test_append_event_raises_when_session_not_found() -> None:
-    """append_event raises ValueError when the session no longer exists in storage."""
+    """append_event raises SessionNotFoundError when the session no longer exists in storage."""
     store = MissingSessionStore()
     service = SQLSpecSessionService(store)  # type: ignore[arg-type]
     session = _make_session()
     event = _make_event()
 
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(SessionNotFoundError, match="not found"):
         await service.append_event(session, event)
 
     assert not store.append_event_and_update_state_called

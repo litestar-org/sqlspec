@@ -211,3 +211,93 @@ def test_pymysql_list_sessions_rejects_invalid_options(options: "dict[str, Any]"
         store.list_sessions("app", **options)
 
     assert cursor.calls == []
+
+
+def test_pymysql_adk_memory_store_insert_and_search_json_handling() -> None:
+    """PyMysqlADKMemoryStore handles missing author, metadata_json=None, and deserializes JSON strings."""
+    from datetime import datetime, timezone
+
+    cursor = MagicMock()
+    cursor.rowcount = 1
+    now = datetime.now(tz=timezone.utc)
+    cursor.description = [
+        ("id",),
+        ("session_id",),
+        ("app_name",),
+        ("user_id",),
+        ("scope",),
+        ("event_id",),
+        ("author",),
+        ("timestamp",),
+        ("content_json",),
+        ("content_text",),
+        ("metadata_json",),
+        ("inserted_at",),
+    ]
+    cursor.fetchall.return_value = [
+        (
+            "mem-1",
+            "sess-1",
+            "app",
+            "user-1",
+            "user",
+            "evt-1",
+            None,
+            now,
+            '{"text": "hello"}',
+            "hello",
+            '{"source": "unit"}',
+            now,
+        )
+    ]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = None
+    config = _mock_config({"owner_id_column": "owner_id INT NULL"})
+    config.provide_connection = lambda *_a, **_k: conn
+    store = PyMysqlADKMemoryStore(config)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user-1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+
+    inserted = store._insert_memory_entries([entry], owner_id=99)
+    records = store._search_entries("hello", "app", "user-1")
+
+    assert inserted == 1
+    insert_params = cursor.execute.call_args_list[0].args[1]
+    assert insert_params[6] is None
+    assert insert_params[11] is None
+    assert len(records) == 1
+    assert records[0]["content_json"] == {"text": "hello"}
+    assert records[0]["metadata_json"] == {"source": "unit"}
+
+
+def test_pymysql_stream_source_closes_cursor_when_execute_raises() -> None:
+    """PymysqlStreamSource.start() closes the cursor if execute() fails."""
+    from sqlspec.adapters.pymysql.core import PymysqlStreamSource
+
+    cursor = MagicMock()
+    cursor.execute.side_effect = RuntimeError("execute boom")
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = MagicMock(connection=connection)
+    source = PymysqlStreamSource(driver, "SELECT 1", (), 100, set())
+
+    with pytest.raises(RuntimeError, match="execute boom"):
+        source.start()
+
+    cursor.close.assert_called_once()
+    assert source._cursor is None

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 from mypy_extensions import mypyc_attr
 
 from sqlspec.migrations.base import BaseMigrationTracker
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -220,8 +221,6 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        from sqlspec.migrations.schema import SchemaTarget, ensure_schema_sync
-
         try:
             target = SchemaTarget(self.version_table, self._tracking_table_ddl())
             result = ensure_schema_sync(driver, [target], manage_schema=True, create_schema=False, assume_existing=True)
@@ -446,8 +445,6 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         Args:
             driver: The database driver to use.
         """
-        from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async
-
         try:
             target = SchemaTarget(self.version_table, self._tracking_table_ddl())
             result = await ensure_schema_async(

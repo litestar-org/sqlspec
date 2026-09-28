@@ -946,6 +946,9 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
 
     def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
+        if not self._enabled:
+            return
+
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
@@ -1131,6 +1134,7 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             for entry in entries:
                 params: tuple[Any, ...]
                 scope_value = entry.get("scope", "user")
+                metadata_json = entry.get("metadata_json")
                 if self._owner_id_column_name:
                     params = (
                         entry["id"],
@@ -1139,12 +1143,12 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                         entry["user_id"],
                         scope_value,
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         owner_id,
                         entry["timestamp"],
                         to_json(entry["content_json"]),
                         entry["content_text"],
-                        to_json(entry["metadata_json"]),
+                        to_json(metadata_json) if metadata_json is not None else None,
                         entry["inserted_at"],
                     )
                 else:
@@ -1155,18 +1159,17 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
                         entry["user_id"],
                         scope_value,
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         entry["timestamp"],
                         to_json(entry["content_json"]),
                         entry["content_text"],
-                        to_json(entry["metadata_json"]),
+                        to_json(metadata_json) if metadata_json is not None else None,
                         entry["inserted_at"],
                     )
                 result = conn.execute(sql, params)
                 inserted_count += len(result.fetchall())
             conn.commit()
 
-            # Refresh FTS index after inserts, not on search
             if self._use_fts and inserted_count > 0:
                 self._refresh_fts_index(conn)
 
@@ -1185,20 +1188,21 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query:
+        if not query or not query.strip():
             return []
 
-        limit_value = limit or self._max_results
+        limit_value = limit if limit is not None else self._max_results
         use_fts = self._use_fts
+        rows: list[Any] | None = None
+        columns: list[str] = []
 
         with self._config.provide_connection() as conn:
             if use_fts and not self._ensure_fts_extension(conn):
                 use_fts = False
 
             if use_fts:
-                # Use match_bm25() -- the correct DuckDB FTS syntax
                 where_scope, scope_params = _build_duckdb_scope_where(app_name, user_id, scope_filter, prefix="m")
-                sql = f"""
+                fts_sql = f"""
             SELECT m.*
             FROM {self._memory_table} m
             JOIN (
@@ -1209,8 +1213,14 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             ORDER BY fts.score DESC
             LIMIT ?
             """
-                params = (query, *scope_params, limit_value)
-            else:
+                fts_params = (query, *scope_params, limit_value)
+                try:
+                    rows = conn.execute(fts_sql, fts_params).fetchall()
+                    columns = [col[0] for col in conn.description or []]
+                except Exception as exc:
+                    logger.warning("FTS search failed; falling back to simple search: %s", exc)
+
+            if rows is None:
                 where_scope, scope_params = _build_duckdb_scope_where(app_name, user_id, scope_filter)
                 sql = f"""
             SELECT * FROM {self._memory_table}
@@ -1219,9 +1229,14 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             LIMIT ?
             """
                 params = (*scope_params, f"%{query}%", limit_value)
+                try:
+                    rows = conn.execute(sql, params).fetchall()
+                    columns = [col[0] for col in conn.description or []]
+                except Exception as exc:
+                    if DUCKDB_TABLE_NOT_FOUND_ERROR in str(exc):
+                        return []
+                    raise
 
-            rows = conn.execute(sql, params).fetchall()
-            columns = [col[0] for col in conn.description or []]
         records: list[StoredMemory] = []
         for row in rows:
             record = cast("StoredMemory", dict(zip(columns, row, strict=False)))
@@ -1256,8 +1271,8 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = [f"inserted_at < (CURRENT_TIMESTAMP - INTERVAL '{days} days')"]
-        params: list[Any] = []
+        clauses = ["inserted_at < (CURRENT_TIMESTAMP - (? * INTERVAL '1 day'))"]
+        params: list[Any] = [days]
         if app_name is not None:
             clauses.append("app_name = ?")
             params.append(app_name)

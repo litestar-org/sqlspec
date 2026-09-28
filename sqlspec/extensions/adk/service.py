@@ -5,6 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
+from google.adk.errors import StaleSessionError
+from google.adk.errors.session_not_found_error import SessionNotFoundError
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
 
 from sqlspec.extensions.adk.converters import (
@@ -276,7 +278,7 @@ class SQLSpecSessionService(BaseSessionService):
         updates the in-memory session only after persistence succeeds.
 
         Implements stale-session detection: if the session has been
-        modified in storage since it was last loaded, a ``ValueError``
+        modified in storage since it was last loaded, a ``StaleSessionError``
         is raised instead of silently overwriting.
 
         ``temp:`` keys are stripped from the persisted state snapshot so
@@ -290,15 +292,13 @@ class SQLSpecSessionService(BaseSessionService):
             The appended event.
 
         Raises:
-            ValueError: If the session has been modified in storage since
-                it was loaded (stale session).
+            SessionNotFoundError: If the session does not exist in storage.
+            StaleSessionError: If the session has been modified in storage
+                since it was loaded (stale session).
         """
         if event.partial:
             return event
 
-        # Apply temp state to in-memory session so subsequent agents in
-        # the same invocation can read temp values, then strip temp keys
-        # from the event delta before persistence.
         self._apply_temp_state(session, event)
         event = self._trim_temp_delta_state(event)
 
@@ -309,7 +309,7 @@ class SQLSpecSessionService(BaseSessionService):
         current_record = await self._call_store("get_session", session.app_name, session.user_id, session.id)
         if current_record is None:
             msg = f"Session {session.id} not found."
-            raise ValueError(msg)
+            raise SessionNotFoundError(msg)
 
         if session._storage_update_marker is not None:  # pyright: ignore[reportPrivateUsage]
             current_marker = compute_update_marker(current_record["update_time"])
@@ -318,13 +318,13 @@ class SQLSpecSessionService(BaseSessionService):
                     "The session has been modified in storage since it was loaded. "
                     "Please reload the session before appending more events."
                 )
-                raise ValueError(msg)
+                raise StaleSessionError(msg)
         elif current_record["update_time"].timestamp() > session.last_update_time:
             msg = (
                 "The session has been modified in storage since it was loaded. "
                 "Please reload the session before appending more events."
             )
-            raise ValueError(msg)
+            raise StaleSessionError(msg)
 
         state_delta = (event.actions.state_delta if event.actions else None) or {}
         app_state_delta, user_state_delta, session_state_delta = split_scoped_state(filter_temp_state(state_delta))
@@ -354,11 +354,9 @@ class SQLSpecSessionService(BaseSessionService):
         )
         updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
-        # Use the returned record directly — saves a round-trip vs a follow-up get_session().
         session.last_update_time = updated_record["update_time"].timestamp()
         session._storage_update_marker = compute_update_marker(updated_record["update_time"])  # pyright: ignore[reportPrivateUsage]
 
-        # Update in-memory session AFTER successful persistence
         self._update_session_state(session, event)
         session.events.append(event)
 

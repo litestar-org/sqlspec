@@ -658,23 +658,27 @@ class OracleSyncStreamSource:
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
         with handler:
-            cursor = self._driver.connection.cursor()
-            self._cursor = cursor
-            cursor.arraysize = self._chunk_size
-            cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
-            if self._fetch_lobs is not None:
-                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-            parameters = coerce_large_parameters_sync(
-                self._driver.connection,
-                self._parameters,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=getattr(self._driver, "_oracle_version_cache", None),
-            )
-            cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+            try:
+                cursor = self._driver.connection.cursor()
+                self._cursor = cursor
+                cursor.arraysize = self._chunk_size
+                cursor.prefetchrows = self._chunk_size
+                fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+                if self._fetch_lobs is not None:
+                    fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+                parameters = coerce_large_parameters_sync(
+                    self._driver.connection,
+                    self._parameters,
+                    clob_type=DB_TYPE_CLOB,
+                    blob_type=DB_TYPE_BLOB,
+                    varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                    raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+                    version_cache=getattr(self._driver, "_oracle_version_cache", None),
+                )
+                cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+            except BaseException:
+                self.close(error=True)
+                raise
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -761,23 +765,27 @@ class OracleAsyncStreamSource:
         self._driver._check_pending_exception(handler)
 
     async def _start(self) -> None:
-        cursor = self._driver.connection.cursor()
-        self._cursor = cursor
-        cursor.arraysize = self._chunk_size
-        cursor.prefetchrows = self._chunk_size
-        fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
-        if self._fetch_lobs is not None:
-            fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-        parameters = await coerce_large_parameters_async(
-            self._driver.connection,
-            self._parameters,
-            clob_type=DB_TYPE_CLOB,
-            blob_type=DB_TYPE_BLOB,
-            varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-            raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-            version_cache=getattr(self._driver, "_oracle_version_cache", None),
-        )
-        await cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        try:
+            cursor = self._driver.connection.cursor()
+            self._cursor = cursor
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            if self._fetch_lobs is not None:
+                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+            parameters = await coerce_large_parameters_async(
+                self._driver.connection,
+                self._parameters,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=getattr(self._driver, "_oracle_version_cache", None),
+            )
+            await cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        except BaseException:
+            await self.close(error=True)
+            raise
 
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
@@ -1048,8 +1056,12 @@ def _parameter_values_need_coercion(
             if is_json_payload(value) and json_binding_state.uses_blob():
                 return True
             continue
-        if isinstance(value, (OracleClob, OracleBlob, OracleJson)):
+        if isinstance(value, (OracleClob, OracleBlob)):
             return True
+        if isinstance(value, OracleJson):
+            if json_binding_state.uses_blob():
+                return True
+            continue
         if isinstance(value, str):
             if len(value.encode("utf-8")) > varchar2_byte_limit:
                 return True
@@ -1073,7 +1085,7 @@ def _coerce_parameters_sync(
     raw_byte_limit: int,
     json_binding_state: _OracleJsonBindingState,
 ) -> Any:
-    """Coerce one parameter container, copying sequences only when changed."""
+    """Coerce one parameter container, copying mappings and sequences only when changed."""
     if isinstance(parameters, dict):
         if not _parameter_values_need_coercion(
             parameters.values(),
@@ -1082,6 +1094,7 @@ def _coerce_parameters_sync(
             json_binding_state=json_binding_state,
         ):
             return parameters
+        coerced_dict: dict[Any, Any] | None = None
         for param_name, param_value in parameters.items():
             coerced_value = _coerce_value_sync(
                 connection,
@@ -1093,8 +1106,10 @@ def _coerce_parameters_sync(
                 json_binding_state=json_binding_state,
             )
             if coerced_value is not param_value:
-                parameters[param_name] = coerced_value
-        return parameters
+                if coerced_dict is None:
+                    coerced_dict = dict(parameters)
+                coerced_dict[param_name] = coerced_value
+        return parameters if coerced_dict is None else coerced_dict
     if isinstance(parameters, (list, tuple)):
         if not _parameter_values_need_coercion(
             parameters,
@@ -1142,6 +1157,7 @@ async def _coerce_parameters_async(
             json_binding_state=json_binding_state,
         ):
             return parameters
+        coerced_dict: dict[Any, Any] | None = None
         for param_name, param_value in parameters.items():
             coerced_value = await _coerce_value_async(
                 connection,
@@ -1153,8 +1169,10 @@ async def _coerce_parameters_async(
                 json_binding_state=json_binding_state,
             )
             if coerced_value is not param_value:
-                parameters[param_name] = coerced_value
-        return parameters
+                if coerced_dict is None:
+                    coerced_dict = dict(parameters)
+                coerced_dict[param_name] = coerced_value
+        return parameters if coerced_dict is None else coerced_dict
     if isinstance(parameters, (list, tuple)):
         if not _parameter_values_need_coercion(
             parameters,
@@ -1224,15 +1242,9 @@ def _coerce_value_sync(
             inner = inner.encode("utf-8")
         return connection.createlob(blob_type, inner)
     if isinstance(value, OracleJson):
-        return _coerce_value_sync(
-            connection,
-            value.value,
-            clob_type=clob_type,
-            blob_type=blob_type,
-            varchar2_byte_limit=varchar2_byte_limit,
-            raw_byte_limit=raw_byte_limit,
-            json_binding_state=json_binding_state,
-        )
+        if json_binding_state.uses_blob():
+            return connection.createlob(blob_type, to_json(value.value, as_bytes=True))
+        return value
     if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
         return connection.createlob(clob_type, value)
     if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:
@@ -1283,15 +1295,9 @@ async def _coerce_value_async(
             inner = inner.encode("utf-8")
         return await connection.createlob(blob_type, inner)
     if isinstance(value, OracleJson):
-        return await _coerce_value_async(
-            connection,
-            value.value,
-            clob_type=clob_type,
-            blob_type=blob_type,
-            varchar2_byte_limit=varchar2_byte_limit,
-            raw_byte_limit=raw_byte_limit,
-            json_binding_state=json_binding_state,
-        )
+        if json_binding_state.uses_blob():
+            return await connection.createlob(blob_type, to_json(value.value, as_bytes=True))
+        return value
     if isinstance(value, str) and len(value.encode("utf-8")) > varchar2_byte_limit:
         return await connection.createlob(clob_type, value)
     if isinstance(value, (bytes, bytearray)) and len(value) > raw_byte_limit:

@@ -172,8 +172,6 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE TABLE {0} (\n"
     "                id VARCHAR2(128) PRIMARY KEY,\n"
-    "                app_name VARCHAR2(128) NOT NULL,\n"
-    "                user_id VARCHAR2(128) NOT NULL,\n"
     "                session_id VARCHAR2(128) NOT NULL,\n"
     "                app_name VARCHAR2(128) NOT NULL,\n"
     "                user_id VARCHAR2(128) NOT NULL,\n"
@@ -408,9 +406,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, params)
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, params)
+                await conn.commit()
 
         result = await self.get_session(app_name, user_id, session_id)
         if result is None:
@@ -439,39 +437,39 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                with conn.cursor() as cursor:
+                    if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+                        await cursor.execute(
+                            f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
+                            {"app_name": app_name, "user_id": user_id, "id": session_id},
+                        )
+                        await conn.commit()
+
                     await cursor.execute(
-                        f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
+                        f"""
+                        SELECT id, app_name, user_id, state, create_time, update_time
+                        FROM {self._session_table}
+                        WHERE app_name = :app_name AND user_id = :user_id AND id = :id
+                        """,
                         {"app_name": app_name, "user_id": user_id, "id": session_id},
                     )
-                    await conn.commit()
+                    row = await cursor.fetchone()
 
-                await cursor.execute(
-                    f"""
-                    SELECT id, app_name, user_id, state, create_time, update_time
-                    FROM {self._session_table}
-                    WHERE app_name = :app_name AND user_id = :user_id AND id = :id
-                    """,
-                    {"app_name": app_name, "user_id": user_id, "id": session_id},
-                )
-                row = await cursor.fetchone()
+                    if row is None:
+                        return None
 
-                if row is None:
-                    return None
+                    session_id_val, app_name, user_id, state_data, create_time, update_time = row
 
-                session_id_val, app_name, user_id, state_data, create_time, update_time = row
+                    state = await self._deserialize_state(state_data)
 
-                state = await self._deserialize_state(state_data)
-
-                return StoredSession(
-                    id=session_id_val,
-                    app_name=app_name,
-                    user_id=user_id,
-                    state=state,
-                    create_time=create_time,
-                    update_time=update_time,
-                )
+                    return StoredSession(
+                        id=session_id_val,
+                        app_name=app_name,
+                        user_id=user_id,
+                        state=state,
+                        create_time=create_time,
+                        update_time=update_time,
+                    )
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -501,9 +499,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(
+                    sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+                )
+                await conn.commit()
 
     async def list_sessions(
         self,
@@ -542,25 +542,25 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, params)
-                rows = await cursor.fetchall()
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, params)
+                    rows = await cursor.fetchall()
 
-                results = []
-                for row in rows:
-                    state = await self._deserialize_state(row[3])
+                    results = []
+                    for row in rows:
+                        state = await self._deserialize_state(row[3])
 
-                    results.append(
-                        StoredSession(
-                            id=row[0],
-                            app_name=row[1],
-                            user_id=row[2],
-                            state=state,
-                            create_time=row[4],
-                            update_time=row[5],
+                        results.append(
+                            StoredSession(
+                                id=row[0],
+                                app_name=row[1],
+                                user_id=row[2],
+                                state=state,
+                                create_time=row[4],
+                                update_time=row[5],
+                            )
                         )
-                    )
-                return results
+                    return results
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -581,9 +581,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                await conn.commit()
 
     async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
@@ -600,20 +600,20 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(
-                sql,
-                {
-                    "id": event_record["id"],
-                    "app_name": event_record["app_name"],
-                    "user_id": event_record["user_id"],
-                    "session_id": event_record["session_id"],
-                    "invocation_id": event_record["invocation_id"],
-                    "timestamp": event_record["timestamp"],
-                    "event_data": await self._serialize_event_data(event_record["event_data"]),
-                },
-            )
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(
+                    sql,
+                    {
+                        "id": event_record["id"],
+                        "app_name": event_record["app_name"],
+                        "user_id": event_record["user_id"],
+                        "session_id": event_record["session_id"],
+                        "invocation_id": event_record["invocation_id"],
+                        "timestamp": event_record["timestamp"],
+                        "event_data": await self._serialize_event_data(event_record["event_data"]),
+                    },
+                )
+                await conn.commit()
 
     async def append_event_and_update_state(
         self,
@@ -675,40 +675,44 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                await cursor.execute(
-                    update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
-                )
-                await cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
-                row = await cursor.fetchone()
-                if row is None:
-                    _raise_session_not_found(session_id)
-                await cursor.execute(
-                    insert_sql,
-                    {
-                        "id": event_record["id"],
-                        "app_name": event_record["app_name"],
-                        "user_id": event_record["user_id"],
-                        "session_id": event_record["session_id"],
-                        "invocation_id": event_record["invocation_id"],
-                        "timestamp": event_record["timestamp"],
-                        "event_data": await self._serialize_event_data(event_record["event_data"]),
-                    },
-                )
-                if app_state is not None:
+            with conn.cursor() as cursor:
+                try:
                     await cursor.execute(
-                        app_upsert_sql, {"app_name": app_name, "state": await self._serialize_state(app_state)}
+                        update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
                     )
-                if user_state is not None:
+                    await cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
+                    row = await cursor.fetchone()
+                    if row is None:
+                        _raise_session_not_found(session_id)
                     await cursor.execute(
-                        user_upsert_sql,
-                        {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(user_state)},
+                        insert_sql,
+                        {
+                            "id": event_record["id"],
+                            "app_name": event_record["app_name"],
+                            "user_id": event_record["user_id"],
+                            "session_id": event_record["session_id"],
+                            "invocation_id": event_record["invocation_id"],
+                            "timestamp": event_record["timestamp"],
+                            "event_data": await self._serialize_event_data(event_record["event_data"]),
+                        },
                     )
-                await conn.commit()
-            except Exception:
-                await conn.rollback()
-                raise
+                    if app_state is not None:
+                        await cursor.execute(
+                            app_upsert_sql, {"app_name": app_name, "state": await self._serialize_state(app_state)}
+                        )
+                    if user_state is not None:
+                        await cursor.execute(
+                            user_upsert_sql,
+                            {
+                                "app_name": app_name,
+                                "user_id": user_id,
+                                "state": await self._serialize_state(user_state),
+                            },
+                        )
+                    await conn.commit()
+                except Exception:
+                    await conn.rollback()
+                    raise
 
         session_id_val, row_app_name, row_user_id, state_data_row, create_time, update_time = row
         return StoredSession(
@@ -766,22 +770,22 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, params)
-                rows = await cursor.fetchall()
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, params)
+                    rows = await cursor.fetchall()
 
-                return [
-                    StoredEvent(
-                        id=row[0],
-                        session_id=row[1],
-                        invocation_id=_oracle_text_value(row[2]),
-                        timestamp=row[3],
-                        event_data=await self._deserialize_json_field(row[4]) or {},
-                        app_name=row[5],
-                        user_id=row[6],
-                    )
-                    for row in rows
-                ]
+                    return [
+                        StoredEvent(
+                            id=row[0],
+                            session_id=row[1],
+                            invocation_id=_oracle_text_value(row[2]),
+                            timestamp=row[3],
+                            event_data=await self._deserialize_json_field(row[4]) or {},
+                            app_name=row[5],
+                            user_id=row[6],
+                        )
+                        for row in rows
+                    ]
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -797,10 +801,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, params)
-                await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, params)
+                    await conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -816,10 +820,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, params)
-                await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, params)
+                    await conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -835,10 +839,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, params)
-                await conn.commit()
-                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, params)
+                    await conn.commit()
+                    return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -851,10 +855,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, {"app_name": app_name})
-                row = await cursor.fetchone()
-                return await self._deserialize_state(row[0]) if row is not None else None
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, {"app_name": app_name})
+                    row = await cursor.fetchone()
+                    return await self._deserialize_state(row[0]) if row is not None else None
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -871,10 +875,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
-                row = await cursor.fetchone()
-                return await self._deserialize_state(row[0]) if row is not None else None
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
+                    row = await cursor.fetchone()
+                    return await self._deserialize_state(row[0]) if row is not None else None
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -895,9 +899,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"app_name": app_name, "state": await self._serialize_state(state)})
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"app_name": app_name, "state": await self._serialize_state(state)})
+                await conn.commit()
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
@@ -913,11 +917,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(
-                sql, {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(state)}
-            )
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(
+                    sql, {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(state)}
+                )
+                await conn.commit()
 
     async def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
@@ -925,10 +929,10 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         try:
             async with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute(sql, {"key": key})
-                row = await cursor.fetchone()
-                return str(row[0]) if row is not None else None
+                with conn.cursor() as cursor:
+                    await cursor.execute(sql, {"key": key})
+                    row = await cursor.fetchone()
+                    return str(row[0]) if row is not None else None
         except OracleDatabaseError as e:
             error_obj = e.args[0] if e.args else None
             if error_obj and error_obj.code == ORACLE_TABLE_NOT_FOUND_ERROR:
@@ -949,9 +953,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"key": key, "value": value})
-            await conn.commit()
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"key": key, "value": value})
+                await conn.commit()
 
     async def _sessions_table_ddl(self) -> str:
         """Get Oracle CREATE TABLE SQL for sessions table.
@@ -1411,8 +1415,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             """
             params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             conn.commit()
 
@@ -1448,8 +1451,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     cursor.execute(
                         f"UPDATE {self._session_table} SET update_time = SYSTIMESTAMP WHERE app_name = :app_name AND user_id = :user_id AND id = :id",
@@ -1503,8 +1505,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         WHERE app_name = :app_name AND user_id = :user_id AND id = :id
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
             conn.commit()
 
@@ -1544,8 +1545,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -1583,8 +1583,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
         sql = f"DELETE FROM {self._session_table} WHERE app_name = :app_name AND user_id = :user_id AND id = :id"
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
             conn.commit()
 
@@ -1598,8 +1597,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         )
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(
                 sql,
                 {
@@ -1669,8 +1667,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             try:
                 cursor.execute(
                     update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
@@ -1755,8 +1752,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
@@ -1787,8 +1783,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             params["app_name"] = app_name
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
@@ -1807,8 +1802,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             params["app_name"] = app_name
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
@@ -1827,8 +1821,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             params["app_name"] = app_name
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, params)
                 conn.commit()
                 return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
@@ -1843,8 +1836,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = :app_name"
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, {"app_name": app_name})
                 row = cursor.fetchone()
                 return self._deserialize_state(row[0]) if row is not None else None
@@ -1863,8 +1855,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, {"app_name": app_name, "user_id": user_id})
                 row = cursor.fetchone()
                 return self._deserialize_state(row[0]) if row is not None else None
@@ -1887,8 +1878,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             VALUES (source.app_name, source.state, SYSTIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"app_name": app_name, "state": self._serialize_state(state)})
             conn.commit()
 
@@ -1905,8 +1895,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(state)})
             conn.commit()
 
@@ -1915,8 +1904,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = :key"
 
         try:
-            with self._config.provide_connection() as conn:
-                cursor = conn.cursor()
+            with self._config.provide_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql, {"key": key})
                 row = cursor.fetchone()
                 return str(row[0]) if row is not None else None
@@ -1939,8 +1927,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             VALUES (source.key, source.value)
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"key": key, "value": value})
             conn.commit()
 
@@ -2327,29 +2314,29 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
         inserted_count = 0
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            for entry in entries:
-                content_json = await self._serialize_json_field(entry["content_json"])
-                metadata_json = await self._serialize_json_field(entry["metadata_json"])
-                params = {
-                    "id": entry["id"],
-                    "session_id": entry["session_id"],
-                    "app_name": entry["app_name"],
-                    "user_id": entry["user_id"],
-                    "scope": entry.get("scope", "user"),
-                    "event_id": entry["event_id"],
-                    "author": entry["author"],
-                    "timestamp": entry["timestamp"],
-                    "content_json": content_json,
-                    "content_text": entry["content_text"],
-                    "metadata_json": metadata_json,
-                    "inserted_at": entry["inserted_at"],
-                }
-                if self._owner_id_column_name:
-                    params["owner_id"] = str(owner_id) if owner_id is not None else None
-                if await self._execute_insert_entry(cursor, sql, params):
-                    inserted_count += 1
-            await conn.commit()
+            with conn.cursor() as cursor:
+                for entry in entries:
+                    content_json = await self._serialize_json_field(entry["content_json"])
+                    metadata_json = await self._serialize_json_field(entry["metadata_json"])
+                    params = {
+                        "id": entry["id"],
+                        "session_id": entry["session_id"],
+                        "app_name": entry["app_name"],
+                        "user_id": entry["user_id"],
+                        "scope": entry.get("scope", "user"),
+                        "event_id": entry["event_id"],
+                        "author": entry["author"],
+                        "timestamp": entry["timestamp"],
+                        "content_json": content_json,
+                        "content_text": entry["content_text"],
+                        "metadata_json": metadata_json,
+                        "inserted_at": entry["inserted_at"],
+                    }
+                    if self._owner_id_column_name:
+                        params["owner_id"] = str(owner_id) if owner_id is not None else None
+                    if await self._execute_insert_entry(cursor, sql, params):
+                        inserted_count += 1
+                await conn.commit()
 
         return inserted_count
 
@@ -2381,10 +2368,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     async def delete_entries_by_session(self, session_id: str) -> int:
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, {"session_id": session_id})
-            await conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, {"session_id": session_id})
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
@@ -2401,10 +2388,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, params)
-            await conn.commit()
-            return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, params)
+                await conn.commit()
+                return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
 
     async def _detect_json_storage_type(self) -> "JSONStorageType":
         return storage_type_from_version(await self._get_version_info())
@@ -2557,10 +2544,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         """
         params = {**scope_params, "query": query, "limit": limit}
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, params)
-            rows = await cursor.fetchall()
-        return await self._rows_to_records(rows)
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, params)
+                rows = await cursor.fetchall()
+                return await self._rows_to_records(rows)
 
     async def _search_entries_simple(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -2582,10 +2569,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
         async with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            await cursor.execute(sql, params)
-            rows = await cursor.fetchall()
-        return await self._rows_to_records(rows)
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, params)
+                rows = await cursor.fetchall()
+                return await self._rows_to_records(rows)
 
     async def _rows_to_records(self, rows: "list[Any]") -> "list[StoredMemory]":
         records: list[StoredMemory] = []
@@ -2659,8 +2646,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         """
 
         inserted_count = 0
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             for entry in entries:
                 content_json = self._serialize_json_field(entry["content_json"])
                 metadata_json = self._serialize_json_field(entry["metadata_json"])
@@ -2715,8 +2701,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = :session_id"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {"session_id": session_id})
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
@@ -2734,8 +2719,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             conn.commit()
             return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
@@ -2890,11 +2874,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         WHERE ROWNUM <= :limit
         """
         params = {**scope_params, "query": query, "limit": limit}
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
-        return self._rows_to_records(rows)
+            return self._rows_to_records(rows)
 
     def _search_entries_simple(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -2915,11 +2898,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         """
         pattern = f"%{query.lower()}%"
         params = {**scope_params, "pattern": pattern, "limit": limit}
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
-        return self._rows_to_records(rows)
+            return self._rows_to_records(rows)
 
     def _rows_to_records(self, rows: "list[Any]") -> "list[StoredMemory]":
         records: list[StoredMemory] = []

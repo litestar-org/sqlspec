@@ -39,7 +39,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from sqlspec.adapters.cockroach_psycopg._typing import CockroachAsyncCursor, CockroachSyncCursor
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.core import SQLResult
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = (
@@ -105,8 +106,14 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
-        # Data dictionary is lazily initialized in property; use parent slot
         self._data_dictionary = None
+
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if cached.operation_profile.returns_rows:
+            self._begin_follower_read_transaction()
+        return super()._execute_cache_hit(sql, params, cached)
 
     def select_to_storage(
         self,
@@ -275,7 +282,6 @@ class CockroachPsycopgSyncDriver(PsycopgSyncDriver):
     @property
     def data_dictionary(self) -> "CockroachPsycopgSyncDataDictionary":  # type: ignore[override]
         if self._data_dictionary is None:
-            # Intentionally assign CockroachDB-specific data dictionary to parent slot
             self._data_dictionary = CockroachPsycopgSyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgSyncDataDictionary", self._data_dictionary)
 
@@ -336,8 +342,14 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
         self._retry_config = CockroachPsycopgRetryConfig.from_features(self.driver_features)
         self._enable_retry = bool(self.driver_features.get("enable_auto_retry", True))
         self._follower_staleness = cast("str | None", self.driver_features.get("default_staleness"))
-        # Data dictionary is lazily initialized in property; use parent slot
         self._data_dictionary = None
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if cached.operation_profile.returns_rows:
+            await self._begin_follower_read_transaction()
+        return await super()._execute_cache_hit(sql, params, cached)
 
     async def select_to_storage(
         self,
@@ -506,7 +518,6 @@ class CockroachPsycopgAsyncDriver(PsycopgAsyncDriver):
     @property
     def data_dictionary(self) -> "CockroachPsycopgAsyncDataDictionary":  # type: ignore[override]
         if self._data_dictionary is None:
-            # Intentionally assign CockroachDB-specific data dictionary to parent slot
             self._data_dictionary = CockroachPsycopgAsyncDataDictionary()  # type: ignore[assignment]
         return cast("CockroachPsycopgAsyncDataDictionary", self._data_dictionary)
 

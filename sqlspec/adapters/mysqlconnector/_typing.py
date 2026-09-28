@@ -17,8 +17,6 @@ from mysql.connector.aio.cursor import MySQLCursor as _MysqlConnectorAsyncRawCur
 from mysql.connector.constants import FieldType as _MysqlConnectorFieldType
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
-from sqlspec.typing import import_optional_attr
-
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from types import TracebackType
@@ -63,7 +61,7 @@ if TYPE_CHECKING:
     MysqlConnectorAsyncRawCursor: TypeAlias = _MysqlConnectorAsyncRawCursor
 
 if not TYPE_CHECKING:
-    MysqlConnectorAsyncPool = import_optional_attr("mysql.connector.aio.pooling", "MySQLConnectionPool")
+    MysqlConnectorAsyncPool = Any
     MysqlConnectorAio = _mysql_connector_aio
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
     MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection

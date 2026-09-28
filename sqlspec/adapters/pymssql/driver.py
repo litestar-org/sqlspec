@@ -222,11 +222,12 @@ class PymssqlDriver(SyncDriverAdapterBase):
                     cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
             else:
                 self.connection.rollback()
-            self._explicit_transaction = False
-            self._transaction_active = False
         except PymssqlError as exc:
             msg = f"Failed to rollback SQL Server transaction: {exc}"
             raise SQLSpecError(msg) from exc
+        finally:
+            self._explicit_transaction = False
+            self._transaction_active = False
 
     def with_cursor(self, connection: "PymssqlConnection") -> "PymssqlCursor":
         return PymssqlCursor(connection)

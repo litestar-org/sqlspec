@@ -86,6 +86,7 @@ class _DummyAsyncCursor:
 class _DummyAsyncConnection:
     def __init__(self, cursor: _DummyAsyncCursor) -> None:
         self._cursor = cursor
+        self.commit_called = False
 
     async def __aenter__(self) -> Self:
         return self
@@ -95,6 +96,9 @@ class _DummyAsyncConnection:
 
     def cursor(self, **kwargs: Any) -> _DummyAsyncCursor:
         return self._cursor
+
+    async def commit(self) -> None:
+        self.commit_called = True
 
 
 class _DummyConfig:
@@ -407,6 +411,9 @@ class _AsyncDummyCursor(_DummyCursor):
     async def fetchall(self) -> "list[dict[str, Any]]":  # type: ignore[override]
         return self._rows
 
+    async def fetchone(self) -> "dict[str, Any] | None":  # type: ignore[override]
+        return self._rows[0] if self._rows else None
+
 
 class _AsyncDummyConnection(_DummyConnection):
     async def __aenter__(self) -> Self:
@@ -414,6 +421,9 @@ class _AsyncDummyConnection(_DummyConnection):
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
+
+    async def commit(self) -> None:  # type: ignore[override]
+        self.commit_called = True
 
 
 def _rendered(query: Any) -> str:
@@ -511,3 +521,43 @@ def test_psycopg_sync_list_sessions_rejects_invalid_options(options: "dict[str, 
         store.list_sessions("app", **options)
 
     assert cursor.execute_calls == []
+
+
+async def test_psycopg_async_adk_store_commits_mutating_operations() -> None:
+    """Async ADK session and memory mutating operations must commit their transactions."""
+    cursor = _AsyncDummyCursor()
+    connection = _AsyncDummyConnection(cursor)
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: connection
+    store = PsycopgAsyncADKStore(config)
+
+    await store.update_session_state("app", "u1", "s1", {"k": "v"})
+    assert connection.commit_called
+
+    connection.commit_called = False
+    await store.delete_session("app", "u1", "s1")
+    assert connection.commit_called
+
+    connection.commit_called = False
+    await store.upsert_app_state("app", {"k": "v"})
+    assert connection.commit_called
+
+    connection.commit_called = False
+    await store.upsert_user_state("app", "u1", {"k": "v"})
+    assert connection.commit_called
+
+    connection.commit_called = False
+    await store.set_metadata("k", "v")
+    assert connection.commit_called
+
+
+def test_psycopg_sync_adk_store_commits_mutating_operations() -> None:
+    """Sync ADK session and memory mutating operations must commit their transactions."""
+    store, _, connection = _build_store()
+
+    store.update_session_state("app", "u1", "s1", {"k": "v"})
+    assert connection.commit_called
+
+    connection.commit_called = False
+    store.delete_session("app", "u1", "s1")
+    assert connection.commit_called

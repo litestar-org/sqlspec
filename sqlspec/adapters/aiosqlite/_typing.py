@@ -27,8 +27,7 @@ if TYPE_CHECKING:
     AiosqliteConnection: TypeAlias = _AiosqliteConnection
     AiosqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
     AiosqliteRawCursor: TypeAlias = aiosqlite.Cursor
-
-if not TYPE_CHECKING:
+else:
     AiosqliteConnection = _AiosqliteConnection
     AiosqliteConnectionFactory = TypeAliasType("AiosqliteConnectionFactory", type[sqlite3.Connection])
     AiosqliteRawCursor = aiosqlite.Cursor

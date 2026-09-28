@@ -174,6 +174,20 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """
         return [f"DROP TABLE IF EXISTS {self._table_name}"]
 
+    def _partition_filter(self, qualifier: str = "") -> str:
+        """Return a constant partition predicate when require_partition_filter is enabled.
+
+        Args:
+            qualifier: Optional table alias qualifier for the expires_at column.
+
+        Returns:
+            SQL predicate fragment or empty string when not required.
+        """
+        if not self._require_partition_filter:
+            return ""
+        prefix = f"{qualifier}." if qualifier else ""
+        return f" AND ({prefix}expires_at IS NULL OR {prefix}expires_at >= TIMESTAMP('1970-01-01 00:00:00+00'))"
+
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "datetime | None":
         """Convert datetime to BigQuery TIMESTAMP.
 
@@ -235,7 +249,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
                     update_sql = f"""
                     UPDATE {self._table_name}
                     SET expires_at = @expires_at
-                    WHERE session_id = @session_id
+                    WHERE session_id = @session_id{self._partition_filter()}
                     """
                     driver.execute(update_sql, expires_at=new_expires_at_ts, session_id=key)
 
@@ -250,7 +264,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         sql = f"""
         MERGE {self._table_name} AS target
         USING (SELECT @session_id AS session_id, @data AS data, @expires_at AS expires_at) AS source
-        ON target.session_id = source.session_id
+        ON target.session_id = source.session_id{self._partition_filter("target")}
         WHEN MATCHED THEN
             UPDATE SET data = source.data, expires_at = source.expires_at
         WHEN NOT MATCHED THEN
@@ -263,14 +277,14 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
 
     def _delete(self, key: str) -> None:
         """Synchronous implementation of delete."""
-        sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id"
+        sql = f"DELETE FROM {self._table_name} WHERE session_id = @session_id{self._partition_filter()}"
 
         with self._config.provide_session() as driver:
             driver.execute(sql, session_id=key)
 
     def _delete_all(self) -> None:
         """Synchronous implementation of delete_all."""
-        sql = f"DELETE FROM {self._table_name} WHERE TRUE"
+        sql = f"DELETE FROM {self._table_name} WHERE TRUE{self._partition_filter()}"
 
         with self._config.provide_session() as driver:
             driver.execute(sql)
@@ -293,7 +307,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         """Synchronous implementation of expires_in."""
         sql = f"""
         SELECT expires_at FROM {self._table_name}
-        WHERE session_id = @session_id
+        WHERE session_id = @session_id{self._partition_filter()}
         """
 
         with self._config.provide_session() as driver:

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
 from mypy_extensions import mypyc_attr
 from typing_extensions import NotRequired
 
+import sqlspec.adapters.asyncpg._typing as _asyncpg_typing
 from sqlspec.adapters.asyncpg._typing import (
     AsyncpgConnection,
     AsyncpgCursor,
@@ -229,7 +230,7 @@ class _AsyncpgCloudSqlConnector:
         self._database = database
 
     async def __call__(self) -> "AsyncpgConnection":
-        connector = self._config.get_cloud_sql_connector()
+        connector = self._config._get_cloud_sql_connector()
         if connector is None:
             msg = "Cloud SQL connector is not initialized"
             raise ImproperConfigurationError(msg)
@@ -258,7 +259,7 @@ class _AsyncpgAlloydbConnector:
         self._database = database
 
     async def __call__(self) -> "AsyncpgConnection":
-        connector = self._config.get_alloydb_connector()
+        connector = self._config._get_alloydb_connector()
         if connector is None:
             msg = "AlloyDB connector is not initialized"
             raise ImproperConfigurationError(msg)
@@ -365,11 +366,11 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         self._validate_connector_config()
 
-    def get_cloud_sql_connector(self) -> Any | None:
+    def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
         return self._cloud_sql_connector
 
-    def get_alloydb_connector(self) -> Any | None:
+    def _get_alloydb_connector(self) -> Any | None:
         """Return the configured AlloyDB connector instance."""
         return self._alloydb_connector
 
@@ -426,10 +427,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Args:
             config: Pool configuration dictionary to modify in-place.
         """
-        from sqlspec.adapters.asyncpg._typing import AsyncpgCloudSqlConnector as Connector
-
         if self._cloud_sql_connector is None:
-            self._cloud_sql_connector = Connector()
+            self._cloud_sql_connector = _asyncpg_typing.AsyncpgCloudSqlConnector()
 
         user = config.get("user")
         password = config.get("password")
@@ -446,10 +445,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         Args:
             config: Pool configuration dictionary to modify in-place.
         """
-        from sqlspec.adapters.asyncpg._typing import AsyncpgAlloydbAsyncConnector as AsyncConnector
-
         if self._alloydb_connector is None:
-            self._alloydb_connector = AsyncConnector()
+            self._alloydb_connector = _asyncpg_typing.AsyncpgAlloydbAsyncConnector()
 
         user = config.get("user")
         password = config.get("password")

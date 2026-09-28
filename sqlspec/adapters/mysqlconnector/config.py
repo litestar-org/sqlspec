@@ -397,7 +397,10 @@ class MysqlConnectorSyncConfig(
         pool_size = config.pop("pool_size", None)
         pool_reset = config.pop("pool_reset_session", True)
         return MysqlConnectorConnectionPool(
-            pool_name=pool_name, pool_size=pool_size or 5, pool_reset_session=pool_reset, **config
+            pool_name=pool_name,
+            pool_size=5 if pool_size is None else pool_size,
+            pool_reset_session=pool_reset,
+            **config,
         )
 
     def _close_pool(self) -> None:

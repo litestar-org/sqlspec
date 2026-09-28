@@ -139,3 +139,21 @@ async def test_async_ensure_diff_adds_missing_column() -> None:
     assert result.added_columns == {"widgets": ["label"]}
     driver.execute.assert_awaited_once()
     driver.commit.assert_awaited_once()
+
+
+def test_schema_target_from_ddl_ignores_parentheses_in_strings_and_comments() -> None:
+    ddl = """
+    BEGIN
+        EXECUTE IMMEDIATE 'CREATE TABLE widgets (
+            id NUMBER PRIMARY KEY,
+            /* comment with ) inside */
+            delim VARCHAR2(10) DEFAULT '')'',
+            label VARCHAR2(50) NOT NULL
+        )';
+    END;
+    """
+
+    target = SchemaTarget.from_ddl("widgets", ddl, dialect="oracle")
+
+    assert [column.name for column in target.create_table.columns] == ["id", "delim", "label"]
+    assert target.create_table.columns[2].not_null is True

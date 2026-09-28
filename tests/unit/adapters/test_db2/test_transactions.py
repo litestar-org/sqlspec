@@ -357,3 +357,28 @@ async def test_session_setup_failure_rolls_back_and_releases(fake_ibm_db: FakeMo
     assert connection.rollbacks == 1
     assert connection.autocommit is True
     assert released == [(connection, RuntimeError)]
+
+
+@pytest.mark.anyio
+async def test_rollback_failure_resets_transaction_state_and_restores_autocommit(
+    fake_ibm_db: FakeModules, db2_mode: DriverMode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing rollback must still reset _transaction_active and restore autocommit."""
+    connection = _registered_connection(fake_ibm_db)
+    driver = db2_mode.driver(connection)
+    await db2_mode.call(driver.begin)
+    assert driver._connection_in_transaction() is True
+    assert connection.autocommit is False
+
+    def failing_rollback() -> None:
+        raise FakeDb2OperationalError("SQL30081N  A communication error has been detected.")
+
+    monkeypatch.setattr(connection, "rollback", failing_rollback)
+
+    with pytest.raises(SQLSpecError, match="Failed to rollback Db2 transaction"):
+        await db2_mode.call(driver.rollback)
+
+    assert driver._connection_in_transaction() is False
+    assert connection.autocommit is True
+    assert not hasattr(driver, "release_open_work")
+    assert hasattr(driver, "_release_open_work")

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.pymysql._typing import PyMysqlCloudSqlConnector as Connector
 from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor, PyMysqlRawCursor, PyMysqlSessionContext
 from sqlspec.adapters.pymysql.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandler
@@ -214,7 +215,7 @@ class _PyMysqlCloudSqlConnector:
         self._driver_kwargs = driver_kwargs
 
     def __call__(self) -> "PyMysqlConnection":
-        connector = self._config.get_cloud_sql_connector()
+        connector = self._config._get_cloud_sql_connector()
         if connector is None:
             msg = "Cloud SQL connector is not initialized"
             raise ImproperConfigurationError(msg)
@@ -308,7 +309,7 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         self._cloud_sql_connector: Any | None = None
         self._validate_connector_config()
 
-    def get_cloud_sql_connector(self) -> Any | None:
+    def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
         return self._cloud_sql_connector
 
@@ -332,8 +333,6 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def _setup_cloud_sql_connector(self, config: "dict[str, Any]") -> "_PyMysqlCloudSqlConnector":
         """Setup Cloud SQL connector and return a pool connection factory."""
-        from sqlspec.adapters.pymysql._typing import PyMysqlCloudSqlConnector as Connector
-
         self._cloud_sql_connector = Connector()
 
         user = config.get("user")

@@ -59,6 +59,11 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             return
 
         with self._config.provide_session() as driver:
+            if self._json_column_type is None:
+                configured = _configured_json_column_type(self._native_json)
+                self._json_column_type = (
+                    configured if configured is not None else _json_column_type_from_sync_driver(driver)
+                )
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
             driver.execute_script(self._app_states_table_ddl())
@@ -390,8 +395,11 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         if configured is not None:
             self._json_column_type = configured
             return configured
-        with self._config.provide_session() as driver:
-            self._json_column_type = _json_column_type_from_sync_driver(driver)
+        try:
+            with self._config.provide_session() as driver:
+                self._json_column_type = _json_column_type_from_sync_driver(driver)
+        except Exception:
+            return JSON_FALLBACK_COLUMN_TYPE
         return self._json_column_type
 
     def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
@@ -452,7 +460,6 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
 
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", %s" if self._owner_id_column_name else ""
-        # Keep the key-range lock and insertion in one statement, including autocommit.
         sql = f"""
         INSERT INTO {_table_ref(self._memory_table)} (
             id, session_id, app_name, user_id, scope, event_id, author, timestamp,
@@ -478,7 +485,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
                     entry["timestamp"],
                     to_json(entry["content_json"]),
                     entry["content_text"],
-                    to_json(entry.get("metadata_json")),
+                    to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
                 )
                 if self._owner_id_column_name:
                     params = (*params, owner_id)
@@ -601,6 +608,8 @@ def _adk_config(config: Any) -> PymssqlADKConfig:
 
 
 def _configured_json_column_type(native_json: "bool | None") -> "str | None":
+    if native_json is None:
+        return None
     if native_json is True:
         return JSON_NATIVE_COLUMN_TYPE
     return JSON_FALLBACK_COLUMN_TYPE

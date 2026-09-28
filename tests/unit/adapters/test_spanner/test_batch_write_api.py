@@ -114,7 +114,7 @@ def test_batch_write_overwrite_uses_transactional_mutations(batch_write_driver: 
     conn = cast("_FakeBatchTransaction", batch_write_driver.connection)
     batch_write_driver.load_from_arrow("users", pa.table({"id": [1]}), overwrite=True)
 
-    assert conn.execute_update_calls and "DELETE FROM users WHERE TRUE" in conn.execute_update_calls[0]
+    assert conn.execute_update_calls and "DELETE FROM `users` WHERE TRUE" in conn.execute_update_calls[0]
     assert conn.insert_or_update_calls == [("users", ["id"], [[1]])]
     assert conn.database.mutation_groups_obj.batch_write_calls == 0
 

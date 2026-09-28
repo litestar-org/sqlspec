@@ -197,6 +197,29 @@ def test_merge_when_matched_update_with_condition_oracle() -> None:
     assert "UPDATE SET price = src.new_price WHERE src.new_price < t.price" in rendered
 
 
+def test_merge_oracle_build_does_not_mutate_subsequent_postgres_build() -> None:
+    """Building a MERGE query for Oracle must not mutate the AST for subsequent Postgres builds."""
+    query = (
+        sql
+        .merge()
+        .into("products", alias="t")
+        .using("staging", alias="src")
+        .on("t.id = src.id")
+        .when_matched_then_update({"price": "src.new_price"}, condition="src.new_price < t.price")
+    )
+
+    oracle_stmt = query.build(dialect="oracle")
+    postgres_stmt = query.build(dialect="postgres")
+
+    oracle_sql = " ".join(oracle_stmt.sql.split())
+    postgres_sql = " ".join(postgres_stmt.sql.split())
+    assert "UPDATE SET price = src.new_price WHERE src.new_price < t.price" in oracle_sql
+    assert (
+        'WHEN MATCHED AND "src"."new_price" < "t"."price" THEN UPDATE SET "price" = "src"."new_price"' in postgres_sql
+    )
+    assert "WHERE" not in postgres_sql
+
+
 def test_merge_when_matched_update_no_values_error() -> None:
     """Test that WHEN MATCHED UPDATE without values raises error."""
     query = sql.merge().into("products", alias="t").using("staging", alias="s").on("t.id = s.id")

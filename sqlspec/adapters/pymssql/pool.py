@@ -204,12 +204,8 @@ class PymssqlConnectionPool:
         _ = connection
 
     def size(self) -> int:
-        try:
-            _ = self._thread_local.connection
-        except AttributeError:
-            return 0
-        else:
-            return 1
+        with self._registry_lock:
+            return len(self._connection_registry)
 
     def checked_out(self) -> int:
         return 0

@@ -1,5 +1,6 @@
 """pymssql extension package tests."""
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -53,19 +54,35 @@ async def test_litestar_store_async_methods_bridge_sync_operations(monkeypatch: 
     assert calls == ["create"]
 
 
-def test_adk_store_ddl_uses_tsql_tables_and_json_fallback() -> None:
-    """ADK DDL should use T-SQL table shape and NVARCHAR JSON fallback by default."""
-    from sqlspec.adapters.pymssql.adk.store import PymssqlADKStore
+@pytest.mark.parametrize(("major", "expected_json_type"), [(16, "NVARCHAR(MAX)"), (17, "JSON")])
+def test_adk_store_ddl_uses_tsql_tables_and_json_fallback(
+    monkeypatch: pytest.MonkeyPatch, major: int, expected_json_type: str
+) -> None:
+    """ADK DDL should detect SQL Server version lazily when native_json is not configured."""
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
 
-    store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {}}))
+    from sqlspec.adapters.pymssql.adk.store import PymssqlADKStore
+    from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo
+
+    config = PymssqlConfig(extension_config={"adk": {}})
+    driver = MagicMock()
+    driver.data_dictionary.get_version.return_value = MssqlVersionInfo(major=major)
+
+    @contextmanager
+    def _fake_session(*_args: Any, **_kwargs: Any) -> Any:
+        yield driver
+
+    monkeypatch.setattr(PymssqlConfig, "provide_session", _fake_session)
+    store = PymssqlADKStore(config)
 
     sessions_ddl = store._sessions_table_ddl()
     events_ddl = store._events_table_ddl()
 
     assert "CREATE TABLE" in sessions_ddl
-    assert "NVARCHAR(MAX)" in sessions_ddl
+    assert f"state {expected_json_type} NOT NULL" in sessions_ddl
     assert "SYSUTCDATETIME()" in sessions_ddl
-    assert "event_data" in events_ddl
+    assert f"event_data {expected_json_type} NOT NULL" in events_ddl
     assert "DATETIME2(6)" in events_ddl
 
 
@@ -76,3 +93,12 @@ def test_adk_store_can_force_native_json_column_type() -> None:
     store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {"native_json": True}}))
 
     assert "state JSON NOT NULL" in store._sessions_table_ddl()
+
+
+def test_adk_store_can_force_fallback_json_column_type() -> None:
+    """ADK config should allow forcing NVARCHAR(MAX) without opening a session."""
+    from sqlspec.adapters.pymssql.adk.store import PymssqlADKStore
+
+    store = PymssqlADKStore(PymssqlConfig(extension_config={"adk": {"native_json": False}}))
+
+    assert "state NVARCHAR(MAX) NOT NULL" in store._sessions_table_ddl()

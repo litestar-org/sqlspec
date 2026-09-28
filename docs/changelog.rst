@@ -17,104 +17,162 @@ Unreleased
 * BigQuery supports native query resource controls,
   explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
   stream modes while retaining the atomic PENDING default.
+  (`#812 <https://github.com/litestar-org/sqlspec/pull/812>`_)
 * The mssql-python adapter can load Arrow streams with native BulkCopy options. Columns
   map by name by default, and overwrite still uses DELETE.
+  (`#819 <https://github.com/litestar-org/sqlspec/pull/819>`_)
 * Pymssql connection types include native encryption settings.
-
+  (`#819 <https://github.com/litestar-org/sqlspec/pull/819>`_)
 * SQLite and aiosqlite can register custom window functions on Python 3.11
   and later when the SQLite runtime supports them. Choose a transaction lock
   mode or set the batch size for Arrow imports. Defaults stay the same.
-
-* Spanner forwards native query options and final-statement hints and
-  supports opt-in Batch Write from read sessions.
-
+  (`#820 <https://github.com/litestar-org/sqlspec/pull/820>`_)
+* Spanner forwards native query options (``QueryOptions``, ``RequestOptions``,
+  ``DirectedReadOptions``) and final-statement hints, supports opt-in Batch Write
+  from read sessions, adds ``run_in_transaction`` retry with backoff on ``Aborted``
+  and ``last_statement=True`` commit inlining, supports multiplexed session pooling
+  and ``PingingPool`` keepalive intervals, coerces ``FLOAT32`` vector parameters,
+  and adds ``execute_partitioned_dml()`` for Partitioned DML truncation during
+  ``load_from_arrow(overwrite=True)``.
+  (`#814 <https://github.com/litestar-org/sqlspec/pull/814>`_)
+* Cloud Spanner and Spangres SQLGlot dialects isolate custom ``SpannerParser``,
+  ``SpangresParser``, ``SpannerGenerator``, and ``SpangresGenerator`` subclasses
+  and expand AST and transpilation support for ``INTERLEAVE IN PARENT`` with
+  ``ON DELETE``, ``TTL``, ``ROW DELETION POLICY``, ``SEARCH`` / ``SCORE`` /
+  ``SNIPPETS`` / ``TOKENLIST``, ``VECTOR_INDEX`` with ``OPTIONS``,
+  ``GRAPH_TABLE``, ``FLOAT32``, ``SAFE_CAST`` / ``TRY_CAST``,
+  ``SPANNER.ML_PREDICT_ROW``, Spanner sequences, and ``spangres`` DDL/DML
+  transpilation and catalog query packs.
+  (`#813 <https://github.com/litestar-org/sqlspec/pull/813>`_)
 * Arrow ODBC runs ``execute_many()`` one row at a time. It reports an unknown
   row count since the native driver does not return the number of changed rows.
-
+  (`#818 <https://github.com/litestar-org/sqlspec/pull/818>`_)
 * ADBC FlightSQL adds options for TLS/mTLS, RPC timeouts, message size, cookies
   and headers. Values set in native ``db_kwargs`` take precedence.
-
+  (`#818 <https://github.com/litestar-org/sqlspec/pull/818>`_)
 * PostgreSQL adapters expose native asyncpg custom codecs and per-query timeouts,
   psycopg null pools and JSON codecs, supported CockroachDB startup settings,
   and psqlpy dense-vector conversion. PgBouncer compatibility mode avoids
   explicit prepared stack statements without weakening transaction cleanup.
   Null pools preserve concurrency limits, and timeout forwarding retains
   explicit zero values.
-
+  (`#822 <https://github.com/litestar-org/sqlspec/pull/822>`_)
 * Added an IBM Db2 adapter for Db2 LUW 11.5 and later with sync
   (``Db2SyncConfig``) and async (``Db2AsyncConfig``) configurations built on
   ``ibm_db``. It includes connection pooling, catalog reflection, migrations,
   and Litestar session, events queue, and Google ADK stores. See
   :doc:`reference/adapters/db2`.
+  (`#811 <https://github.com/litestar-org/sqlspec/pull/811>`_)
 * Added a ``db2`` SQL dialect. It renders Db2 paging, special registers,
   labeled durations, isolation and lock clauses, and Db2 data types, and
   translates builder row locks to Db2 lock clauses.
+  (`#811 <https://github.com/litestar-org/sqlspec/pull/811>`_)
 * The arrow-odbc adapter supports IBM Db2 through the IBM CLI/ODBC driver,
   including Db2 connection keywords, transactions, lowercase result columns,
   and its Litestar session, events queue, and Google ADK stores.
+  (`#811 <https://github.com/litestar-org/sqlspec/pull/811>`_)
+
+**Changed:**
+
+* Extracted shared MySQL driver primitives into ``sqlspec/adapters/mysql_common.py``
+  across ``aiomysql``, ``asyncmy``, ``pymysql``, and ``mysqlconnector``, and
+  reorganized dialect data-dictionary definitions into dialect-scoped
+  ``sqlspec/data_dictionary/dialects/<dialect>/`` packages with shared MySQL
+  data-dictionary base classes.
+  (`#821 <https://github.com/litestar-org/sqlspec/pull/821>`_)
+* Simplified OracleDB and Db2 typing and helper boundaries: encapsulated
+  ``OraclePipelineDriver`` protocol typing, exported ``Db2ConnectionParams`` and
+  ``Db2DriverFeatures``, removed redundant ``if not TYPE_CHECKING:`` typing
+  blocks in ``oracledb`` and ``db2``, internalized adapter core helpers, and
+  made Oracle JSON, UUID, and vector type-handler registration idempotent.
+  (`#817 <https://github.com/litestar-org/sqlspec/pull/817>`_,
+  `#823 <https://github.com/litestar-org/sqlspec/pull/823>`_)
 
 **Fixed:**
 
 * Spanner binds Decimal values as NUMERIC and boolean arrays as BOOL.
   Typed null dictionaries use JSON, and JSON null results stay ``None``.
+  (`#814 <https://github.com/litestar-org/sqlspec/pull/814>`_)
 * ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
   question marks in quoted identifiers, literals, and comments.
-
+  (`#818 <https://github.com/litestar-org/sqlspec/pull/818>`_)
 * Arrow ODBC pagination reuses compiled placeholder positions instead of
   parsing SQL again. ADBC keeps bound values in its ADK store queries.
   DuckDB Arrow loads keep sparse dictionary fields and quote table names.
-
-* SQL Server event queue DDL guards use the configured table and index names.
-  Arrow ODBC index checks no longer include column text in the table name.
-
+  (`#818 <https://github.com/litestar-org/sqlspec/pull/818>`_)
+* T-SQL event store ``CREATE INDEX`` ``OBJECT_ID`` guards across ``arrow_odbc``,
+  ``pymssql``, and ``mssql_python`` use the configured table and generated index
+  names directly so ``arrow_odbc`` index checks no longer capture column list
+  text inside the table name.
+  (`#816 <https://github.com/litestar-org/sqlspec/issues/816>`_,
+  `#819 <https://github.com/litestar-org/sqlspec/pull/819>`_,
+  `#828 <https://github.com/litestar-org/sqlspec/pull/828>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * Arrow read failures in the mssql-python adapter use SQLSpec error types.
+  (`#819 <https://github.com/litestar-org/sqlspec/pull/819>`_)
 * SQLite pools replace lost in-memory connections. Arrow imports roll back
   writes on failure or cancellation when the adapter owns the transaction.
-
+  (`#820 <https://github.com/litestar-org/sqlspec/pull/820>`_)
 * Builder results keep CTE trees independent, and column pruning no longer
   exposes its cached expression to mutation. SQL generation avoids redundant
   copies of temporary trees while preserving caller and cache ownership.
-
+  (`#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * SQL Server migration drivers retain the previous default schema if restoring
   it fails, so cleanup can be retried. The migration guide clarifies that this
   setting belongs to the database user rather than one connection.
-
+  (`#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * Asyncpg stack telemetry reports sequential prepared execution rather than
   native pipelining. Each statement still returns its own result.
-
-* Fixture files keep JSON strings such as ``"true"`` and ``"[1]"`` as strings.
-  This also works for SQLite JSON columns. Write objects and arrays directly
-  instead of encoding them as strings. Column filtering respects case.
-  See :doc:`usage/testing`.
-
-* DDL builders and migration trackers keep quoted table names intact.
-  Names with spaces and mixed-case Oracle names retain their quotes.
-
+  (`#822 <https://github.com/litestar-org/sqlspec/pull/822>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
+* Fixture files keep JSON strings such as ``"true"`` and ``"[1]"`` as strings
+  during export and load round-trips across DuckDB, SQLite, ADBC, and MySQL
+  (``#824``), normalize bare string ``conflict_keys`` values and ignore tables
+  absent from subset loads (``#825``), and support sparse row keys,
+  ``ignore_unknown_columns``, and ``exclude_update_columns`` for upserts
+  (``#826``). Column filtering respects case. See :doc:`usage/testing`.
+  (`#827 <https://github.com/litestar-org/sqlspec/pull/827>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
+* Quoted and schema-qualified ``version_table`` identifiers are preserved across
+  migration trackers and DDL builders (``CreateTable``, ``DropTable``,
+  ``AlterTable``). Trackers keep unquoted catalog lookup names in
+  ``version_table_name`` and ``version_table_schema`` while retaining exact
+  identifier quotes in DDL and tracking queries, including names with spaces and
+  mixed-case Oracle identifiers.
+  (`#815 <https://github.com/litestar-org/sqlspec/issues/815>`_,
+  `#828 <https://github.com/litestar-org/sqlspec/pull/828>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * MySQL pools release connections when setup fails. They discard connections
   that fail to roll back. MySQL Connector keeps native async pooling on
   Connector 9.4 and later, plus direct connections on older versions.
   Asyncmy retains native ``LOAD DATA LOCAL INFILE`` support.
-
+  (`#821 <https://github.com/litestar-org/sqlspec/pull/821>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * Oracle keeps Thick-mode options for sync pools. Async pools reject Thick
   mode before they open. Pool shutdown preserves native checks for
   borrowed connections. Custom handlers still convert LOBs, and JSON handlers
   preserve the user's callbacks.
-
+  (`#817 <https://github.com/litestar-org/sqlspec/pull/817>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * Db2 pools clean up after failed or cancelled setup. Batch results keep an
   unknown row count when the driver cannot report one.
   String searches keep their start position and requested occurrence.
-
+  (`#811 <https://github.com/litestar-org/sqlspec/pull/811>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * Spanner schema queries no longer require a table name. SQL output keeps JOIN
   hints and plain comments. Sequence statements keep qualified names and
   ``IF NOT EXISTS`` guards. Cached row converters refresh when the configured
   JSON deserializer changes.
-
+  (`#813 <https://github.com/litestar-org/sqlspec/pull/813>`_,
+  `#829 <https://github.com/litestar-org/sqlspec/pull/829>`_)
 * Psycopg reads COPY files in chunks, not all at once. ADK stores use
   RETURNING to cut round trips. Psqlpy closes a connection if setup fails.
-
+  (`#822 <https://github.com/litestar-org/sqlspec/pull/822>`_)
 * Builder upserts emit ``MERGE`` for the ``db2`` dialect.
+  (`#811 <https://github.com/litestar-org/sqlspec/pull/811>`_)
 * The arrow-odbc adapter detects the SQL dialect from the ODBC driver name
   only, so database, host, or user names no longer select the wrong dialect.
+  (`#811 <https://github.com/litestar-org/sqlspec/pull/811>`_)
 
 v0.64.0 - Startup performance, connection normalization, and adapter lifecycle hardening
 -----------------------------------------------------------------------------------------

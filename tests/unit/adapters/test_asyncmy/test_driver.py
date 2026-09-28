@@ -10,15 +10,22 @@ pytest.importorskip("asyncmy", reason="asyncmy adapter requires the asyncmy pack
 
 
 class _FakeConnection:
-    def __init__(self, in_transaction: bool) -> None:
-        self._in_transaction = in_transaction
-
-    def get_transaction_status(self) -> bool:
-        return self._in_transaction
+    def __init__(self, server_status: int) -> None:
+        self.server_status = server_status
 
 
-@pytest.mark.parametrize("in_transaction", [True, False])
-def test_connection_in_transaction_reflects_driver_state(in_transaction: bool) -> None:
-    """_connection_in_transaction() must reflect the connection's real transaction status."""
-    driver = AsyncmyDriver(connection=cast("Any", _FakeConnection(in_transaction)))
-    assert driver._connection_in_transaction() is in_transaction
+class _StatelessConnection:
+    pass
+
+
+@pytest.mark.parametrize(("server_status", "expected"), [(0, False), (1, True), (2, False), (3, True)])
+def test_connection_in_transaction_reflects_driver_state(server_status: int, expected: bool) -> None:
+    """_connection_in_transaction() must reflect the SERVER_STATUS_IN_TRANS bit on server_status."""
+    driver = AsyncmyDriver(connection=cast("Any", _FakeConnection(server_status)))
+    assert driver._connection_in_transaction() is expected
+
+
+def test_connection_in_transaction_defaults_false_without_server_status() -> None:
+    """_connection_in_transaction() returns False when connection has no server_status attribute."""
+    driver = AsyncmyDriver(connection=cast("Any", _StatelessConnection()))
+    assert driver._connection_in_transaction() is False

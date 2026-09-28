@@ -453,3 +453,21 @@ async def test_async_pool_unavailable_preserves_standalone_connections(monkeypat
     assert await MysqlConnectorAsyncConfig()._acquire_async_connection() is connection
     with pytest.raises(ImproperConfigurationError, match=r"9\.4"):
         await MysqlConnectorAsyncConfig(connection_config={"pool_size": 2})._acquire_async_connection()
+
+
+def test_sync_create_pool_preserves_zero_pool_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MysqlConnectorSyncConfig._create_pool must preserve explicit pool_size=0."""
+    from sqlspec.adapters.mysqlconnector import config as cfg_module
+
+    pool_kwargs: list[dict[str, Any]] = []
+
+    class _FakePool:
+        def __init__(self, **kwargs: Any) -> None:
+            pool_kwargs.append(kwargs)
+
+    monkeypatch.setattr(cfg_module, "MysqlConnectorConnectionPool", _FakePool)
+    config = MysqlConnectorSyncConfig(connection_config={"pool_size": 0})
+    config._create_pool()
+
+    assert len(pool_kwargs) == 1
+    assert pool_kwargs[0]["pool_size"] == 0

@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
+from sqlspec.adapters.spanner._typing import SpannerClient as Client
 from sqlspec.adapters.spanner._typing import SpannerConnection
+from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
+from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
 from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
@@ -23,7 +27,6 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from sqlspec.adapters.spanner._typing import SpannerAbstractSessionPool as AbstractSessionPool
-    from sqlspec.adapters.spanner._typing import SpannerClient as Client
     from sqlspec.adapters.spanner._typing import SpannerClientInfo as ClientInfo
     from sqlspec.adapters.spanner._typing import SpannerClientOptions as ClientOptions
     from sqlspec.adapters.spanner._typing import SpannerCredentials as Credentials
@@ -325,8 +328,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         ):
             self.connection_config["session_labels"] = legacy_session_labels
 
-        from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
-
         self.connection_config.setdefault("size", self.connection_config.pop("max_sessions", 10))
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
@@ -349,8 +350,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self._database: Database | None = None
 
     def _get_client(self) -> "Client":
-        from sqlspec.adapters.spanner._typing import SpannerClient as Client
-
         if self._client is None:
             client_kwargs = self._connection_kwargs_for(_CLIENT_CONFIG_FIELDS)
             self._client = Client(**client_kwargs)
@@ -392,10 +391,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return cast("SpannerConnection", self.get_database().snapshot(multi_use=True))  # type: ignore[no-untyped-call]
 
     def _create_pool(self) -> "AbstractSessionPool":
-        from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
-        from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
-        from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
-
         instance_id = self.connection_config.get("instance_id")
         database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:
