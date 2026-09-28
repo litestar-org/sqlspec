@@ -1,6 +1,5 @@
 """arrow-odbc event queue store with T-SQL and Db2 DDL."""
 
-import re
 from typing import Final
 
 from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
@@ -68,26 +67,15 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
         if self._db2:
             return statement
         if object_type == "table":
-            match = re.search(r"CREATE TABLE\s+(\S+)", statement, re.IGNORECASE)
-            if match:
-                table_name = match.group(1)
-                return f"IF OBJECT_ID(N'{_object_name(table_name)}', N'U') IS NULL BEGIN {statement}; END"
+            return f"IF OBJECT_ID(N'{_object_name(self.table_name)}', N'U') IS NULL BEGIN {statement}; END"
         if object_type == "index":
-            match = re.search(r"CREATE INDEX\s+(\S+)\s+ON\s+([^\s(]+)", statement, re.IGNORECASE)
-            if match:
-                index_name = match.group(1).strip("[]")
-                table_name = match.group(2)
-                return f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index_name}' AND object_id = OBJECT_ID(N'{_object_name(table_name)}')) BEGIN {statement}; END"
+            return f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{self._index_name()}' AND object_id = OBJECT_ID(N'{_object_name(self.table_name)}')) BEGIN {statement}; END"
         return statement
 
     def _wrap_drop_statement(self, statement: str) -> str:
         if self._db2:
             return statement
-        match = re.search(r"DROP TABLE\s+(\S+)", statement, re.IGNORECASE)
-        if match:
-            table_name = match.group(1)
-            return f"IF OBJECT_ID(N'{_object_name(table_name)}', N'U') IS NOT NULL DROP TABLE {table_name};"
-        return statement
+        return f"IF OBJECT_ID(N'{_object_name(self.table_name)}', N'U') IS NOT NULL {statement};"
 
 
 def _split_table_name(table_name: str) -> tuple[str, str]:

@@ -419,21 +419,98 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         partitioner: "dict[str, object] | None" = None,
         overwrite: bool = False,
         telemetry: "StorageTelemetry | None" = None,
+        batch_size: int = 0,
+        timeout: int = 30,
+        table_lock: bool = False,
+        check_constraints: bool = False,
+        fire_triggers: bool = False,
+        keep_identity: bool = False,
+        keep_nulls: bool = False,
+        use_internal_transaction: bool = False,
+        column_mappings: "list[str] | list[tuple[int, str]] | None" = None,
     ) -> "StorageBridgeJob":
-        """Load Arrow data into SQL Server via BulkCopy."""
+        """Load Arrow tables or streams using native BulkCopy options.
+
+        Stream sources without schema metadata require explicit column mappings.
+        Overwrite deletes existing rows after validating the source shape; errors
+        while consuming a stream can still leave a partially completed load.
+        """
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
-        if overwrite:
-            exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
+        ensure_pyarrow()
+        import pyarrow as pa
+
+        if batch_size < 0 or timeout < 0:
+            msg = "batch_size and timeout must be non-negative"
+            raise ValueError(msg)
+        is_stream = not isinstance(source, pa.Table) and (
+            isinstance(source, (pa.RecordBatchReader, pa.RecordBatch)) or hasattr(source, "__arrow_c_stream__")
+        )
+        if is_stream:
+            arrow_source = source
+            has_rows = True
+            schema = getattr(source, "schema", None)
+            schema_names = getattr(schema, "names", None)
+            if column_mappings is None and schema_names is None:
+                msg = "Arrow stream sources without schema metadata require column_mappings"
+                raise ValueError(msg)
+            columns = column_mappings if column_mappings is not None else list(cast("Iterable[str]", schema_names))
+            telemetry_payload = cast("StorageTelemetry", {"format": "arrow", "extra": {}})
+        else:
+            arrow_source = self._coerce_arrow_table(source)
+            has_rows = bool(arrow_source.num_rows)
+            columns = column_mappings if column_mappings is not None else list(arrow_source.column_names)
+            telemetry_payload = self._ingest_telemetry(arrow_source)
+
+        options = {
+            "batch_size": batch_size,
+            "timeout": timeout,
+            "table_lock": table_lock,
+            "check_constraints": check_constraints,
+            "fire_triggers": fire_triggers,
+            "keep_identity": keep_identity,
+            "keep_nulls": keep_nulls,
+            "use_internal_transaction": use_internal_transaction,
+            "column_mappings": columns,
+        }
+        raw_result: Any = None
+        use_fallback = False
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler, self.with_cursor(self.connection) as cursor:
+            native_bulkcopy = getattr(cursor, "bulkcopy_arrow", None)
+            if is_stream and not callable(native_bulkcopy):
+                msg = "This mssql-python version does not support native Arrow stream bulk copy"
+                raise SQLSpecError(msg)
+            if overwrite:
                 cursor.execute(f"DELETE FROM {_quote_mssql_table(table)}")
-            self._check_pending_exception(exc_handler)
-        if arrow_table.num_rows:
-            exc_handler = self.handle_database_exceptions()
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                cursor.bulkcopy_arrow(table, arrow_table, column_mappings=list(arrow_table.column_names))
-            self._check_pending_exception(exc_handler)
-        telemetry_payload = self._ingest_telemetry(arrow_table)
+            if has_rows:
+                if callable(native_bulkcopy):
+                    raw_result = native_bulkcopy(table, arrow_source, **options)
+                else:
+                    use_fallback = True
+        self._check_pending_exception(exc_handler)
+        if use_fallback:
+            _, records = self._arrow_table_to_rows(cast("Any", arrow_source))
+            raw_result = self.bulk_copy(
+                table,
+                records,
+                batch_size=batch_size,
+                timeout=timeout,
+                table_lock=table_lock,
+                check_constraints=check_constraints,
+                fire_triggers=fire_triggers,
+                keep_identity=keep_identity,
+                keep_nulls=keep_nulls,
+                use_internal_transaction=use_internal_transaction,
+                column_mappings=columns,
+            )
+        if isinstance(raw_result, dict):
+            extra = telemetry_payload.setdefault("extra", {})
+            if "rows_copied" in raw_result:
+                telemetry_payload["rows_processed"] = raw_result["rows_copied"]
+                extra["rows_ingested"] = raw_result["rows_copied"]
+            for key in ("elapsed_time", "rows_per_second", "batch_count"):
+                if key in raw_result:
+                    extra[key] = raw_result[key]
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)

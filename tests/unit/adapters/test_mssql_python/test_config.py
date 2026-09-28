@@ -346,3 +346,16 @@ def test_failed_session_rolls_back_before_release() -> None:
         raise RuntimeError
 
     assert calls == ["rollback", "release"]
+
+
+def test_pool_does_not_reconfigure_when_params_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Identical pool configuration should avoid touching the native process-wide pool."""
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", (10, 60, True))
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: calls.append(kw))
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        MssqlPythonConnectionPool(connection_string="Server=localhost;", max_size=10, idle_timeout=60, enabled=True)
+    assert not any("Pooling configuration was already set" in str(w.message) for w in recorded)
+    assert calls == []

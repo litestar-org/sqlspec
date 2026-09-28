@@ -94,3 +94,15 @@ Use these types inside ``extension_config["adk"]``.
 .. autoclass:: sqlspec.adapters.mssql_python.adk.MssqlPythonADKConfig
    :members:
    :show-inheritance:
+
+Native Arrow loading
+--------------------
+
+``load_from_arrow()`` accepts tables, record batches, record batch readers, and
+Arrow C stream sources. It forwards ``batch_size``, ``timeout``, ``table_lock``,
+``check_constraints``, ``fire_triggers``, ``keep_identity``, ``keep_nulls``,
+``use_internal_transaction``, and ``column_mappings`` to native BulkCopy.
+Field names supply default mappings; sources without schema metadata require
+explicit mappings. Native internal transactions apply per batch, not to the
+caller connection transaction. ``overwrite=True`` retains DELETE semantics;
+stream consumption failures can leave a partial load.

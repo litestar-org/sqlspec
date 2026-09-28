@@ -40,10 +40,11 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "extract_error_number",
     "materialize_tuple_rows",
 )
 
-_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)(?:,|\))")
+_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 _VERSION_PART_COUNT: Final[int] = 3
@@ -98,9 +99,54 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
 }
 
 
+def extract_error_number(exc: BaseException | None) -> int | None:
+    """Extract numeric SQL Server error code using fast attribute/string parsing before regex fallback."""
+    if exc is None:
+        return None
+    for attr in ("number", "error_code", "errno"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and not isinstance(val, bool):
+            return val
+    ddbc_err = getattr(exc, "ddbc_error", None)
+    if isinstance(ddbc_err, str) and ddbc_err.startswith("("):
+        end_idx = ddbc_err.find(",")
+        if end_idx == -1:
+            end_idx = ddbc_err.find(")")
+        if end_idx != -1:
+            num_str = ddbc_err[1:end_idx].strip()
+            try:
+                return int(num_str)
+            except ValueError:
+                pass
+
+    if exc.args:
+        first_arg = exc.args[0]
+        if isinstance(first_arg, int) and not isinstance(first_arg, bool):
+            return first_arg
+        if isinstance(first_arg, str):
+            msg = first_arg
+            start_idx = msg.rfind("(")
+            if start_idx != -1:
+                end_idx = msg.find(",", start_idx)
+                if end_idx == -1:
+                    end_idx = msg.find(")", start_idx)
+                if end_idx != -1:
+                    num_str = msg[start_idx + 1 : end_idx].strip()
+                    try:
+                        return int(num_str)
+                    except ValueError:
+                        pass
+
+    matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
+    if not matches:
+        return None
+    last_match = matches[-1]
+    return int(last_match[0] or last_match[1])
+
+
 def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a mssql-python exception to SQLSpec's exception hierarchy."""
-    error_number = _extract_error_number(error)
+    error_number = extract_error_number(error)
     if error_number == _MSSQL_CONSTRAINT_547:
         message = str(error)
         if "check constraint" in message.lower():
@@ -131,15 +177,17 @@ def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None)
 
 
 def materialize_tuple_rows(fetched: "Sequence[Any] | None") -> "list[tuple[Any, ...]]":
-    """Materialize mssql-python ``Row`` objects into plain tuples.
+    """Materialize mssql-python Row objects into plain tuples.
 
-    ``mssql-python`` returns ``mssql_python.Row`` objects that are iterable and
-    indexable but are not ``tuple`` subclasses. The driver reports
-    ``row_format="tuple"``, so fetched rows are converted to real tuples to keep
-    that contract accurate when results are materialized.
+    Uses native tuple storage when available, avoiding a tuple copy per row.
     """
     if not fetched:
         return []
+    first = fetched[0]
+    if isinstance(first, tuple):
+        return list(fetched) if not isinstance(fetched, list) else fetched
+    if hasattr(first, "_values"):
+        return [tuple(row._values) if not isinstance(row._values, tuple) else row._values for row in fetched]
     return [tuple(row) for row in fetched]
 
 
@@ -328,16 +376,6 @@ def _append_port(server: str, port: Any) -> str:
     if not port or "," in server or ":" in server:
         return server
     return f"{server},{port}"
-
-
-def _extract_error_number(exc: Exception) -> "int | None":
-    matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
-    if not matches:
-        return None
-    try:
-        return int(matches[-1])
-    except ValueError:
-        return None
 
 
 MSSQL_PYTHON_VERSION: Final[tuple[int, int, int]] = _parse_version()

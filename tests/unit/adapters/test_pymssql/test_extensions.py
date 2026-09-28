@@ -13,10 +13,13 @@ def test_event_store_uses_tsql_column_types_and_idempotent_wrappers() -> None:
 
     store = PymssqlEventQueueStore(PymssqlConfig(extension_config={"events": {"queue_table": "event_queue"}}))
 
-    assert store._column_types() == ("NVARCHAR(MAX)", "NVARCHAR(MAX)", "DATETIME2(6)")
-    assert store._timestamp_default() == "SYSUTCDATETIME()"
-    assert "OBJECT_ID" in store._wrap_create_statement("CREATE TABLE event_queue (id INT)", "table")
-    assert "sys.indexes" in store._wrap_create_statement("CREATE INDEX idx_events ON event_queue (channel)", "index")
+    statements = store.create_statements()
+    assert "payload_json NVARCHAR(MAX)" in statements[0]
+    assert "SYSUTCDATETIME()" in statements[0]
+    assert "OBJECT_ID(N'[dbo].[event_queue]', N'U')" in statements[0]
+    assert "name = N'idx_event_queue_channel_status'" in statements[1]
+    assert "OBJECT_ID(N'[dbo].[event_queue]')" in statements[1]
+    assert store.drop_statements() == ["IF OBJECT_ID(N'[dbo].[event_queue]', N'U') IS NOT NULL DROP TABLE event_queue;"]
 
 
 def test_litestar_store_ddl_is_tsql_idempotent() -> None:

@@ -1,12 +1,12 @@
 """mssql-python ADK stores for Google Agent Development Kit session storage."""
 
-import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor, MssqlPythonError
+from sqlspec.adapters.mssql_python.core import extract_error_number
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -26,7 +26,6 @@ MSSQL_TABLE_NOT_FOUND_ERROR: Final[int] = 208
 MSSQL_DUPLICATE_OBJECT_ERROR: Final[int] = 2714
 MSSQL_DUPLICATE_INDEX_ERROR: Final[int] = 1913
 MSSQL_SCHEMA: Final[str] = "dbo"
-MSSQL_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)\)")
 JSON_FALLBACK_COLUMN_TYPE: Final[str] = "NVARCHAR(MAX)"
 JSON_NATIVE_COLUMN_TYPE: Final[str] = "JSON"
 
@@ -848,17 +847,7 @@ def _cursor_rowcount(cursor: Any) -> int:
 
 def _is_mssql_table_missing(exc: BaseException) -> bool:
     text = str(exc).lower()
-    return "invalid object name" in text or _mssql_error_number(exc) == MSSQL_TABLE_NOT_FOUND_ERROR
-
-
-def _mssql_error_number(exc: BaseException) -> "int | None":
-    matches = MSSQL_ERROR_NUMBER_PATTERN.findall(str(exc))
-    if not matches:
-        return None
-    try:
-        return int(matches[-1])
-    except ValueError:
-        return None
+    return "invalid object name" in text or extract_error_number(exc) == MSSQL_TABLE_NOT_FOUND_ERROR
 
 
 def _quote_identifier(identifier: str) -> str:

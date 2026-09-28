@@ -17,6 +17,10 @@ Unreleased
 * BigQuery supports native query resource controls,
   explicit STRUCT parameters, typed empty arrays, and configurable Storage Write
   stream modes while retaining the atomic PENDING default.
+* The mssql-python adapter can load Arrow streams with native BulkCopy options. Columns
+  map by name by default, and overwrite still uses DELETE.
+* Pymssql connection types include native encryption settings.
+
 * SQLite and aiosqlite can register custom window functions on Python 3.11
   and later when the SQLite runtime supports them. Choose a transaction lock
   mode or set the batch size for Arrow imports. Defaults stay the same.
@@ -48,6 +52,16 @@ Unreleased
 
 **Fixed:**
 
+* SQL Server event queue DDL guards use the configured table and index names.
+  Arrow ODBC index checks no longer include column text in the table name.
+
+* Arrow read failures in the mssql-python adapter use SQLSpec error types.
+* ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
+  question marks in quoted identifiers, literals, and comments.
+
+* Arrow ODBC pagination reuses compiled placeholder positions instead of
+  parsing SQL again. ADBC keeps bound values in its ADK store queries.
+  DuckDB Arrow loads keep sparse dictionary fields and quote table names.
 * SQLite pools replace lost in-memory connections. Arrow imports roll back
   writes on failure or cancellation when the adapter owns the transaction.
 
@@ -88,13 +102,6 @@ Unreleased
   hints and plain comments. Sequence statements keep qualified names and
   ``IF NOT EXISTS`` guards. Cached row converters refresh when the configured
   JSON deserializer changes.
-
-* ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
-  question marks in quoted identifiers, literals, and comments.
-
-* Arrow ODBC pagination reuses compiled placeholder positions instead of
-  parsing SQL again. ADBC keeps bound values in its ADK store queries.
-  DuckDB Arrow loads keep sparse dictionary fields and quote table names.
 
 * Psycopg reads COPY files in chunks, not all at once. ADK stores use
   RETURNING to cut round trips. Psqlpy closes a connection if setup fails.

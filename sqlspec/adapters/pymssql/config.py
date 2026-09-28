@@ -42,6 +42,7 @@ class PymssqlConnectionParams(TypedDict):
     conn_properties: NotRequired[str]
     autocommit: NotRequired[bool]
     tds_version: NotRequired[str]
+    encryption: NotRequired[Literal["off", "request", "require"]]
     use_datetime2: NotRequired[bool]
     arraysize: NotRequired[int]
     conv: NotRequired[Mapping[int | type[Any], Callable[..., Any]]]
@@ -88,6 +89,8 @@ class _PymssqlSessionConnectionHandler(SyncPoolSessionFactory):
 
 class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool, PymssqlDriver]):
     """Configuration for pymssql synchronous connections."""
+
+    __slots__ = ("_user_connection_hook",)
 
     driver_type: "ClassVar[type[PymssqlDriver]]" = PymssqlDriver
     connection_type: "ClassVar[type[PymssqlConnection]]" = cast("type[PymssqlConnection]", PymssqlConnection)

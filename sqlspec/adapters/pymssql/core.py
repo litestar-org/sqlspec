@@ -38,6 +38,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "extract_error_number",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
@@ -46,7 +47,7 @@ __all__ = (
     "resolve_rowcount",
 )
 
-_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([-]?\d+)(?:,|\))")
+_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
 _MSSQL_CONSTRAINT_547: Final[int] = 547
 _COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
@@ -61,6 +62,14 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     8114: (DataError, "data conversion error"),
     1105: (OperationalError, "operational error"),
 }
+
+
+def _quote_bracket_identifier(identifier: str) -> str:
+    """Quote a T-SQL identifier with square brackets."""
+    cleaned = identifier.strip()
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1].replace("]]", "]")
+    return f"[{cleaned.replace(']', ']]')}]"
 
 
 def format_identifier(identifier: str) -> str:
@@ -144,7 +153,7 @@ def apply_driver_features(
 
 def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
     """Map a pymssql exception to SQLSpec's exception hierarchy."""
-    error_number = _extract_error_number(error)
+    error_number = extract_error_number(error)
     if error_number == _MSSQL_CONSTRAINT_547:
         message = str(error)
         if "check constraint" in message.lower():
@@ -202,9 +211,10 @@ def collect_rows(
     column_names = resolve_column_names(description, column_name_cache)
     if not fetched_data:
         return [], column_names, "tuple"
-    if isinstance(fetched_data[0], dict):
-        return list(fetched_data), column_names, "dict"
-    return list(fetched_data), column_names, "tuple"
+    rows = fetched_data if isinstance(fetched_data, list) else list(fetched_data)
+    if isinstance(rows[0], dict):
+        return rows, column_names, "dict"
+    return rows, column_names, "tuple"
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -255,21 +265,26 @@ def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
     return coercions
 
 
-def _quote_bracket_identifier(identifier: str) -> str:
-    cleaned = identifier.strip()
-    if cleaned.startswith("[") and cleaned.endswith("]"):
-        cleaned = cleaned[1:-1].replace("]]", "]")
-    return f"[{cleaned.replace(']', ']]')}]"
+def extract_error_number(exc: BaseException | None) -> int | None:
+    """Extract integer SQL Server error code from an exception if present.
 
-
-def _extract_error_number(exc: Exception) -> "int | None":
+    Checks native integer attributes (number, error_code, errno) or args[0] before regex.
+    """
+    if exc is None:
+        return None
+    for attr in ("number", "error_code", "errno"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and not isinstance(val, bool) and val != 0:
+            return val
+    if exc.args:
+        first = exc.args[0]
+        if isinstance(first, int) and not isinstance(first, bool):
+            return first
     matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
     if not matches:
         return None
-    try:
-        return int(matches[-1])
-    except ValueError:
-        return None
+    last_match = matches[-1]
+    return int(last_match[0] or last_match[1])
 
 
 driver_profile = build_profile()

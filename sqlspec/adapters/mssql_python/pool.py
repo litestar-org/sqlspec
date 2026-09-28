@@ -51,8 +51,9 @@ class MssqlPythonConnectionPool:
                 f"overwriting with {new_params}. Only one pool config per process is supported.",
                 stacklevel=2,
             )
-        MSSQL_PYTHON_MODULE.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
-        _POOLING_PARAMS = new_params
+        if _POOLING_PARAMS is None or new_params != _POOLING_PARAMS:
+            MSSQL_PYTHON_MODULE.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
+            _POOLING_PARAMS = new_params
 
     def acquire(self) -> "MssqlPythonConnection":
         if self._closed:

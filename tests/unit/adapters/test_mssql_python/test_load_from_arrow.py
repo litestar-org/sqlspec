@@ -3,6 +3,7 @@
 from typing import Any, cast
 
 import pyarrow as pa
+import pytest
 
 from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
 
@@ -29,7 +30,9 @@ class _FakeCursor:
 
     def bulkcopy_arrow(self, table_name: str, source: Any, **kwargs: Any) -> dict[str, Any]:
         self.arrow_calls.append((table_name, source, kwargs))
-        return {"rows_copied": source.num_rows}
+        return {
+            "rows_copied": source.read_all().num_rows if isinstance(source, pa.RecordBatchReader) else source.num_rows
+        }
 
     def execute(self, sql: str, *_args: Any) -> None:
         self.execute_calls.append(sql)
@@ -96,3 +99,27 @@ def test_sync_load_from_arrow_overwrite_preserves_quoted_dots() -> None:
 
     assert conn._cursor.execute_calls == ["DELETE FROM [dbo.schema].[orders.table]"]
     assert conn._cursor.arrow_calls
+
+
+def test_arrow_stream_preserves_name_mapping_and_bulk_options() -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    reader = pa.table({"second": [2], "first": [1]}).to_reader()
+    job = driver.load_from_arrow("orders", reader, batch_size=32, timeout=4, keep_identity=True, table_lock=True)
+    target, source, options = conn._cursor.arrow_calls[0]
+    assert target == "orders"
+    assert source is reader
+    assert options["column_mappings"] == ["second", "first"]
+    assert options["batch_size"] == 32
+    assert options["timeout"] == 4
+    assert options["keep_identity"] is True
+    assert options["table_lock"] is True
+    assert job.telemetry["rows_processed"] == 1
+
+
+def test_arrow_overwrite_validates_source_before_delete() -> None:
+    conn = _FakeConnection()
+    driver = MssqlPythonDriver(cast("Any", conn), driver_features={"storage_capabilities": _CAPS})
+    with pytest.raises((TypeError, ValueError)):
+        driver.load_from_arrow("orders", object(), overwrite=True)
+    assert conn._cursor.execute_calls == []
