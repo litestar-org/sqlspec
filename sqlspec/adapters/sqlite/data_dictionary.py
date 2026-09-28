@@ -50,10 +50,8 @@ class SqliteDataDictionary(SyncDataDictionaryBase):
             SQLite version information or None if detection fails.
         """
         driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
-        # Not cached, fetch from database
 
         version_value = driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:

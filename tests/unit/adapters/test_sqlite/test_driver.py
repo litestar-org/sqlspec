@@ -1,11 +1,12 @@
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 from sqlspec.adapters.sqlite import SqliteDriver
-from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT
+from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config
 
 
 def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
@@ -179,3 +180,150 @@ def test_legacy_mode_still_uses_the_connection_methods(
 
     assert connection.statements == []
     assert getattr(connection, attribute) == 1
+
+
+class _TrackingCursor:
+    def __init__(self, rows: list[tuple[Any, ...]] | None = None) -> None:
+        self._rows = rows or []
+        self.description = [("id",)] if rows is not None else None
+        self.rowcount = len(self._rows) if self._rows else 2
+        self.lastrowid = 1
+        self.closed = False
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _TrackingConnection:
+    def __init__(self) -> None:
+        self.in_transaction = False
+        self.cursors: list[_TrackingCursor] = []
+
+    def execute(self, sql: str, parameters: object = ()) -> _TrackingCursor:
+        _ = (sql, parameters)
+        cursor = _TrackingCursor(rows=[(1,)])
+        self.cursors.append(cursor)
+        return cursor
+
+    def executemany(self, sql: str, parameters: object) -> _TrackingCursor:
+        _ = (sql, parameters)
+        cursor = _TrackingCursor()
+        self.cursors.append(cursor)
+        return cursor
+
+
+def test_execute_many_thin_path_closes_cursor() -> None:
+    """SqliteDriver.execute_many thin path must close its cursor in finally."""
+    connection = _TrackingConnection()
+    driver = SqliteDriver(connection=cast("Any", connection))
+
+    result = driver.execute_many("INSERT INTO items (name) VALUES (?)", [("a",), ("b",)])
+
+    assert result.rows_affected == 2
+    assert len(connection.cursors) == 1
+    assert connection.cursors[0].closed is True
+
+
+def test_execute_cache_hit_closes_cursor() -> None:
+    """SqliteDriver._execute_cache_hit must close its cursor on cached execution."""
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+    connection.execute("INSERT INTO items (name) VALUES ('alpha')")
+    driver = SqliteDriver(connection=connection)
+    try:
+        first = driver.execute("SELECT id, name FROM items WHERE id = ?", (1,))
+        second = driver.execute("SELECT id, name FROM items WHERE id = ?", (1,))
+        assert first.get_data() == [{"id": 1, "name": "alpha"}]
+        assert second.get_data() == [{"id": 1, "name": "alpha"}]
+    finally:
+        connection.close()
+
+
+def test_execute_many_thin_path_checks_all_rows_beyond_sample_threshold() -> None:
+    """_thin_path_parameters_are_eligible must inspect every row even in large batches."""
+    rows: list[tuple[Any, ...]] = [(i,) for i in range(120)]
+    rows[57] = (defaultdict(int, a=1),)
+
+    assert (
+        SqliteDriver._thin_path_parameters_are_eligible(
+            rows, default_statement_config.parameter_config.type_coercion_map
+        )
+        is False
+    )
+
+
+def test_arrow_ingest_rolls_back_when_a_later_batch_conversion_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pyarrow as pa
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE target (value INTEGER)")
+    driver = SqliteDriver(
+        connection=connection, driver_features={"storage_capabilities": {"arrow_import_enabled": True}}
+    )
+    batches_prepared = 0
+
+    def prepare(parameters: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal batches_prepared
+        batches_prepared += 1
+        if batches_prepared == 2:
+            raise ValueError("conversion failed")
+        return parameters
+
+    monkeypatch.setattr(SqliteDriver, "_arrow_rows_need_preparation", lambda *args: True)
+    monkeypatch.setattr(
+        SqliteDriver, "prepare_driver_parameters", lambda self, *args, **kwargs: prepare(*args, **kwargs)
+    )
+    try:
+        with pytest.raises(ValueError, match="conversion failed"):
+            driver.load_from_arrow("target", pa.table({"value": list(range(10001))}))
+        assert connection.in_transaction is False
+        assert connection.execute("SELECT COUNT(*) FROM target").fetchone() == (0,)
+    finally:
+        connection.close()
+
+
+def test_sqlite_begin_mode_and_arrow_batch_validation() -> None:
+    connection = sqlite3.connect(":memory:")
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+    driver = SqliteDriver(connection=connection, driver_features={"default_transaction_mode": "EXCLUSIVE"})
+    try:
+        driver.begin()
+        driver.rollback()
+        driver.begin(mode="DEFERRED")
+        driver.rollback()
+        with pytest.raises(ValueError, match="Transaction mode"):
+            driver.begin(mode=cast("Any", "INVALID"))
+        with pytest.raises(ValueError, match="batch_size"):
+            driver.load_from_arrow("sample", cast("Any", None), batch_size=0)
+        assert statements == ["BEGIN EXCLUSIVE", "ROLLBACK", "BEGIN DEFERRED", "ROLLBACK"]
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("async_adapter", [False, True])
+def test_window_registration_checks_native_capability(async_adapter: bool) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sqlspec.adapters.aiosqlite.pool import _register_runtime_objects
+    from sqlspec.adapters.sqlite.pool import _apply_runtime_setup
+    from sqlspec.exceptions import ImproperConfigurationError
+
+    window_class = type("Window", (), {})
+    functions = [{"name": "window_sum", "narg": 1, "window_class": window_class}]
+    register = Mock()
+    native = SimpleNamespace(create_window_function=register)
+    if async_adapter:
+        _register_runtime_objects(cast("Any", SimpleNamespace(_conn=native)), (), (), functions)
+    else:
+        _apply_runtime_setup(cast("Any", native), {"custom_window_functions": functions})
+    register.assert_called_once_with("window_sum", 1, window_class)
+    with pytest.raises(ImproperConfigurationError, match="Python 3"):
+        if async_adapter:
+            _register_runtime_objects(cast("Any", SimpleNamespace(_conn=object())), (), (), functions)
+        else:
+            _apply_runtime_setup(cast("Any", object()), {"custom_window_functions": functions})

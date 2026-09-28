@@ -393,3 +393,17 @@ async def test_wal_setup_failure_propagates_from_new_connection(
             await pool.new_connection()
     finally:
         await pool.close()
+
+
+async def test_close_continues_after_a_native_connection_was_closed() -> None:
+    pool = AiosqliteConnectionPool({"database": ":memory:"}, pool_size=2)
+    first = await pool.acquire()
+    second = await pool.acquire()
+    try:
+        await first.connection.close()
+        await pool.close()
+        with pytest.raises(ValueError, match="no active connection"):
+            await second.connection.execute("SELECT 1")
+    finally:
+        await second.connection.close()
+        await pool.close()

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
-from sqlspec.adapters.aiosqlite.config import _render_pragmas
+from sqlspec.adapters.aiosqlite.core import end_transaction, render_pragmas
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -128,7 +128,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
             await conn.execute(sql, params)
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
         return StoredSession(
             id=session_id, app_name=app_name, user_id=user_id, state=state, create_time=now, update_time=now
@@ -165,7 +165,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     WHERE app_name = ? AND user_id = ? AND id = ?
                     """
                     await conn.execute(update_sql, (_datetime_to_julian(datetime.now(timezone.utc)), *params))
-                    await conn.commit()
+                    await end_transaction(conn, commit=True)
                 cursor = await conn.execute(sql, params)
                 row = await cursor.fetchone()
 
@@ -206,7 +206,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
             await conn.execute(sql, (state_json, now_julian, app_name, user_id, session_id))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def list_sessions(
         self,
@@ -274,7 +274,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
             await conn.execute(sql, (app_name, user_id, session_id))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def append_event(self, event_record: StoredEvent) -> None:
         """Append an event to a session.
@@ -305,7 +305,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     event_data_json,
                 ),
             )
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def append_event_and_update_state(
         self,
@@ -391,13 +391,13 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     if user_state is not None:
                         await conn.execute(user_upsert_sql, (app_name, user_id, to_json(user_state), now_julian))
             except Exception:
-                await conn.rollback()
+                await end_transaction(conn, commit=False)
                 raise
             else:
                 if row is None:
-                    await conn.rollback()
+                    await end_transaction(conn, commit=False)
                 else:
-                    await conn.commit()
+                    await end_transaction(conn, commit=True)
 
         if row is None:
             msg = f"Session {session_id} not found during append_event_and_update_state."
@@ -488,7 +488,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 await self._apply_pragmas(conn)
                 cursor = await conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                await conn.commit()
+                await end_transaction(conn, commit=True)
                 return deleted_count
         except sqlite3.OperationalError as exc:
             if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
@@ -508,7 +508,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 await self._apply_pragmas(conn)
                 cursor = await conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                await conn.commit()
+                await end_transaction(conn, commit=True)
                 return deleted_count
         except sqlite3.OperationalError as exc:
             if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
@@ -528,7 +528,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                 await self._apply_pragmas(conn)
                 cursor = await conn.execute(sql, tuple(params))
                 deleted_count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
-                await conn.commit()
+                await end_transaction(conn, commit=True)
                 return deleted_count
         except sqlite3.OperationalError as exc:
             if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
@@ -582,7 +582,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
             await conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
@@ -599,7 +599,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             await conn.execute(
                 sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(timezone.utc)))
             )
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def get_metadata(self, key: str) -> "str | None":
         """Return a value from the ADK internal metadata table."""
@@ -627,7 +627,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
             await conn.execute(sql, (key, value))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
 
     async def _apply_pragmas(self, connection: Any) -> None:
         """Apply PRAGMA optimization profile for this connection.
@@ -799,20 +799,19 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         if not entries:
             return 0
 
-        inserted_count = 0
         async with self._config.provide_connection() as conn:
-            for entry in entries:
-                params: tuple[Any, ...]
-                scope = entry.get("scope", "user")
-                if self._owner_id_column_name:
-                    sql = f"""
-                    INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, scope, event_id, author,
-                     {self._owner_id_column_name}, timestamp, content_json,
-                     content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
-                    params = (
+            params_list: list[tuple[Any, ...]] = []
+            if self._owner_id_column_name:
+                sql = f"""
+                INSERT OR IGNORE INTO {self._memory_table}
+                (id, session_id, app_name, user_id, scope, event_id, author,
+                 {self._owner_id_column_name}, timestamp, content_json,
+                 content_text, metadata_json, inserted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                for entry in entries:
+                    scope = entry.get("scope", "user")
+                    params_list.append((
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
@@ -826,15 +825,17 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                         entry["content_text"],
                         to_json(entry["metadata_json"]),
                         _datetime_to_julian(entry["inserted_at"]),
-                    )
-                else:
-                    sql = f"""
-                    INSERT OR IGNORE INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, scope, event_id, author,
-                     timestamp, content_json, content_text, metadata_json, inserted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """
-                    params = (
+                    ))
+            else:
+                sql = f"""
+                INSERT OR IGNORE INTO {self._memory_table}
+                (id, session_id, app_name, user_id, scope, event_id, author,
+                 timestamp, content_json, content_text, metadata_json, inserted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                for entry in entries:
+                    scope = entry.get("scope", "user")
+                    params_list.append((
                         entry["id"],
                         entry["session_id"],
                         entry["app_name"],
@@ -847,11 +848,13 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                         entry["content_text"],
                         to_json(entry["metadata_json"]),
                         _datetime_to_julian(entry["inserted_at"]),
-                    )
-                cursor = await conn.execute(sql, params)
-                inserted_count += cursor.rowcount
+                    ))
+            cursor = await conn.executemany(sql, params_list)
+            try:
+                inserted_count = cursor.rowcount if cursor.rowcount >= 0 else len(params_list)
+            finally:
                 await cursor.close()
-            await conn.commit()
+            await end_transaction(conn, commit=True)
         return inserted_count
 
     async def search_entries(
@@ -917,7 +920,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
         async with self._config.provide_connection() as conn:
             cursor = await conn.execute(sql, (session_id,))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
             return cursor.rowcount
 
     async def delete_entries_older_than(
@@ -940,7 +943,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         async with self._config.provide_connection() as conn:
             cursor = await conn.execute(sql, tuple(params))
-            await conn.commit()
+            await end_transaction(conn, commit=True)
             return cursor.rowcount
 
     async def _memory_table_ddl(self) -> str:
@@ -1036,7 +1039,7 @@ def _pragma_overrides(config: "AiosqliteConfig") -> "list[tuple[str, str]]":
         msg = "extension_config['adk']['pragma_overrides'] must be a mapping of PRAGMA names to values"
         raise ImproperConfigurationError(msg)
     try:
-        return _render_pragmas(pragma_overrides)
+        return render_pragmas(pragma_overrides)
     except ImproperConfigurationError as exc:
         msg = str(exc).replace("driver_features['pragmas']", "extension_config['adk']['pragma_overrides']")
         raise ImproperConfigurationError(msg) from exc
