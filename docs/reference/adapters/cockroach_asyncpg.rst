@@ -130,3 +130,11 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.cockroach_asyncpg.adk.CockroachAsyncpgADKConfig
    :members:
    :show-inheritance:
+
+Native startup settings
+-----------------------
+
+``connection_config`` accepts ``application_name``,
+``default_transaction_use_follower_reads`` (boolean), and ``results_buffer_size``
+(non-negative integer bytes). These map to asyncpg ``server_settings``;
+explicit entries in ``server_settings`` take precedence.

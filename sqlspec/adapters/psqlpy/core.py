@@ -13,6 +13,7 @@ from sqlglot import exp
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
+from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
@@ -596,6 +597,8 @@ def _coerce_parameter_for_cast(value: Any, cast_type: str, serializer: "Callable
         return _coerce_json_parameter(value, upper_cast, serializer)
     if upper_cast in _UUID_CASTS:
         return _coerce_uuid_parameter(value)
+    if upper_cast == "VECTOR":
+        return coerce_pgvector(value)
     if upper_cast in _TIMESTAMP_CASTS:
         return _coerce_timestamp_parameter(value)
     return value

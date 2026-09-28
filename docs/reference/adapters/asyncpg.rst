@@ -89,3 +89,22 @@ All PostgreSQL adapters support ``data ? 'key'``, ``data ? $1``,
 ``data ? :key``, ``?|``, and ``?&`` without treating the operator as a
 placeholder. Write ``data ?? other_col`` for identifier or function right-hand operands. Write parameterized intervals as ``? * interval '1 day'``
 (or use ``$1``).
+
+Native execution options
+------------------------
+
+Set ``execution_args={"timeout": seconds}`` on ``StatementConfig`` to forward
+an asyncpg timeout to queries, batches, script statements, stack operations,
+and stream fetches. ``command_timeout`` is accepted as an alias; ``timeout``
+takes precedence. Explicit ``0`` and ``None`` values are preserved.
+
+``driver_features={"pgbouncer": True}`` disables asyncpg's statement cache and
+SQLSpec's explicit prepared statements in stacks, while preserving transaction
+cleanup. The option is also accepted in ``connection_config``. Use this mode
+when the proxy configuration does not support prepared statements; PgBouncer
+can support them when configured to track protocol-level prepared statements.
+
+``driver_features["type_codecs"]`` accepts a list of native codec specifications.
+Each entry requires ``typename``, ``encoder``, and ``decoder``; ``schema`` defaults
+to ``public`` and ``format`` to ``text``. Codecs register after SQLSpec's built-in
+JSON and vector setup and before ``on_connection_create``.

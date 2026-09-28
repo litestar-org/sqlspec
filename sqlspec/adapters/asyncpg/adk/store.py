@@ -106,20 +106,28 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
                 INSERT INTO {self._session_table}
                 (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
                 VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING id, app_name, user_id, state, create_time, update_time
                 """
-                await conn.execute(sql, session_id, app_name, user_id, owner_id, state)
+                row = await conn.fetchrow(sql, session_id, app_name, user_id, owner_id, state)
             else:
                 sql = f"""
                 INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
                 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING id, app_name, user_id, state, create_time, update_time
                 """
-                await conn.execute(sql, session_id, app_name, user_id, state)
+                row = await conn.fetchrow(sql, session_id, app_name, user_id, state)
 
-        result = await self.get_session(app_name, user_id, session_id)
-        if result is None:
+        if row is None:
             msg = "Failed to fetch created session"
             raise RuntimeError(msg)
-        return result
+        return StoredSession(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None

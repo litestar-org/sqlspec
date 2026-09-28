@@ -229,24 +229,34 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """
             params = (session_id, app_name, user_id, state_json)
 
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql.encode(), params)
+            row = await cur.fetchone()
             await conn.commit()
 
-        result = await self.get_session(app_name, user_id, session_id)
-        if result is None:
+        if row is None:
             msg = "Session creation failed"
             raise RuntimeError(msg)
-        return result
+
+        return StoredSession(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -705,24 +715,34 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """
             params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """
             params = (session_id, app_name, user_id, state_json)
 
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql.encode(), params)
+            row = cur.fetchone()
             conn.commit()
 
-        result = self.get_session(app_name, user_id, session_id)
-        if result is None:
+        if row is None:
             msg = "Session creation failed"
             raise RuntimeError(msg)
-        return result
+
+        return StoredSession(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None

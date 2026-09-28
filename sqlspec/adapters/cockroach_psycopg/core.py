@@ -10,17 +10,20 @@ from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
 from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
+from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgPoolConfig
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
     "CockroachPsycopgRetryConfig",
     "apply_driver_features",
+    "build_connection_config",
     "build_native_export",
     "build_native_import",
     "build_statement_config",
@@ -68,6 +71,49 @@ class CockroachPsycopgRetryConfig:
             max_delay_ms=float(driver_features.get("retry_delay_max_ms", _DEFAULT_MAX_DELAY_MS)),
             enable_logging=bool(driver_features.get("enable_retry_logging", _DEFAULT_ENABLE_LOGGING)),
         )
+
+
+def build_connection_config(
+    connection_config: "CockroachPsycopgPoolConfig | Mapping[str, Any] | None",
+) -> dict[str, Any]:
+    """Build normalized CockroachDB psycopg connection configuration, resolving aliases for libpq compatibility."""
+    config = normalize_connection_config(connection_config)
+    conninfo = (
+        config.pop("conninfo", None)
+        or config.pop("dsn", None)
+        or config.pop("url", None)
+        or config.pop("connection_string", None)
+    )
+    if conninfo is not None:
+        config["conninfo"] = conninfo
+    dbname = config.pop("dbname", None) or config.pop("database", None) or config.pop("db", None)
+    if dbname is not None:
+        config["dbname"] = dbname
+    user = config.pop("user", None) or config.pop("username", None)
+    if user is not None:
+        config["user"] = user
+
+    session_options: list[str] = []
+    if "default_transaction_use_follower_reads" in config:
+        val = config.pop("default_transaction_use_follower_reads")
+        if not isinstance(val, bool):
+            msg = "default_transaction_use_follower_reads must be a boolean"
+            raise ImproperConfigurationError(msg)
+        session_options.append(f"-c default_transaction_use_follower_reads={'on' if val else 'off'}")
+    for key in ("results_buffer_size", "statement_timeout", "idle_in_transaction_session_timeout"):
+        if key not in config:
+            continue
+        value = config.pop(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            msg = f"{key} must be a non-negative integer"
+            raise ImproperConfigurationError(msg)
+        session_options.append(f"-c {key}={value}")
+    if session_options:
+        existing = config.get("options")
+        opt_str = " ".join(session_options)
+        config["options"] = f"{existing} {opt_str}" if existing else opt_str
+
+    return config
 
 
 def is_retryable_error(error: BaseException) -> bool:

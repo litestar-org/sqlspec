@@ -114,6 +114,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         self._prepared_statements: OrderedDict[str, AsyncpgPreparedStatement] = OrderedDict()
         self._transaction: Any = None
 
+    def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":
+        for options in (config.execution_args, self.statement_config.execution_args):
+            if options:
+                for key in ("timeout", "command_timeout"):
+                    if key in options:
+                        return {"timeout": options[key]}
+        return {}
+
     async def dispatch_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
@@ -130,7 +138,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
 
         if statement.returns_rows():
-            records = await cursor.fetch(sql, *params) if params else await cursor.fetch(sql)
+            records = await cursor.fetch(sql, *params, **self._timeout_arguments(statement.statement_config))
             data, column_names = collect_rows(records)
 
             return self.create_execution_result(
@@ -142,7 +150,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 row_format="record",
             )
 
-        result = await cursor.execute(sql, *params) if params else await cursor.execute(sql)
+        result = await cursor.execute(sql, *params, **self._timeout_arguments(statement.statement_config))
 
         affected_rows = parse_status(result)
 
@@ -162,7 +170,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         if prepared_parameters:
             parameter_sets = cast("list[Sequence[object]]", prepared_parameters)
-            await cursor.executemany(sql, parameter_sets)
+            await cursor.executemany(sql, parameter_sets, **self._timeout_arguments(statement.statement_config))
             affected_rows = resolve_many_rowcount(parameter_sets)
         else:
             affected_rows = 0
@@ -186,7 +194,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         last_result = None
 
         for stmt in statements:
-            result = await cursor.execute(stmt)
+            result = await cursor.execute(stmt, **self._timeout_arguments(statement.statement_config))
             last_result = result
             successful_count += 1
 
@@ -301,7 +309,9 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             return None
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         params: tuple[Any, ...] = cast("tuple[Any, ...]", prepared_parameters) if prepared_parameters else ()
-        return AsyncRowStream(AsyncpgStreamSource(self, sql, params, chunk_size))
+        return AsyncRowStream(
+            AsyncpgStreamSource(self, sql, params, chunk_size, self._timeout_arguments(statement.statement_config))
+        )
 
     def handle_database_exceptions(self) -> "AsyncpgExceptionHandler":
         """Handle database exceptions with PostgreSQL error codes."""
@@ -310,7 +320,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     async def execute_stack(
         self, stack: "StatementStack", *, continue_on_error: bool = False
     ) -> "tuple[StackResult, ...]":
-        """Execute a StatementStack using asyncpg's rapid batching."""
+        """Execute a StatementStack sequentially, reusing native prepared statements."""
 
         if not isinstance(stack, StatementStack) or not stack or self.stack_native_disabled:
             return await super().execute_stack(stack, continue_on_error=continue_on_error)
@@ -509,7 +519,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         if not continue_on_error and not self._connection_in_transaction():
             transaction_cm = self.connection.transaction()
 
-        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
+        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
             if transaction_cm is not None:
                 async with transaction_cm:
                     await self._run_stack_operations(stack, continue_on_error, observer, results)
@@ -572,18 +582,22 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 await self._commit_stack_success()
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
-        prepared = await self._get_prepared_statement(normalized.sql)
+        if self.driver_features.get("pgbouncer"):
+            result = await self._execute_cached_statement(normalized.statement)
+            return StackResult.from_sql_result(result)
+        timeout_args = self._timeout_arguments(normalized.statement.statement_config)
+        prepared = await self._get_prepared_statement(normalized.sql, timeout_args)
         metadata = {"prepared_statement": True}
 
         if normalized.statement.returns_rows():
-            rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True)
+            rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True, **timeout_args)
             data, _ = collect_rows(rows)
             sql_result = create_sql_result(
                 normalized.statement, data=data, rows_affected=len(data), metadata=metadata, row_format="record"
             )
             return StackResult.from_sql_result(sql_result)
 
-        status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False)
+        status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False, **timeout_args)
         rowcount = parse_status(status)
         sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
         return StackResult.from_sql_result(sql_result)
@@ -592,13 +606,13 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         """Check if connection is in transaction."""
         return bool(self.connection.is_in_transaction())
 
-    async def _get_prepared_statement(self, sql: str) -> "AsyncpgPreparedStatement":
+    async def _get_prepared_statement(self, sql: str, timeout_args: "dict[str, Any]") -> "AsyncpgPreparedStatement":
         cached = self._prepared_statements.get(sql)
         if cached is not None:
             self._prepared_statements.move_to_end(sql)
             return cached
 
-        prepared = cast("AsyncpgPreparedStatement", await self.connection.prepare(sql))
+        prepared = cast("AsyncpgPreparedStatement", await self.connection.prepare(sql, **timeout_args))
         self._prepared_statements[sql] = prepared
         if len(self._prepared_statements) > PREPARED_STATEMENT_CACHE_SIZE:
             self._prepared_statements.popitem(last=False)
