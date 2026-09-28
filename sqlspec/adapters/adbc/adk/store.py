@@ -1,8 +1,8 @@
 """ADBC ADK store for Google Agent Development Kit session/event storage."""
 
 import contextlib
-import re
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.adapters.adbc.core import (
@@ -40,6 +40,21 @@ ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
     "does not exist",
     "table with name",
 )
+
+
+@lru_cache(maxsize=256)
+def _postgresql_store_sql(sql: str) -> str:
+    """Cache positional SQL conversion without changing quoted or commented text."""
+    segments: list[str] = []
+    last_end = 0
+    index = 0
+    for match in PARAMETER_REGEX.finditer(sql):
+        if match.lastgroup == "qmark":
+            index += 1
+            segments.extend((sql[last_end : match.start()], f"${index}"))
+            last_end = match.end()
+    segments.append(sql[last_end:])
+    return "".join(segments)
 
 
 class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
@@ -624,14 +639,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """Return SQL with dialect-appropriate positional placeholders."""
         if self._dialect != DIALECT_POSTGRESQL:
             return sql
-        index = 0
-
-        def replace_placeholder(_match: Any) -> str:
-            nonlocal index
-            index += 1
-            return f"${index}"
-
-        return re.sub(r"\?", replace_placeholder, sql)
+        return _postgresql_store_sql(sql)
 
     def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
         """Execute parameterized SQL using the current ADBC dialect's placeholder style."""
@@ -1353,16 +1361,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         """Return SQL with dialect-appropriate positional placeholders."""
         if self._dialect != DIALECT_POSTGRESQL:
             return sql
-        index = 0
-
-        def replace_placeholder(match: "re.Match[str]") -> str:
-            nonlocal index
-            if match.lastgroup != "qmark":
-                return match.group(0)
-            index += 1
-            return f"${index}"
-
-        return PARAMETER_REGEX.sub(replace_placeholder, sql)
+        return _postgresql_store_sql(sql)
 
     def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
         """Execute parameterized SQL using the current ADBC dialect's placeholder style."""

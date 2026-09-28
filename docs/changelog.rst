@@ -38,6 +38,9 @@ Unreleased
 
 **Fixed:**
 
+* ADBC ADK stores reuse cached PostgreSQL placeholder conversion and preserve
+  question marks in quoted identifiers, literals, and comments.
+
 * Arrow ODBC pagination reuses compiled placeholder positions instead of
   parsing SQL again. ADBC keeps bound values in its ADK store queries.
   DuckDB Arrow loads keep sparse dictionary fields and quote table names.

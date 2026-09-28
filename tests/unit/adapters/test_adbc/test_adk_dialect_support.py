@@ -283,3 +283,23 @@ def test_memory_store_detects_postgresql_from_uri_and_formats_placeholders() -> 
     formatted = store._format_sql('DELETE FROM "memory?" WHERE session_id = ? AND app_name = ?')
     assert formatted == 'DELETE FROM "memory?" WHERE session_id = $1 AND app_name = $2'
     assert store._json_placeholder() == "?::jsonb"
+
+
+@pytest.mark.parametrize("store_type", [AdbcADKStore, AdbcADKMemoryStore])
+@pytest.mark.parametrize("driver_name", ["postgresql", "sqlite"])
+def test_store_placeholder_formatting_preserves_sql_text(store_type: type, driver_name: str) -> None:
+    config = AdbcConfig(connection_config={"driver_name": driver_name})
+    store = store_type(config)
+    sql = 'SELECT \'?\', "field?", $$?$$, $tag$?$tag$ FROM "table?" /* ? */ WHERE id = ?::int -- ?\nAND name = ?'
+    expected = sql.replace("id = ?::int", "id = $1::int").replace("name = ?", "name = $2")
+    assert store._format_sql(sql) == (expected if driver_name == "postgresql" else sql)
+
+
+def test_store_placeholder_formatting_reuses_cached_sql() -> None:
+    from sqlspec.adapters.adbc.adk.store import _postgresql_store_sql
+
+    _postgresql_store_sql.cache_clear()
+    sql = "SELECT ?::jsonb /* cached store query */"
+    assert _postgresql_store_sql(sql) == "SELECT $1::jsonb /* cached store query */"
+    assert _postgresql_store_sql(sql) == "SELECT $1::jsonb /* cached store query */"
+    assert _postgresql_store_sql.cache_info().hits == 1
