@@ -9,8 +9,8 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
-----------
+v0.65.0 - IBM Db2 adapter, dialect isolation, and native adapter hardening
+-------------------------------------------------------------------------
 
 **Added:**
 
@@ -90,15 +90,15 @@ Unreleased
 
 * MySQL Connector can create async pools again. Db2 exposes the installed
   driver's connection and cursor types to apps.
-
+  (`#814 <https://github.com/litestar-org/sqlspec/pull/814>`_)
 * DuckDB returns UUID objects for UUID columns on the first query, on cache
   hits, and in row streams. Disabling UUID input conversion does not change
   result types. Text columns still return strings.
-
+  (`#814 <https://github.com/litestar-org/sqlspec/pull/814>`_)
 * Schema checks can read table DDL inside SQL blocks with dialect-specific
   quotes. They also handle Oracle blocks whose trailing text is not supported
   by the parser.
-
+  (`#814 <https://github.com/litestar-org/sqlspec/pull/814>`_)
 * Spanner binds Decimal values as NUMERIC and boolean arrays as BOOL.
   Typed null dictionaries use JSON, and JSON null results stay ``None``.
   (`#814 <https://github.com/litestar-org/sqlspec/pull/814>`_)
