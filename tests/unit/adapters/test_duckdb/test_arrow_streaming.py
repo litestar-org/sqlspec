@@ -16,8 +16,10 @@ from sqlspec.exceptions import MissingDependencyError, NotFoundError
 
 
 @contextmanager
-def _seed_driver() -> Iterator[DuckDBDriver]:
-    config = DuckDBConfig(connection_config={"database": ":memory:"})
+def _seed_driver(*, enable_uuid_conversion: bool = True) -> Iterator[DuckDBDriver]:
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:"}, driver_features={"enable_uuid_conversion": enable_uuid_conversion}
+    )
     with config.provide_session() as driver:
         driver.execute_script("""
             CREATE OR REPLACE TABLE arrow_streaming (id INTEGER, name VARCHAR);
@@ -98,18 +100,19 @@ def test_execute_many_bulk_path_survives_a_previous_driver() -> None:
         second_config.close_pool()
 
 
-def test_select_arrow_path_restores_uuid_columns_only() -> None:
+@pytest.mark.parametrize("enabled", [True, False])
+def test_select_arrow_path_restores_uuid_columns_only(enabled: bool) -> None:
     uuid_value = "550e8400-e29b-41d4-a716-446655440000"
-    with _seed_driver() as driver:
+    with _seed_driver(enable_uuid_conversion=enabled) as driver:
         driver.execute("CREATE OR REPLACE TABLE uuid_target (id UUID, text_id VARCHAR)")
         driver.execute("INSERT INTO uuid_target VALUES (?, ?)", uuid_value, uuid_value)
 
-        row = driver.select_one("SELECT id, text_id FROM uuid_target")
-
-    assert isinstance(row["id"], UUID)
-    assert str(row["id"]) == uuid_value
-    assert row["text_id"] == uuid_value
-    assert isinstance(row["text_id"], str)
+        for _ in range(2):
+            row = driver.select_one("SELECT id, text_id FROM uuid_target WHERE text_id = ?", uuid_value)
+            assert isinstance(row["id"], UUID)
+            assert str(row["id"]) == uuid_value
+            assert row["text_id"] == uuid_value
+            assert isinstance(row["text_id"], str)
 
 
 def test_select_stream_native_only_reads_bounded_rows() -> None:
@@ -128,9 +131,10 @@ def test_select_stream_native_only_reads_bounded_rows() -> None:
     ]
 
 
-def test_select_stream_restores_uuid_columns_per_batch() -> None:
+@pytest.mark.parametrize("enabled", [True, False])
+def test_select_stream_restores_uuid_columns_per_batch(enabled: bool) -> None:
     uuid_value = "550e8400-e29b-41d4-a716-446655440000"
-    with _seed_driver() as driver:
+    with _seed_driver(enable_uuid_conversion=enabled) as driver:
         driver.execute("CREATE OR REPLACE TABLE uuid_stream (id UUID, text_id VARCHAR)")
         driver.execute("INSERT INTO uuid_stream VALUES (?, ?), (?, ?)", uuid_value, uuid_value, uuid_value, uuid_value)
 

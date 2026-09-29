@@ -157,3 +157,40 @@ def test_schema_target_from_ddl_ignores_parentheses_in_strings_and_comments() ->
 
     assert [column.name for column in target.create_table.columns] == ["id", "delim", "label"]
     assert target.create_table.columns[2].not_null is True
+
+
+@pytest.mark.parametrize(
+    ("dialect", "ddl", "columns"),
+    [
+        (
+            "tsql",
+            "IF OBJECT_ID(N'widgets', N'U') IS NULL BEGIN CREATE TABLE widgets (id INT, [O'Brien] VARCHAR(50)); END;",
+            ["id", "O'Brien"],
+        ),
+        (
+            "oracle",
+            (
+                "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE widgets (id NUMBER, label VARCHAR2(50))'; "
+                "EXCEPTION WHEN OTHERS THEN raise_application_error(-20001, q'[can't create table]'); END;"
+            ),
+            ["id", "label"],
+        ),
+    ],
+)
+def test_schema_target_from_wrapped_ddl_preserves_dialect_quotes(dialect: str, ddl: str, columns: list[str]) -> None:
+    target = SchemaTarget.from_ddl("widgets", ddl, dialect=dialect)
+
+    assert [column.name for column in target.create_table.columns] == columns
+    assert target.create_statement == ddl
+
+
+@pytest.mark.parametrize(
+    "ddl",
+    [
+        "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE widgets (id NUMBER); END;",
+        "BEGIN EXECUTE IMMEDIATE 'CREATE TABLE widgets (id NUMBER, label VARCHAR2(50)'; END;",
+    ],
+)
+def test_schema_target_rejects_incomplete_wrapped_ddl(ddl: str) -> None:
+    with pytest.raises(ValueError, match="Unable to parse CREATE TABLE DDL"):
+        SchemaTarget.from_ddl("widgets", ddl, dialect="oracle")

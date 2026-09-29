@@ -3,12 +3,16 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from sqlglot import TokenType, exp, parse, tokenize
+from sqlglot import Dialect, TokenType, exp, parse
+from sqlglot.errors import ParseError, TokenError
 
 from sqlspec.builder._ddl import AlterTable, CreateTable, _parse_ddl_identifier, _parse_ddl_table
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from sqlglot.dialects.dialect import DialectType
+    from sqlglot.tokenizer_core import Token
 
 __all__ = ("SchemaEnsureResult", "SchemaTarget", "ensure_schema_async", "ensure_schema_sync")
 
@@ -375,7 +379,7 @@ def _parse_create_expressions(create_statement: str, dialect: Any) -> list[exp.C
     """Parse direct or procedural-wrapper CREATE TABLE DDL."""
     try:
         expressions = parse(create_statement, read=dialect)
-    except Exception:
+    except (ParseError, TokenError):
         expressions = []
     creates = [
         expression
@@ -384,17 +388,17 @@ def _parse_create_expressions(create_statement: str, dialect: Any) -> list[exp.C
     ]
     if creates:
         return creates
-    extracted = _extract_create_table_statement(create_statement)
+    extracted = _extract_create_table_statement(create_statement, dialect)
     if extracted is None:
         return []
     try:
         expression = parse(extracted, read=dialect)[0]
-    except Exception:
+    except (ParseError, TokenError):
         return []
     return [expression] if isinstance(expression, exp.Create) else []
 
 
-def _extract_create_table_statement(create_statement: str) -> "str | None":
+def _extract_create_table_statement(create_statement: str, dialect: "DialectType") -> "str | None":
     """Extract the first balanced CREATE TABLE statement from a wrapper."""
     upper_statement = create_statement.upper()
     start = upper_statement.find("CREATE TABLE")
@@ -403,19 +407,13 @@ def _extract_create_table_statement(create_statement: str) -> "str | None":
     prefix = create_statement[:start].rstrip()
     if prefix.endswith("'"):
         quote_pos = create_statement.rfind("'", 0, start)
-        try:
-            string_tokens = tokenize(create_statement[quote_pos:])
-        except Exception:
-            return None
+        string_tokens = _tokenize_ddl_prefix(create_statement[quote_pos:], dialect)
         if not string_tokens or string_tokens[0].token_type != TokenType.STRING:
             return None
         sql = string_tokens[0].text
     else:
         sql = create_statement[start:]
-    try:
-        tokens = tokenize(sql)
-    except Exception:
-        return None
+    tokens = _tokenize_ddl_prefix(sql, dialect)
     depth = 0
     for token in tokens:
         if token.token_type == TokenType.L_PAREN:
@@ -425,3 +423,16 @@ def _extract_create_table_statement(create_statement: str) -> "str | None":
             if depth == 0:
                 return sql[: token.end + 1]
     return None
+
+
+def _tokenize_ddl_prefix(sql: str, dialect: "DialectType") -> "list[Token]":
+    """Retain complete tokens before an unsupported procedural wrapper suffix.
+
+    Only a completed string literal or balanced table definition is consumed by
+    the caller. An unfinished token in the DDL cannot complete either boundary.
+    """
+    tokenizer = Dialect.get_or_raise(dialect).tokenizer()
+    try:
+        return tokenizer.tokenize(sql)
+    except TokenError:
+        return tokenizer.tokens

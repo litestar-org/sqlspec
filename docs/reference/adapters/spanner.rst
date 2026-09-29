@@ -27,6 +27,10 @@ Default request controls can be configured through
 ``retry`` and ``timeout``
     Forwarded to Spanner statement execution calls when provided.
 
+``query_options``
+    Forwarded to ``execute_sql()`` and ``execute_update()``. Batch DML does not
+    accept query options.
+
 Per-call overrides use the existing ``execute()``, ``execute_many()``, and
 ``execute_script()`` methods:
 
@@ -44,6 +48,11 @@ Per-call overrides use the existing ``execute()``, ``execute_many()``, and
 the argument for a DML statement so call sites can share option plumbing, but it
 does not forward directed-read options to ``execute_update()`` or
 ``batch_update()``.
+
+Pass ``last_statement=True`` to mark the final DML request in a transaction.
+For scripts, SQLSpec forwards it only when the final statement is DML. This
+option does not commit the transaction; commit through the normal transaction
+context or driver API.
 
 Session-Scoped Controls
 =======================

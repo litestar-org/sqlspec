@@ -151,8 +151,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if is_select_like:
             arrow_table = cursor.to_arrow_table()
             data = arrow_table.to_pylist()
-            if self.driver_features.get("enable_uuid_conversion", True):
-                _restore_uuid_columns(data, cursor.description)
+            _restore_uuid_columns(data, cursor.description)
             column_names = list(arrow_table.column_names)
 
             return self.create_execution_result(
@@ -692,7 +691,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         reader: Any | None = None
         with handler:
             result = self.connection.execute(sql, normalize_execute_parameters(parameters))
-            description = result.description if self.driver_features.get("enable_uuid_conversion", True) else None
+            description = result.description
             reader = result.to_arrow_reader(chunk_size)
         self._check_pending_exception(handler)
         if reader is None:

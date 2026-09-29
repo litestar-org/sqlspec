@@ -25,6 +25,19 @@ if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorCursorParams, MysqlConnectorFailoverTarget
 
 
+@pytest.mark.anyio
+async def test_async_create_pool_uses_native_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_pool = pytest.importorskip("mysql.connector.aio.pooling").MySQLConnectionPool
+    initialize = AsyncMock()
+    monkeypatch.setattr(native_pool, "initialize_pool", initialize)
+    config = MysqlConnectorAsyncConfig(connection_config={"pool_name": "sqlspec", "pool_size": 2})
+
+    pool = await config.create_pool()
+
+    assert isinstance(pool, native_pool)
+    initialize.assert_awaited_once_with()
+
+
 def test_sync_config_uses_connector_python_host_default_and_disables_local_infile() -> None:
     """SQLSpec should preserve the driver host default and close the local infile gate."""
     config = MysqlConnectorSyncConfig()

@@ -27,13 +27,11 @@ Unreleased
   and later when the SQLite runtime supports them. Choose a transaction lock
   mode or set the batch size for Arrow imports. Defaults stay the same.
   (`#820 <https://github.com/litestar-org/sqlspec/pull/820>`_)
-* Spanner forwards native query options (``QueryOptions``, ``RequestOptions``,
-  ``DirectedReadOptions``) and final-statement hints, supports opt-in Batch Write
-  from read sessions, adds ``run_in_transaction`` retry with backoff on ``Aborted``
-  and ``last_statement=True`` commit inlining, supports multiplexed session pooling
-  and ``PingingPool`` keepalive intervals, coerces ``FLOAT32`` vector parameters,
-  and adds ``execute_partitioned_dml()`` for Partitioned DML truncation during
-  ``load_from_arrow(overwrite=True)``.
+* Spanner forwards native query, request, and directed-read options through
+  existing execution and session APIs. ``last_statement=True`` marks the final
+  DML statement; it does not commit the transaction. Opt-in Batch Write accepts
+  read sessions for Arrow imports without overwrite. Overwrite uses a
+  transaction for both the delete and replacement mutations.
   (`#814 <https://github.com/litestar-org/sqlspec/pull/814>`_)
 * Cloud Spanner and Spangres SQLGlot dialects isolate custom ``SpannerParser``,
   ``SpangresParser``, ``SpannerGenerator``, and ``SpangresGenerator`` subclasses
@@ -89,6 +87,17 @@ Unreleased
   `#823 <https://github.com/litestar-org/sqlspec/pull/823>`_)
 
 **Fixed:**
+
+* MySQL Connector can create async pools again. Db2 exposes the installed
+  driver's connection and cursor types to apps.
+
+* DuckDB returns UUID objects for UUID columns on the first query, on cache
+  hits, and in row streams. Disabling UUID input conversion does not change
+  result types. Text columns still return strings.
+
+* Schema checks can read table DDL inside SQL blocks with dialect-specific
+  quotes. They also handle Oracle blocks whose trailing text is not supported
+  by the parser.
 
 * Spanner binds Decimal values as NUMERIC and boolean arrays as BOOL.
   Typed null dictionaries use JSON, and JSON null results stay ``None``.

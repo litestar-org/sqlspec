@@ -26,10 +26,10 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
 if not TYPE_CHECKING:
-    Db2SyncConnection = Any
-    Db2RawCursor = Any
-    Db2AsyncConnection = Any
-    Db2AsyncRawCursor = Any
+    Db2SyncConnection = import_optional_attr("ibm_db_dbi", "Connection") or Any
+    Db2RawCursor = import_optional_attr("ibm_db_dbi", "Cursor") or Any
+    Db2AsyncConnection = import_optional_attr("ibm_db_dbi", "AsyncConnection") or Any
+    Db2AsyncRawCursor = import_optional_attr("ibm_db_dbi", "AsyncCursor") or Any
     Db2Error = import_optional_attr("ibm_db_dbi", "Error") or _Db2UnavailableError
 
 ibm_db = import_optional("ibm_db")

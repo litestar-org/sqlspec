@@ -165,25 +165,19 @@ class DuckDBDriverFeatures(TypedDict):
     """TypedDict for DuckDB driver features configuration.
 
     Attributes:
-        extensions: List of extensions to install/load on connection creation.
-        secrets: List of secrets to create for AI/API integrations.
-        on_connection_create: Callback executed when connection is created.
-        json_serializer: Custom JSON serializer for dict/list parameter conversion.
-            Defaults to sqlspec.utils.serializers.to_json if not provided.
-        enable_uuid_conversion: Enable automatic UUID string conversion.
-            When True (default), UUID strings are automatically converted to UUID objects.
-            When False, UUID strings are treated as regular strings.
-        extension_flags: Connection-level flags folded into the database startup
-            configuration. DuckDB rejects these settings once the database is
-            running, so they cannot be applied afterwards.
-        enable_events: Enable database event channel support.
-            Defaults to True when extension_config["events"] is configured.
-            Provides pub/sub capabilities via table-backed queue (DuckDB has no native pub/sub).
-            Requires extension_config["events"] for migration setup.
-        events_backend: Event channel backend selection.
-        Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
-            DuckDB does not have native pub/sub, so poll_queue is the only backend.
-            Defaults to "poll_queue".
+        extensions: Extensions to install/load when connecting.
+        secrets: Secrets to create for external services.
+        on_connection_create: Callback run when connecting.
+        json_serializer: Serializer for dict/list parameters. Defaults to
+            sqlspec.utils.serializers.to_json.
+        enable_uuid_conversion: Convert UUID parameters to strings (default True).
+            False passes parameters unchanged. UUID result columns always return
+            UUID objects; VARCHAR columns remain strings.
+        extension_flags: Startup-only flags; DuckDB rejects changes after startup.
+        enable_events: Enable table-backed event queues. Defaults to True when
+            extension_config["events"] is set; requires it for migrations.
+        events_backend: Only "poll_queue" is supported, with lease-based retries
+            and acknowledgements. DuckDB has no native pub/sub.
     """
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
@@ -209,29 +203,16 @@ class _DuckDBSessionConnectionHandler(SyncPoolSessionFactory):
 class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, DuckDBDriver]):
     """DuckDB configuration with connection pooling.
 
-    This configuration supports DuckDB's features including:
+    Supports extensions, secrets, Arrow transfers, and direct file queries.
+    Connections recycle after 24 hours by default; set recycling to 0 to disable.
+    Shared memory databases use ``:memory:shared_db``.
 
-    - Connection pooling
-    - Extension management and installation
-    - Secret management for API integrations
-    - Auto configuration settings
-    - Arrow integration
-    - Direct file querying capabilities
-    - Configurable type handlers for JSON serialization and UUID conversion
+    Set ``driver_features["json_serializer"]`` to a serializer that returns text
+    for dict/list parameters. The default is ``sqlspec.utils.serializers.to_json``.
 
-    DuckDB Connection Pool Configuration:
-        - Default pool size is 1-4 connections (DuckDB uses single connection by default)
-        - Connection recycling is set to 24 hours by default (set to 0 to disable)
-        - Shared memory databases use `:memory:shared_db` for proper concurrency
-
-    Type Handler Configuration via driver_features:
-        - `json_serializer`: Custom JSON serializer for dict/list parameters.
-            Defaults to `sqlspec.utils.serializers.to_json` if not provided.
-            Accepts serializer callables that return text.
-
-    - `enable_uuid_conversion`: Enable automatic UUID string conversion (default: True).
-     When True, UUID strings in query results are automatically converted to UUID objects.
-     When False, UUID strings are treated as regular strings.
+    ``driver_features["enable_uuid_conversion"]`` converts UUID parameters to
+    strings by default. Disable it to pass UUID parameters through unchanged.
+    UUID result columns always return UUID objects; VARCHAR columns remain strings.
     """
 
     driver_type: "ClassVar[type[DuckDBDriver]]" = DuckDBDriver
