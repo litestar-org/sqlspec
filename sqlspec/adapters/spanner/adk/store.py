@@ -2,10 +2,13 @@
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, cast
 
+import sqlglot
+from sqlglot import exp
 from typing_extensions import NotRequired, TypedDict
 
+import sqlspec.dialects.spanner  # noqa: F401
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerSyncConfig
@@ -26,8 +29,6 @@ if TYPE_CHECKING:
 __all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
 
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
-MIN_DROP_TABLE_TOKENS: Final = 3
-MIN_DROP_SEARCH_INDEX_TOKENS: Final = 4
 
 
 class SpannerADKRetentionConfig(TypedDict):
@@ -1185,27 +1186,29 @@ def _filter_existing_spanner_drops(statements: "list[str]", existing_tables: "se
 
 
 def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -> "str | None":
-    tokens = statement.strip().split()
-    if len(tokens) >= MIN_DROP_TABLE_TOKENS and tokens[0].upper() == "DROP" and tokens[1].upper() == "TABLE":
-        table_name = tokens[2]
-        return table_name if table_name in existing_tables else None
-
-    index_name: str | None = None
-    if len(tokens) >= MIN_DROP_TABLE_TOKENS and tokens[0].upper() == "DROP" and tokens[1].upper() == "INDEX":
-        index_name = tokens[2]
-    if (
-        len(tokens) >= MIN_DROP_SEARCH_INDEX_TOKENS
-        and tokens[0].upper() == "DROP"
-        and tokens[1].upper() == "SEARCH"
-        and tokens[2].upper() == "INDEX"
-    ):
-        index_name = tokens[3]
-    if index_name is None:
+    try:
+        parsed = sqlglot.parse_one(statement, read="spanner")
+        if isinstance(parsed, exp.Command) and str(parsed.this).upper() == "DROP":
+            expr_sql = str(parsed.expression or "").strip()
+            if expr_sql.upper().startswith("SEARCH "):
+                parsed = sqlglot.parse_one(f"DROP {expr_sql[7:]}", read="spanner")
+    except Exception:
         return None
 
-    for table_name in existing_tables:
-        if index_name.startswith(f"idx_{table_name}_"):
-            return table_name
+    if not isinstance(parsed, exp.Drop):
+        return None
+
+    target = parsed.this if isinstance(parsed.this, exp.Table) else parsed.find(exp.Table)
+    if target is None or not target.name:
+        return None
+
+    kind = str(parsed.args.get("kind") or "").upper()
+    if kind == "TABLE":
+        return target.name if target.name in existing_tables else None
+    if kind in {"INDEX", "SEARCH INDEX"}:
+        for table_name in existing_tables:
+            if target.name.startswith(f"idx_{table_name}_"):
+                return table_name
     return None
 
 

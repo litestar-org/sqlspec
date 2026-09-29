@@ -82,12 +82,13 @@ def test_coerce_json_parameters_sync_pre_native_versions_create_utf8_blob_locato
 def test_coerce_json_parameters_sync_native_versions_keep_python_value_for_db_type_json(
     sync_connection: MagicMock, payload: object, wrapper: "Callable[[object], object]"
 ) -> None:
-    """Oracle 21c+ values stay as Python JSON for the DB_TYPE_JSON input handler."""
+    """Oracle 21c+ values stay as Python JSON or OracleJson for the DB_TYPE_JSON input handler."""
     sync_connection._sqlspec_oracle_major = 21
+    wrapped = wrapper(payload)
 
     result = coerce_large_parameters_sync(
         sync_connection,
-        {"payload": wrapper(payload)},
+        {"payload": wrapped},
         clob_type=CLOB_TYPE,
         blob_type=BLOB_TYPE,
         varchar2_byte_limit=VARCHAR2_LIMIT,
@@ -95,7 +96,7 @@ def test_coerce_json_parameters_sync_native_versions_keep_python_value_for_db_ty
     )
 
     sync_connection.createlob.assert_not_called()
-    assert result["payload"] is payload
+    assert result["payload"] is wrapped
 
 
 def test_coerce_json_parameters_sync_uses_connection_version_when_cached_major_is_missing(
@@ -388,7 +389,7 @@ def test_coerce_large_parameters_sync_string_exactly_at_threshold_no_coercion(sy
 
 def test_coerce_large_parameters_sync_string_over_threshold_becomes_clob(sync_connection: MagicMock) -> None:
     params = {"content": "a" * 4001}
-    coerce_large_parameters_sync(
+    result = coerce_large_parameters_sync(
         sync_connection,
         params,
         clob_type=CLOB_TYPE,
@@ -397,7 +398,9 @@ def test_coerce_large_parameters_sync_string_over_threshold_becomes_clob(sync_co
         raw_byte_limit=RAW_LIMIT,
     )
     sync_connection.createlob.assert_called_once_with(CLOB_TYPE, "a" * 4001)
-    assert params["content"] is sync_connection.createlob.return_value
+    assert result["content"] is sync_connection.createlob.return_value
+    assert result is not params
+    assert params["content"] == "a" * 4001
 
 
 def test_coerce_large_parameters_sync_multibyte_string_under_charcount_but_over_bytecount(
@@ -466,7 +469,7 @@ def test_coerce_large_parameters_sync_mixed_parameters(sync_connection: MagicMoc
         "big_bytes": b"\xff" * 3000,
         "number": 42,
     }
-    coerce_large_parameters_sync(
+    result = coerce_large_parameters_sync(
         sync_connection,
         params,
         clob_type=CLOB_TYPE,
@@ -474,10 +477,11 @@ def test_coerce_large_parameters_sync_mixed_parameters(sync_connection: MagicMoc
         varchar2_byte_limit=VARCHAR2_LIMIT,
         raw_byte_limit=RAW_LIMIT,
     )
-    assert params["small_str"] == "hello"
-    assert params["big_str"] is sync_connection.createlob.return_value
-    assert params["small_bytes"] == b"\x00" * 100
-    assert params["number"] == 42
+    assert result["small_str"] == "hello"
+    assert result["big_str"] is sync_connection.createlob.return_value
+    assert result["small_bytes"] == b"\x00" * 100
+    assert result["number"] == 42
+    assert params["big_str"] == "x" * 5000
     assert sync_connection.createlob.call_count == 2
 
 
@@ -488,7 +492,7 @@ def test_coerce_large_parameters_sync_oracle_clob_wrapper_short_value_routed_to_
     from sqlspec.adapters.oracledb import OracleClob
 
     params = {"v": OracleClob("short text")}
-    coerce_large_parameters_sync(
+    result = coerce_large_parameters_sync(
         sync_connection,
         params,
         clob_type=CLOB_TYPE,
@@ -497,7 +501,8 @@ def test_coerce_large_parameters_sync_oracle_clob_wrapper_short_value_routed_to_
         raw_byte_limit=RAW_LIMIT,
     )
     sync_connection.createlob.assert_called_once_with(CLOB_TYPE, "short text")
-    assert params["v"] is sync_connection.createlob.return_value
+    assert result["v"] is sync_connection.createlob.return_value
+    assert isinstance(params["v"], OracleClob)
 
 
 def test_coerce_large_parameters_sync_oracle_clob_wrapper_bytes_decoded_to_str(sync_connection: MagicMock) -> None:
@@ -551,10 +556,12 @@ def test_coerce_large_parameters_sync_oracle_blob_wrapper_str_encoded_to_bytes(s
 
 
 def test_coerce_large_parameters_sync_oracle_json_wrapper_unwrapped_to_value(sync_connection: MagicMock) -> None:
-    """OracleJson unwraps so the C1 input handler can claim the value."""
+    """OracleJson stays wrapped on 21c+ so the C1 input handler can claim and unwrap the value."""
     from sqlspec.adapters.oracledb import OracleJson
+    from sqlspec.adapters.oracledb._json_handlers import is_json_payload, json_converter_in_native
 
-    params = {"v": OracleJson({"a": 1})}
+    wrapped = OracleJson({"a": 1})
+    params = {"v": wrapped}
     result = coerce_large_parameters_sync(
         sync_connection,
         params,
@@ -563,7 +570,9 @@ def test_coerce_large_parameters_sync_oracle_json_wrapper_unwrapped_to_value(syn
         varchar2_byte_limit=VARCHAR2_LIMIT,
         raw_byte_limit=RAW_LIMIT,
     )
-    assert result["v"] == {"a": 1}
+    assert result["v"] is wrapped
+    assert is_json_payload(result["v"]) is True
+    assert json_converter_in_native(result["v"]) == {"a": 1}
     sync_connection.createlob.assert_not_called()
 
 
@@ -628,10 +637,11 @@ def test_coerce_large_parameters_sync_oracle_blob_wrapper_unwrapped_in_positiona
 def test_coerce_large_parameters_sync_oracle_json_wrapper_unwrapped_in_positional_tuple(
     sync_connection: MagicMock,
 ) -> None:
-    """OracleJson inside a positional tuple is unwrapped to its inner value."""
+    """OracleJson inside a positional tuple is preserved on 21c+ for the C1 input handler."""
     from sqlspec.adapters.oracledb import OracleJson
 
-    params = (1, OracleJson({"a": 1}))
+    wrapped = OracleJson({"a": 1})
+    params = (1, wrapped)
     result = coerce_large_parameters_sync(
         sync_connection,
         params,
@@ -641,7 +651,7 @@ def test_coerce_large_parameters_sync_oracle_json_wrapper_unwrapped_in_positiona
         raw_byte_limit=RAW_LIMIT,
     )
     sync_connection.createlob.assert_not_called()
-    assert result[1] == {"a": 1}
+    assert result[1] is wrapped
 
 
 def test_coerce_large_parameters_sync_positional_tuple_str_over_threshold_becomes_clob(
@@ -709,7 +719,7 @@ async def test_coerce_large_parameters_async_none_parameters_passthrough(async_c
 @pytest.mark.anyio
 async def test_coerce_large_parameters_async_string_over_threshold_becomes_clob(async_connection: AsyncMock) -> None:
     params = {"content": "a" * 4001}
-    await coerce_large_parameters_async(
+    result = await coerce_large_parameters_async(
         async_connection,
         params,
         clob_type=CLOB_TYPE,
@@ -718,6 +728,9 @@ async def test_coerce_large_parameters_async_string_over_threshold_becomes_clob(
         raw_byte_limit=RAW_LIMIT,
     )
     async_connection.createlob.assert_called_once_with(CLOB_TYPE, "a" * 4001)
+    assert result["content"] is async_connection.createlob.return_value
+    assert result is not params
+    assert params["content"] == "a" * 4001
 
 
 @pytest.mark.anyio
@@ -829,10 +842,11 @@ async def test_coerce_large_parameters_async_oracle_blob_wrapper_str_encoded_to_
 async def test_coerce_large_parameters_async_oracle_json_wrapper_unwrapped_to_value(
     async_connection: AsyncMock,
 ) -> None:
-    """OracleJson unwraps so the C1 input handler can claim the value."""
+    """OracleJson stays wrapped on 21c+ so the C1 input handler can claim and unwrap the value."""
     from sqlspec.adapters.oracledb import OracleJson
 
-    params = {"v": OracleJson({"a": 1})}
+    wrapped = OracleJson({"a": 1})
+    params = {"v": wrapped}
     result = await coerce_large_parameters_async(
         async_connection,
         params,
@@ -841,7 +855,7 @@ async def test_coerce_large_parameters_async_oracle_json_wrapper_unwrapped_to_va
         varchar2_byte_limit=VARCHAR2_LIMIT,
         raw_byte_limit=RAW_LIMIT,
     )
-    assert result["v"] == {"a": 1}
+    assert result["v"] is wrapped
     async_connection.createlob.assert_not_called()
 
 
@@ -906,19 +920,20 @@ async def test_coerce_large_parameters_async_oracle_blob_wrapper_unwrapped_in_po
 async def test_coerce_large_parameters_async_oracle_json_wrapper_unwrapped_in_positional_tuple(
     async_connection: AsyncMock,
 ) -> None:
-    """OracleJson inside a positional tuple is unwrapped to its inner value."""
+    """OracleJson inside a positional tuple is preserved on 21c+ for the C1 input handler."""
     from sqlspec.adapters.oracledb import OracleJson
 
+    wrapped = OracleJson({"a": 1})
     result = await coerce_large_parameters_async(
         async_connection,
-        (1, OracleJson({"a": 1})),
+        (1, wrapped),
         clob_type=CLOB_TYPE,
         blob_type=BLOB_TYPE,
         varchar2_byte_limit=VARCHAR2_LIMIT,
         raw_byte_limit=RAW_LIMIT,
     )
     async_connection.createlob.assert_not_called()
-    assert result[1] == {"a": 1}
+    assert result[1] is wrapped
 
 
 @pytest.mark.anyio
@@ -1080,3 +1095,35 @@ async def test_async_stream_keeps_locators_when_fetch_lobs_is_requested() -> Non
 
     assert chunk == [{"id": 1, "body": locator}]
     assert locator.read_count == 0
+
+
+def test_oracle_sync_stream_source_closes_cursor_when_execute_raises() -> None:
+    """OracleSyncStreamSource.start() closes the cursor if execute() fails."""
+    cursor = MagicMock()
+    cursor.execute.side_effect = RuntimeError("execute boom")
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleSyncDriver(cast("OracleSyncConnection", connection))
+    source = OracleSyncStreamSource(driver, "SELECT 1 FROM dual", None, 100)
+
+    with pytest.raises(RuntimeError, match="execute boom"):
+        source.start()
+
+    cursor.close.assert_called_once()
+    assert source._cursor is None
+
+
+async def test_oracle_async_stream_source_closes_cursor_when_execute_raises() -> None:
+    """OracleAsyncStreamSource.start() closes the cursor if execute() fails."""
+    cursor = MagicMock()
+    cursor.execute = AsyncMock(side_effect=RuntimeError("execute boom"))
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    driver = OracleAsyncDriver(cast("OracleAsyncConnection", connection))
+    source = OracleAsyncStreamSource(driver, "SELECT 1 FROM dual", None, 100)
+
+    with pytest.raises(RuntimeError, match="execute boom"):
+        await source.start()
+
+    cursor.close.assert_called_once()
+    assert source._cursor is None

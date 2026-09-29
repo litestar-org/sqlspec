@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 import psycopg as cockroach_psycopg_module
 from psycopg import AsyncCursor, Cursor
 from psycopg import crdb as cockroach_psycopg_crdb
-from psycopg import crdb as psycopg_crdb
 from psycopg import errors as cockroach_psycopg_errors
 from psycopg import sql as cockroach_psycopg_sql
 from psycopg.rows import DictRow as PsycopgDictRow
@@ -32,10 +31,9 @@ if TYPE_CHECKING:
     CockroachAsyncConnection: TypeAlias = AsyncCrdbConnection[PsycopgDictRow]
     CockroachSyncCursor: TypeAlias = Cursor[PsycopgDictRow]
     CockroachAsyncCursor: TypeAlias = AsyncCursor[PsycopgDictRow]
-
-if not TYPE_CHECKING:
-    CockroachSyncConnection = psycopg_crdb.CrdbConnection
-    CockroachAsyncConnection = psycopg_crdb.AsyncCrdbConnection
+else:
+    CockroachSyncConnection = cockroach_psycopg_crdb.CrdbConnection
+    CockroachAsyncConnection = cockroach_psycopg_crdb.AsyncCrdbConnection
     CockroachSyncCursor = Cursor
     CockroachAsyncCursor = AsyncCursor
 

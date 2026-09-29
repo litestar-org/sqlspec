@@ -100,9 +100,11 @@ def test_pool_close_closes_connections_opened_on_other_threads(monkeypatch) -> N
         worker.join()
 
     assert len({id(connection) for connection in opened}) == 2
+    assert pool.size() == 2
 
     pool.close()
 
+    assert pool.size() == 0
     assert [connection.closed for connection in opened] == [True, True]
 
 

@@ -2,6 +2,7 @@
 """Unit tests for BigQuery ADK store behavior."""
 
 import inspect
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, cast, get_args, get_origin
 
@@ -10,6 +11,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.adk import BigQueryADKConfig, BigQueryADKRetentionConfig, BigQueryADKStore
+from sqlspec.adapters.bigquery.litestar import BigQueryStore
 from sqlspec.config import ADKConfig, ExtensionConfigs
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore
@@ -294,3 +296,67 @@ def test_bigquery_list_sessions_rejects_invalid_options(monkeypatch: Any, option
         store.list_sessions("app", **options)
 
     assert calls == []
+
+
+def test_bigquery_litestar_store_includes_partition_filter_when_required() -> None:
+    """BigQueryStore appends the expires_at partition predicate when require_partition_filter is enabled."""
+    executed: list[str] = []
+    selected: list[str] = []
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    class _FakeDriver:
+        def select_one(self, sql: str, **_kwargs: Any) -> dict[str, Any]:
+            selected.append(sql)
+            return {"data": b"payload", "expires_at": now}
+
+        def execute(self, sql: str, **_kwargs: Any) -> None:
+            executed.append(sql)
+
+    config = BigQueryConfig(
+        connection_config={"project": "proj", "dataset_id": "ds"},
+        extension_config={"litestar": {"require_partition_filter": True}},
+    )
+    config.provide_session = lambda *_args, **_kwargs: nullcontext(_FakeDriver())  # type: ignore[method-assign]
+    store = BigQueryStore(config)
+
+    store._get("s1", renew_for=60)
+    store._set("s1", b"val", expires_in=60)
+    store._delete("s1")
+    store._delete_all()
+    store._expires_in("s1")
+
+    predicate = "expires_at IS NULL OR expires_at >= TIMESTAMP('1970-01-01 00:00:00+00')"
+    target_predicate = "target.expires_at IS NULL OR target.expires_at >= TIMESTAMP('1970-01-01 00:00:00+00')"
+    assert predicate in executed[0]
+    assert target_predicate in executed[1]
+    assert predicate in executed[2]
+    assert predicate in executed[3]
+    assert predicate in selected[1]
+
+
+def test_bigquery_litestar_store_omits_partition_filter_by_default() -> None:
+    """BigQueryStore omits the synthetic partition predicate when require_partition_filter is disabled."""
+    executed: list[str] = []
+    selected: list[str] = []
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    class _FakeDriver:
+        def select_one(self, sql: str, **_kwargs: Any) -> dict[str, Any]:
+            selected.append(sql)
+            return {"data": b"payload", "expires_at": now}
+
+        def execute(self, sql: str, **_kwargs: Any) -> None:
+            executed.append(sql)
+
+    config = BigQueryConfig(connection_config={"project": "proj", "dataset_id": "ds"})
+    config.provide_session = lambda *_args, **_kwargs: nullcontext(_FakeDriver())  # type: ignore[method-assign]
+    store = BigQueryStore(config)
+
+    store._get("s1", renew_for=60)
+    store._set("s1", b"val", expires_in=60)
+    store._delete("s1")
+    store._delete_all()
+    store._expires_in("s1")
+
+    assert all("1970-01-01" not in sql for sql in executed)
+    assert all("1970-01-01" not in sql for sql in selected)

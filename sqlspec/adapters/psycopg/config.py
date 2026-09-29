@@ -8,6 +8,7 @@ from psycopg.adapt import AdaptersMap
 from psycopg.types.json import set_json_dumps, set_json_loads
 from typing_extensions import NotRequired, Self
 
+import sqlspec.adapters.psycopg._typing as _psycopg_typing
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
     PsycopgAsyncCursor,
@@ -318,7 +319,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
@@ -372,10 +372,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         self, config: "dict[str, Any]", pool_parameters: "dict[str, Any] | None" = None
     ) -> None:
         """Setup AlloyDB connector and configure psycopg-pool connection_class."""
-        from sqlspec.adapters.psycopg._typing import PsycopgAlloydbConnector as Connector
-
         if self._alloydb_connector is None:
-            self._alloydb_connector = Connector()
+            self._alloydb_connector = _psycopg_typing.PsycopgAlloydbConnector()
 
         user = config.get("user")
         password = config.get("password")
@@ -476,11 +474,9 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if self._pgvector_available:
             register_pgvector_sync(conn)
 
-        # Ensure connection is not left in INTRANS state from extension detection or registration
         if not conn.autocommit:
             conn.rollback()
 
-        # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             self._user_connection_hook(conn)
 
@@ -619,7 +615,6 @@ class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     async def __aenter__(self) -> "PsycopgAsyncConnection":
         if self._config.connection_instance is None:
             self._config.connection_instance = await self._config.create_pool()
-        # pool.connection() returns an async context manager
         if self._config.connection_instance:
             self._ctx = self._config.connection_instance.connection()
             return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
@@ -706,7 +701,6 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
-        # Extract user connection hook before storing driver_features
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.pop(
             "on_connection_create", None
@@ -807,11 +801,9 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         if self._pgvector_available:
             await register_pgvector_async(conn)
 
-        # Ensure connection is not left in INTRANS state from extension detection or registration
         if not conn.autocommit:
             await conn.rollback()
 
-        # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
             await self._user_connection_hook(conn)
 

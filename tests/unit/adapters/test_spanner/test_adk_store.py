@@ -17,6 +17,7 @@ from sqlspec.adapters.spanner.adk import (
     SpannerSyncADKMemoryStore,
     SpannerSyncADKStore,
 )
+from sqlspec.adapters.spanner.adk.store import _spanner_drop_statement_table
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import StoredEvent, StoredMemory
 
@@ -253,6 +254,19 @@ def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() ->
         "DROP INDEX idx_adk_memory_entries_scope",
         "DROP TABLE adk_memory_entries",
     ]
+
+
+def test_spanner_drop_statement_table_handles_if_exists_and_quoted_identifiers() -> None:
+    existing = {"adk_events", "adk_memory_entries"}
+
+    assert _spanner_drop_statement_table("DROP TABLE IF EXISTS `adk_events`", existing) == "adk_events"
+    assert _spanner_drop_statement_table("DROP TABLE IF EXISTS `adk_session`", existing) is None
+    assert _spanner_drop_statement_table("DROP INDEX IF EXISTS `idx_adk_events_timestamp`", existing) == "adk_events"
+    assert (
+        _spanner_drop_statement_table("DROP SEARCH INDEX IF EXISTS `idx_adk_memory_entries_fts`", existing)
+        == "adk_memory_entries"
+    )
+    assert _spanner_drop_statement_table("DROP SEARCH INDEX `idx_adk_session_fts`", existing) is None
 
 
 def test_get_session_returns_none_when_spanner_session_table_missing() -> None:

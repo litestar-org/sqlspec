@@ -25,6 +25,19 @@ if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.config import MysqlConnectorCursorParams, MysqlConnectorFailoverTarget
 
 
+@pytest.mark.anyio
+async def test_async_create_pool_uses_native_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_pool = pytest.importorskip("mysql.connector.aio.pooling").MySQLConnectionPool
+    initialize = AsyncMock()
+    monkeypatch.setattr(native_pool, "initialize_pool", initialize)
+    config = MysqlConnectorAsyncConfig(connection_config={"pool_name": "sqlspec", "pool_size": 2})
+
+    pool = await config.create_pool()
+
+    assert isinstance(pool, native_pool)
+    initialize.assert_awaited_once_with()
+
+
 def test_sync_config_uses_connector_python_host_default_and_disables_local_infile() -> None:
     """SQLSpec should preserve the driver host default and close the local infile gate."""
     config = MysqlConnectorSyncConfig()
@@ -453,3 +466,21 @@ async def test_async_pool_unavailable_preserves_standalone_connections(monkeypat
     assert await MysqlConnectorAsyncConfig()._acquire_async_connection() is connection
     with pytest.raises(ImproperConfigurationError, match=r"9\.4"):
         await MysqlConnectorAsyncConfig(connection_config={"pool_size": 2})._acquire_async_connection()
+
+
+def test_sync_create_pool_preserves_zero_pool_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MysqlConnectorSyncConfig._create_pool must preserve explicit pool_size=0."""
+    from sqlspec.adapters.mysqlconnector import config as cfg_module
+
+    pool_kwargs: list[dict[str, Any]] = []
+
+    class _FakePool:
+        def __init__(self, **kwargs: Any) -> None:
+            pool_kwargs.append(kwargs)
+
+    monkeypatch.setattr(cfg_module, "MysqlConnectorConnectionPool", _FakePool)
+    config = MysqlConnectorSyncConfig(connection_config={"pool_size": 0})
+    config._create_pool()
+
+    assert len(pool_kwargs) == 1
+    assert pool_kwargs[0]["pool_size"] == 0

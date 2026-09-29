@@ -278,7 +278,7 @@ def extract_error_number(exc: BaseException | None) -> int | None:
             return val
     if exc.args:
         first = exc.args[0]
-        if isinstance(first, int) and not isinstance(first, bool):
+        if isinstance(first, int) and not isinstance(first, bool) and first != 0:
             return first
     matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
     if not matches:

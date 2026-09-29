@@ -44,8 +44,9 @@ if TYPE_CHECKING:
     PsqlpyOperationalError: TypeAlias = _PsqlpyOperationalError
 
 
-if not TYPE_CHECKING:
+else:
     PsqlpyConnection = import_optional_attr("psqlpy", "Connection") or Any
+    PsqlpyConnectionPool = import_optional_attr("psqlpy", "ConnectionPool") or Any
     PsqlpyDataError = import_optional_attr("psqlpy.exceptions", "DataError") or _PsqlpyUnavailableError
     PsqlpyDatabaseError = import_optional_attr("psqlpy.exceptions", "DatabaseError") or _PsqlpyUnavailableError
     PsqlpyConnectionExecuteError = (

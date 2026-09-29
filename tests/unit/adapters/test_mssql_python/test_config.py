@@ -359,3 +359,16 @@ def test_pool_does_not_reconfigure_when_params_match(monkeypatch: pytest.MonkeyP
         MssqlPythonConnectionPool(connection_string="Server=localhost;", max_size=10, idle_timeout=60, enabled=True)
     assert not any("Pooling configuration was already set" in str(w.message) for w in recorded)
     assert calls == []
+
+
+def test_close_pool_clears_connection_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MssqlPythonConfig._close_pool closes the pool and clears connection_instance."""
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    config = MssqlPythonConfig(connection_config={"server": "localhost"})
+    pool = config.create_pool()
+    assert config.connection_instance is pool
+
+    config.close_pool()
+
+    assert config.connection_instance is None

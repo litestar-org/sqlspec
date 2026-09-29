@@ -97,3 +97,40 @@ def test_pymssql_list_sessions_rejects_invalid_options(
         store.list_sessions("app", **options)
 
     assert calls == []
+
+
+def test_pymssql_adk_memory_store_insert_handles_none_metadata_and_missing_author() -> None:
+    """PymssqlADKMemoryStore binds None for metadata_json=None and missing author."""
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from sqlspec.adapters.pymssql.adk import PymssqlADKMemoryStore
+
+    config = _mock_config()
+    conn = config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.rowcount = 1
+    store = PymssqlADKMemoryStore(config)
+    now = datetime.now(tz=timezone.utc)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user-1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+
+    inserted = store.insert_memory_entries([entry])
+
+    assert inserted == 1
+    params = cursor.execute.call_args.args[1]
+    assert params[6] is None
+    assert params[10] is None

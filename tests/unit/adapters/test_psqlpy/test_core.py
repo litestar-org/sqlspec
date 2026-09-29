@@ -279,11 +279,8 @@ def test_dml_count_query_wraps_supported_statements(sql: str) -> None:
 
 
 def test_dml_count_query_preserves_placeholders_quotes_and_existing_with() -> None:
-    """The rewrite should preserve compiled placeholders and a DML-owned WITH clause."""
-    sql = (
-        'WITH source AS (SELECT $2 AS "id") '
-        'UPDATE "events" SET "payload" = $1 FROM source WHERE "events"."id" = source."id"'
-    )
+    """The rewrite should preserve compiled placeholders and a nested subquery WITH clause."""
+    sql = 'INSERT INTO "events" ("id", "payload") SELECT "id", $1 FROM (WITH source AS (SELECT $2 AS "id") SELECT "id" FROM source) AS sub'
 
     rewritten = psqlpy_core._dml_count_query(sql)  # pyright: ignore[reportPrivateUsage]
 
@@ -297,9 +294,8 @@ def test_dml_count_query_preserves_placeholders_quotes_and_existing_with() -> No
 def test_dml_count_query_uses_collision_free_cte_alias() -> None:
     """A user CTE using the private base name should force a deterministic suffix."""
     sql = (
-        "WITH _sqlspec_affected AS (SELECT $2 AS id) "
-        "UPDATE events SET payload = $1 FROM _sqlspec_affected "
-        "WHERE events.id = _sqlspec_affected.id"
+        "INSERT INTO events (id, payload) "
+        "SELECT id, $1 FROM (WITH _sqlspec_affected AS (SELECT $2 AS id) SELECT id FROM _sqlspec_affected) AS sub"
     )
 
     rewritten = psqlpy_core._dml_count_query(sql)  # pyright: ignore[reportPrivateUsage]
@@ -316,6 +312,7 @@ def test_dml_count_query_uses_collision_free_cte_alias() -> None:
         "MERGE INTO events USING source ON events.id = source.id WHEN MATCHED THEN DELETE",
         "CREATE TABLE events (id INT)",
         "UPDATE events SET payload = $1 WHERE id = $2 RETURNING id",
+        "WITH source AS (SELECT $2 AS id) UPDATE events SET payload = $1 FROM source WHERE events.id = source.id",
     ],
 )
 def test_dml_count_query_bypasses_unsupported_or_returning_statements(sql: str) -> None:
@@ -324,6 +321,5 @@ def test_dml_count_query_bypasses_unsupported_or_returning_statements(sql: str) 
 
 
 def test_dml_count_query_surfaces_parse_errors() -> None:
-    """Invalid compiled SQL should raise rather than report a false row count."""
-    with pytest.raises(SQLSpecError, match="Unable to build psqlpy DML row count query"):
-        psqlpy_core._dml_count_query("UPDATE events SET payload =")  # pyright: ignore[reportPrivateUsage]
+    """Invalid compiled SQL should return None rather than raising during count query rewrite."""
+    assert psqlpy_core._dml_count_query("UPDATE events SET payload =") is None  # pyright: ignore[reportPrivateUsage]

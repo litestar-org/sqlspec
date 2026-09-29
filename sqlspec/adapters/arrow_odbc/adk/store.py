@@ -449,12 +449,13 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
 
     def create_tables(self) -> None:
         """Create the memory table and indexes the catalog reports as missing."""
+        if not self._enabled:
+            return
+
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
 
-        if not self._enabled:
-            return
         with self._config.provide_session() as driver:
             self._sql.create_missing_objects(
                 driver, ((self._memory_table, self._memory_table_ddl()),), self._memory_index_specs()
@@ -516,17 +517,28 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
+        if not query or not query.strip():
+            return []
         effective_limit = max(0, int(limit if limit is not None else self._max_results))
         if effective_limit == 0:
             return []
         where_scope, scope_params = _build_arrow_odbc_scope_where(app_name, user_id, scope_filter)
-        rows = self._execute_fetchall(
-            self._sql.memory_search_sql(self._memory_table, where_scope, effective_limit), (*scope_params, f"%{query}%")
-        )
+        try:
+            rows = self._execute_fetchall(
+                self._sql.memory_search_sql(self._memory_table, where_scope, effective_limit),
+                (*scope_params, f"%{query}%"),
+            )
+        except SQLSpecError as exc:
+            if self._sql.is_table_missing(exc):
+                return []
+            raise
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
         table_ref = self._sql.table_ref(self._memory_table)
         count = self._select_count(f"SELECT COUNT(*) AS row_count FROM {table_ref} WHERE session_id = ?", (session_id,))
         self._execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (session_id,), commit=True)
@@ -534,6 +546,9 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than ``days`` days."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
         cutoff = datetime.now(timezone.utc).timestamp() - (days * 86_400)
         cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
         clauses = ["inserted_at < ?"]
@@ -817,6 +832,7 @@ def _event_record_from_row(row: Any) -> StoredEvent:
 def _memory_insert_params(
     entry: StoredMemory, format_datetime: "Callable[[datetime | None], str | None]"
 ) -> "tuple[Any, ...]":
+    metadata_json = entry.get("metadata_json")
     return (
         entry["id"],
         entry["session_id"],
@@ -824,11 +840,11 @@ def _memory_insert_params(
         entry["user_id"],
         entry.get("scope", "user"),
         entry["event_id"],
-        entry["author"],
+        entry.get("author"),
         format_datetime(entry["timestamp"]),
         to_json(entry["content_json"]),
         entry["content_text"],
-        to_json(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+        to_json(metadata_json) if metadata_json is not None else None,
         format_datetime(entry["inserted_at"]),
     )
 

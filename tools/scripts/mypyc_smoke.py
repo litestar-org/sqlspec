@@ -577,6 +577,8 @@ def _discover_adapter_config_classes(*, skipped: "list[str] | None" = None) -> "
                 "asyncpg",
                 "duckdb",
                 "google",
+                "ibm_db",
+                "ibm_db_dbi",
                 "mssql_python",
                 "mysql",
                 "oracledb",

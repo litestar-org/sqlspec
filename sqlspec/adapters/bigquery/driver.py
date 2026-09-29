@@ -59,7 +59,7 @@ from sqlspec.core import (
 from sqlspec.driver import BaseSyncExceptionHandler, ExecutionResult, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import ImproperConfigurationError, StorageOperationFailedError
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.text import split_qualified_identifier
 
@@ -81,6 +81,8 @@ __all__ = ("BigQueryCursor", "BigQueryDriver", "BigQueryExceptionHandler", "BigQ
 logger = get_logger(__name__)
 _DATASET_TABLE_PARTS = 2
 _PROJECT_DATASET_TABLE_PARTS = 3
+_pa: Any = import_optional("pyarrow")
+_pq: Any = import_optional("pyarrow.parquet")
 
 
 class BigQueryExceptionHandler(BaseSyncExceptionHandler):
@@ -297,12 +299,15 @@ class BigQueryDriver(SyncDriverAdapterBase):
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> ExecutionResult:
         """Execute a procedural script as one native BigQuery job with bound parameters."""
         sql, parameters = self._compiled_sql(statement, self.statement_config)
+        stmt_count = max(
+            len(self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)), 1
+        )
         cursor.job = self._run_query_job(cursor, sql, parameters)
         cursor.job.result(job_retry=self._job_retry, timeout=self._job_result_timeout)
         return self.create_execution_result(
             cursor,
-            statement_count=1,
-            successful_statements=1,
+            statement_count=stmt_count,
+            successful_statements=stmt_count,
             rowcount_override=normalize_script_rowcount(0, cursor.job),
             is_script_result=True,
         )
@@ -470,9 +475,7 @@ class BigQueryDriver(SyncDriverAdapterBase):
 
         with exc_handler:
             query_job = self._run_query_job(self.connection, sql, driver_params)
-            query_job.result(
-                job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs()
-            )  # Wait for completion
+            query_job.result(job_retry=self._job_retry, timeout=self._job_result_timeout, **self._job_result_kwargs())
 
             arrow_table = query_job.to_arrow()
 
@@ -607,10 +610,8 @@ class BigQueryDriver(SyncDriverAdapterBase):
                 self._attach_partition_telemetry(telemetry_payload, partitioner)
                 return self._storage_job(telemetry_payload)
 
-        import pyarrow.parquet as pq
-
         buffer = io.BytesIO()
-        pq.write_table(arrow_table, buffer)
+        _pq.write_table(arrow_table, buffer)
         buffer.seek(0)
         job_config = build_load_job_config("parquet", overwrite)
         job = self.connection.load_table_from_file(
@@ -829,14 +830,15 @@ register_driver_profile("bigquery", driver_profile)
 
 def _bigquery_arrow_reader_from_iterable(batches: "Iterable[ArrowRecordBatch]") -> "ArrowRecordBatchReader | None":
     ensure_pyarrow()
-    import pyarrow as pa
-
     iterator = iter(batches)
     try:
         first_batch = next(iterator)
     except StopIteration:
         return None
-    return pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator))
+    return cast(
+        "ArrowRecordBatchReader",
+        _pa.RecordBatchReader.from_batches(first_batch.schema, chain((first_batch,), iterator)),
+    )
 
 
 def _records_to_json_rows(

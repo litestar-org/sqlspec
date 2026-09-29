@@ -7,9 +7,18 @@ efficient LOB (Large Object) processing and vector helpers.
 import array
 from typing import Any
 
+from sqlspec.adapters.oracledb._vector_handlers import (
+    numpy_converter_in,  # pyright: ignore[reportPrivateUsage]
+    numpy_converter_out,  # pyright: ignore[reportPrivateUsage]
+)
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
 from sqlspec.utils.type_guards import is_readable
+
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore[assignment]
 
 __all__ = ("OracleOutputConverter",)
 
@@ -54,8 +63,6 @@ class OracleOutputConverter:
             return value
 
         if isinstance(value, array.array):
-            from sqlspec.adapters.oracledb._vector_handlers import numpy_converter_out  # pyright: ignore[reportPrivateUsage]
-
             return numpy_converter_out(value)
 
         return value
@@ -73,14 +80,10 @@ class OracleOutputConverter:
             array.array compatible with Oracle VECTOR if value is ndarray,
             otherwise original value.
         """
-        if not NUMPY_INSTALLED:
+        if not NUMPY_INSTALLED or np is None:
             return value
 
-        import numpy as np
-
         if isinstance(value, np.ndarray):
-            from sqlspec.adapters.oracledb._vector_handlers import numpy_converter_in  # pyright: ignore[reportPrivateUsage]
-
             return numpy_converter_in(value)
 
         return value

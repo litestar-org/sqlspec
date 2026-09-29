@@ -7,6 +7,7 @@ from typing_extensions import NotRequired
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor, MssqlPythonError
 from sqlspec.adapters.mssql_python.core import extract_error_number
+from sqlspec.adapters.mssql_python.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from datetime import timedelta
 
     from sqlspec.adapters.mssql_python.config import MssqlPythonConfig
+    from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
     from sqlspec.extensions.adk import SessionOrderBy
     from sqlspec.extensions.adk.memory._types import StoredMemory
 
@@ -41,13 +43,14 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
     """Synchronous mssql-python ADK session/event store."""
 
     connector_name: ClassVar[str] = "mssql_python"
-    __slots__ = ("_json_column_type",)
+    __slots__ = ("_json_column_type", "_native_json")
 
     def __init__(self, config: "MssqlPythonConfig") -> None:
         super().__init__(config)
         adk_config = _adk_config(config)
         native_json = adk_config.get("native_json")
-        self._json_column_type = JSON_NATIVE_COLUMN_TYPE if native_json is True else JSON_FALLBACK_COLUMN_TYPE
+        self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
+        self._json_column_type: str | None = None
 
     def create_tables(self) -> None:
         """Create ADK tables (idempotent T-SQL) and DD-gated indexes."""
@@ -56,6 +59,11 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
             return
 
         with self._config.provide_session() as driver:
+            if self._json_column_type is None:
+                configured = _configured_json_column_type(self._native_json)
+                self._json_column_type = (
+                    configured if configured is not None else _json_column_type_from_sync_driver(driver)
+                )
             driver.execute_script(self._sessions_table_ddl())
             driver.execute_script(self._events_table_ddl())
             driver.execute_script(self._app_states_table_ddl())
@@ -381,6 +389,17 @@ class MssqlPythonADKStore(BaseSyncADKStore["MssqlPythonConfig"]):
         return _events_query(self._events_table, app_name, user_id, session_id, after_timestamp, limit)
 
     def _json_column_type_sync(self) -> str:
+        if self._json_column_type is not None:
+            return self._json_column_type
+        configured = _configured_json_column_type(self._native_json)
+        if configured is not None:
+            self._json_column_type = configured
+            return configured
+        try:
+            with self._config.provide_session() as driver:
+                self._json_column_type = _json_column_type_from_sync_driver(driver)
+        except Exception:
+            return JSON_FALLBACK_COLUMN_TYPE
         return self._json_column_type
 
     def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
@@ -441,7 +460,6 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
 
         owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", ?" if self._owner_id_column_name else ""
-        # Keep the key-range lock and insertion in one statement, including autocommit.
         sql = f"""
         INSERT INTO {_table_ref(self._memory_table)} (
             id, session_id, app_name, user_id, scope, event_id, author, timestamp,
@@ -467,7 +485,7 @@ class MssqlPythonADKMemoryStore(BaseSyncADKMemoryStore["MssqlPythonConfig"]):
                     entry["timestamp"],
                     to_json(entry["content_json"]),
                     entry["content_text"],
-                    to_json(entry.get("metadata_json")),
+                    to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
                 )
                 if self._owner_id_column_name:
                     params = (*params, owner_id)
@@ -587,6 +605,21 @@ def _adk_config(config: Any) -> MssqlPythonADKConfig:
     if not isinstance(adk_config, dict):
         return {}
     return cast("MssqlPythonADKConfig", adk_config)
+
+
+def _configured_json_column_type(native_json: "bool | None") -> "str | None":
+    if native_json is None:
+        return None
+    if native_json is True:
+        return JSON_NATIVE_COLUMN_TYPE
+    return JSON_FALLBACK_COLUMN_TYPE
+
+
+def _json_column_type_from_sync_driver(driver: "MssqlPythonDriver") -> str:
+    version_info = driver.data_dictionary.get_version(driver)
+    if isinstance(version_info, MssqlVersionInfo) and version_info.supports_native_json():
+        return JSON_NATIVE_COLUMN_TYPE
+    return JSON_FALLBACK_COLUMN_TYPE
 
 
 def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:

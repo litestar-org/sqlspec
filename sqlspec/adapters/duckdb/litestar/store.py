@@ -291,12 +291,12 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
 
     def _delete_expired(self) -> int:
         """Synchronous implementation of delete_expired."""
-        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
+        sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP RETURNING 1"
 
         with self._config.provide_connection() as conn:
             cursor = conn.execute(sql)
-            count = cursor.fetchone()
-            row_count = count[0] if count else 0
+            row_count = len(cursor.fetchall())
+            conn.commit()
             if row_count > 0:
                 self._log_delete_expired(row_count)
             return row_count

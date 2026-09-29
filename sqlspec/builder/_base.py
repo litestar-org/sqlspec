@@ -10,8 +10,17 @@ from typing import Any, Final, NoReturn, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
+from sqlglot import optimizer as sqlglot_optimizer
 from sqlglot.dialects.dialect import DialectType
 from sqlglot.errors import ParseError as SQLGlotParseError
+from sqlglot.optimizer import RULES
+from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
+from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subqueries_rule
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
+from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
+from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
+from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
+from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
 
 from sqlspec.builder._locking import register_lock_generator
@@ -837,16 +846,8 @@ class QueryBuilder:
         if cached_optimized is not None:
             return cast("exp.Expr", cached_optimized).copy()
 
-        # Qualification drops VALUES CTE column aliases without projecting replacements.
         if any(isinstance(cte.this, exp.Values) and cte.alias_column_names for cte in expression.find_all(exp.CTE)):
             return expression
-
-        from sqlglot.optimizer import RULES, optimize
-        from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
-        from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subqueries_rule
-        from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
-        from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
-        from sqlglot.optimizer.simplify import simplify as _simplify_rule
 
         excluded_rules = set()
         if not self.optimize_joins:
@@ -862,7 +863,7 @@ class QueryBuilder:
         rules = RULES if not excluded_rules else tuple(rule for rule in RULES if rule not in excluded_rules)
 
         try:
-            optimized = optimize(
+            optimized = sqlglot_optimizer.optimize(
                 expression, schema=cast("dict[str, object] | None", self.schema), dialect=self.dialect_name, rules=rules
             )
             cache.put_optimized(cache_key, optimized.copy())
@@ -893,8 +894,6 @@ class QueryBuilder:
             expression.set("conflict", conflict)
         if optimized is expression:
             return expression
-        from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
-        from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
 
         dialect_name = self.dialect_name
         quoted_conflict = _quote_identifiers_rule(

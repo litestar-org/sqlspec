@@ -131,20 +131,34 @@ def test_mssql_python_begin_failure_keeps_transaction_inactive() -> None:
     assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
-@pytest.mark.parametrize("method_name", ["commit", "rollback"])
-def test_mssql_python_completion_failure_preserves_active_state(method_name: str) -> None:
-    """A failed DBAPI completion should leave the transaction active and un-restored."""
+def test_mssql_python_commit_failure_preserves_active_state() -> None:
+    """A failed DBAPI commit should leave the transaction active and un-restored."""
     connection = FakeConnection(autocommit=True)
     driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
     driver.begin()
-    setattr(connection, f"fail_{method_name}", True)
+    connection.fail_commit = True
 
-    with pytest.raises(SQLSpecError, match=f"Failed to {method_name} transaction"):
-        getattr(driver, method_name)()
+    with pytest.raises(SQLSpecError, match="Failed to commit transaction"):
+        driver.commit()
 
     assert connection.autocommit is False
     assert connection.autocommit_values == [False]
     assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
+
+
+def test_mssql_python_rollback_failure_resets_active_state_and_restores_autocommit() -> None:
+    """A failed DBAPI rollback must still reset transaction state and restore autocommit."""
+    connection = FakeConnection(autocommit=True)
+    driver = MssqlPythonDriver(cast("MssqlPythonConnection", connection))
+    driver.begin()
+    connection.fail_rollback = True
+
+    with pytest.raises(SQLSpecError, match="Failed to rollback transaction"):
+        driver.rollback()
+
+    assert connection.autocommit is True
+    assert connection.autocommit_values == [False, True]
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.parametrize("method_name", ["commit", "rollback"])

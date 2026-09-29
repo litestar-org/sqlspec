@@ -35,6 +35,7 @@ from sqlspec.core import (
 from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.typing import import_optional
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
@@ -43,13 +44,16 @@ from sqlspec.utils.uuids import uuid4
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    import pyarrow as pa
+
     from sqlspec.adapters.duckdb._typing import DuckDBConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowReturnFormat, StatementParameters
-
+else:
+    pa = import_optional("pyarrow")
 
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
@@ -465,7 +469,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         self._require_capability("arrow_import_enabled")
         ensure_pyarrow()
-        import pyarrow as pa
 
         source_data = source.get_data() if hasattr(source, "get_data") else source
         arrow_table = None
@@ -628,19 +631,22 @@ class DuckDBDriver(SyncDriverAdapterBase):
         target_table = table_expr.sql(dialect="duckdb")
         column_sql = ", ".join(column.sql(dialect="duckdb") for column in expression.this.expressions)
         temp_view = f"_sqlspec_batch_{uuid4().hex}"
-        self.connection.register(temp_view, arrow_table)
-        try:
-            self.connection.execute(f"INSERT INTO {target_table} ({column_sql}) SELECT * FROM {temp_view}")
-        finally:
-            with contextlib.suppress(Exception):
-                self.connection.unregister(temp_view)
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
+            self.connection.register(temp_view, arrow_table)
+            try:
+                self.connection.execute(f"INSERT INTO {target_table} ({column_sql}) SELECT * FROM {temp_view}")
+            finally:
+                with contextlib.suppress(Exception):
+                    self.connection.unregister(temp_view)
+        self._check_pending_exception(exc_handler)
 
         return DMLResult("INSERT", len(rows))
 
     @staticmethod
     def _build_arrow_table(rows: "list[Any]", column_names: "list[str]") -> Any | None:
         """Build a pyarrow table from batch rows when they share a stable shape."""
-        if not rows:
+        if not rows or pa is None:
             return None
         first_row = rows[0]
 
@@ -648,9 +654,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
             keys = column_names or list(first_row.keys())
             if any(not isinstance(row, dict) for row in rows):
                 return None
-            import pyarrow as pa
-
-            return pa.table({key: [row.get(key) for row in rows] for key in keys})
+            try:
+                return pa.table({key: [row.get(key) for row in rows] for key in keys})
+            except Exception:
+                return None
 
         if isinstance(first_row, (list, tuple)):
             values = list(first_row)
@@ -658,9 +665,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 column_names = [f"col_{index}" for index in range(len(values))]
             if any(not isinstance(row, (list, tuple)) or len(row) != len(column_names) for row in rows):
                 return None
-            import pyarrow as pa
-
-            return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
+            try:
+                return pa.Table.from_arrays([pa.array(col) for col in zip(*rows, strict=True)], names=column_names)
+            except Exception:
+                return None
 
         return None
 

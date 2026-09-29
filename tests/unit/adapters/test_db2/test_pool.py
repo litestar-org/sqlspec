@@ -144,9 +144,11 @@ def test_pool_close_closes_connections_opened_on_other_threads(fake_ibm_db: Fake
         worker.join()
 
     assert len({id(conn) for conn in opened}) == 2
+    assert pool.size() == 2
 
     pool.close()
 
+    assert pool.size() == 0
     assert [conn.closed for conn in opened] == [True, True]
 
 

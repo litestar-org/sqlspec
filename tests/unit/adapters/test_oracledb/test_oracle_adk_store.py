@@ -349,6 +349,16 @@ class _RecordingCursor:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.closed = False
+
+    def __enter__(self) -> "Self":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.closed = True
 
     def execute(self, sql: str, params: "dict[str, Any] | None" = None) -> None:
         self.calls.append((sql, dict(params or {})))
@@ -475,6 +485,30 @@ def test_oracle_sync_list_sessions_zero_limit_never_queries() -> None:
 
     assert store.list_sessions("app", limit=0) == []
     assert cursor.calls == []
+
+
+@pytest.mark.parametrize("storage_type", list(JSONStorageType))
+def test_oracle_adk_memory_table_ddl_has_no_duplicate_columns(storage_type: JSONStorageType) -> None:
+    """Memory table DDL must not declare duplicate app_name or user_id columns."""
+    config = _mock_config({})
+    for store in (OracleAsyncADKMemoryStore(config), OracleSyncADKMemoryStore(config)):
+        sql = store._memory_table_ddl_for_type(storage_type)
+        assert sql.count("app_name VARCHAR2(128) NOT NULL") == 1
+        assert sql.count("user_id VARCHAR2(128) NOT NULL") == 1
+
+
+def test_oracle_sync_list_sessions_closes_cursor() -> None:
+    """Sync ADK store closes cursor via context manager."""
+    store, cursor = _sync_session_store()
+    store.list_sessions("app")
+    assert cursor.closed is True
+
+
+async def test_oracle_async_list_sessions_closes_cursor() -> None:
+    """Async ADK store closes cursor via context manager."""
+    store, cursor = _async_session_store()
+    await store.list_sessions("app")
+    assert cursor.closed is True
 
 
 @pytest.mark.parametrize(

@@ -22,6 +22,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
+from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.core import TypedParameter
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.type_converters import should_json_encode_sequence
@@ -212,7 +214,37 @@ _NULL_PARAM_TYPE_NAMES: "dict[type[Any], str]" = {
     date: "DATE",
     Decimal: "NUMERIC",
     UUID: "STRING",
+    dict: "JSON",
 }
+
+
+def _infer_sequence_param_type(value: Any, param_types: Any, json_type: Any) -> Any | None:
+    """Infer Spanner parameter type for sequence values.
+
+    Args:
+        value: Sequence value to inspect.
+        param_types: The Spanner param_types module.
+        json_type: The Spanner JSON param type.
+
+    Returns:
+        Spanner Array type, JSON type, or None if sequence is empty or unhandled.
+    """
+    if should_json_encode_sequence(value):
+        return json_type
+    if not value:
+        return None
+    first = value[0]
+    if isinstance(first, bool):
+        return param_types.Array(param_types.BOOL)
+    if isinstance(first, int):
+        return param_types.Array(param_types.INT64)
+    if isinstance(first, str):
+        return param_types.Array(param_types.STRING)
+    if isinstance(first, float):
+        return param_types.Array(param_types.FLOAT64)
+    if isinstance(first, Decimal):
+        return param_types.Array(param_types.NUMERIC)
+    return None
 
 
 def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
@@ -232,17 +264,21 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
     types: dict[str, Any] = {}
     json_type = _json_param_type()
     for key, raw_value in params.items():
-        value = raw_value.value if type(raw_value) is TypedParameter else raw_value
+        is_typed = type(raw_value) is TypedParameter
+        value = raw_value.value if is_typed else raw_value
         if value is None:
             null_type = _null_param_type(raw_value, param_types)
             if null_type is not None:
                 types[key] = null_type
-        elif isinstance(value, bool):
+            continue
+        if isinstance(value, bool):
             types[key] = param_types.BOOL
         elif isinstance(value, int):
             types[key] = param_types.INT64
         elif isinstance(value, float):
             types[key] = param_types.FLOAT64
+        elif isinstance(value, Decimal):
+            types[key] = param_types.NUMERIC
         elif isinstance(value, _STRING_PARAM_TYPES):
             types[key] = param_types.STRING
         elif isinstance(value, bytes):
@@ -254,21 +290,9 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
         elif isinstance(value, (dict, json_object_type)):
             types[key] = json_type
         elif isinstance(value, (list, tuple)):
-            if should_json_encode_sequence(value):
-                types[key] = json_type
-                continue
-            sequence = list(value)
-            if not sequence:
-                continue
-            first = sequence[0]
-            if isinstance(first, int):
-                types[key] = param_types.Array(param_types.INT64)
-            elif isinstance(first, str):
-                types[key] = param_types.Array(param_types.STRING)
-            elif isinstance(first, float):
-                types[key] = param_types.Array(param_types.FLOAT64)
-            elif isinstance(first, bool):
-                types[key] = param_types.Array(param_types.BOOL)
+            seq_type = _infer_sequence_param_type(value, param_types, json_type)
+            if seq_type is not None:
+                types[key] = seq_type
     return types
 
 
@@ -291,14 +315,14 @@ def _null_param_type(raw_value: Any, param_types: "SpannerParamTypesProtocol") -
     if declared is None:
         return None
     resolver = _NULL_PARAM_TYPE_NAMES.get(declared)
+    if resolver == "JSON":
+        return _json_param_type()
     return getattr(param_types, resolver) if resolver is not None else None
 
 
 def _get_param_types() -> "SpannerParamTypesProtocol":
     global _SPANNER_PARAM_TYPES
     if _SPANNER_PARAM_TYPES is None:
-        from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
-
         _SPANNER_PARAM_TYPES = cast("SpannerParamTypesProtocol", param_types)
     return _SPANNER_PARAM_TYPES
 
@@ -306,8 +330,6 @@ def _get_param_types() -> "SpannerParamTypesProtocol":
 def _get_json_object_type() -> "type[Any]":
     global _JSON_OBJECT_TYPE
     if _JSON_OBJECT_TYPE is None:
-        from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
-
         _JSON_OBJECT_TYPE = JsonObject
     return _JSON_OBJECT_TYPE
 

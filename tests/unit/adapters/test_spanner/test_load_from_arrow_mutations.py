@@ -71,8 +71,37 @@ def test_load_from_arrow_overwrite_deletes_then_mutates(mutations_driver: Spanne
     mutations_driver.load_from_arrow("users", arrow_table, overwrite=True)
 
     assert txn.execute_update_calls
-    assert "DELETE FROM users WHERE TRUE" in txn.execute_update_calls[0]
+    assert "DELETE FROM `users` WHERE TRUE" in txn.execute_update_calls[0]
     assert len(txn.insert_or_update_calls) == 1
+
+
+def test_load_from_arrow_overwrite_quotes_qualified_table_identifier(mutations_driver: SpannerSyncDriver) -> None:
+    txn = cast("_FakeTransaction", mutations_driver.connection)
+    arrow_table = pa.table({"id": [1]})
+
+    mutations_driver.load_from_arrow("my_schema.order", arrow_table, overwrite=True)
+
+    assert txn.execute_update_calls == ["DELETE FROM `my_schema`.`order` WHERE TRUE"]
+
+
+def test_dispatch_execute_script_recognizes_union_and_spanner_queries_as_reads() -> None:
+    class _ReadSnapshot:
+        def __init__(self) -> None:
+            self.executed_sql: list[str] = []
+
+        def execute_sql(self, sql: str, **_kwargs: Any) -> list[Any]:
+            self.executed_sql.append(sql)
+            return []
+
+    snapshot = _ReadSnapshot()
+    driver = SpannerSyncDriver(cast("Any", snapshot))
+    script = (
+        "SELECT 1 UNION ALL SELECT 2; @{FORCE_INDEX=_BASE_TABLE} SELECT * FROM users @{FORCE_INDEX=idx_users_name};"
+    )
+    result = driver.dispatch_execute_script(cast("Any", snapshot), driver.prepare_statement(script))
+
+    assert result.statement_count == 2
+    assert len(snapshot.executed_sql) == 2
 
 
 def test_load_from_arrow_rerun_is_idempotent(mutations_driver: SpannerSyncDriver) -> None:

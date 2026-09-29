@@ -243,6 +243,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "retry",
         "timeout",
         "request_options",
+        "query_options",
         "directed_read_options",
         "session_labels",
         "enable_events",

@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
+from sqlspec.adapters.spanner._typing import SpannerClient as Client
 from sqlspec.adapters.spanner._typing import SpannerConnection
+from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
+from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
 from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerSessionContext, SpannerSyncDriver
@@ -23,7 +27,6 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from sqlspec.adapters.spanner._typing import SpannerAbstractSessionPool as AbstractSessionPool
-    from sqlspec.adapters.spanner._typing import SpannerClient as Client
     from sqlspec.adapters.spanner._typing import SpannerClientInfo as ClientInfo
     from sqlspec.adapters.spanner._typing import SpannerClientOptions as ClientOptions
     from sqlspec.adapters.spanner._typing import SpannerCredentials as Credentials
@@ -173,6 +176,7 @@ class SpannerDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     retry: "NotRequired[Retry | None]"
     timeout: "NotRequired[float | None]"
+    query_options: "NotRequired[ExecuteSqlRequest.QueryOptions | dict[str, Any] | None]"
     request_options: "NotRequired[RequestOptions | dict[str, Any] | None]"
     directed_read_options: "NotRequired[DirectedReadOptions | None]"
     session_labels: "NotRequired[dict[str, str]]"
@@ -324,8 +328,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         ):
             self.connection_config["session_labels"] = legacy_session_labels
 
-        from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
-
         self.connection_config.setdefault("size", self.connection_config.pop("max_sessions", 10))
         self.connection_config.setdefault("pool_type", FixedSizePool)
 
@@ -348,8 +350,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         self._database: Database | None = None
 
     def _get_client(self) -> "Client":
-        from sqlspec.adapters.spanner._typing import SpannerClient as Client
-
         if self._client is None:
             client_kwargs = self._connection_kwargs_for(_CLIENT_CONFIG_FIELDS)
             self._client = Client(**client_kwargs)
@@ -391,10 +391,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         return cast("SpannerConnection", self.get_database().snapshot(multi_use=True))  # type: ignore[no-untyped-call]
 
     def _create_pool(self) -> "AbstractSessionPool":
-        from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
-        from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
-        from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
-
         instance_id = self.connection_config.get("instance_id")
         database_id = self.connection_config.get("database_id")
         if not instance_id or not database_id:
@@ -480,6 +476,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         transaction: "bool" = _DEFAULT_SESSION_TRANSACTION,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -497,6 +494,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 Snapshot (False).
             request_options: Session-scoped RequestOptions for Spanner statements.
             directed_read_options: Session-scoped DirectedReadOptions for reads.
+            query_options: Session-scoped QueryOptions for Spanner statements.
             retry: Session-scoped retry policy for Spanner statement calls.
             timeout: Session-scoped timeout for Spanner statement calls.
             **kwargs: Additional keyword arguments.
@@ -514,6 +512,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             driver_features=self._session_driver_features(
                 request_options=request_options,
                 directed_read_options=directed_read_options,
+                query_options=query_options,
                 retry=retry,
                 timeout=timeout,
             ),
@@ -526,6 +525,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -537,6 +537,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             transaction=True,
             request_options=request_options,
             directed_read_options=directed_read_options,
+            query_options=query_options,
             retry=retry,
             timeout=timeout,
             **kwargs,
@@ -548,6 +549,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         statement_config: "StatementConfig | None" = None,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
         **kwargs: Any,
@@ -563,6 +565,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             transaction=False,
             request_options=request_options,
             directed_read_options=directed_read_options,
+            query_options=query_options,
             retry=retry,
             timeout=timeout,
             **kwargs,
@@ -573,16 +576,25 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         *,
         request_options: "RequestOptions | dict[str, Any] | None",
         directed_read_options: "DirectedReadOptions | None",
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         retry: "Retry | None",
         timeout: "float | None",
     ) -> "dict[str, Any]":
-        if request_options is None and directed_read_options is None and retry is None and timeout is None:
+        if (
+            request_options is None
+            and directed_read_options is None
+            and query_options is None
+            and retry is None
+            and timeout is None
+        ):
             return self.driver_features
         driver_features = dict(self.driver_features)
         if request_options is not None:
             driver_features["request_options"] = request_options
         if directed_read_options is not None:
             driver_features["directed_read_options"] = directed_read_options
+        if query_options is not None:
+            driver_features["query_options"] = query_options
         if retry is not None:
             driver_features["retry"] = retry
         if timeout is not None:

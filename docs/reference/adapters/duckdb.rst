@@ -6,6 +6,16 @@ Sync DuckDB adapter with full Arrow integration, extension management, and
 secret configuration. DuckDB excels at analytical workloads and can query
 Parquet, CSV, and JSON files directly.
 
+UUID parameters and results
+===========================
+
+``driver_features={"enable_uuid_conversion": False}`` passes UUID parameters
+to DuckDB unchanged. The default converts these parameters to strings.
+This setting does not change result types: UUID columns return Python UUID
+objects, including on cache hits and in row streams. VARCHAR columns remain
+strings, even when their values look like UUIDs. Arrow results keep their
+native Arrow representation.
+
 Native object-store transfers
 =============================
 

@@ -244,8 +244,8 @@ def test_storage_write_client_is_created_once_per_config() -> None:
     module = SimpleNamespace(BigQueryWriteClient=_WriteClient)
     config = BigQueryConfig(connection_config={"project": "p", "dataset_id": "d"})
     with patch.object(bigquery_config, "BigQueryStorageWriteModule", module):
-        first = config.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
-        second = config.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+        first = config._provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+        second = config._provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
 
     assert first is second
     assert len(built) == 1
@@ -263,7 +263,7 @@ def test_storage_write_client_receives_client_options() -> None:
     module = SimpleNamespace(BigQueryWriteClient=_WriteClient)
     config = BigQueryConfig(connection_config={"project": "p", "client_options": cast("Any", options)})
     with patch.object(bigquery_config, "BigQueryStorageWriteModule", module):
-        config.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+        config._provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
 
     assert built[0]["client_options"] is options
 
@@ -280,7 +280,7 @@ def test_close_pool_closes_only_clients_sqlspec_created() -> None:
     owned = BigQueryConfig(connection_config={"project": "p"})
     owned._connection_instance = cast("Any", SimpleNamespace(close=lambda: closed.append("owned")))
     with patch.object(bigquery_config, "BigQueryStorageWriteModule", module):
-        owned.provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
+        owned._provide_storage_write_client(cast("Any", SimpleNamespace(_credentials=None)))
     owned.close_pool()
 
     assert closed == ["write", "owned"]

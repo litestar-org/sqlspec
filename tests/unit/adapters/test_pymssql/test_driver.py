@@ -245,7 +245,7 @@ def test_failed_transaction_boundary_preserves_state(operation: str, monkeypatch
     with pytest.raises(SQLSpecError) as caught:
         getattr(driver, operation)()
     assert caught.value.__cause__ is failure
-    assert driver._connection_in_transaction() is (operation != "begin")
+    assert driver._connection_in_transaction() is (operation == "commit")
 
 
 @pytest.mark.parametrize("fails", [False, True])

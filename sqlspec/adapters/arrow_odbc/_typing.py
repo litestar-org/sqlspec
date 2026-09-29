@@ -21,8 +21,7 @@ if TYPE_CHECKING:
 
     ArrowOdbcConnection: TypeAlias = _arrow_odbc.Connection
     ArrowOdbcRawCursor: TypeAlias = _arrow_odbc.Connection
-
-if not TYPE_CHECKING:
+else:
     ArrowOdbcConnection = _arrow_odbc.Connection
     ArrowOdbcRawCursor = _arrow_odbc.Connection
 

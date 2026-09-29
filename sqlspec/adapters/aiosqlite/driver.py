@@ -457,6 +457,10 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             return False
         if "?" not in statement:
             return False
+        if self._resolve_dml_operation_type(statement) not in {"INSERT", "UPDATE", "DELETE"}:
+            return False
+        if "RETURNING" in statement.upper():
+            return False
 
         parameter_config = config.parameter_config
         if parameter_config.default_parameter_style is not ParameterStyle.QMARK:

@@ -105,7 +105,7 @@ def extract_error_number(exc: BaseException | None) -> int | None:
         return None
     for attr in ("number", "error_code", "errno"):
         val = getattr(exc, attr, None)
-        if isinstance(val, int) and not isinstance(val, bool):
+        if isinstance(val, int) and not isinstance(val, bool) and val != 0:
             return val
     ddbc_err = getattr(exc, "ddbc_error", None)
     if isinstance(ddbc_err, str) and ddbc_err.startswith("("):
@@ -121,7 +121,7 @@ def extract_error_number(exc: BaseException | None) -> int | None:
 
     if exc.args:
         first_arg = exc.args[0]
-        if isinstance(first_arg, int) and not isinstance(first_arg, bool):
+        if isinstance(first_arg, int) and not isinstance(first_arg, bool) and first_arg != 0:
             return first_arg
         if isinstance(first_arg, str):
             msg = first_arg

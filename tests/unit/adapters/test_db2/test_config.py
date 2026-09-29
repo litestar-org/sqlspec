@@ -31,6 +31,19 @@ from tests.unit.adapters.test_db2._fakes import (
 FakeModules = tuple[FakeIbmDbModule, FakeIbmDbDbiModule]
 
 
+@pytest.mark.parametrize("mode", ["Sync", "Async"])
+def test_connection_signature_namespace_preserves_native_types(mode: str) -> None:
+    native = pytest.importorskip("ibm_db_dbi")
+    config = Db2SyncConfig() if mode == "Sync" else Db2AsyncConfig()
+    connection_type = native.Connection if mode == "Sync" else native.AsyncConnection
+    cursor_type = native.Cursor if mode == "Sync" else native.AsyncCursor
+    namespace = config.get_signature_namespace()
+
+    assert config.connection_type is connection_type
+    assert namespace[f"Db2{mode}Connection"] is connection_type
+    assert namespace["Db2RawCursor" if mode == "Sync" else "Db2AsyncRawCursor"] is cursor_type
+
+
 def test_parse_db2_dsn_cli_format() -> None:
     """Known CLI keywords map to canonical connection keys."""
     dsn = "DATABASE=mytestdb;HOSTNAME=127.0.0.1;PORT=50000;PROTOCOL=TCPIP;UID=db2admin;PWD=secretpass;"

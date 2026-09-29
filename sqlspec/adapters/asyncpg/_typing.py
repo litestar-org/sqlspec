@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 import asyncpg as asyncpg_module
 from asyncpg import Connection as AsyncpgRawConnection
-from asyncpg import Pool, PostgresError
+from asyncpg import Pool
+from asyncpg import PostgresError as AsyncpgPostgresError
 from asyncpg import Record as AsyncpgRecord
 from asyncpg import connect as asyncpg_connect
 from asyncpg import create_pool as asyncpg_create_pool
@@ -35,13 +36,10 @@ if TYPE_CHECKING:
 
     AsyncpgConnection: TypeAlias = Connection[Record] | PoolConnectionProxy[Record]
     AsyncpgPool: TypeAlias = Pool[Record]
-    AsyncpgPostgresError: TypeAlias = PostgresError
     AsyncpgPreparedStatement: TypeAlias = PreparedStatement[Record]
-
-if not TYPE_CHECKING:
+else:
     AsyncpgConnection = PoolConnectionProxy
     AsyncpgPool = Pool
-    AsyncpgPostgresError = PostgresError
     AsyncpgPreparedStatement = PreparedStatement
 
 

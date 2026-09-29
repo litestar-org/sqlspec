@@ -446,7 +446,7 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         Returns:
             True when the server reports an open transaction.
         """
-        return bool(self.connection.get_transaction_status())
+        return bool(getattr(self.connection, "server_status", 0) & 1)
 
 
 def _resolve_column_types(description: Any) -> "dict[str, str] | None":

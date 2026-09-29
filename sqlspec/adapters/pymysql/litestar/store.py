@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from typing_extensions import NotRequired
 
+from sqlspec.adapters.pymysql._typing import PyMysqlDictCursor, PyMysqlMySQLError
 from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -101,8 +102,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
-        from sqlspec.adapters.pymysql._typing import PyMysqlDictCursor, PyMysqlMySQLError
-
         sql = f"""
         SELECT data, expires_at FROM {self._table_name}
         WHERE session_id = %s
@@ -177,8 +176,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             conn.commit()
 
     def _delete_all(self) -> None:
-        from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
-
         sql = f"DELETE FROM {self._table_name}"
 
         try:
@@ -197,8 +194,6 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
             raise
 
     def _exists(self, key: str) -> bool:
-        from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
-
         sql = f"""
         SELECT 1 FROM {self._table_name}
         WHERE session_id = %s

@@ -7,6 +7,9 @@ and converting between ADK models and database records.
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from google.adk.memory.memory_entry import MemoryEntry
+from google.genai import types
+
 from sqlspec.extensions.adk.memory._types import StoredMemory
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
@@ -15,9 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from google.adk.events.event import Event
-    from google.adk.memory.memory_entry import MemoryEntry
     from google.adk.sessions import Session
-    from google.genai import types
 
 __all__ = (
     "event_to_memory_record",
@@ -29,6 +30,7 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.extensions.adk.memory.converters")
+_UNKNOWN_SESSION_ID = "__unknown_session_id__"
 
 
 def extract_content_text(content: "types.Content") -> str:
@@ -161,13 +163,14 @@ def memory_entry_to_record(
         except (ValueError, TypeError):
             timestamp = now
 
+    record_id = entry.id or str(uuid4())
     return StoredMemory(
-        id=entry.id or str(uuid4()),
-        session_id="",
+        id=record_id,
+        session_id=_UNKNOWN_SESSION_ID,
         app_name=app_name,
         user_id=user_id,
         scope=scope,
-        event_id="",
+        event_id=record_id,
         author=entry.author or "",
         timestamp=timestamp,
         content_json=content_dict,
@@ -226,9 +229,6 @@ def record_to_memory_entry(record: "StoredMemory") -> "MemoryEntry":
     Returns:
         ADK MemoryEntry object with all available fields populated.
     """
-    from google.adk.memory.memory_entry import MemoryEntry
-    from google.genai import types
-
     content = types.Content.model_validate(record["content_json"])
 
     timestamp_str = record["timestamp"].isoformat() if record["timestamp"] else None

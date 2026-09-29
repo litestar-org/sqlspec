@@ -183,7 +183,7 @@ class Db2SyncSessionContext:
             return None
         try:
             if self._driver is not None:
-                self._driver.release_open_work(autocommit_baseline=self._autocommit_baseline)
+                self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
         finally:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
@@ -303,7 +303,7 @@ class Db2AsyncSessionContext:
             return None
         try:
             if self._driver is not None:
-                await self._driver.release_open_work(autocommit_baseline=self._autocommit_baseline)
+                await self._driver._release_open_work(autocommit_baseline=self._autocommit_baseline)
         finally:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None

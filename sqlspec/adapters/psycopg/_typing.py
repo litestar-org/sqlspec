@@ -51,8 +51,7 @@ if TYPE_CHECKING:
     PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
     PsycopgSyncRawCursor: TypeAlias = Cursor[PsycopgDictRow]
     PsycopgAsyncRawCursor: TypeAlias = AsyncCursor[PsycopgDictRow]
-
-if not TYPE_CHECKING:
+else:
     PsycopgSyncConnection = Connection
     PsycopgAsyncConnection = AsyncConnection
     PsycopgSyncRawCursor = Cursor

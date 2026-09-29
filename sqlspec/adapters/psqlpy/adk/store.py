@@ -663,21 +663,21 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 {self._owner_id_column_name}, timestamp, content_json,
                 content_text, metadata_json, inserted_at
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
             )
             ON CONFLICT (event_id) DO NOTHING
             """
         else:
             sql = f"""
             INSERT INTO {self._memory_table} (
-                id, session_id, app_name, user_id, event_id, author,
+                id, session_id, app_name, user_id, scope, event_id, author,
                 timestamp, content_json, content_text, metadata_json, inserted_at
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
             )
             ON CONFLICT (event_id) DO NOTHING
             """
@@ -690,6 +690,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        entry.get("scope", "user"),
                         entry["event_id"],
                         entry["author"],
                         owner_id,
@@ -705,6 +706,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                         entry["session_id"],
                         entry["app_name"],
                         entry["user_id"],
+                        entry.get("scope", "user"),
                         entry["event_id"],
                         entry["author"],
                         entry["timestamp"],
@@ -735,15 +737,22 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query or not query.strip():
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
 
         try:
             if self._use_fts:
                 try:
-                    return await self._search_entries_fts(query, app_name, user_id, effective_limit)
+                    return await self._search_entries_fts(
+                        query, app_name, user_id, effective_limit, scope_filter=scope_filter
+                    )
                 except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
-            return await self._search_entries_simple(query, app_name, user_id, effective_limit)
+            return await self._search_entries_simple(
+                query, app_name, user_id, effective_limit, scope_filter=scope_filter
+            )
         except Exception as e:
             if _is_psqlpy_database_error(e):
                 error_msg = str(e).lower()
@@ -774,21 +783,31 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
     ) -> int:
         """Delete memory entries older than specified days."""
+        clauses = ["inserted_at < (CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day'))"]
+        params: list[Any] = [days]
+        if app_name is not None:
+            params.append(app_name)
+            clauses.append(f"app_name = ${len(params)}")
+        if scope is not None:
+            params.append(scope)
+            clauses.append(f"scope = ${len(params)}")
+        where_clause = " AND ".join(clauses)
+
         count_sql = f"""
         SELECT COUNT(*) AS count FROM {self._memory_table}
-        WHERE inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'
+        WHERE {where_clause}
         """
         delete_sql = f"""
         DELETE FROM {self._memory_table}
-        WHERE inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'
+        WHERE {where_clause}
         """
 
         try:
             async with self._config.provide_connection() as conn:
-                count_result = await conn.fetch(count_sql, [])
+                count_result = await conn.fetch(count_sql, params)
                 count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
                 count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, [])
+                await conn.execute(delete_sql, params)
                 return count
         except Exception as e:
             if _is_psqlpy_database_error(e):
@@ -816,6 +835,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             session_id VARCHAR(128) NOT NULL,
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
+            scope VARCHAR(16) NOT NULL DEFAULT 'user',
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,

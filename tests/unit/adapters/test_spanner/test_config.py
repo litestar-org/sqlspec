@@ -169,7 +169,10 @@ def test_get_database_routes_client_instance_and_database_settings(monkeypatch: 
     created_clients: list[_FakeClient] = []
     import google.cloud.spanner_v1
 
+    import sqlspec.adapters.spanner.config as spanner_config
+
     monkeypatch.setattr(google.cloud.spanner_v1, "Client", _FakeClient)
+    monkeypatch.setattr(spanner_config, "Client", _FakeClient)
 
     client_info = object()
     query_options = object()

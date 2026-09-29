@@ -275,35 +275,28 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         A SQLSpec exception that wraps the original error
     """
     del logger
-    # Integrity errors
     if isinstance(error, api_exceptions.AlreadyExists):
         return _create_spanner_error(error, UniqueViolationError, "resource already exists")
 
-    # Resource not found
     if isinstance(error, api_exceptions.NotFound):
         return _create_spanner_error(error, NotFoundError, "resource not found")
 
-    # SQL/argument errors
     if isinstance(error, api_exceptions.InvalidArgument):
         return _create_spanner_error(error, SQLParsingError, "invalid query or argument")
 
-    # Permission/authentication errors
     if isinstance(error, api_exceptions.PermissionDenied):
         return _create_spanner_error(error, PermissionDeniedError, "permission denied")
     if isinstance(error, api_exceptions.Unauthenticated):
         return _create_spanner_error(error, PermissionDeniedError, "authentication failed")
 
-    # Transaction errors (deadlock/abort)
     if isinstance(error, api_exceptions.Aborted):
         return _create_spanner_error(error, DeadlockError, "transaction aborted")
 
-    # Query timeout/cancellation
     if isinstance(error, api_exceptions.Cancelled):
         return _create_spanner_error(error, OperationCancelledError, "operation cancelled")
     if isinstance(error, api_exceptions.DeadlineExceeded):
         return _create_spanner_error(error, QueryTimeoutError, "deadline exceeded")
 
-    # Service/operational errors
     if isinstance(error, (api_exceptions.ServiceUnavailable, api_exceptions.TooManyRequests)):
         return _create_spanner_error(error, OperationalError, "service unavailable or rate limited")
 
@@ -314,6 +307,8 @@ def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], A
     """Convert a native Spanner JSON cell using the configured deserializer."""
     if isinstance(value, JsonObject):
         json_value = cast("Any", value).serialize()
+        if json_value is None:
+            return None
     elif isinstance(value, str):
         json_value = value
     else:

@@ -27,6 +27,10 @@ Default request controls can be configured through
 ``retry`` and ``timeout``
     Forwarded to Spanner statement execution calls when provided.
 
+``query_options``
+    Forwarded to ``execute_sql()`` and ``execute_update()``. Batch DML does not
+    accept query options.
+
 Per-call overrides use the existing ``execute()``, ``execute_many()``, and
 ``execute_script()`` methods:
 
@@ -44,6 +48,11 @@ Per-call overrides use the existing ``execute()``, ``execute_many()``, and
 the argument for a DML statement so call sites can share option plumbing, but it
 does not forward directed-read options to ``execute_update()`` or
 ``batch_update()``.
+
+Pass ``last_statement=True`` to mark the final DML request in a transaction.
+For scripts, SQLSpec forwards it only when the final statement is DML. This
+option does not commit the transaction; commit through the normal transaction
+context or driver API.
 
 Session-Scoped Controls
 =======================
@@ -139,3 +148,15 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
 .. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKRetentionConfig
    :members:
    :show-inheritance:
+
+Native execution controls
+-------------------------
+
+``query_options`` can be configured on the driver, supplied when opening a
+session, or overridden per call. They apply to queries and single DML operations;
+native batch DML does not accept them. ``last_statement=True`` marks final
+transaction DML, including only the final statement of a script.
+
+Opt-in Arrow Batch Write ingestion works from database-backed read sessions.
+Mutation groups commit independently. Arrow overwrite retains transactional
+delete-and-insert behavior without partitioned DML or Batch Write.

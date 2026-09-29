@@ -16,6 +16,8 @@ from sqlspec.builder._insert import Insert
 from sqlspec.builder._select import Select
 from sqlspec.builder._update import Update
 from sqlspec.exceptions import MigrationError
+from sqlspec.migrations.templates import MigrationTemplateSettings, build_template_settings
+from sqlspec.migrations.utils import resolve_default_schema, resolve_extension_migrations_path, resolve_tracker_schema
 from sqlspec.migrations.version import parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import module_to_os_path
@@ -24,7 +26,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
 
     from sqlspec.config import DatabaseConfigProtocol
-    from sqlspec.migrations.templates import MigrationTemplateSettings
     from sqlspec.observability import ObservabilityRuntime
 
 __all__ = ("AppliedMigrationRecord", "BaseMigrationCommands", "BaseMigrationTracker", "LoadedMigrationMetadata")
@@ -440,8 +441,6 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Args:
             config: The SQLSpec configuration.
         """
-        from sqlspec.migrations.templates import build_template_settings
-
         self.config = config
         migration_config = self._get_migration_config()
 
@@ -518,9 +517,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
 
     def _resolve_default_schema(self) -> str | None:
         """Return the configured default migration schema."""
-        from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
-
-        return _resolve_default_schema(self._get_migration_config())
+        return resolve_default_schema(self._get_migration_config())
 
     def _config_supports_schemas(self) -> bool:
         """Return whether the bound config opts into schema-aware migrations."""
@@ -539,11 +536,9 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
 
     def _resolve_tracker_schema(self) -> str | None:
         """Return tracker schema only for adapters that support schema-qualified migration tables."""
-        from sqlspec.migrations.utils import resolve_tracker_schema as _resolve_tracker_schema
-
         if not self._config_supports_schemas():
             return None
-        return _resolve_tracker_schema(self._get_migration_config())
+        return resolve_tracker_schema(self._get_migration_config())
 
     def _create_tracker(self) -> Any:
         """Create the configured migration tracker without breaking legacy constructors."""
@@ -584,8 +579,6 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Returns:
             Dictionary mapping extension names to their migration paths.
         """
-        from sqlspec.migrations.utils import resolve_extension_migrations_path
-
         extension_migrations = {}
 
         for ext_name, ext_options in self.extension_configs.items():

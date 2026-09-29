@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
 
 from sqlspec.extensions.adk.memory.converters import (
+    _UNKNOWN_SESSION_ID,
+    event_to_memory_record,
     memory_entry_to_record,
     records_to_memory_entries,
     session_to_memory_records,
@@ -107,13 +109,12 @@ class SQLSpecMemoryService(BaseMemoryService):
                 ``StoredMemory.metadata_json``.
             scope: Visibility scope ('user' or 'app').
         """
-        from sqlspec.extensions.adk.memory.converters import event_to_memory_record
-
         metadata_dict = dict(custom_metadata) if custom_metadata else None
+        resolved_session_id = session_id or _UNKNOWN_SESSION_ID
         records = []
         for event in events:
             record = event_to_memory_record(
-                event=event, session_id=session_id or "", app_name=app_name, user_id=user_id, scope=scope
+                event=event, session_id=resolved_session_id, app_name=app_name, user_id=user_id, scope=scope
             )
             if record is not None:
                 if metadata_dict:
@@ -275,6 +276,101 @@ class SQLSpecSyncMemoryService:
         inserted_count = self._store.insert_memory_entries(records)
         logger.debug(
             "Stored %d memory entries for session %s (total events: %d)", inserted_count, session.id, len(records)
+        )
+
+    def add_events_to_memory(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        events: "Sequence[Event]",
+        session_id: "str | None" = None,
+        custom_metadata: "Mapping[str, object] | None" = None,
+        scope: str = "user",
+    ) -> None:
+        """Add an explicit list of events to the memory service.
+
+        Same Event-to-StoredMemory extraction logic as
+        ``add_session_to_memory``, but operates on a sequence of Events
+        directly (no Session wrapper needed).
+
+        Args:
+            app_name: The application name for memory scope.
+            user_id: The user ID for memory scope.
+            events: The events to add to memory.
+            session_id: Optional session ID for memory scope/partitioning.
+                If None, memory entries are user-scoped only.
+            custom_metadata: Optional portable metadata stored in
+                ``StoredMemory.metadata_json``.
+            scope: Visibility scope ('user' or 'app').
+        """
+        metadata_dict = dict(custom_metadata) if custom_metadata else None
+        resolved_session_id = session_id or _UNKNOWN_SESSION_ID
+        records = []
+        for event in events:
+            record = event_to_memory_record(
+                event=event, session_id=resolved_session_id, app_name=app_name, user_id=user_id, scope=scope
+            )
+            if record is not None:
+                if metadata_dict:
+                    record["metadata_json"] = metadata_dict
+                records.append(record)
+
+        if not records:
+            logger.debug(
+                "No content to store for events (app=%s, user=%s, count=%d)", app_name, user_id, len(list(events))
+            )
+            return
+
+        inserted_count = self._store.insert_memory_entries(records)
+        logger.debug(
+            "Stored %d memory entries from %d events (app=%s, user=%s)", inserted_count, len(records), app_name, user_id
+        )
+
+    def add_memory(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        memories: "Sequence[MemoryEntry]",
+        custom_metadata: "Mapping[str, object] | None" = None,
+        scope: str = "user",
+    ) -> None:
+        """Add explicit memory items directly to the memory service.
+
+        Each entry's ``content`` is serialized to ``content_json``, text is
+        extracted from ``content.parts`` for ``content_text``, and
+        ``custom_metadata`` merges the entry-level ``entry.custom_metadata``
+        with the call-level ``custom_metadata`` parameter.
+
+        Args:
+            app_name: The application name for memory scope.
+            user_id: The user ID for memory scope.
+            memories: Explicit memory items to add.
+            custom_metadata: Optional portable metadata for memory writes.
+                Merged with each entry's ``custom_metadata``.
+            scope: Visibility scope ('user' or 'app').
+        """
+        call_metadata = dict(custom_metadata) if custom_metadata else {}
+        records = []
+        for entry in memories:
+            record = memory_entry_to_record(
+                entry=entry, app_name=app_name, user_id=user_id, extra_metadata=call_metadata, scope=scope
+            )
+            if record is not None:
+                records.append(record)
+
+        if not records:
+            logger.debug("No content to store for memories (app=%s, user=%s)", app_name, user_id)
+            return
+
+        inserted_count = self._store.insert_memory_entries(records)
+        logger.debug(
+            "Stored %d memory entries from %d memories (app=%s, user=%s)",
+            inserted_count,
+            len(records),
+            app_name,
+            user_id,
         )
 
     def search_memory(

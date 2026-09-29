@@ -988,37 +988,41 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                self._execute(
-                    cursor,
-                    insert_sql,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        event_data,
-                    ),
-                )
                 self._execute(cursor, update_sql, (state_json, app_name, user_id, session_id))
-                if app_state is not None:
-                    self._execute(cursor, delete_app_state_sql, (app_name,))
-                    self._execute(
-                        cursor,
-                        insert_app_state_sql,
-                        (app_name, self._serialize_state(app_state), datetime.now(timezone.utc)),
-                    )
-                if user_state is not None:
-                    self._execute(cursor, delete_user_state_sql, (app_name, user_id))
-                    self._execute(
-                        cursor,
-                        insert_user_state_sql,
-                        (app_name, user_id, self._serialize_state(user_state), datetime.now(timezone.utc)),
-                    )
                 self._execute(cursor, select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
-                conn.commit()
+                if row is not None:
+                    self._execute(
+                        cursor,
+                        insert_sql,
+                        (
+                            event_record["id"],
+                            event_record["app_name"],
+                            event_record["user_id"],
+                            event_record["session_id"],
+                            event_record["invocation_id"],
+                            event_record["timestamp"],
+                            event_data,
+                        ),
+                    )
+                    if app_state is not None:
+                        self._execute(cursor, delete_app_state_sql, (app_name,))
+                        self._execute(
+                            cursor,
+                            insert_app_state_sql,
+                            (app_name, self._serialize_state(app_state), datetime.now(timezone.utc)),
+                        )
+                    if user_state is not None:
+                        self._execute(cursor, delete_user_state_sql, (app_name, user_id))
+                        self._execute(
+                            cursor,
+                            insert_user_state_sql,
+                            (app_name, user_id, self._serialize_state(user_state), datetime.now(timezone.utc)),
+                        )
+                    conn.commit()
+                else:
+                    with contextlib.suppress(Exception):
+                        conn.rollback()
             except Exception:
                 with contextlib.suppress(Exception):
                     conn.rollback()
@@ -1304,6 +1308,9 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
+        if not self._enabled:
+            return
+
         if not self.create_schema_enabled:
             self.reconcile_schema()
             return
@@ -1583,7 +1590,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             try:
                 for entry in entries:
                     content_json = self._serialize_json_field(entry["content_json"])
-                    metadata_json = self._serialize_json_field(entry["metadata_json"])
+                    metadata_json = self._serialize_json_field(entry.get("metadata_json"))
                     params: tuple[Any, ...]
                     if self._owner_id_column_name:
                         params = (
@@ -1593,7 +1600,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                             entry["user_id"],
                             entry.get("scope", "user"),
                             entry["event_id"],
-                            entry["author"],
+                            entry.get("author"),
                             owner_id,
                             self._encode_timestamp(entry["timestamp"]),
                             content_json,
@@ -1609,7 +1616,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                             entry["user_id"],
                             entry.get("scope", "user"),
                             entry["event_id"],
-                            entry["author"],
+                            entry.get("author"),
                             self._encode_timestamp(entry["timestamp"]),
                             content_json,
                             entry["content_text"],
@@ -1647,6 +1654,9 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query or not query.strip():
+            return []
+
         if self._use_fts:
             logger.warning("ADBC memory store does not support FTS, falling back to simple search")
 
@@ -1681,6 +1691,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return self._rows_to_records(rows)
 
     def _delete_entries_by_session(self, session_id: str) -> int:
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         if use_returning:
             sql = f"DELETE FROM {self._memory_table} WHERE session_id = ? RETURNING 1"
@@ -1700,6 +1714,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 cursor.close()
 
     def _delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
         cutoff = self._encode_timestamp(datetime.now(timezone.utc) - timedelta(days=days))
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         clauses = ["inserted_at < ?"]

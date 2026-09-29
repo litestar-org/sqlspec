@@ -786,11 +786,11 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
         Skips table creation if memory store is disabled.
         """
-        if not self.create_schema_enabled:
-            self.reconcile_schema()
+        if not self._enabled:
             return
 
-        if not self._enabled:
+        if not self.create_schema_enabled:
+            self.reconcile_schema()
             return
 
         with self._config.provide_session() as driver:
@@ -836,7 +836,8 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                     timestamp_julian = _datetime_to_julian(entry["timestamp"])
                     inserted_at_julian = _datetime_to_julian(entry["inserted_at"])
                     content_json_str = to_json(entry["content_json"])
-                    metadata_json_str = to_json(entry["metadata_json"]) if entry["metadata_json"] else None
+                    metadata_json = entry.get("metadata_json")
+                    metadata_json_str = to_json(metadata_json) if metadata_json is not None else None
                     scope = entry.get("scope", "user")
                     params_list.append((
                         entry["id"],
@@ -845,7 +846,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                         entry["user_id"],
                         scope,
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         owner_id,
                         timestamp_julian,
                         content_json_str,
@@ -864,7 +865,8 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                     timestamp_julian = _datetime_to_julian(entry["timestamp"])
                     inserted_at_julian = _datetime_to_julian(entry["inserted_at"])
                     content_json_str = to_json(entry["content_json"])
-                    metadata_json_str = to_json(entry["metadata_json"]) if entry["metadata_json"] else None
+                    metadata_json = entry.get("metadata_json")
+                    metadata_json_str = to_json(metadata_json) if metadata_json is not None else None
                     scope = entry.get("scope", "user")
                     params_list.append((
                         entry["id"],
@@ -873,7 +875,7 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                         entry["user_id"],
                         scope,
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         timestamp_julian,
                         content_json_str,
                         entry["content_text"],
@@ -901,6 +903,9 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query or not query.strip():
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
 
         if self._use_fts:
@@ -908,10 +913,19 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
                 return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
             except Exception as exc:
                 logger.warning("FTS search failed; falling back to simple search: %s", exc)
-        return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+        try:
+            return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
+        except sqlite3.OperationalError as exc:
+            if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                return []
+            raise
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = ?"
 
         with self._config.provide_connection() as conn:
@@ -924,6 +938,10 @@ class SqliteADKMemoryStore(BaseSyncADKMemoryStore["SqliteConfig"]):
 
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
         cutoff_julian = _datetime_to_julian(datetime.now(timezone.utc)) - days
 
         sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"

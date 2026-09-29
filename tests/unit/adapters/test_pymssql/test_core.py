@@ -156,9 +156,15 @@ def test_extract_error_number() -> None:
     class BoolAttributeException(Exception):
         number = True
 
+    class ZeroAttributeException(Exception):
+        number = 0
+
     assert extract_error_number(AttributeException("duplicate key")) == 2627
     assert extract_error_number(BoolAttributeException("Msg 2627, Level 14")) == 2627
+    assert extract_error_number(ZeroAttributeException("Msg 2627, Level 14")) == 2627
+    assert extract_error_number(ZeroAttributeException("Plain error")) is None
     assert extract_error_number(Exception(True, "Msg 1205, Level 13")) == 1205
+    assert extract_error_number(Exception(0, "Msg 1205, Level 13")) == 1205
     assert extract_error_number(Exception(1205, "Deadlock found")) == 1205
     assert extract_error_number(Exception("Violation of UNIQUE KEY constraint (2627)")) == 2627
     assert extract_error_number(Exception("Plain error")) is None

@@ -13,9 +13,11 @@ from sqlspec.config import ADKConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    import logging
     from collections.abc import Sequence
 
     from sqlspec.adapters.aiosqlite.config import AiosqliteConfig
@@ -29,6 +31,8 @@ JULIAN_EPOCH = 2440587.5
 SQLITE_TABLE_NOT_FOUND_ERROR: Final = "no such table"
 _FTS_DETAIL_VALUES: Final = frozenset({"full", "column", "none"})
 _FTS_TOKENIZE_PATTERN: Final = re.compile(r"^[A-Za-z0-9_ -]+$")
+
+logger: "logging.Logger" = get_logger("sqlspec.adapters.aiosqlite.adk.store")
 
 
 class AiosqliteADKConfig(ADKConfig):
@@ -776,11 +780,11 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
 
         Skips table creation if memory store is disabled.
         """
-        if not self.create_schema_enabled:
-            await self.reconcile_schema()
+        if not self._enabled:
             return
 
-        if not self._enabled:
+        if not self.create_schema_enabled:
+            await self.reconcile_schema()
             return
 
         async with self._config.provide_session() as driver:
@@ -811,6 +815,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                 """
                 for entry in entries:
                     scope = entry.get("scope", "user")
+                    metadata_json = entry.get("metadata_json")
                     params_list.append((
                         entry["id"],
                         entry["session_id"],
@@ -818,12 +823,12 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                         entry["user_id"],
                         scope,
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         owner_id,
                         _datetime_to_julian(entry["timestamp"]),
                         to_json(entry["content_json"]),
                         entry["content_text"],
-                        to_json(entry["metadata_json"]),
+                        to_json(metadata_json) if metadata_json is not None else None,
                         _datetime_to_julian(entry["inserted_at"]),
                     ))
             else:
@@ -835,6 +840,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                 """
                 for entry in entries:
                     scope = entry.get("scope", "user")
+                    metadata_json = entry.get("metadata_json")
                     params_list.append((
                         entry["id"],
                         entry["session_id"],
@@ -842,11 +848,11 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
                         entry["user_id"],
                         scope,
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         _datetime_to_julian(entry["timestamp"]),
                         to_json(entry["content_json"]),
                         entry["content_text"],
-                        to_json(entry["metadata_json"]),
+                        to_json(metadata_json) if metadata_json is not None else None,
                         _datetime_to_julian(entry["inserted_at"]),
                     ))
             cursor = await conn.executemany(sql, params_list)
@@ -871,35 +877,55 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query:
+        if not query or not query.strip():
             return []
 
-        limit_value = limit or self._max_results
-        if self._use_fts:
-            where_scope, scope_params = _build_sqlite_scope_clause("m.", app_name, user_id, scope_filter)
-            sql = f"""
-            SELECT m.* FROM {self._memory_table} AS m
-            JOIN {self._memory_table}_fts AS fts ON m.rowid = fts.rowid
-            WHERE {where_scope} AND fts.content_text MATCH ?
-            ORDER BY m.timestamp DESC
-            LIMIT ?
-            """
-            params = (*scope_params, query, limit_value)
-        else:
-            where_scope, scope_params = _build_sqlite_scope_clause("", app_name, user_id, scope_filter)
-            sql = f"""
-            SELECT * FROM {self._memory_table}
-            WHERE {where_scope} AND content_text LIKE ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """
-            params = (*scope_params, f"%{query}%", limit_value)
+        limit_value = limit if limit is not None else self._max_results
+        rows: list[Any] | None = None
+        columns: list[str] = []
 
         async with self._config.provide_connection() as conn:
-            cursor = await conn.execute(sql, params)
-            rows = await cursor.fetchall()
-            columns = [col[0] for col in cursor.description or []]
-            await cursor.close()
+            if self._use_fts:
+                where_scope, scope_params = _build_sqlite_scope_clause("m.", app_name, user_id, scope_filter)
+                fts_sql = f"""
+                SELECT m.* FROM {self._memory_table} AS m
+                JOIN {self._memory_table}_fts AS fts ON m.rowid = fts.rowid
+                WHERE {where_scope} AND fts.content_text MATCH ?
+                ORDER BY m.timestamp DESC
+                LIMIT ?
+                """
+                fts_params = (*scope_params, query, limit_value)
+                try:
+                    cursor = await conn.execute(fts_sql, fts_params)
+                    try:
+                        rows = list(await cursor.fetchall())
+                        columns = [col[0] for col in cursor.description or []]
+                    finally:
+                        await cursor.close()
+                except Exception as exc:
+                    logger.warning("FTS search failed; falling back to simple search: %s", exc)
+
+            if rows is None:
+                where_scope, scope_params = _build_sqlite_scope_clause("", app_name, user_id, scope_filter)
+                sql = f"""
+                SELECT * FROM {self._memory_table}
+                WHERE {where_scope} AND content_text LIKE ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """
+                params = (*scope_params, f"%{query}%", limit_value)
+                try:
+                    cursor = await conn.execute(sql, params)
+                    try:
+                        rows = list(await cursor.fetchall())
+                        columns = [col[0] for col in cursor.description or []]
+                    finally:
+                        await cursor.close()
+                except sqlite3.OperationalError as exc:
+                    if SQLITE_TABLE_NOT_FOUND_ERROR in str(exc):
+                        return []
+                    raise
+
         records: list[StoredMemory] = []
         for row in rows:
             raw = dict(zip(columns, row, strict=False))

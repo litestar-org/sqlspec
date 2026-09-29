@@ -109,3 +109,16 @@ def test_join_hint_round_trip() -> None:
 def test_at_comment_on_expression_is_preserved() -> None:
     sql = "SELECT 1 /* @ ordinary comment */"
     assert "@ ordinary comment" in parse_one(sql, dialect="spanner").sql(dialect="spanner")
+
+
+def test_at_comments_without_equals_on_select_table_and_join_are_not_hints() -> None:
+    sql = "-- @author: Alice\nSELECT * FROM Albums /* @todo */ JOIN /* @note */ Singers ON Albums.SingerId = Singers.Id"
+    parsed = parse_one(sql, dialect="spanner")
+
+    assert parsed.args.get("hint") is None
+    table = parsed.find(exp.Table)
+    assert table is not None
+    assert not table.args.get("hints")
+    join = parsed.find(exp.Join)
+    assert join is not None
+    assert join.args.get("spanner_hint") is None

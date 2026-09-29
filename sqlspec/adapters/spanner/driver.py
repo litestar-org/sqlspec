@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.spanner._typing import SpannerConnection
     from sqlspec.adapters.spanner._typing import SpannerDirectedReadOptions as DirectedReadOptions
+    from sqlspec.adapters.spanner._typing import SpannerExecuteSqlRequest as ExecuteSqlRequest
     from sqlspec.adapters.spanner._typing import SpannerRequestOptions as RequestOptions
     from sqlspec.adapters.spanner._typing import SpannerRetry as Retry
     from sqlspec.builder import QueryBuilder
@@ -176,7 +177,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         _coerce = self._coerce_params
         _infer = self._infer_param_types
-        execute_kwargs = self._execute_kwargs()
+        execute_kwargs = self._execute_kwargs(for_batch=True)
         param_types_cache: dict[tuple[tuple[str, type[Any], Any], ...], dict[str, Any]] = {}
         empty_param_types: dict[str, Any] = {}
         batch_args: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = []
@@ -212,17 +213,23 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         coerced_params = self._coerce_params(script_params)
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
-        for stmt in statements:
+        dialect_str = str(self.dialect) if self.dialect else "spanner"
+        for index, stmt in enumerate(statements):
             try:
-                parsed = _sqlglot.parse_one(stmt)
-                is_select = isinstance(parsed, _sqlglot_exp.Select)
+                parsed = _sqlglot.parse_one(stmt, read=dialect_str)
+                is_select = isinstance(parsed, _sqlglot_exp.Query)
             except Exception:
                 is_select = stmt.upper().strip().startswith("SELECT")
             if not is_select and not is_transaction:
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
                 writer = cast("_SpannerWriteProtocol", cursor)
-                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map, **write_execute_kwargs)
+                statement_kwargs = write_execute_kwargs
+                if "last_statement" in write_execute_kwargs and index != len(statements) - 1:
+                    statement_kwargs = {
+                        key: value for key, value in write_execute_kwargs.items() if key != "last_statement"
+                    }
+                writer.execute_update(stmt, params=coerced_params, param_types=param_types_map, **statement_kwargs)
             else:
                 _ = list(
                     reader.execute_sql(stmt, params=coerced_params, param_types=param_types_map, **read_execute_kwargs)
@@ -439,7 +446,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source)
 
         if overwrite:
-            delete_sql = f"DELETE FROM {table} WHERE TRUE"
+            dialect_str = str(self.dialect) if self.dialect else "spanner"
+            table_sql = _sqlglot_exp.to_table(table, dialect=dialect_str).sql(dialect=dialect_str, identify=True)
+            delete_sql = f"DELETE FROM {table_sql} WHERE TRUE"
             if isinstance(self.connection, SpannerTransaction):
                 writer = cast("_SpannerWriteProtocol", self.connection)
                 writer.execute_update(delete_sql)
@@ -449,14 +458,14 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
-            conn = self.connection
-            if not isinstance(conn, SpannerTransaction):
-                msg = "Arrow import requires a Transaction context."
-                raise SQLConversionError(msg)
             chunks = self._chunk_mutation_rows(columns, records)
             if self.driver_features.get("enable_batch_write_api") and not overwrite:
                 self._batch_write_mutations(table, columns, chunks)
             else:
+                conn = self.connection
+                if not isinstance(conn, SpannerTransaction):
+                    msg = "Arrow import requires a Transaction context."
+                    raise SQLConversionError(msg)
                 writer = cast("_SpannerWriteProtocol", conn)
                 for chunk in chunks:
                     writer.insert_or_update(table, columns, chunk)
@@ -512,36 +521,57 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """
         return 0
 
-    def _execute_kwargs(self, *, for_read: bool = False) -> dict[str, Any]:
+    def _execute_kwargs(self, *, for_read: bool = False, for_batch: bool = False) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             key: self.driver_features[key] for key in ("retry", "timeout") if key in self.driver_features
         }
         request_options = self.driver_features.get("request_options")
         if request_options is not None:
             kwargs["request_options"] = request_options
-        directed_read_options = self.driver_features.get("directed_read_options")
-        if for_read and directed_read_options is not None:
-            kwargs["directed_read_options"] = directed_read_options
+        if not for_batch:
+            query_options = self.driver_features.get("query_options")
+            if query_options is not None:
+                kwargs["query_options"] = query_options
+        if for_read and not for_batch:
+            directed_read_options = self.driver_features.get("directed_read_options")
+            if directed_read_options is not None:
+                kwargs["directed_read_options"] = directed_read_options
         pending = self._pending_execute_options
         if pending is not None:
             if pending.request_options is not None:
                 kwargs["request_options"] = pending.request_options
+            if not for_batch and pending.query_options is not None:
+                kwargs["query_options"] = pending.query_options
             if pending.retry is not None:
                 kwargs["retry"] = pending.retry
             if pending.timeout is not None:
                 kwargs["timeout"] = pending.timeout
-            if for_read and pending.directed_read_options is not None:
+            if for_read and not for_batch and pending.directed_read_options is not None:
                 kwargs["directed_read_options"] = pending.directed_read_options
+            if not for_read and pending.last_statement:
+                kwargs["last_statement"] = True
         return kwargs
 
     def _pop_execute_options(self, kwargs: dict[str, Any]) -> "_PerCallExecuteOptions | None":
-        if not any(key in kwargs for key in ("request_options", "directed_read_options", "retry", "timeout")):
+        if not any(
+            key in kwargs
+            for key in (
+                "request_options",
+                "query_options",
+                "directed_read_options",
+                "retry",
+                "timeout",
+                "last_statement",
+            )
+        ):
             return None
         return _PerCallExecuteOptions(
             request_options=kwargs.pop("request_options", None),
+            query_options=kwargs.pop("query_options", None),
             directed_read_options=kwargs.pop("directed_read_options", None),
             retry=kwargs.pop("retry", None),
             timeout=kwargs.pop("timeout", None),
+            last_statement=bool(kwargs.pop("last_statement", False)),
         )
 
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
@@ -647,20 +677,24 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
 class _PerCallExecuteOptions:
     """Per-call Spanner execution options captured for a single dispatch."""
 
-    __slots__ = ("directed_read_options", "request_options", "retry", "timeout")
+    __slots__ = ("directed_read_options", "last_statement", "query_options", "request_options", "retry", "timeout")
 
     def __init__(
         self,
         *,
         request_options: "RequestOptions | dict[str, Any] | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
         directed_read_options: "DirectedReadOptions | None" = None,
         retry: "Retry | None" = None,
         timeout: "float | None" = None,
+        last_statement: bool = False,
     ) -> None:
         self.request_options = request_options
+        self.query_options = query_options
         self.directed_read_options = directed_read_options
         self.retry = retry
         self.timeout = timeout
+        self.last_statement = last_statement
 
 
 class _SpannerSelectStreamSource:

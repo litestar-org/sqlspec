@@ -236,6 +236,7 @@ exclude = [
   "sqlspec/dialects/postgres/_pgvector.py", # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/postgres/_paradedb.py", # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/postgres/_pg_textsearch.py", # interpreted: Dialect subclass needs sqlglot's metaclass
+  "sqlspec/dialects/spanner/_expressions.py", # interpreted: SQLGlot AST expression helpers stay interpreted
   "sqlspec/dialects/spanner/_spanner.py",   # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/dialects/spanner/_spangres.py",  # interpreted: Dialect subclass needs sqlglot's metaclass
   "sqlspec/storage/_arrow_payload.py",      # PyArrow conversion boundary stays interpreted
