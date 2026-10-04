@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 import sqlglot as _sqlglot
 from sqlglot import exp as _sqlglot_exp
 
-from sqlspec.adapters.spanner import data_dictionary as spanner_data_dictionary_module
 from sqlspec.adapters.spanner._typing import (
     SpannerAsyncConnection,
     SpannerAsyncCursor,
@@ -33,10 +32,9 @@ from sqlspec.adapters.spanner.core import (
     supports_batch_update,
     supports_write,
 )
-from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import SpannerAsyncDataDictionary, SpannerDataDictionary
 from sqlspec.core import StatementConfig, register_driver_profile
 from sqlspec.driver import (
-    AsyncDataDictionaryBase,
     AsyncDriverAdapterBase,
     AsyncRowStream,
     BaseAsyncExceptionHandler,
@@ -530,7 +528,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     @property
     def data_dictionary(self) -> "SpannerDataDictionary":
         if self._data_dictionary is None:
-            self._data_dictionary = SpannerDataDictionary()
+            dialect_str = str(self.statement_config.dialect) if self.statement_config.dialect else "spanner"
+            mode = "postgresql" if dialect_str in {"spangres", "postgres", "postgresql"} else "googlesql"
+            self._data_dictionary = SpannerDataDictionary(mode=mode)
         return self._data_dictionary
 
     def collect_rows(self, cursor: "SpannerConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
@@ -735,7 +735,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
             statement_config = default_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
-        self._data_dictionary: AsyncDataDictionaryBase | None = None
+        self._data_dictionary: SpannerAsyncDataDictionary | None = None
         self._pending_execute_options: _PerCallExecuteOptions | None = None
         self._row_plan_cache: dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]] = {}
         self._row_plan_deserializer = cast("Callable[[str], Any]", features.get("json_deserializer", from_json))
@@ -1151,15 +1151,11 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         )
 
     @property
-    def data_dictionary(self) -> "AsyncDataDictionaryBase":
+    def data_dictionary(self) -> "SpannerAsyncDataDictionary":
         if self._data_dictionary is None:
-            async_dd_cls = getattr(spanner_data_dictionary_module, "SpannerAsyncDataDictionary", None)
             dialect_str = str(self.statement_config.dialect) if self.statement_config.dialect else "spanner"
             mode = "postgresql" if dialect_str in {"spangres", "postgres", "postgresql"} else "googlesql"
-            if async_dd_cls is not None:
-                self._data_dictionary = cast("AsyncDataDictionaryBase", async_dd_cls(mode=mode))
-            else:
-                self._data_dictionary = cast("AsyncDataDictionaryBase", SpannerDataDictionary(mode=mode))
+            self._data_dictionary = SpannerAsyncDataDictionary(mode=mode)
         return self._data_dictionary
 
     def collect_rows(

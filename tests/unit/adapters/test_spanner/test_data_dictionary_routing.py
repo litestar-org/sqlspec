@@ -4,7 +4,13 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import (
+    SpannerAsyncDataDictionary,
+    SpannerDataDictionary,
+    SpannerSyncDataDictionary,
+)
+from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
+from sqlspec.core import StatementConfig
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 
 
@@ -134,3 +140,94 @@ def test_schema_metadata_binds_only_schema(mode: str, domain: str) -> None:
     statement = driver.last_query.copy(parameters={"schema_name": driver.last_params["schema_name"]})
     _sql, parameters = statement.compile()
     assert parameters == ("public", "public")
+
+
+class MockAsyncSpannerDriver:
+    """Mock SpannerAsyncDriver to capture async query execution."""
+
+    def __init__(self) -> None:
+        self.last_query: Any = None
+        self.last_params: dict[str, Any] = {}
+
+    async def select(self, query: Any, **params: Any) -> list[Any]:
+        self.last_query = query
+        self.last_params = params
+        schema_type = params.get("schema_type")
+        if schema_type is TableMetadata:
+            return [TableMetadata(table_name="users", schema_name="public", table_type="BASE TABLE")]
+        if schema_type is ColumnMetadata:
+            return [
+                ColumnMetadata(
+                    column_name="id", table_name="users", schema_name="public", data_type="INT64", ordinal_position=1
+                )
+            ]
+        if schema_type is IndexMetadata:
+            return [
+                IndexMetadata(index_name="users_by_name", table_name="users", schema_name="public", columns=["name"])
+            ]
+        if schema_type is ForeignKeyMetadata:
+            return [
+                ForeignKeyMetadata(
+                    table_name="users",
+                    column_name="org_id",
+                    referenced_table="orgs",
+                    referenced_column="id",
+                    constraint_name="fk_users_org",
+                    schema="public",
+                    referenced_schema="public",
+                )
+            ]
+        return []
+
+
+async def test_async_data_dictionary_routing_and_sync_alias() -> None:
+    """Verify SpannerAsyncDataDictionary routes GoogleSQL and PostgreSQL queries and SpannerSyncDataDictionary is aliased."""
+    assert SpannerSyncDataDictionary is SpannerDataDictionary
+
+    dictionary = SpannerAsyncDataDictionary()
+    assert dictionary.mode == "googlesql"
+    driver = MockAsyncSpannerDriver()
+
+    tables = await dictionary.get_tables(cast("Any", driver))
+    assert len(tables) == 1
+    assert "TABLE_SCHEMA AS schema_name" in str(driver.last_query)
+
+    columns = await dictionary.get_columns(cast("Any", driver), table="users")
+    assert len(columns) == 1
+    assert "COLUMN_NAME AS column_name" in str(driver.last_query)
+
+    indexes = await dictionary.get_indexes(cast("Any", driver), table="users")
+    assert len(indexes) == 1
+    assert "i.INDEX_NAME AS index_name" in str(driver.last_query)
+
+    fks = await dictionary.get_foreign_keys(cast("Any", driver), table="users")
+    assert len(fks) == 1
+    assert "fk_columns" in str(driver.last_query)
+
+    pg_dictionary = SpannerAsyncDataDictionary(mode="postgresql")
+    assert pg_dictionary.mode == "postgresql"
+    await pg_dictionary.get_tables(cast("Any", driver), schema="public")
+    assert "table_catalog" in str(driver.last_query)
+
+
+def test_driver_data_dictionary_dialect_mode_routing() -> None:
+    """Verify SpannerSyncDriver and SpannerAsyncDriver instantiate data dictionaries with dialect-matched mode."""
+    async_driver_gsql = SpannerAsyncDriver(connection=cast("Any", object()))
+    assert isinstance(async_driver_gsql.data_dictionary, SpannerAsyncDataDictionary)
+    assert async_driver_gsql.data_dictionary.mode == "googlesql"
+
+    async_driver_pg = SpannerAsyncDriver(
+        connection=cast("Any", object()),
+        statement_config=StatementConfig(dialect="spangres"),
+    )
+    assert isinstance(async_driver_pg.data_dictionary, SpannerAsyncDataDictionary)
+    assert async_driver_pg.data_dictionary.mode == "postgresql"
+
+    sync_driver_pg = SpannerSyncDriver(
+        connection=cast("Any", object()),
+        statement_config=StatementConfig(dialect="spangres"),
+    )
+    assert isinstance(sync_driver_pg.data_dictionary, SpannerDataDictionary)
+    assert sync_driver_pg.data_dictionary.mode == "postgresql"
+
+
