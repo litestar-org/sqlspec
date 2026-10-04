@@ -3,8 +3,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
+from typing_extensions import Self
 
+import sqlspec.adapters.spanner.config as spanner_config
 from sqlspec.adapters.spanner.config import (
+    SpannerAsyncConfig,
+    SpannerAsyncConnectionContext,
     SpannerConnectionParams,
     SpannerDriverFeatures,
     SpannerPoolParams,
@@ -713,3 +717,145 @@ def test_spanner_config_accepts_aliases() -> None:
     assert config.connection_config["database_id"] == "db"
     pool = config.provide_pool()
     assert pool is not None
+
+
+async def test_async_config_initialization_and_get_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify SpannerAsyncConfig initializes async pool and awaits instance.database(...)."""
+
+    class _FakeAsyncDatabase:
+        def __init__(self, database_id: str, kwargs: dict[str, Any]) -> None:
+            self.database_id = database_id
+            self.kwargs = kwargs
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _FakeAsyncInstance:
+        def __init__(self, instance_id: str, kwargs: dict[str, Any]) -> None:
+            self.instance_id = instance_id
+            self.kwargs = kwargs
+
+        async def database(self, database_id: str, **kwargs: Any) -> _FakeAsyncDatabase:
+            return _FakeAsyncDatabase(database_id, kwargs)
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            self.closed = False
+            created_async_clients.append(self)
+
+        def instance(self, instance_id: str, **kwargs: Any) -> _FakeAsyncInstance:
+            return _FakeAsyncInstance(instance_id, kwargs)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    created_async_clients: list[_FakeAsyncClient] = []
+    monkeypatch.setattr(spanner_config, "AsyncClient", _FakeAsyncClient)
+
+    config = SpannerAsyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    pool = await config.provide_pool()
+    assert pool is not None
+    database = cast("_FakeAsyncDatabase", await config.get_database())
+    assert database.database_id == "d"
+    assert database.kwargs["pool"] is pool
+
+    await config.close_pool()
+    assert database.closed is True
+    assert created_async_clients[0].closed is True
+    assert config._database is None
+    assert config._client is None
+
+
+async def test_async_config_provide_connection_and_sessions() -> None:
+    """Verify SpannerAsyncConfig provide_connection, provide_session, provide_write_session, and provide_read_session."""
+    snap_obj = object()
+
+    class _AsyncSnapshotCheckout:
+        def __init__(self, val: object) -> None:
+            self.val = val
+            self.exited = False
+
+        async def __aenter__(self) -> object:
+            return self.val
+
+        async def __aexit__(self, *_: object) -> bool:
+            self.exited = True
+            return False
+
+    class _AsyncTxn:
+        def __init__(self) -> None:
+            self._transaction_id = b"async-txn-id"
+            self._mutations: list[object] = []
+            self.committed: Any = None
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> bool:
+            return False
+
+        async def commit(self) -> None:
+            self.commit_calls += 1
+            self.committed = object()
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    class _AsyncSession:
+        def __init__(self) -> None:
+            self.txn = _AsyncTxn()
+
+        def transaction(self) -> _AsyncTxn:
+            return self.txn
+
+    class _AsyncSessionsManager:
+        def __init__(self) -> None:
+            self.session = _AsyncSession()
+            self.checked_out = 0
+            self.returned = 0
+
+        async def get_session(self, _transaction_type: object) -> _AsyncSession:
+            self.checked_out += 1
+            return self.session
+
+        async def put_session(self, _session: object) -> None:
+            self.returned += 1
+
+    class _AsyncDB:
+        def __init__(self) -> None:
+            self.sessions_manager = _AsyncSessionsManager()
+            self.snapshot_checkout = _AsyncSnapshotCheckout(snap_obj)
+
+        def snapshot(self, multi_use: bool = False) -> _AsyncSnapshotCheckout:
+            assert multi_use is True
+            return self.snapshot_checkout
+
+    database = _AsyncDB()
+    config = SpannerAsyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+
+    async def _get_db() -> Any:
+        return database
+
+    config.get_database = _get_db  # type: ignore[method-assign]
+
+    ctx = config.provide_connection(transaction=True)
+    assert isinstance(ctx, SpannerAsyncConnectionContext)
+    async with ctx as conn:
+        assert isinstance(conn, _AsyncTxn)
+    assert database.sessions_manager.session.txn.commit_calls == 1
+    assert database.sessions_manager.checked_out == 1
+    assert database.sessions_manager.returned == 1
+
+    async with config.provide_read_session() as read_driver:
+        assert read_driver.connection is snap_obj
+    assert database.snapshot_checkout.exited is True
+
+    database.sessions_manager.session.txn.committed = None
+    async with config.provide_write_session() as write_driver:
+        assert isinstance(write_driver.connection, _AsyncTxn)
+    assert database.sessions_manager.session.txn.commit_calls == 2
+
