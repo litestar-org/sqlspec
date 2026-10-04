@@ -14,14 +14,16 @@ from sqlspec.adapters.spanner._typing import (
     SpannerAsyncConnection,
     SpannerAsyncSessionContext,
     SpannerConnection,
+    SpannerGoogleAPICallError,
     SpannerSessionContext,
+    spanner_exceptions,
 )
 from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
 from sqlspec.adapters.spanner._typing import SpannerClient as Client
 from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
 from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
-from sqlspec.adapters.spanner.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.spanner.core import apply_driver_features, create_mapped_exception, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
@@ -31,7 +33,7 @@ from sqlspec.driver import (
     SyncPoolConnectionContext,
     SyncPoolSessionFactory,
 )
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import DeadlockError, ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.type_guards import supports_close
@@ -590,6 +592,39 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             **kwargs,
         )
 
+    def run_in_transaction(
+        self,
+        fn: "Callable[..., Any]",
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a callable inside Spanner's retryable transaction runner.
+
+        Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
+        so the Spanner SDK retries on transaction abort, and maps terminal
+        ``Aborted`` exceptions back to ``DeadlockError``.
+        """
+        database = self.get_database()
+
+        def _work(transaction: "SpannerConnection", *work_args: Any) -> Any:
+            driver = self.driver_type(
+                connection=transaction,
+                statement_config=self.statement_config,
+                driver_features=self.driver_features,
+            )
+            driver = self._prepare_driver(driver)
+            try:
+                return fn(driver, *work_args)
+            except DeadlockError as exc:
+                if isinstance(exc.__cause__, spanner_exceptions.Aborted):
+                    raise exc.__cause__ from None
+                raise
+
+        try:
+            return cast("Any", database).run_in_transaction(_work, *args, **kwargs)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
+
     def _session_driver_features(
         self,
         *,
@@ -999,6 +1034,40 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             timeout=timeout,
             **kwargs,
         )
+
+    async def run_in_transaction(
+        self,
+        fn: "Callable[..., Any]",
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute an async callable inside Spanner's async retryable transaction runner.
+
+        Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
+        so the Spanner SDK retries on transaction abort, and maps terminal
+        ``Aborted`` exceptions back to ``DeadlockError``.
+        """
+        database = await self.get_database()
+
+        async def _work(transaction: "SpannerAsyncConnection", *work_args: Any) -> Any:
+            driver = self.driver_type(
+                connection=transaction,
+                statement_config=self.statement_config,
+                driver_features=self.driver_features,
+            )
+            driver = self._prepare_driver(driver)
+            try:
+                result = fn(driver, *work_args)
+                return await result if inspect.isawaitable(result) else result
+            except DeadlockError as exc:
+                if isinstance(exc.__cause__, spanner_exceptions.Aborted):
+                    raise exc.__cause__ from None
+                raise
+
+        try:
+            return await cast("Any", database).run_in_transaction(_work, *args, **kwargs)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _session_driver_features(
         self,

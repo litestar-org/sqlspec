@@ -2,6 +2,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
 from typing_extensions import Self
 
@@ -16,8 +17,9 @@ from sqlspec.adapters.spanner.config import (
     build_connection_config,
 )
 from sqlspec.adapters.spanner.core import default_statement_config
+from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.driver import SyncDriverAdapterBase
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import DeadlockError, ImproperConfigurationError
 from tests.conftest import requires_interpreted
 
 if TYPE_CHECKING:
@@ -858,4 +860,167 @@ async def test_async_config_provide_connection_and_sessions() -> None:
     async with config.provide_write_session() as write_driver:
         assert isinstance(write_driver.connection, _AsyncTxn)
     assert database.sessions_manager.session.txn.commit_calls == 2
+
+
+def _make_aborted(message: str) -> api_exceptions.Aborted:
+    return api_exceptions.Aborted(message)  # type: ignore[no-untyped-call]
+
+
+def test_sync_run_in_transaction_unwraps_deadlock_error_and_retries() -> None:
+    """SpannerSyncConfig.run_in_transaction and SpannerSyncDriver.run_in_transaction should unwrap DeadlockError."""
+
+    class _SyncDB:
+        def __init__(self, max_attempts: int = 2) -> None:
+            self.max_attempts = max_attempts
+            self.attempts = 0
+
+        def run_in_transaction(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+            last_aborted: api_exceptions.Aborted | None = None
+            for _ in range(self.max_attempts):
+                self.attempts += 1
+                try:
+                    return fn(object(), *args, **kwargs)
+                except api_exceptions.Aborted as exc:
+                    last_aborted = exc
+            assert last_aborted is not None
+            raise last_aborted
+
+    db = _SyncDB(max_attempts=2)
+    config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+    config.get_database = lambda: cast("Any", db)  # type: ignore[method-assign]
+
+    call_count = 0
+
+    def _work(driver: SpannerSyncDriver, value: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        assert isinstance(driver, SpannerSyncDriver)
+        if call_count == 1:
+            aborted = _make_aborted("Transaction aborted")
+            err = DeadlockError("Transaction aborted")
+            err.__cause__ = aborted
+            raise err
+        return value * 2
+
+    assert config.run_in_transaction(_work, 21) == 42
+    assert db.attempts == 2
+
+    db_exhausted = _SyncDB(max_attempts=2)
+    config.get_database = lambda: cast("Any", db_exhausted)  # type: ignore[method-assign]
+
+    def _always_abort(_driver: SpannerSyncDriver) -> None:
+        aborted = _make_aborted("Always aborted")
+        err = DeadlockError("Always aborted")
+        err.__cause__ = aborted
+        raise err
+
+    with pytest.raises(DeadlockError, match="Always aborted"):
+        config.run_in_transaction(_always_abort)
+    assert db_exhausted.attempts == 2
+
+    db_driver = _SyncDB(max_attempts=2)
+    sync_driver = SpannerSyncDriver(
+        connection=cast("Any", object()),
+        statement_config=default_statement_config,
+        driver_features={"database_provider": lambda: db_driver},
+    )
+    driver_calls = 0
+
+    def _driver_work(txn_driver: SpannerSyncDriver) -> str:
+        nonlocal driver_calls
+        driver_calls += 1
+        assert isinstance(txn_driver, SpannerSyncDriver)
+        if driver_calls == 1:
+            aborted = _make_aborted("Driver abort")
+            err = DeadlockError("Driver abort")
+            err.__cause__ = aborted
+            raise err
+        return "committed"
+
+    assert sync_driver.run_in_transaction(_driver_work) == "committed"
+    assert db_driver.attempts == 2
+
+
+async def test_async_run_in_transaction_unwraps_deadlock_error_and_retries() -> None:
+    """SpannerAsyncConfig.run_in_transaction and SpannerAsyncDriver.run_in_transaction should unwrap DeadlockError."""
+
+    class _AsyncDB:
+        def __init__(self, max_attempts: int = 2) -> None:
+            self.max_attempts = max_attempts
+            self.attempts = 0
+
+        async def run_in_transaction(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+            last_aborted: api_exceptions.Aborted | None = None
+            for _ in range(self.max_attempts):
+                self.attempts += 1
+                try:
+                    return await fn(object(), *args, **kwargs)
+                except api_exceptions.Aborted as exc:
+                    last_aborted = exc
+            assert last_aborted is not None
+            raise last_aborted
+
+    db = _AsyncDB(max_attempts=2)
+    config = SpannerAsyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+
+    async def _get_db() -> Any:
+        return db
+
+    config.get_database = _get_db  # type: ignore[method-assign]
+
+    call_count = 0
+
+    async def _work(driver: SpannerAsyncDriver, value: int) -> int:
+        nonlocal call_count
+        call_count += 1
+        assert isinstance(driver, SpannerAsyncDriver)
+        if call_count == 1:
+            aborted = _make_aborted("Async transaction aborted")
+            err = DeadlockError("Async transaction aborted")
+            err.__cause__ = aborted
+            raise err
+        return value + 10
+
+    assert await config.run_in_transaction(_work, 32) == 42
+    assert db.attempts == 2
+
+    db_exhausted = _AsyncDB(max_attempts=2)
+
+    async def _get_exhausted_db() -> Any:
+        return db_exhausted
+
+    config.get_database = _get_exhausted_db  # type: ignore[method-assign]
+
+    async def _always_abort(_driver: SpannerAsyncDriver) -> None:
+        aborted = _make_aborted("Async always aborted")
+        err = DeadlockError("Async always aborted")
+        err.__cause__ = aborted
+        raise err
+
+    with pytest.raises(DeadlockError, match="Async always aborted"):
+        await config.run_in_transaction(_always_abort)
+    assert db_exhausted.attempts == 2
+
+    db_driver = _AsyncDB(max_attempts=2)
+    async_driver = SpannerAsyncDriver(
+        connection=cast("Any", object()),
+        statement_config=default_statement_config,
+        driver_features={"database_provider": lambda: db_driver},
+    )
+    driver_calls = 0
+
+    async def _driver_work(txn_driver: SpannerAsyncDriver) -> str:
+        nonlocal driver_calls
+        driver_calls += 1
+        assert isinstance(txn_driver, SpannerAsyncDriver)
+        if driver_calls == 1:
+            aborted = _make_aborted("Async driver abort")
+            err = DeadlockError("Async driver abort")
+            err.__cause__ = aborted
+            raise err
+        return "async-committed"
+
+    assert await async_driver.run_in_transaction(_driver_work) == "async-committed"
+    assert db_driver.attempts == 2
+
 

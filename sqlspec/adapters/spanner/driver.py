@@ -19,6 +19,7 @@ from sqlspec.adapters.spanner._typing import (
     SpannerSessionContext,
     SpannerSyncCursor,
     SpannerTransaction,
+    spanner_exceptions,
 )
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
@@ -45,7 +46,7 @@ from sqlspec.driver import (
     SyncRowStream,
     rows_to_dicts,
 )
-from sqlspec.exceptions import SQLConversionError
+from sqlspec.exceptions import DeadlockError, SQLConversionError
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
@@ -635,13 +636,24 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             chunks.append(values)
         return chunks
 
-    def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
-        """High-throughput ingest via the Spanner Batch Write API (one mutation group per chunk)."""
-        session = cast("object", getattr(self.connection, "_session", None))
+    def _resolve_database(self) -> Any:
+        conn = self.connection
+        session = cast("object", getattr(conn, "_session", None))
         database = cast("Any", getattr(session, "_database", None)) if session is not None else None
+        if database is None:
+            database = getattr(conn, "database", None)
+        if database is None:
+            provider = self.driver_features.get("database_provider")
+            if callable(provider):
+                database = provider()
         if database is None:
             msg = "Spanner Batch Write API requires a database-backed session."
             raise SQLConversionError(msg)
+        return database
+
+    def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
+        """High-throughput ingest via the Spanner Batch Write API (one mutation group per chunk)."""
+        database = self._resolve_database()
         with database.mutation_groups() as mutation_groups:
             for chunk in chunks:
                 group = mutation_groups.group()
@@ -651,6 +663,38 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 if status is not None and status.code:
                     msg = f"Spanner batch_write group failed: {status.message}"
                     raise SQLConversionError(msg)
+
+    def run_in_transaction(
+        self,
+        fn: "Callable[..., Any]",
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a callable inside Spanner's retryable transaction runner.
+
+        Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
+        so the Spanner SDK retries on transaction abort, and maps terminal
+        ``Aborted`` exceptions back to ``DeadlockError``.
+        """
+        database = self._resolve_database()
+
+        def _work(transaction: "SpannerConnection", *work_args: Any) -> Any:
+            driver = type(self)(
+                connection=transaction,
+                statement_config=self.statement_config,
+                driver_features=self.driver_features,
+            )
+            try:
+                return fn(driver, *work_args)
+            except DeadlockError as exc:
+                if isinstance(exc.__cause__, spanner_exceptions.Aborted):
+                    raise exc.__cause__ from None
+                raise
+
+        try:
+            return database.run_in_transaction(_work, *args, **kwargs)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
@@ -1249,6 +1293,39 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                     if status is not None and status.code:
                         msg = f"Spanner batch_write group failed: {status.message}"
                         raise SQLConversionError(msg)
+
+    async def run_in_transaction(
+        self,
+        fn: "Callable[..., Any]",
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute an async callable inside Spanner's async retryable transaction runner.
+
+        Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
+        so the Spanner SDK retries on transaction abort, and maps terminal
+        ``Aborted`` exceptions back to ``DeadlockError``.
+        """
+        database = await self._resolve_database()
+
+        async def _work(transaction: "SpannerAsyncConnection", *work_args: Any) -> Any:
+            driver = type(self)(
+                connection=transaction,
+                statement_config=self.statement_config,
+                driver_features=self.driver_features,
+            )
+            try:
+                result = fn(driver, *work_args)
+                return await result if inspect.isawaitable(result) else result
+            except DeadlockError as exc:
+                if isinstance(exc.__cause__, spanner_exceptions.Aborted):
+                    raise exc.__cause__ from None
+                raise
+
+        try:
+            return await database.run_in_transaction(_work, *args, **kwargs)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
