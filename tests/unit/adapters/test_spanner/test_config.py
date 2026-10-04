@@ -3,7 +3,17 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from google.api_core import exceptions as api_exceptions
-from google.cloud.spanner_v1.pool import AbstractSessionPool, BurstyPool, FixedSizePool
+from google.cloud.spanner_v1._async.pool import BurstyPool as AsyncBurstyPool
+from google.cloud.spanner_v1._async.pool import FixedSizePool as AsyncFixedSizePool
+from google.cloud.spanner_v1._async.pool import PingingPool as AsyncPingingPool
+from google.cloud.spanner_v1._async.pool import TransactionPingingPool as AsyncTransactionPingingPool
+from google.cloud.spanner_v1.pool import (
+    AbstractSessionPool,
+    BurstyPool,
+    FixedSizePool,
+    PingingPool,
+    TransactionPingingPool,
+)
 from typing_extensions import Self
 
 import sqlspec.adapters.spanner.config as spanner_config
@@ -1022,5 +1032,92 @@ async def test_async_run_in_transaction_unwraps_deadlock_error_and_retries() -> 
 
     assert await async_driver.run_in_transaction(_driver_work) == "async-committed"
     assert db_driver.attempts == 2
+
+
+def test_sync_pinging_and_transaction_pinging_pool_defaults() -> None:
+    """PingingPool and TransactionPingingPool should default ping_interval to 1800s."""
+    pinging_config = SpannerSyncConfig(
+        connection_config={
+            "project": "p",
+            "instance_id": "i",
+            "database_id": "d",
+            "pool_type": PingingPool,
+            "size": 5,
+        }
+    )
+    pinging_pool = pinging_config.provide_pool()
+    assert isinstance(pinging_pool, PingingPool)
+    assert pinging_pool.size == 5
+    assert cast("Any", pinging_pool)._delta == timedelta(seconds=1800)
+
+    txn_pinging_config = SpannerSyncConfig(
+        connection_config={
+            "project": "p",
+            "instance_id": "i",
+            "database_id": "d",
+            "pool_type": TransactionPingingPool,
+            "size": 8,
+            "ping_interval": 900,
+        }
+    )
+    txn_pinging_pool = txn_pinging_config.provide_pool()
+    assert isinstance(txn_pinging_pool, TransactionPingingPool)
+    assert txn_pinging_pool.size == 8
+    assert cast("Any", txn_pinging_pool)._delta == timedelta(seconds=900)
+
+
+async def test_async_config_pool_types_and_sync_alias_mapping() -> None:
+    """SpannerAsyncConfig should support all async pools and map sync pool classes to Async* pools."""
+    default_config = SpannerAsyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"}
+    )
+    default_pool = await default_config.provide_pool()
+    assert isinstance(default_pool, AsyncBurstyPool)
+    assert default_pool.target_size == 10
+
+    fixed_from_sync = SpannerAsyncConfig(
+        connection_config={
+            "project": "p",
+            "instance_id": "i",
+            "database_id": "d",
+            "pool_type": FixedSizePool,
+            "size": 6,
+            "max_age_minutes": 30,
+        }
+    )
+    fixed_pool = await fixed_from_sync.provide_pool()
+    assert isinstance(fixed_pool, AsyncFixedSizePool)
+    assert fixed_pool.size == 6
+    assert fixed_pool._max_age == timedelta(minutes=30)
+
+    pinging_from_sync = SpannerAsyncConfig(
+        connection_config={
+            "project": "p",
+            "instance_id": "i",
+            "database_id": "d",
+            "pool_type": PingingPool,
+            "size": 4,
+        }
+    )
+    pinging_pool = await pinging_from_sync.provide_pool()
+    assert isinstance(pinging_pool, AsyncPingingPool)
+    assert pinging_pool.size == 4
+    assert cast("Any", pinging_pool)._delta == timedelta(seconds=1800)
+
+    txn_pinging_from_sync = SpannerAsyncConfig(
+        connection_config={
+            "project": "p",
+            "instance_id": "i",
+            "database_id": "d",
+            "pool_type": TransactionPingingPool,
+            "size": 3,
+            "ping_interval": 600,
+        }
+    )
+    txn_pinging_pool = await txn_pinging_from_sync.provide_pool()
+    assert isinstance(txn_pinging_pool, AsyncTransactionPingingPool)
+    assert txn_pinging_pool.size == 3
+    assert cast("Any", txn_pinging_pool)._delta == timedelta(seconds=600)
+
 
 

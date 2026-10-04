@@ -11,6 +11,7 @@ from sqlspec.adapters.spanner._typing import (
     AsyncClient,
     AsyncFixedSizePool,
     AsyncPingingPool,
+    AsyncTransactionPingingPool,
     SpannerAsyncConnection,
     SpannerAsyncSessionContext,
     SpannerConnection,
@@ -22,6 +23,7 @@ from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
 from sqlspec.adapters.spanner._typing import SpannerClient as Client
 from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
 from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
+from sqlspec.adapters.spanner._typing import SpannerTransactionPingingPool as TransactionPingingPool
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
 from sqlspec.adapters.spanner.core import apply_driver_features, create_mapped_exception, default_statement_config
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
@@ -418,12 +420,20 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        pool_type = cast("type[AbstractSessionPool]", self.connection_config.get("pool_type", FixedSizePool))
+        sync_pool_map: dict[Any, Any] = {
+            AsyncFixedSizePool: FixedSizePool,
+            AsyncBurstyPool: BurstyPool,
+            AsyncPingingPool: PingingPool,
+            AsyncTransactionPingingPool: TransactionPingingPool,
+        }
+        raw_pool_type = self.connection_config.get("pool_type", FixedSizePool)
+        pool_type = cast("type[AbstractSessionPool]", sync_pool_map.get(raw_pool_type, raw_pool_type))
 
         labels = self.connection_config.get("session_labels", self.connection_config.get("labels"))
         pool_kwargs: dict[str, Any] = self._pool_base_kwargs(labels=cast("dict[str, str] | None", labels))
         if issubclass(pool_type, PingingPool):
-            pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "ping_interval"}))
+            pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout"}))
+            pool_kwargs["ping_interval"] = self.connection_config.get("ping_interval", 1800)
         elif issubclass(pool_type, FixedSizePool):
             pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "max_age_minutes"}))
         elif issubclass(pool_type, BurstyPool):
@@ -879,12 +889,20 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             msg = "instance_id and database_id are required."
             raise ImproperConfigurationError(msg)
 
-        pool_type = cast("type[AsyncAbstractSessionPool]", self.connection_config.get("pool_type", AsyncBurstyPool))
+        async_pool_map: dict[Any, Any] = {
+            FixedSizePool: AsyncFixedSizePool,
+            BurstyPool: AsyncBurstyPool,
+            PingingPool: AsyncPingingPool,
+            TransactionPingingPool: AsyncTransactionPingingPool,
+        }
+        raw_pool_type = self.connection_config.get("pool_type", AsyncBurstyPool)
+        pool_type = cast("type[AsyncAbstractSessionPool]", async_pool_map.get(raw_pool_type, raw_pool_type))
 
         labels = self.connection_config.get("session_labels", self.connection_config.get("labels"))
         pool_kwargs: dict[str, Any] = self._pool_base_kwargs(labels=cast("dict[str, str] | None", labels))
         if issubclass(pool_type, (AsyncPingingPool, PingingPool)):
-            pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "ping_interval"}))
+            pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout"}))
+            pool_kwargs["ping_interval"] = self.connection_config.get("ping_interval", 1800)
         elif issubclass(pool_type, (AsyncFixedSizePool, FixedSizePool)):
             pool_kwargs.update(self._connection_kwargs_for({"size", "default_timeout", "max_age_minutes"}))
         elif issubclass(pool_type, (AsyncBurstyPool, BurstyPool)):
