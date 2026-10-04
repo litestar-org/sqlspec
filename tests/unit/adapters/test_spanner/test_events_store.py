@@ -1,9 +1,12 @@
 # pyright: reportPrivateUsage=false
-"""Unit tests for SpannerSyncEventQueueStore."""
+"""Unit tests for SpannerSyncEventQueueStore and SpannerAsyncEventQueueStore."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlspec.adapters.spanner.events import SpannerSyncEventQueueStore
+import pytest
+
+from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.adapters.spanner.events import SpannerAsyncEventQueueStore, SpannerSyncEventQueueStore
 
 
 def _mock_spanner_config() -> MagicMock:
@@ -156,8 +159,6 @@ def test_index_name_generation() -> None:
 
 def test_create_table_uses_update_ddl() -> None:
     """Verify create_table calls database.update_ddl with statements."""
-    from sqlspec.adapters.spanner.config import SpannerSyncConfig
-
     config = MagicMock(spec=SpannerSyncConfig)
     config.extension_config = {"events": {"queue_table": "test_events"}}
 
@@ -179,8 +180,6 @@ def test_create_table_uses_update_ddl() -> None:
 
 def test_drop_table_uses_update_ddl() -> None:
     """Verify drop_table calls database.update_ddl with statements."""
-    from sqlspec.adapters.spanner.config import SpannerSyncConfig
-
     config = MagicMock(spec=SpannerSyncConfig)
     config.extension_config = {"events": {"queue_table": "test_events"}}
 
@@ -200,3 +199,75 @@ def test_drop_table_uses_update_ddl() -> None:
     assert "DROP INDEX" in call_args[0]
     assert "DROP TABLE" in call_args[1]
     mock_operation.result.assert_called_once()
+
+
+def test_async_store_ddl_parity_with_sync_store() -> None:
+    """Verify SpannerAsyncEventQueueStore generates identical DDL to SpannerSyncEventQueueStore."""
+    config = _mock_spanner_config()
+    sync_store = SpannerSyncEventQueueStore(config)
+    async_store = SpannerAsyncEventQueueStore(config)
+
+    assert async_store.create_statements() == sync_store.create_statements()
+    assert async_store.drop_statements() == sync_store.drop_statements()
+    assert async_store.table_name == sync_store.table_name
+
+
+async def test_async_create_table_uses_update_ddl() -> None:
+    """Verify async create_table awaits get_database and update_ddl."""
+    config = MagicMock(spec=SpannerAsyncConfig)
+    config.extension_config = {"events": {"queue_table": "test_events"}}
+
+    mock_database = MagicMock()
+    mock_operation = MagicMock()
+    mock_operation.result = AsyncMock(return_value=None)
+    mock_database.update_ddl = AsyncMock(return_value=mock_operation)
+    config.get_database = AsyncMock(return_value=mock_database)
+
+    store = SpannerAsyncEventQueueStore(config)
+
+    await store.create_table()
+
+    config.get_database.assert_awaited_once()
+    mock_database.update_ddl.assert_awaited_once()
+    call_args = mock_database.update_ddl.call_args[0][0]
+    assert len(call_args) == 2
+    assert "CREATE TABLE" in call_args[0]
+    assert "CREATE INDEX" in call_args[1]
+    mock_operation.result.assert_awaited_once()
+
+
+async def test_async_drop_table_uses_update_ddl() -> None:
+    """Verify async drop_table awaits get_database and update_ddl."""
+    config = MagicMock(spec=SpannerAsyncConfig)
+    config.extension_config = {"events": {"queue_table": "test_events"}}
+
+    mock_database = MagicMock()
+    mock_operation = MagicMock()
+    mock_operation.result = AsyncMock(return_value=None)
+    mock_database.update_ddl = AsyncMock(return_value=mock_operation)
+    config.get_database = AsyncMock(return_value=mock_database)
+
+    store = SpannerAsyncEventQueueStore(config)
+
+    await store.drop_table()
+
+    config.get_database.assert_awaited_once()
+    mock_database.update_ddl.assert_awaited_once()
+    call_args = mock_database.update_ddl.call_args[0][0]
+    assert len(call_args) == 2
+    assert "DROP INDEX" in call_args[0]
+    assert "DROP TABLE" in call_args[1]
+    mock_operation.result.assert_awaited_once()
+
+
+async def test_async_create_and_drop_table_type_error_on_wrong_config() -> None:
+    """Verify SpannerAsyncEventQueueStore raises TypeError if config is not SpannerAsyncConfig."""
+    config = _mock_spanner_config()
+    store = SpannerAsyncEventQueueStore(config)
+
+    with pytest.raises(TypeError, match="SpannerAsyncConfig"):
+        await store.create_table()
+
+    with pytest.raises(TypeError, match="SpannerAsyncConfig"):
+        await store.drop_table()
+
