@@ -1,5 +1,6 @@
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from google.api_core import exceptions as api_exceptions
@@ -852,7 +853,7 @@ async def test_async_config_provide_connection_and_sessions() -> None:
     async def _get_db() -> Any:
         return database
 
-    config.get_database = _get_db  # type: ignore[method-assign]
+    object.__setattr__(config, "get_database", _get_db)
 
     ctx = config.provide_connection(transaction=True)
     assert isinstance(ctx, SpannerAsyncConnectionContext)
@@ -872,8 +873,102 @@ async def test_async_config_provide_connection_and_sessions() -> None:
     assert database.sessions_manager.session.txn.commit_calls == 2
 
 
+async def test_async_connection_context_mutations_empty_rollback_and_aenter_failure() -> None:
+    """Verify SpannerAsyncConnectionContext handles mutations-only, empty, exception rollback, and __aenter__ failure."""
+
+    class _AsyncTxn:
+        def __init__(
+            self,
+            *,
+            txn_id: bytes | None = None,
+            mutations: list[object] | None = None,
+            fail_enter: bool = False,
+        ) -> None:
+            self._transaction_id = txn_id
+            self._mutations = mutations if mutations is not None else []
+            self.fail_enter = fail_enter
+            self.committed: Any = None
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        async def __aenter__(self) -> Self:
+            if self.fail_enter:
+                msg = "Failed entering transaction"
+                raise RuntimeError(msg)
+            return self
+
+        async def __aexit__(self, *_: object) -> bool:
+            return False
+
+        async def commit(self) -> None:
+            self.commit_calls += 1
+            self.committed = object()
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    class _AsyncSession:
+        def __init__(self, txn: _AsyncTxn) -> None:
+            self.txn = txn
+
+        def transaction(self) -> _AsyncTxn:
+            return self.txn
+
+    class _AsyncSessionsManager:
+        def __init__(self, session: _AsyncSession) -> None:
+            self.session = session
+            self.returned = 0
+
+        async def get_session(self, _transaction_type: object) -> _AsyncSession:
+            return self.session
+
+        async def put_session(self, _session: object) -> None:
+            self.returned += 1
+
+    class _AsyncDB:
+        def __init__(self, txn: _AsyncTxn) -> None:
+            self.txn = txn
+            self.sessions_manager = _AsyncSessionsManager(_AsyncSession(txn))
+
+    config = SpannerAsyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
+
+    mutations_db = _AsyncDB(_AsyncTxn(txn_id=None, mutations=[object()]))
+    object.__setattr__(config, "get_database", AsyncMock(return_value=mutations_db))
+    async with config.provide_connection(transaction=True):
+        pass
+    assert mutations_db.txn.commit_calls == 1
+    assert mutations_db.txn.rollback_calls == 0
+    assert mutations_db.sessions_manager.returned == 1
+
+    empty_db = _AsyncDB(_AsyncTxn(txn_id=None, mutations=[]))
+    object.__setattr__(config, "get_database", AsyncMock(return_value=empty_db))
+    async with config.provide_connection(transaction=True):
+        pass
+    assert empty_db.txn.commit_calls == 0
+    assert empty_db.txn.rollback_calls == 0
+    assert empty_db.sessions_manager.returned == 1
+
+    rollback_db = _AsyncDB(_AsyncTxn(txn_id=b"active-txn", mutations=[]))
+    object.__setattr__(config, "get_database", AsyncMock(return_value=rollback_db))
+    with pytest.raises(ValueError, match="boom"):
+        async with config.provide_connection(transaction=True):
+            msg = "boom"
+            raise ValueError(msg)
+    assert rollback_db.txn.commit_calls == 0
+    assert rollback_db.txn.rollback_calls == 1
+    assert rollback_db.sessions_manager.returned == 1
+
+    fail_enter_db = _AsyncDB(_AsyncTxn(fail_enter=True))
+    object.__setattr__(config, "get_database", AsyncMock(return_value=fail_enter_db))
+    with pytest.raises(RuntimeError, match="Failed entering transaction"):
+        async with config.provide_connection(transaction=True):
+            pass
+    assert fail_enter_db.sessions_manager.returned == 1
+
+
 def _make_aborted(message: str) -> api_exceptions.Aborted:
-    return api_exceptions.Aborted(message)  # type: ignore[no-untyped-call]
+    aborted_cls = cast("Any", api_exceptions.Aborted)
+    return cast("api_exceptions.Aborted", aborted_cls(message))
 
 
 def test_sync_run_in_transaction_unwraps_deadlock_error_and_retries() -> None:
@@ -897,7 +992,7 @@ def test_sync_run_in_transaction_unwraps_deadlock_error_and_retries() -> None:
 
     db = _SyncDB(max_attempts=2)
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
-    config.get_database = lambda: cast("Any", db)  # type: ignore[method-assign]
+    object.__setattr__(config, "get_database", lambda: cast("Any", db))
 
     call_count = 0
 
@@ -916,7 +1011,7 @@ def test_sync_run_in_transaction_unwraps_deadlock_error_and_retries() -> None:
     assert db.attempts == 2
 
     db_exhausted = _SyncDB(max_attempts=2)
-    config.get_database = lambda: cast("Any", db_exhausted)  # type: ignore[method-assign]
+    object.__setattr__(config, "get_database", lambda: cast("Any", db_exhausted))
 
     def _always_abort(_driver: SpannerSyncDriver) -> None:
         aborted = _make_aborted("Always aborted")
@@ -976,7 +1071,7 @@ async def test_async_run_in_transaction_unwraps_deadlock_error_and_retries() -> 
     async def _get_db() -> Any:
         return db
 
-    config.get_database = _get_db  # type: ignore[method-assign]
+    object.__setattr__(config, "get_database", _get_db)
 
     call_count = 0
 
@@ -999,7 +1094,7 @@ async def test_async_run_in_transaction_unwraps_deadlock_error_and_retries() -> 
     async def _get_exhausted_db() -> Any:
         return db_exhausted
 
-    config.get_database = _get_exhausted_db  # type: ignore[method-assign]
+    object.__setattr__(config, "get_database", _get_exhausted_db)
 
     async def _always_abort(_driver: SpannerAsyncDriver) -> None:
         aborted = _make_aborted("Async always aborted")
@@ -1118,6 +1213,7 @@ async def test_async_config_pool_types_and_sync_alias_mapping() -> None:
     assert isinstance(txn_pinging_pool, AsyncTransactionPingingPool)
     assert txn_pinging_pool.size == 3
     assert cast("Any", txn_pinging_pool)._delta == timedelta(seconds=600)
+
 
 
 

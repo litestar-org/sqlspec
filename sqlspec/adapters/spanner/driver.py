@@ -32,7 +32,11 @@ from sqlspec.adapters.spanner.core import (
     supports_batch_update,
     supports_write,
 )
-from sqlspec.adapters.spanner.data_dictionary import SpannerAsyncDataDictionary, SpannerDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import (
+    SpannerAsyncDataDictionary,
+    SpannerDataDictionary,
+    SpannerSyncDataDictionary,
+)
 from sqlspec.core import StatementConfig, register_driver_profile
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
@@ -65,6 +69,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "SpannerAsyncCursor",
+    "SpannerAsyncDataDictionary",
     "SpannerAsyncDriver",
     "SpannerAsyncExceptionHandler",
     "SpannerAsyncSessionContext",
@@ -72,8 +77,11 @@ __all__ = (
     "SpannerExceptionHandler",
     "SpannerSessionContext",
     "SpannerSyncCursor",
+    "SpannerSyncDataDictionary",
     "SpannerSyncDriver",
 )
+
+_MAX_MUTATIONS_PER_COMMIT = 80_000
 
 _READ_ONLY_SNAPSHOT_ERROR_MESSAGE = (
     "Cannot execute DML in a read-only Snapshot context. "
@@ -616,7 +624,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
         """Coerce Arrow rows into chunks bounded by Spanner's mutation-group ceiling."""
         column_count = len(columns)
-        max_cells = 80_000
+        max_cells = _MAX_MUTATIONS_PER_COMMIT
         chunks: list[list[list[Any]]] = []
         values: list[list[Any]] = []
         pending_cells = 0
@@ -1231,7 +1239,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
         """Coerce Arrow rows into chunks bounded by Spanner's mutation-group ceiling."""
         column_count = len(columns)
-        max_cells = 80_000
+        max_cells = _MAX_MUTATIONS_PER_COMMIT
         chunks: list[list[list[Any]]] = []
         values: list[list[Any]] = []
         pending_cells = 0

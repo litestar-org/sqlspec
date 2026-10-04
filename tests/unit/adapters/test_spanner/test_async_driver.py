@@ -42,6 +42,10 @@ class _FakeAsyncResultSet:
         self.metadata: Any = None
         self.closed = False
 
+    def to_dict_list(self) -> list[dict[str, Any]]:
+        msg = "SpannerAsyncDriver must not call blocking to_dict_list() on AsyncStreamedResultSet"
+        raise AssertionError(msg)
+
     def __aiter__(self) -> "_FakeAsyncResultSet":
         self._index = 0
         return self
@@ -57,6 +61,7 @@ class _FakeAsyncResultSet:
 
     async def close(self) -> None:
         self.closed = True
+
 
 
 async def test_spanner_async_exception_handler_maps_google_api_errors() -> None:
@@ -362,5 +367,49 @@ async def test_async_driver_load_from_arrow_batch_write_api() -> None:
     assert database.mutation_groups_obj.exited is True
     assert database.mutation_groups_obj.batch_write_calls == 1
     assert database.mutation_groups_obj.groups[0].calls == [("users", ["id", "name"], [[1, "a"], [2, "b"]])]
+
+
+async def test_async_driver_select_stream_handles_empty_result_set() -> None:
+    """Verify SpannerAsyncDriver.select_stream handles an empty AsyncStreamedResultSet cleanly."""
+    fake_rs = _FakeAsyncResultSet(rows=[], fields=[_field("id", TypeCode.INT64)])
+    mock_conn = MagicMock()
+    mock_conn.execute_sql = AsyncMock(return_value=fake_rs)
+
+    driver = SpannerAsyncDriver(connection=mock_conn)
+    async with driver.select_stream("SELECT id FROM users WHERE FALSE") as active_stream:
+        rows = [row async for row in active_stream]
+
+    assert rows == []
+    assert fake_rs.closed is True
+
+
+async def test_async_driver_load_from_arrow_empty_and_multi_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify SpannerAsyncDriver.load_from_arrow handles empty tables and splits chunks exceeding 80,000 cells."""
+
+    class _FakeAsyncMutationTxn:
+        def __init__(self) -> None:
+            self.insert_or_update_calls: list[tuple[str, list[str], int]] = []
+
+        def insert_or_update(self, table: str, columns: Any, values: Any) -> None:
+            self.insert_or_update_calls.append((table, list(columns), len(values)))
+
+    monkeypatch.setattr(spanner_driver_module, "SpannerAsyncTransaction", _FakeAsyncMutationTxn)
+    txn = _FakeAsyncMutationTxn()
+    driver = SpannerAsyncDriver(
+        connection=cast("Any", txn),
+        driver_features={"storage_capabilities": _ARROW_CAPABILITIES},
+    )
+
+    empty_table = pa.table({"id": pa.array([], type=pa.int64()), "name": pa.array([], type=pa.string())})
+    empty_job = await driver.load_from_arrow("users", empty_table)
+    assert empty_job.telemetry["rows_processed"] == 0
+    assert txn.insert_or_update_calls == []
+
+    monkeypatch.setattr(spanner_driver_module, "_MAX_MUTATIONS_PER_COMMIT", 4)
+    multi_table = pa.table({"id": [1, 2, 3, 4, 5], "name": ["a", "b", "c", "d", "e"]})
+    multi_job = await driver.load_from_arrow("users", multi_table)
+    assert multi_job.telemetry["rows_processed"] == 5
+    assert [count for _, _, count in txn.insert_or_update_calls] == [2, 2, 1]
+
 
 
