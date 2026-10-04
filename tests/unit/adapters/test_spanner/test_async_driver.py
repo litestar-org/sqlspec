@@ -2,15 +2,22 @@
 
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.types.type import TypeCode
 
-from sqlspec.adapters.spanner.core import resolve_row_plan
-from sqlspec.adapters.spanner.driver import SpannerAsyncExceptionHandler, _SpannerAsyncSelectStreamSource
+import sqlspec.adapters.spanner.driver as spanner_driver_module
+from sqlspec.adapters.spanner.core import default_statement_config, resolve_row_plan
+from sqlspec.adapters.spanner.driver import (
+    SpannerAsyncDriver,
+    SpannerAsyncExceptionHandler,
+    _SpannerAsyncSelectStreamSource,
+)
 from sqlspec.driver import AsyncRowStream
-from sqlspec.exceptions import DeadlockError, UniqueViolationError
+from sqlspec.exceptions import DeadlockError, SQLConversionError, UniqueViolationError
 from sqlspec.utils.serializers import from_json
 
 
@@ -115,3 +122,144 @@ async def test_spanner_async_select_stream_source_chunks_and_resolves_metadata()
         {"id": 3, "payload": {"k": "v3"}},
     ]
     assert fake_rs.closed is True
+
+
+async def test_async_driver_dispatch_execute_select() -> None:
+    """Verify SpannerAsyncDriver executes SELECT queries via async iteration and resolves metadata."""
+    json_cls = cast("Any", JsonObject)
+    fields = [_field("id", TypeCode.INT64), _field("meta", TypeCode.JSON)]
+    fake_rs = _FakeAsyncResultSet(rows=[(10, json_cls({"ok": True}))], fields=fields)
+
+    mock_conn = MagicMock()
+    mock_conn.execute_sql = AsyncMock(return_value=fake_rs)
+
+    driver = SpannerAsyncDriver(connection=mock_conn, statement_config=default_statement_config)
+    query_opts = {"optimizer_version": "6"}
+    result = await driver.execute("SELECT id, meta FROM users WHERE id = @id", {"id": 10}, query_options=query_opts)
+
+    assert result.all() == [{"id": 10, "meta": {"ok": True}}]
+    mock_conn.execute_sql.assert_awaited_once()
+    _, kwargs = mock_conn.execute_sql.call_args
+    assert kwargs.get("query_options") == query_opts
+
+
+async def test_async_driver_dispatch_execute_dml_and_last_statement() -> None:
+    """Verify SpannerAsyncDriver executes DML via await execute_update and forwards last_statement."""
+    mock_conn = MagicMock()
+    mock_conn.execute_update = AsyncMock(return_value=2)
+    mock_conn.committed = None
+
+    driver = SpannerAsyncDriver(connection=mock_conn)
+    result = await driver.execute("UPDATE users SET active = TRUE WHERE id = @id", {"id": 1}, last_statement=True)
+
+    assert result.rows_affected == 2
+    mock_conn.execute_update.assert_awaited_once()
+    _, kwargs = mock_conn.execute_update.call_args
+    assert kwargs.get("last_statement") is True
+
+
+async def test_async_driver_dispatch_execute_dml_on_read_only_snapshot_raises() -> None:
+    """Verify SpannerAsyncDriver raises SQLConversionError on DML when cursor lacks execute_update."""
+    snapshot = SimpleNamespace(execute_sql=AsyncMock())
+    driver = SpannerAsyncDriver(connection=cast("Any", snapshot))
+
+    with pytest.raises(SQLConversionError, match="Cannot execute DML in a read-only Snapshot context"):
+        await driver.execute("DELETE FROM users WHERE id = 1")
+
+
+async def test_async_driver_dispatch_execute_many() -> None:
+    """Verify SpannerAsyncDriver.execute_many invokes await batch_update and omits query_options."""
+    mock_conn = MagicMock()
+    mock_conn.batch_update = AsyncMock(return_value=(None, [1, 1]))
+
+    driver = SpannerAsyncDriver(
+        connection=mock_conn,
+        statement_config=default_statement_config,
+        driver_features={"query_options": {"optimizer_version": "latest"}},
+    )
+    result = await driver.execute_many(
+        "INSERT INTO users (id, name) VALUES (:id, :name)",
+        [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}],
+        query_options={"optimizer_version": "6"},
+    )
+
+    assert result.rows_affected == 2
+    mock_conn.batch_update.assert_awaited_once()
+    _, kwargs = mock_conn.batch_update.call_args
+    assert "query_options" not in kwargs
+
+
+async def test_async_driver_dispatch_execute_script_marks_only_final_dml_as_last_statement() -> None:
+    """Verify SpannerAsyncDriver.execute_script forwards last_statement only to the final DML statement."""
+    mock_conn = MagicMock()
+    mock_conn.execute_update = AsyncMock(return_value=1)
+
+    driver = SpannerAsyncDriver(connection=mock_conn)
+    result = await driver.execute_script("UPDATE t SET x = 1; UPDATE t SET x = 2", last_statement=True)
+
+    assert result.total_statements == 2
+    calls = mock_conn.execute_update.await_args_list
+    assert len(calls) == 2
+    assert "last_statement" not in calls[0].kwargs
+    assert calls[1].kwargs["last_statement"] is True
+
+
+async def test_async_driver_select_stream_and_select_to_arrow() -> None:
+    """Verify SpannerAsyncDriver.select_stream and select_to_arrow work asynchronously."""
+    fields = [_field("id", TypeCode.INT64), _field("name", TypeCode.STRING)]
+
+    mock_conn = MagicMock()
+    mock_conn.execute_sql = AsyncMock(
+        side_effect=lambda *args, **kwargs: _FakeAsyncResultSet(
+            rows=[(1, "alice"), (2, "bob")],
+            fields=fields,
+        )
+    )
+
+    driver = SpannerAsyncDriver(connection=mock_conn)
+    stream = driver.select_stream("SELECT id, name FROM users", chunk_size=1, query_options={"optimizer_version": "6"})
+    async with stream as active_stream:
+        streamed_rows = [row async for row in active_stream]
+
+    assert streamed_rows == [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]
+
+    arrow_result = await driver.select_to_arrow("SELECT id, name FROM users")
+    assert arrow_result.to_dict() == [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}]
+
+
+async def test_async_driver_commit_rollback_and_savepoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify SpannerAsyncDriver commit, rollback, and savepoint methods."""
+
+    class _FakeAsyncTxn:
+        def __init__(self) -> None:
+            self.committed: Any = None
+            self._transaction_id = b"txn-1"
+            self._mutations: list[Any] = []
+            self.commit_calls = 0
+            self.rollback_calls = 0
+
+        async def commit(self) -> None:
+            self.commit_calls += 1
+            self.committed = True
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    monkeypatch.setattr(spanner_driver_module, "SpannerAsyncTransaction", _FakeAsyncTxn)
+    txn = _FakeAsyncTxn()
+    driver = SpannerAsyncDriver(connection=cast("Any", txn))
+
+    await driver.begin()
+    await driver.commit()
+    assert txn.commit_calls == 1
+    await driver.commit()
+    assert txn.commit_calls == 1
+
+    txn.committed = None
+    await driver.rollback()
+    assert txn.rollback_calls == 1
+
+    for method in ("create_savepoint", "release_savepoint", "rollback_to_savepoint"):
+        with pytest.raises(NotImplementedError, match="Spanner"):
+            await getattr(driver, method)("sp1")
+
