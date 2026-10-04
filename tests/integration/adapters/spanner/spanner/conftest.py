@@ -5,6 +5,9 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, TextIO, cast
 
 import pytest
+from google.cloud.spanner_v1._async.database_sessions_manager import (
+    DatabaseSessionsManager as AsyncDatabaseSessionsManager,
+)
 from google.cloud.spanner_v1.database_sessions_manager import DatabaseSessionsManager
 
 from tests.integration.fixtures.spanner import drop_table_if_exists, run_ddl
@@ -25,6 +28,7 @@ def spanner_emulator_session_polling() -> Generator[None, None, None]:
     """
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(DatabaseSessionsManager, "_MAINTENANCE_THREAD_POLLING_INTERVAL", timedelta(milliseconds=100))
+        patch.setattr(AsyncDatabaseSessionsManager, "_MAINTENANCE_THREAD_POLLING_INTERVAL", timedelta(milliseconds=100))
         yield
 
 

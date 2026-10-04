@@ -1,6 +1,6 @@
 """Shared Spanner integration fixtures."""
 
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -9,12 +9,22 @@ from google.cloud import spanner
 from pytest_databases.docker.spanner import SpannerService
 
 from sqlspec import SQLSpec
-from sqlspec.adapters.spanner import SpannerSyncConfig, SpannerSyncDriver
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerAsyncDriver, SpannerSyncConfig, SpannerSyncDriver
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
 
-__all__ = ("spanner_config", "spanner_database", "spanner_read_session", "spanner_session", "spanner_write_session")
+__all__ = (
+    "spanner_async_config",
+    "spanner_async_read_session",
+    "spanner_async_session",
+    "spanner_async_write_session",
+    "spanner_config",
+    "spanner_database",
+    "spanner_read_session",
+    "spanner_session",
+    "spanner_write_session",
+)
 
 
 def _spanner_connection_config(spanner_service: "SpannerService") -> "dict[str, Any]":
@@ -33,12 +43,11 @@ def spanner_database(
     spanner_service: "SpannerService", spanner_connection: "spanner.Client"
 ) -> "Generator[Database, None, None]":
     """Ensure the emulator instance and database exist."""
-    instance = spanner_connection.instance(spanner_service.instance_name)  # type: ignore[no-untyped-call]
+    client = cast("Any", spanner_connection)
+    instance = client.instance(spanner_service.instance_name)
     if not instance.exists():
         config_name = f"{spanner_connection.project_name}/instanceConfigs/emulator-config"
-        instance = spanner_connection.instance(  # type: ignore[no-untyped-call]
-            spanner_service.instance_name, configuration_name=config_name
-        )
+        instance = client.instance(spanner_service.instance_name, configuration_name=config_name)
         instance.create().result(300)
 
     database = instance.database(spanner_service.database_name)
@@ -79,6 +88,46 @@ def spanner_write_session(spanner_config: "SpannerSyncConfig") -> "Generator[Spa
 def spanner_read_session(spanner_config: "SpannerSyncConfig") -> "Generator[SpannerSyncDriver, None, None]":
     """Provide a read-only Spanner session."""
     with spanner_config.provide_read_session() as session:
+        yield session
+
+
+@pytest.fixture
+async def spanner_async_config(
+    spanner_service: "SpannerService", spanner_database: "Database"
+) -> "AsyncGenerator[SpannerAsyncConfig, None]":
+    """Create an async Spanner configuration after ensuring the database exists."""
+    del spanner_database
+    config = SpannerAsyncConfig(connection_config=_spanner_connection_config(spanner_service))
+    try:
+        yield config
+    finally:
+        await config.close_pool()
+
+
+@pytest.fixture
+async def spanner_async_session(spanner_async_config: "SpannerAsyncConfig") -> "AsyncGenerator[SpannerAsyncDriver, None]":
+    """Provide a read-only async Spanner session."""
+    sql = SQLSpec()
+    registered_config = sql.add_config(spanner_async_config)
+    async with sql.provide_session(registered_config) as session:
+        yield session
+
+
+@pytest.fixture
+async def spanner_async_write_session(
+    spanner_async_config: "SpannerAsyncConfig",
+) -> "AsyncGenerator[SpannerAsyncDriver, None]":
+    """Provide a write-capable async Spanner session."""
+    async with spanner_async_config.provide_write_session() as session:
+        yield session
+
+
+@pytest.fixture
+async def spanner_async_read_session(
+    spanner_async_config: "SpannerAsyncConfig",
+) -> "AsyncGenerator[SpannerAsyncDriver, None]":
+    """Provide a read-only async Spanner session."""
+    async with spanner_async_config.provide_read_session() as session:
         yield session
 
 

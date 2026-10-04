@@ -2,8 +2,8 @@
 Spanner
 =======
 
-Google Cloud Spanner adapter using the Spanner client library with session
-pool management.
+Google Cloud Spanner adapter using the Spanner client library with sync and
+async session pool management.
 
 Request And Session Controls
 ============================
@@ -13,7 +13,7 @@ expose public ``execute_with_options()``, ``execute_partitioned_dml()``,
 ``apply_mutations()``, or ``provide_batch_snapshot()`` methods.
 
 Default request controls can be configured through
-``SpannerSyncConfig.driver_features``:
+``SpannerSyncConfig.driver_features`` or ``SpannerAsyncConfig.driver_features``:
 
 ``request_options``
     Forwarded to Spanner ``execute_sql()``, ``execute_update()``, and
@@ -57,8 +57,8 @@ context or driver API.
 Session-Scoped Controls
 =======================
 
-``SpannerSyncConfig.provide_session()`` also accepts explicit Spanner controls
-for the returned session context:
+``SpannerSyncConfig.provide_session()`` and ``SpannerAsyncConfig.provide_session()``
+also accept explicit Spanner controls for the returned session context:
 
 .. code-block:: python
 
@@ -69,6 +69,13 @@ for the returned session context:
    ) as driver:
        driver.execute("UPDATE orders SET status = @status WHERE id = @id", status="paid", id="o-1")
 
+   async with async_config.provide_session(
+       request_options={"transaction_tag": "orders.write"},
+       retry=retry,
+       timeout=20.0,
+   ) as driver:
+       await driver.execute("UPDATE orders SET status = @status WHERE id = @id", status="paid", id="o-1")
+
 The explicit ``provide_session()`` arguments are copied into the returned
 driver's feature set and do not mutate ``config.driver_features``. They also do
 not hide a ``database_provider`` feature for unrelated database-level methods.
@@ -77,8 +84,26 @@ not hide a ``database_provider`` feature for unrelated database-level methods.
 reads. For DDL, DML, and write-capable transactions, use ``provide_session()``
 or ``provide_write_session()``.
 
-Configuration
-=============
+For read-write transactions with automatic ``Aborted`` retry semantics, use
+``run_in_transaction()`` on either configuration or driver:
+
+.. code-block:: python
+
+   async def transfer(driver: SpannerAsyncDriver, amount: int) -> None:
+       await driver.execute(
+           "UPDATE accounts SET balance = balance - @amount WHERE id = @id",
+           amount=amount,
+           id="a-1",
+       )
+
+   await async_config.run_in_transaction(
+       transfer,
+       100,
+       transaction_tag="accounts.transfer",
+   )
+
+Sync Configuration
+==================
 
 With ``google-cloud-spanner==3.71.0``, closing a database that used multiplexed
 sessions can wait up to ten minutes for the SDK's maintenance thread. The
@@ -87,6 +112,13 @@ is merged but has not yet been released. Allow for this delay during application
 shutdown until a fixed SDK is available.
 
 .. autoclass:: sqlspec.adapters.spanner.SpannerSyncConfig
+   :members:
+   :show-inheritance:
+
+Async Configuration
+===================
+
+.. autoclass:: sqlspec.adapters.spanner.SpannerAsyncConfig
    :members:
    :show-inheritance:
 
@@ -117,10 +149,17 @@ Custom Dialects
 Spanner uses the :doc:`Spanner and Spangres dialects <../dialects>` for SQL compilation.
 See the :doc:`Dialects <../dialects>` reference for details.
 
-Driver
-======
+Sync Driver
+===========
 
 .. autoclass:: sqlspec.adapters.spanner.SpannerSyncDriver
+   :members:
+   :show-inheritance:
+
+Async Driver
+============
+
+.. autoclass:: sqlspec.adapters.spanner.SpannerAsyncDriver
    :members:
    :show-inheritance:
 
@@ -128,6 +167,10 @@ Data Dictionary
 ===============
 
 .. autoclass:: sqlspec.adapters.spanner.data_dictionary.SpannerDataDictionary
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.data_dictionary.SpannerAsyncDataDictionary
    :members:
    :show-inheritance:
 
@@ -149,6 +192,41 @@ namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapt
    :members:
    :show-inheritance:
 
+Extension Stores
+================
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerSyncADKStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerAsyncADKStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerAsyncADKMemoryStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.litestar.SpannerSyncStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.litestar.SpannerAsyncStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.events.SpannerSyncEventQueueStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.events.SpannerAsyncEventQueueStore
+   :members:
+   :show-inheritance:
+
 Native execution controls
 -------------------------
 
@@ -160,3 +238,4 @@ transaction DML, including only the final statement of a script.
 Opt-in Arrow Batch Write ingestion works from database-backed read sessions.
 Mutation groups commit independently. Arrow overwrite retains transactional
 delete-and-insert behavior without partitioned DML or Batch Write.
+
