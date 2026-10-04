@@ -1,7 +1,8 @@
 """Spanner driver implementation."""
 
 import contextlib
-from collections.abc import Iterator
+import inspect
+from collections.abc import AsyncIterator, Iterator
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 
@@ -9,6 +10,8 @@ import sqlglot as _sqlglot
 from sqlglot import exp as _sqlglot_exp
 
 from sqlspec.adapters.spanner._typing import (
+    SpannerAsyncCursor,
+    SpannerAsyncSessionContext,
     SpannerGoogleAPICallError,
     SpannerSessionContext,
     SpannerSyncCursor,
@@ -29,6 +32,7 @@ from sqlspec.adapters.spanner.core import (
 from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
 from sqlspec.core import StatementConfig, register_driver_profile
 from sqlspec.driver import (
+    BaseAsyncExceptionHandler,
     BaseSyncExceptionHandler,
     ExecutionResult,
     SyncDriverAdapterBase,
@@ -55,6 +59,9 @@ if TYPE_CHECKING:
     from sqlspec.typing import SchemaT, StatementParameters
 
 __all__ = (
+    "SpannerAsyncCursor",
+    "SpannerAsyncExceptionHandler",
+    "SpannerAsyncSessionContext",
     "SpannerDataDictionary",
     "SpannerExceptionHandler",
     "SpannerSessionContext",
@@ -80,7 +87,25 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
     __slots__ = ()
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
+        if exc_type is None:
+            return False
 
+        if isinstance(exc_val, SpannerGoogleAPICallError):
+            self.pending_exception = create_mapped_exception(exc_val)
+            return True
+        return False
+
+
+class SpannerAsyncExceptionHandler(BaseAsyncExceptionHandler):
+    """Async context manager for handling Spanner API exceptions.
+
+    Maps Google Cloud API exceptions to specific SQLSpecException subclasses.
+    Uses deferred exception pattern for mypyc compatibility.
+    """
+
+    __slots__ = ()
+
+    def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
 
@@ -674,6 +699,22 @@ class _SpannerWriteProtocol(_SpannerReadProtocol, Protocol):
     def rollback(self) -> None: ...
 
 
+class _SpannerAsyncResultSetProtocol(Protocol):
+    metadata: Any
+
+    def __aiter__(self) -> AsyncIterator[Any]: ...
+
+
+class _SpannerAsyncReadProtocol(Protocol):
+    async def execute_sql(
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        param_types: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> _SpannerAsyncResultSetProtocol: ...
+
+
 class _PerCallExecuteOptions:
     """Per-call Spanner execution options captured for a single dispatch."""
 
@@ -786,6 +827,110 @@ class _SpannerSelectStreamSource:
             if callable(close):
                 with contextlib.suppress(Exception):
                     close()
+        self._result_set = None
+        self._row_iterator = None
+        self._column_names = None
+        self._column_plan = None
+
+
+class _SpannerAsyncSelectStreamSource:
+    """Native async chunk source for Spanner SELECT streaming."""
+
+    __slots__ = (
+        "_chunk_size",
+        "_column_names",
+        "_column_plan",
+        "_driver",
+        "_execute_kwargs",
+        "_param_types",
+        "_params",
+        "_result_set",
+        "_row_iterator",
+        "_sql",
+    )
+
+    def __init__(
+        self,
+        driver: Any,
+        sql: str,
+        params: "dict[str, Any] | None",
+        param_types: "dict[str, Any]",
+        chunk_size: int,
+        execute_kwargs: "dict[str, Any]",
+    ) -> None:
+        self._driver = driver
+        self._sql = sql
+        self._params = params
+        self._param_types = param_types
+        self._chunk_size = chunk_size
+        self._execute_kwargs = execute_kwargs
+        self._column_names: list[str] | None = None
+        self._column_plan: tuple[tuple[int, Any], ...] | None = None
+        self._result_set: _SpannerAsyncResultSetProtocol | None = None
+        self._row_iterator: AsyncIterator[Any] | None = None
+
+    async def start(self) -> None:
+        handler = self._driver.handle_database_exceptions()
+        async with handler:
+            reader = cast("_SpannerAsyncReadProtocol", self._driver.connection)
+            result_set = await reader.execute_sql(
+                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
+            )
+            self._result_set = result_set
+            self._row_iterator = aiter(result_set)
+        self._driver._check_pending_exception(handler)
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        result_set = self._result_set
+        row_iterator = self._row_iterator
+        column_names = self._column_names
+        if result_set is None or row_iterator is None:
+            return []
+
+        handler = self._driver.handle_database_exceptions()
+        rows: list[Any] = []
+        async with handler:
+            for _ in range(self._chunk_size):
+                try:
+                    row = await anext(row_iterator)
+                except StopAsyncIteration:
+                    break
+                rows.append(row)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+
+        if column_names is None:
+            try:
+                metadata = result_set.metadata
+                row_type = metadata.row_type
+                fields = row_type.fields
+            except AttributeError:
+                msg = "Result set metadata not available."
+                raise SQLConversionError(msg)
+            if not fields:
+                msg = "Result set metadata not available."
+                raise SQLConversionError(msg)
+            column_names, column_plan = self._driver._resolve_row_plan(fields)
+            self._column_names = column_names
+            self._column_plan = column_plan
+
+        converted_rows, resolved_column_names = collect_rows(
+            rows, (), column_names=column_names, column_plan=self._column_plan
+        )
+        self._column_names = resolved_column_names
+        return rows_to_dicts(converted_rows, resolved_column_names)
+
+    async def close(self, error: bool = False) -> None:
+        del error
+        result_set = self._result_set
+        if result_set is not None:
+            close = getattr(result_set, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    maybe_awaitable = close()
+                    if inspect.isawaitable(maybe_awaitable):
+                        await maybe_awaitable
         self._result_set = None
         self._row_iterator = None
         self._column_names = None
