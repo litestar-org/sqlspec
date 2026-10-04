@@ -309,12 +309,12 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         return cast("int", result)
 
     def _create_table(self) -> None:
-        database = self._config.get_database()
-        existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
+        database = cast("Any", self._config.get_database())
+        existing_tables = {t.table_id for t in database.list_tables()}
 
         if self._table_name not in existing_tables:
             ddl_statements = [self._table_ddl(), self._index_ddl()]
-            database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
+            database.update_ddl(ddl_statements).result(300)
 
 
 class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["SpannerAsyncConfig"]):

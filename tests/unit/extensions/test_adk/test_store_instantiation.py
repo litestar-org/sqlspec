@@ -40,6 +40,7 @@ SESSION_STORE_CLASSES = [
     "sqlspec.adapters.psycopg.adk.PsycopgSyncADKStore",
     "sqlspec.adapters.pymssql.adk.PymssqlADKStore",
     "sqlspec.adapters.pymysql.adk.PyMysqlADKStore",
+    "sqlspec.adapters.spanner.adk.SpannerAsyncADKStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKStore",
 ]
@@ -65,6 +66,7 @@ MEMORY_STORE_CLASSES = [
     "sqlspec.adapters.psycopg.adk.PsycopgSyncADKMemoryStore",
     "sqlspec.adapters.pymssql.adk.PymssqlADKMemoryStore",
     "sqlspec.adapters.pymysql.adk.PyMysqlADKMemoryStore",
+    "sqlspec.adapters.spanner.adk.SpannerAsyncADKMemoryStore",
     "sqlspec.adapters.spanner.adk.SpannerSyncADKMemoryStore",
     "sqlspec.adapters.sqlite.adk.SqliteADKMemoryStore",
 ]

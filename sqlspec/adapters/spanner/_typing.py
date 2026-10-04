@@ -86,6 +86,7 @@ if TYPE_CHECKING:
     AsyncTransaction: TypeAlias = _SpannerAsyncTransaction
     AsyncTransactionPingingPool: TypeAlias = SpannerAsyncTransactionPingingPool
     SpannerConnection: TypeAlias = Snapshot | SnapshotCheckout | _SpannerTransaction
+    SpannerSyncConnection: TypeAlias = SpannerConnection
     SpannerAsyncConnection: TypeAlias = (
         SpannerAsyncSnapshot | AsyncSnapshotCheckout | _SpannerAsyncTransaction | SpannerAsyncBatch
     )
@@ -96,6 +97,7 @@ if TYPE_CHECKING:
 
 if not TYPE_CHECKING:
     SpannerConnection = Any
+    SpannerSyncConnection = Any
     SpannerAsyncConnection = Any
     SpannerGoogleAPICallError = (
         import_optional_attr("google.api_core.exceptions", "GoogleAPICallError")
@@ -162,7 +164,9 @@ __all__ = (
     "SpannerRequestOptions",
     "SpannerRetry",
     "SpannerSessionContext",
+    "SpannerSyncConnection",
     "SpannerSyncCursor",
+    "SpannerSyncSessionContext",
     "SpannerTransaction",
     "SpannerTransactionPingingPool",
     "SpannerTransactionType",
@@ -263,6 +267,9 @@ class SpannerSessionContext:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+SpannerSyncSessionContext = SpannerSessionContext
 
 
 class SpannerAsyncSessionContext:

@@ -418,6 +418,22 @@ def test_spanner_store_drop_statements_reverse_order() -> None:
     assert "DROP TABLE" in statements[1]
 
 
+def test_spanner_async_store_column_types_and_ddl_parity() -> None:
+    """Spanner async store produces identical column types and DDL as sync store."""
+    pytest.importorskip("google.cloud.spanner")
+    from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
+    from sqlspec.adapters.spanner.events.store import SpannerAsyncEventQueueStore, SpannerSyncEventQueueStore
+
+    sync_cfg = SpannerSyncConfig(connection_config={"project": "test", "instance": "inst", "database": "db"})
+    async_cfg = SpannerAsyncConfig(connection_config={"project": "test", "instance": "inst", "database": "db"})
+    sync_store = SpannerSyncEventQueueStore(sync_cfg)
+    async_store = SpannerAsyncEventQueueStore(async_cfg)
+
+    assert async_store._column_types() == sync_store._column_types()
+    assert async_store.create_statements() == sync_store.create_statements()
+    assert async_store.drop_statements() == sync_store.drop_statements()
+
+
 def test_adbc_store_postgres_dialect() -> None:
     """ADBC store detects PostgreSQL dialect from URI."""
     pytest.importorskip("adbc_driver_manager")

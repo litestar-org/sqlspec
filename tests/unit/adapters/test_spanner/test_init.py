@@ -69,9 +69,13 @@ def test_spanner_adapter_exports_sync_and_async_symbols() -> None:
         "SpannerPoolParams",
         "SpannerSessionContext",
         "SpannerSyncConfig",
+        "SpannerSyncConnection",
+        "SpannerSyncConnectionContext",
         "SpannerSyncCursor",
         "SpannerSyncDataDictionary",
         "SpannerSyncDriver",
+        "SpannerSyncExceptionHandler",
+        "SpannerSyncSessionContext",
         "default_statement_config",
     }
     assert expected.issubset(set(spanner_pkg.__all__))

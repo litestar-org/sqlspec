@@ -17,6 +17,8 @@ from sqlspec.adapters.spanner._typing import (
     SpannerConnection,
     SpannerGoogleAPICallError,
     SpannerSessionContext,
+    SpannerSyncConnection,
+    SpannerSyncSessionContext,
     spanner_exceptions,
 )
 from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
@@ -70,6 +72,7 @@ __all__ = (
     "SpannerDriverFeatures",
     "SpannerPoolParams",
     "SpannerSyncConfig",
+    "SpannerSyncConnectionContext",
     "build_connection_config",
 )
 
@@ -292,6 +295,9 @@ class SpannerConnectionContext(SyncPoolConnectionContext):
         return None
 
 
+SpannerSyncConnectionContext = SpannerConnectionContext
+
+
 class _SpannerSessionConnectionHandler(SyncPoolSessionFactory):
     __slots__ = ("_connection_ctx",)
 
@@ -396,9 +402,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
                 instance_kwargs["labels"] = instance_labels
             database_kwargs = self._connection_kwargs_for(_DATABASE_CONFIG_FIELDS)
             database_kwargs["pool"] = self.connection_instance
-            self._database = client.instance(instance_id, **instance_kwargs).database(  # type: ignore[no-untyped-call]
-                database_id, **database_kwargs
-            )
+            instance = cast("Any", client).instance(instance_id, **instance_kwargs)
+            self._database = cast("Database", instance.database(database_id, **database_kwargs))
         return self._database
 
     def create_connection(self) -> SpannerConnection:
@@ -411,7 +416,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         Returns:
             A snapshot checkout to be used as a context manager.
         """
-        return cast("SpannerConnection", self.get_database().snapshot(multi_use=True))  # type: ignore[no-untyped-call]
+        return cast("SpannerConnection", cast("Any", self.get_database()).snapshot(multi_use=True))
 
     def _create_pool(self) -> "AbstractSessionPool":
         instance_id = self.connection_config.get("instance_id")
@@ -680,7 +685,10 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             "SpannerPoolParams": SpannerPoolParams,
             "SpannerSessionContext": SpannerSessionContext,
             "SpannerSyncConfig": SpannerSyncConfig,
+            "SpannerSyncConnection": SpannerSyncConnection,
+            "SpannerSyncConnectionContext": SpannerSyncConnectionContext,
             "SpannerSyncDriver": SpannerSyncDriver,
+            "SpannerSyncSessionContext": SpannerSyncSessionContext,
         })
         return namespace
 
@@ -868,7 +876,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
 
         if self._database is None:
             client = self._get_client()
-            instance = client.instance(instance_id, **self._instance_kwargs())  # type: ignore[no-untyped-call]
+            instance = cast("Any", client).instance(instance_id, **self._instance_kwargs())
             database_result = instance.database(
                 database_id, pool=self.connection_instance, **self._database_kwargs()
             )

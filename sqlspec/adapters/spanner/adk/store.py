@@ -736,7 +736,7 @@ class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerS
 
     def _existing_tables(self) -> "set[str]":
         database = self._database()
-        return {table.table_id for table in database.list_tables()}  # type: ignore[no-untyped-call]
+        return {table.table_id for table in cast("Any", database).list_tables()}
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -746,7 +746,7 @@ class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerS
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._database().run_in_transaction(_SpannerWriteJob(statements))  # type: ignore[no-untyped-call]
+        cast("Any", self._database()).run_in_transaction(_SpannerWriteJob(statements))
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -890,7 +890,7 @@ class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerS
         existing_tables = self._existing_tables()
         ddl_statements = self._missing_table_ddl_statements(existing_tables)
         if ddl_statements:
-            database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
+            cast("Any", database).update_ddl(ddl_statements).result(300)
 
     def _sessions_table_ddl(self) -> str:
         return self._build_sessions_table_ddl()
@@ -1507,7 +1507,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseSyncADKMe
 
     def _existing_tables(self) -> "set[str]":
         database = self._database()
-        return {table.table_id for table in database.list_tables()}  # type: ignore[no-untyped-call]
+        return {table.table_id for table in cast("Any", database).list_tables()}
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -1518,24 +1518,24 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseSyncADKMe
             return list(result_set)
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._database().run_in_transaction(_SpannerMemoryWriteJob(statements))  # type: ignore[no-untyped-call]
+        cast("Any", self._database()).run_in_transaction(_SpannerMemoryWriteJob(statements))
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        return int(self._database().run_in_transaction(_SpannerMemoryUpdateJob(sql, params, types)))  # type: ignore[no-untyped-call]
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerMemoryUpdateJob(sql, params, types)))
 
     def _create_tables(self) -> None:
         if not self._enabled:
             return
 
         database = self._database()
-        existing_tables = {t.table_id for t in database.list_tables()}  # type: ignore[no-untyped-call]
+        existing_tables = {t.table_id for t in cast("Any", database).list_tables()}
 
         ddl_statements: list[str] = []
         if self._memory_table not in existing_tables:
             ddl_statements.extend(self._memory_table_ddl())
 
         if ddl_statements:
-            database.update_ddl(ddl_statements).result(300)  # type: ignore[no-untyped-call]
+            cast("Any", database).update_ddl(ddl_statements).result(300)
 
     def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()

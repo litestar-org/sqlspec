@@ -26,7 +26,7 @@ from sqlspec.adapters.duckdb.config import DuckDBConfig, DuckDBPoolParams
 from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OraclePoolParams, OracleSyncConfig
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig, PsqlpyPoolParams
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgPoolParams, PsycopgSyncConfig
-from sqlspec.adapters.spanner.config import SpannerSyncConfig
+from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionParams
 
 
@@ -272,14 +272,15 @@ def test_adbc_config_accepts_connection_parameters() -> None:
 
 
 def test_spanner_config_accepts_connection_parameters() -> None:
-    """Test SpannerSyncConfig accepts connection_config and connection_instance."""
-    config = SpannerSyncConfig(
-        connection_config={"instance_id": "test-instance", "database_id": "test-database"}, connection_instance=None
-    )
+    """Test SpannerSyncConfig and SpannerAsyncConfig accept connection_config and connection_instance."""
+    for config_cls in (SpannerSyncConfig, SpannerAsyncConfig):
+        config = config_cls(
+            connection_config={"instance_id": "test-instance", "database_id": "test-database"}, connection_instance=None
+        )
 
-    assert config.connection_config["instance_id"] == "test-instance"
-    assert config.connection_config["database_id"] == "test-database"
-    assert config.connection_instance is None
+        assert config.connection_config["instance_id"] == "test-instance"
+        assert config.connection_config["database_id"] == "test-database"
+        assert config.connection_instance is None
 
 
 def test_connection_config_empty_dict_is_valid() -> None:
@@ -427,6 +428,7 @@ def test_connection_config_parameter_naming_consistency() -> None:
         (DuckDBConfig, DuckDBPoolParams(database=":memory:"), "database"),  # Converts :memory: to shared_db
         (BigQueryConfig, BigQueryConnectionParams(project="test-project"), None),
         (AdbcConfig, cast(AdbcConnectionParams, {"driver": "adbc_driver_sqlite"}), None),
+        (SpannerAsyncConfig, {"instance_id": "test", "database_id": "test"}, None),
         (SpannerSyncConfig, {"instance_id": "test", "database_id": "test"}, None),
     ]
 
@@ -458,6 +460,7 @@ def test_connection_instance_parameter_naming_consistency() -> None:
         (DuckDBConfig, DuckDBPoolParams(database=":memory:")),
         (BigQueryConfig, BigQueryConnectionParams(project="test-project")),
         (AdbcConfig, cast(AdbcConnectionParams, {"driver": "adbc_driver_sqlite"})),
+        (SpannerAsyncConfig, {"instance_id": "test", "database_id": "test"}),
         (SpannerSyncConfig, {"instance_id": "test", "database_id": "test"}),
     ]
 

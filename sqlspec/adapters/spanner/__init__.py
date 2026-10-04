@@ -6,7 +6,9 @@ from sqlspec.adapters.spanner._typing import (
     SpannerAsyncSessionContext,
     SpannerConnection,
     SpannerSessionContext,
+    SpannerSyncConnection,
     SpannerSyncCursor,
+    SpannerSyncSessionContext,
 )
 from sqlspec.adapters.spanner.config import (
     SpannerAsyncConfig,
@@ -16,6 +18,7 @@ from sqlspec.adapters.spanner.config import (
     SpannerDriverFeatures,
     SpannerPoolParams,
     SpannerSyncConfig,
+    SpannerSyncConnectionContext,
     build_connection_config,
 )
 from sqlspec.adapters.spanner.core import default_statement_config
@@ -29,6 +32,7 @@ from sqlspec.adapters.spanner.driver import (
     SpannerAsyncExceptionHandler,
     SpannerExceptionHandler,
     SpannerSyncDriver,
+    SpannerSyncExceptionHandler,
 )
 from sqlspec.adapters.spanner.type_converter import (
     bytes_to_spanner,
@@ -58,9 +62,13 @@ __all__ = (
     "SpannerPoolParams",
     "SpannerSessionContext",
     "SpannerSyncConfig",
+    "SpannerSyncConnection",
+    "SpannerSyncConnectionContext",
     "SpannerSyncCursor",
     "SpannerSyncDataDictionary",
     "SpannerSyncDriver",
+    "SpannerSyncExceptionHandler",
+    "SpannerSyncSessionContext",
     "build_connection_config",
     "bytes_to_spanner",
     "coerce_params_for_spanner",

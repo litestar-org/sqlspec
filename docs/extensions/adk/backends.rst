@@ -112,7 +112,7 @@ The table below classifies every backend by its ADK support level.
      - Supported
      - Full
      - Full
-     - Google Cloud Spanner (cloud-managed).
+     - Google Cloud Spanner (cloud-managed; supports both sync and async modes).
    * - bigquery
      - Supported (Analytics)
      - Replay / Search
@@ -329,7 +329,9 @@ Driver 18:
 Spanner
 -------
 
-Google Cloud Spanner provides globally distributed ADK storage:
+Google Cloud Spanner provides globally distributed ADK storage in both native
+async (``SpannerAsyncADKStore`` / ``SpannerAsyncADKMemoryStore``) and sync
+(``SpannerSyncADKStore`` / ``SpannerSyncADKMemoryStore``) modes:
 
 - Cloud-managed, horizontally scalable.
 - Optional hash sharding via ``shard_count`` to reduce hot spots.

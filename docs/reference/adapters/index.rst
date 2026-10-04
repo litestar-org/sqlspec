@@ -83,7 +83,7 @@ exports a typed config class and a driver implementation.
       :link: spanner
       :link-type: doc
 
-      Google Cloud Spanner.
+      Sync + Async Google Cloud Spanner.
 
    .. grid-item-card:: CockroachDB + AsyncPG
       :link: cockroach_asyncpg
@@ -289,9 +289,9 @@ means the parameter pipeline preserves the Python value for the driver.
      - Text
    * - spanner
      - Yes
-     -
      - Yes
-     -
+     - Yes
+     - Yes
      -
      - Yes
      - Native

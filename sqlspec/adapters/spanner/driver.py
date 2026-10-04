@@ -17,6 +17,7 @@ from sqlspec.adapters.spanner._typing import (
     SpannerGoogleAPICallError,
     SpannerSessionContext,
     SpannerSyncCursor,
+    SpannerSyncSessionContext,
     SpannerTransaction,
     spanner_exceptions,
 )
@@ -79,6 +80,8 @@ __all__ = (
     "SpannerSyncCursor",
     "SpannerSyncDataDictionary",
     "SpannerSyncDriver",
+    "SpannerSyncExceptionHandler",
+    "SpannerSyncSessionContext",
 )
 
 _MAX_MUTATIONS_PER_COMMIT = 80_000
@@ -114,6 +117,9 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
+
+
+SpannerSyncExceptionHandler = SpannerExceptionHandler
 
 
 class SpannerAsyncExceptionHandler(BaseAsyncExceptionHandler):
