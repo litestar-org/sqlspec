@@ -14,6 +14,7 @@ from sqlspec.adapters.spanner.core import (
 )
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.core import TypedParameter
+from sqlspec.utils.serializers import from_json
 
 
 def _field(name: str, code: int) -> SimpleNamespace:
@@ -145,3 +146,33 @@ def test_resolve_column_names_reuses_cached_fields() -> None:
     assert first == ["id", "name"]
     assert second is first
     assert len(cache) == 1
+
+
+def test_convert_json_row_value_zero_copy_unwrapping_with_default_deserializer(monkeypatch: Any) -> None:
+    """Verify JsonObject is unwrapped directly without calling serialize() when using default from_json."""
+    fields = [
+        _field("obj", TypeCode.JSON),
+        _field("arr", TypeCode.JSON),
+        _field("scalar", TypeCode.JSON),
+        _field("null_val", TypeCode.JSON),
+    ]
+    json_cls = cast("Any", JsonObject)
+    json_obj = json_cls({"a": 1})
+    json_arr = json_cls([1, 2, 3])
+    json_scalar = json_cls("hello")
+    json_null = json_cls(None)
+
+    def fail_serialize(self: Any) -> str:
+        msg = "serialize() should not be called when json_deserializer is from_json"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(JsonObject, "serialize", fail_serialize)
+
+    column_names, column_plan = resolve_row_plan(fields, {}, json_deserializer=from_json)
+    rows = [(json_obj, json_arr, json_scalar, json_null)]
+    data, _ = collect_rows(rows, fields, column_names=column_names, column_plan=column_plan)
+
+    assert data == [({"a": 1}, [1, 2, 3], "hello", None)]
+    assert type(data[0][0]) is dict
+    assert type(data[0][1]) is list
+

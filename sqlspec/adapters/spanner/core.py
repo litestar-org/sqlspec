@@ -306,7 +306,17 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
 def _convert_json_row_value(value: Any, *, json_deserializer: "Callable[[str], Any]") -> Any:
     """Convert a native Spanner JSON cell using the configured deserializer."""
     if isinstance(value, JsonObject):
-        json_value = cast("Any", value).serialize()
+        raw_json_obj = cast("Any", value)
+        if getattr(raw_json_obj, "_is_null", False):
+            return None
+        if json_deserializer is from_json:
+            if getattr(raw_json_obj, "_is_array", False):
+                return list(raw_json_obj._array_value)
+            if getattr(raw_json_obj, "_is_scalar_value", False):
+                return raw_json_obj._simple_value
+            if isinstance(value, dict):
+                return dict(value)
+        json_value = raw_json_obj.serialize()
         if json_value is None:
             return None
     elif isinstance(value, str):
