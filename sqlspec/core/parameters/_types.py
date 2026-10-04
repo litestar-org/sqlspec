@@ -176,9 +176,11 @@ class TypedParameter:
 
     __slots__ = TYPED_PARAMETER_SLOTS
 
-    def __init__(self, value: Any, original_type: "type | None" = None, semantic_name: "str | None" = None) -> None:
+    def __init__(
+        self, value: Any, original_type: "type | str | None" = None, semantic_name: "str | None" = None
+    ) -> None:
         self.value = value
-        self.original_type = original_type or type(value)
+        self.original_type: type | str = original_type or type(value)
         self.semantic_name = semantic_name
         self._hash: int | None = None
 
@@ -199,7 +201,8 @@ class TypedParameter:
 
     def __repr__(self) -> str:
         name_part = f", semantic_name='{self.semantic_name}'" if self.semantic_name else ""
-        return f"TypedParameter({self.value!r}, original_type={self.original_type.__name__}{name_part})"
+        type_label = self.original_type if isinstance(self.original_type, str) else self.original_type.__name__
+        return f"TypedParameter({self.value!r}, original_type={type_label}{name_part})"
 
     def __reduce__(self) -> "tuple[Any, ...]":
         """Reconstruct via ``TypedParameter(value, original_type, semantic_name)``."""
