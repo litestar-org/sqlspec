@@ -3,8 +3,18 @@
 from sqlspec.adapters.spanner.adk.store import (
     SpannerADKConfig,
     SpannerADKRetentionConfig,
+    SpannerAsyncADKMemoryStore,
+    SpannerAsyncADKStore,
     SpannerSyncADKMemoryStore,
     SpannerSyncADKStore,
 )
 
-__all__ = ("SpannerADKConfig", "SpannerADKRetentionConfig", "SpannerSyncADKMemoryStore", "SpannerSyncADKStore")
+__all__ = (
+    "SpannerADKConfig",
+    "SpannerADKRetentionConfig",
+    "SpannerAsyncADKMemoryStore",
+    "SpannerAsyncADKStore",
+    "SpannerSyncADKMemoryStore",
+    "SpannerSyncADKStore",
+)
+

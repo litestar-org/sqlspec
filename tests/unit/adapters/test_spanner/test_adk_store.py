@@ -4,7 +4,7 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast, get_args, get_origin
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from google.api_core.exceptions import NotFound
@@ -14,6 +14,8 @@ from typing_extensions import NotRequired
 from sqlspec.adapters.spanner.adk import (
     SpannerADKConfig,
     SpannerADKRetentionConfig,
+    SpannerAsyncADKMemoryStore,
+    SpannerAsyncADKStore,
     SpannerSyncADKMemoryStore,
     SpannerSyncADKStore,
 )
@@ -377,3 +379,209 @@ def test_spanner_list_sessions_rejects_invalid_options(options: "dict[str, Any]"
         store.list_sessions("app", **options)
 
     assert calls == []
+
+
+async def test_async_adk_store_create_tables_with_async_generator_list_tables() -> None:
+    """Verify SpannerAsyncADKStore.create_tables consumes async generator list_tables and awaits update_ddl().result()."""
+    config = _mock_config({"expires_index_options": "locality_group = 'cold'"})
+    database = MagicMock()
+
+    async def _list_tables() -> Any:
+        yield SimpleNamespace(table_id="adk_session")
+
+    database.list_tables.side_effect = _list_tables
+    op_mock = MagicMock()
+    op_mock.result = AsyncMock(return_value=None)
+    database.update_ddl = AsyncMock(return_value=op_mock)
+    config.get_database = AsyncMock(return_value=database)
+
+    store = SpannerAsyncADKStore(config)
+    await store.create_tables()
+
+    database.update_ddl.assert_awaited_once()
+    ddl_statements = database.update_ddl.call_args.args[0]
+    assert not any("CREATE TABLE adk_session" in stmt for stmt in ddl_statements)
+    assert any("CREATE TABLE adk_event" in stmt for stmt in ddl_statements)
+    op_mock.result.assert_awaited_once_with(300)
+
+
+async def test_async_adk_store_create_get_list_delete_session() -> None:
+    """Verify SpannerAsyncADKStore CRUD operations over async snapshots and transactions."""
+    config = _mock_config()
+    database = MagicMock()
+    executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    async def _run_in_txn(job: Any) -> Any:
+        txn = MagicMock()
+
+        async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+            executed_writes.append((sql, params, param_types))
+            return 1
+
+        async def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+            executed_writes.extend(stmts)
+            return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+        txn.execute_update = _exec_update
+        txn.batch_update = _batch_update
+        return await job(txn)
+
+    database.run_in_transaction = _run_in_txn
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    snapshot = MagicMock()
+
+    async def _execute_sql(sql: str, params: dict[str, Any] | None = None, param_types: dict[str, Any] | None = None) -> Any:
+        del sql, params, param_types
+
+        async def _rows() -> Any:
+            yield ("s1", "app", "u1", '{"k":"v"}', now, now)
+
+        return _rows()
+
+    snapshot.execute_sql = _execute_sql
+    snap_ctx = MagicMock()
+    snap_ctx.__aenter__ = AsyncMock(return_value=snapshot)
+    snap_ctx.__aexit__ = AsyncMock(return_value=None)
+    database.snapshot.return_value = snap_ctx
+    config.get_database = AsyncMock(return_value=database)
+
+    store = SpannerAsyncADKStore(config)
+    created = await store.create_session("s1", "app", "u1", {"k": "v"})
+    assert created["id"] == "s1"
+    assert len(executed_writes) == 1
+
+    fetched = await store.get_session("app", "u1", "s1")
+    assert fetched is not None
+    assert fetched["state"] == {"k": "v"}
+
+    sessions = await store.list_sessions("app", "u1", limit=5)
+    assert len(sessions) == 1
+    assert sessions[0]["id"] == "s1"
+
+    executed_writes.clear()
+    await store.delete_session("app", "u1", "s1")
+    assert len(executed_writes) == 2
+
+
+async def test_async_adk_store_append_event_and_update_state_and_get_events() -> None:
+    """Verify SpannerAsyncADKStore atomic append_event_and_update_state and get_events."""
+    store = SpannerAsyncADKStore(_mock_config())
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    event: StoredEvent = {
+        "id": "event-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "session_id": "session-1",
+        "invocation_id": "inv-1",
+        "timestamp": timestamp,
+        "event_data": {"content": "hello"},
+    }
+    fake_record = {
+        "id": "session-1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"turn": 1},
+        "create_time": timestamp,
+        "update_time": timestamp,
+    }
+
+    with (
+        patch.object(store, "_run_write", new_callable=AsyncMock) as run_write,
+        patch.object(store, "_get_session", new_callable=AsyncMock, return_value=fake_record),
+    ):
+        returned = await store.append_event_and_update_state(event, "app", "u1", "session-1", {"turn": 1})
+
+    assert returned == fake_record
+    run_write.assert_awaited_once()
+    event_sql, event_params, _ = run_write.call_args.args[0][0]
+    assert "@timestamp" in event_sql
+    assert event_params["timestamp"] is timestamp
+
+    with patch.object(
+        store,
+        "_run_read",
+        new_callable=AsyncMock,
+        return_value=[("event-1", "session-1", "inv-1", timestamp, '{"content":"hello"}', "app", "u1")],
+    ):
+        events = await store.get_events("app", "u1", "session-1")
+    assert len(events) == 1
+    assert events[0]["event_data"] == {"content": "hello"}
+
+
+async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> None:
+    """Verify SpannerAsyncADKMemoryStore DDL, insert, search, and delete operations."""
+    config = _mock_config()
+    database = MagicMock()
+
+    async def _list_tables() -> Any:
+        if False:
+            yield None
+
+    database.list_tables.side_effect = _list_tables
+    op_mock = MagicMock()
+    op_mock.result = AsyncMock(return_value=None)
+    database.update_ddl = AsyncMock(return_value=op_mock)
+    config.get_database = AsyncMock(return_value=database)
+
+    store = SpannerAsyncADKMemoryStore(config)
+    await store.create_tables()
+    database.update_ddl.assert_awaited_once()
+
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    entry: StoredMemory = {
+        "id": "memory-1",
+        "session_id": "session-1",
+        "app_name": "app",
+        "user_id": "user",
+        "scope": "user",
+        "event_id": "event-1",
+        "author": "assistant",
+        "timestamp": timestamp,
+        "content_json": {"text": "hello"},
+        "content_text": "hello",
+        "metadata_json": {"source": "unit"},
+        "inserted_at": timestamp,
+        "embedding": None,
+    }
+
+    with (
+        patch.object(store, "_event_exists", new_callable=AsyncMock, return_value=False),
+        patch.object(store, "_run_write", new_callable=AsyncMock) as run_write,
+    ):
+        inserted = await store.insert_memory_entries([entry])
+    assert inserted == 1
+    run_write.assert_awaited_once()
+
+    with patch.object(
+        store,
+        "_run_read",
+        new_callable=AsyncMock,
+        return_value=[
+            (
+                "memory-1",
+                "session-1",
+                "app",
+                "user",
+                "user",
+                "event-1",
+                "assistant",
+                timestamp,
+                '{"text":"hello"}',
+                "hello",
+                '{"source":"unit"}',
+                timestamp,
+            )
+        ],
+    ):
+        results = await store.search_entries("hello", "app", "user")
+    assert len(results) == 1
+    assert results[0]["content_json"] == {"text": "hello"}
+
+    with patch.object(store, "_execute_update", new_callable=AsyncMock, return_value=2) as exec_update:
+        deleted = await store.delete_entries_by_session("session-1")
+        assert deleted == 2
+        deleted_old = await store.delete_entries_older_than(7, app_name="app")
+        assert deleted_old == 2
+        assert exec_update.await_count == 2
+
