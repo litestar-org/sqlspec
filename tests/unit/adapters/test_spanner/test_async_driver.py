@@ -4,10 +4,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import pyarrow as pa
 import pytest
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.types.type import TypeCode
+from typing_extensions import Self
 
 import sqlspec.adapters.spanner.driver as spanner_driver_module
 from sqlspec.adapters.spanner.core import default_statement_config, resolve_row_plan
@@ -19,6 +21,14 @@ from sqlspec.adapters.spanner.driver import (
 from sqlspec.driver import AsyncRowStream
 from sqlspec.exceptions import DeadlockError, SQLConversionError, UniqueViolationError
 from sqlspec.utils.serializers import from_json
+
+_ARROW_CAPABILITIES = {
+    "arrow_export_enabled": True,
+    "arrow_import_enabled": True,
+    "parquet_export_enabled": True,
+    "parquet_import_enabled": True,
+    "partition_strategies": ["fixed"],
+}
 
 
 def _field(name: str, code: int) -> SimpleNamespace:
@@ -262,4 +272,95 @@ async def test_async_driver_commit_rollback_and_savepoints(monkeypatch: pytest.M
     for method in ("create_savepoint", "release_savepoint", "rollback_to_savepoint"):
         with pytest.raises(NotImplementedError, match="Spanner"):
             await getattr(driver, method)("sp1")
+
+
+async def test_async_driver_load_from_arrow_transactional_and_overwrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify SpannerAsyncDriver.load_from_arrow mutations and overwrite=True delete-then-mutate."""
+
+    class _FakeAsyncMutationTxn:
+        def __init__(self) -> None:
+            self.insert_or_update_calls: list[tuple[str, list[str], list[list[Any]]]] = []
+            self.execute_update_calls: list[str] = []
+
+        def insert_or_update(self, table: str, columns: Any, values: Any) -> None:
+            self.insert_or_update_calls.append((table, list(columns), [list(v) for v in values]))
+
+        async def execute_update(self, sql: str, params: Any = None, param_types: Any = None, **kwargs: Any) -> int:
+            del params, param_types, kwargs
+            self.execute_update_calls.append(sql)
+            return 0
+
+    monkeypatch.setattr(spanner_driver_module, "SpannerAsyncTransaction", _FakeAsyncMutationTxn)
+    txn = _FakeAsyncMutationTxn()
+    driver = SpannerAsyncDriver(
+        connection=cast("Any", txn),
+        driver_features={"storage_capabilities": _ARROW_CAPABILITIES},
+    )
+
+    arrow_table = pa.table({"id": [1, 2], "name": ["a", "b"]})
+    job = await driver.load_from_arrow("my_schema.users", arrow_table, overwrite=True)
+
+    assert job.telemetry["rows_processed"] == 2
+    assert txn.execute_update_calls == ["DELETE FROM `my_schema`.`users` WHERE TRUE"]
+    assert txn.insert_or_update_calls == [("my_schema.users", ["id", "name"], [[1, "a"], [2, "b"]])]
+
+
+async def test_async_driver_load_from_arrow_batch_write_api() -> None:
+    """Verify SpannerAsyncDriver.load_from_arrow with enable_batch_write_api=True uses async mutation_groups."""
+
+    class _FakeGroup:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[str], list[list[Any]]]] = []
+
+        def insert_or_update(self, table: str, columns: Any, values: Any) -> None:
+            self.calls.append((table, list(columns), [list(v) for v in values]))
+
+    class _FakeAsyncMutationGroups:
+        def __init__(self) -> None:
+            self.groups: list[_FakeGroup] = []
+            self.batch_write_calls = 0
+            self.entered = False
+            self.exited = False
+
+        async def __aenter__(self) -> Self:
+            self.entered = True
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            self.exited = True
+
+        def group(self) -> _FakeGroup:
+            group = _FakeGroup()
+            self.groups.append(group)
+            return group
+
+        async def batch_write(self) -> Any:
+            self.batch_write_calls += 1
+
+            async def _gen() -> Any:
+                yield SimpleNamespace(status=SimpleNamespace(code=0, message="OK"))
+
+            return _gen()
+
+    class _FakeAsyncDatabase:
+        def __init__(self) -> None:
+            self.mutation_groups_obj = _FakeAsyncMutationGroups()
+
+        def mutation_groups(self) -> _FakeAsyncMutationGroups:
+            return self.mutation_groups_obj
+
+    database = _FakeAsyncDatabase()
+    snapshot = SimpleNamespace(_session=SimpleNamespace(_database=database))
+    driver = SpannerAsyncDriver(
+        connection=cast("Any", snapshot),
+        driver_features={"storage_capabilities": _ARROW_CAPABILITIES, "enable_batch_write_api": True},
+    )
+
+    job = await driver.load_from_arrow("users", pa.table({"id": [1, 2], "name": ["a", "b"]}))
+    assert job.telemetry["rows_processed"] == 2
+    assert database.mutation_groups_obj.entered is True
+    assert database.mutation_groups_obj.exited is True
+    assert database.mutation_groups_obj.batch_write_calls == 1
+    assert database.mutation_groups_obj.groups[0].calls == [("users", ["id", "name"], [[1, "a"], [2, "b"]])]
+
 

@@ -1045,6 +1045,67 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
+    async def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into Spanner table via batch mutations."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+
+        exc_handler = self.handle_database_exceptions()
+        async with exc_handler:
+            if overwrite:
+                dialect_str = str(self.dialect) if self.dialect else "spanner"
+                table_sql = _sqlglot_exp.to_table(table, dialect=dialect_str).sql(dialect=dialect_str, identify=True)
+                delete_sql = f"DELETE FROM {table_sql} WHERE TRUE"
+                if isinstance(self.connection, SpannerAsyncTransaction):
+                    writer = cast("_SpannerAsyncWriteProtocol", self.connection)
+                    await writer.execute_update(delete_sql)
+                else:
+                    msg = "Delete requires a Transaction context."
+                    raise SQLConversionError(msg)
+
+            columns, records = self._arrow_table_to_rows(arrow_table)
+            if records:
+                chunks = self._chunk_mutation_rows(columns, records)
+                if self.driver_features.get("enable_batch_write_api") and not overwrite:
+                    await self._batch_write_mutations(table, columns, chunks)
+                else:
+                    conn = self.connection
+                    if not isinstance(conn, SpannerAsyncTransaction):
+                        msg = "Arrow import requires a Transaction context."
+                        raise SQLConversionError(msg)
+                    writer = cast("_SpannerAsyncWriteProtocol", conn)
+                    for chunk in chunks:
+                        writer.insert_or_update(table, columns, chunk)
+        self._check_pending_exception(exc_handler)
+
+        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    async def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load artifacts from storage into Spanner table asynchronously."""
+        arrow_table, inbound = await self._read_storage_arrow(source, file_format=file_format)
+        return await self.load_from_arrow(
+            table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
+        )
+
     @property
     def data_dictionary(self) -> "AsyncDataDictionaryBase":
         if self._data_dictionary is None:
@@ -1149,6 +1210,45 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         if values:
             chunks.append(values)
         return chunks
+
+    async def _resolve_database(self) -> Any:
+        conn = self.connection
+        session = cast("object", getattr(conn, "_session", None))
+        database = cast("Any", getattr(session, "_database", None)) if session is not None else None
+        if database is None:
+            database = getattr(conn, "database", None)
+        if database is None:
+            provider = self.driver_features.get("database_provider")
+            if callable(provider):
+                candidate = provider()
+                database = await candidate if inspect.isawaitable(candidate) else candidate
+        if database is None:
+            msg = "Spanner Batch Write API requires a database-backed session."
+            raise SQLConversionError(msg)
+        return database
+
+    async def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
+        """High-throughput async ingest via the Spanner Batch Write API (one mutation group per chunk)."""
+        database = await self._resolve_database()
+        async with database.mutation_groups() as mutation_groups:
+            for chunk in chunks:
+                group = mutation_groups.group()
+                group.insert_or_update(table, columns, chunk)
+            batch_result = mutation_groups.batch_write()
+            if inspect.isawaitable(batch_result):
+                batch_result = await batch_result
+            if hasattr(batch_result, "__aiter__"):
+                async for response in batch_result:
+                    status = response.status
+                    if status is not None and status.code:
+                        msg = f"Spanner batch_write group failed: {status.message}"
+                        raise SQLConversionError(msg)
+            elif batch_result is not None:
+                for response in batch_result:
+                    status = response.status
+                    if status is not None and status.code:
+                        msg = f"Spanner batch_write group failed: {status.message}"
+                        raise SQLConversionError(msg)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
