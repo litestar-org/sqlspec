@@ -12,6 +12,7 @@ import sqlglot
 from sqlglot import Dialect, exp
 from sqlglot import optimizer as sqlglot_optimizer
 from sqlglot.dialects.dialect import DialectType
+from sqlglot.errors import OptimizeError as SQLGlotOptimizeError
 from sqlglot.errors import ParseError as SQLGlotParseError
 from sqlglot.optimizer import RULES
 from sqlglot.optimizer.eliminate_ctes import eliminate_ctes as _eliminate_ctes_rule
@@ -19,6 +20,7 @@ from sqlglot.optimizer.merge_subqueries import merge_subqueries as _merge_subque
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers as _normalize_identifiers_rule
 from sqlglot.optimizer.optimize_joins import optimize_joins as _optimize_joins_rule
 from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdown_predicates_rule
+from sqlglot.optimizer.pushdown_projections import pushdown_projections as _pushdown_projections_rule
 from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
 from sqlglot.optimizer.simplify import simplify as _simplify_rule
 from typing_extensions import Self
@@ -859,13 +861,30 @@ class QueryBuilder:
         if expression.args.get("with_") is not None or self._with_ctes:
             excluded_rules.add(_eliminate_ctes_rule)
             excluded_rules.add(_merge_subqueries_rule)
+            excluded_rules.add(_pushdown_projections_rule)
+        elif self.schema is None and isinstance(expression, exp.Select) and expression.is_star:
+            excluded_rules.add(_pushdown_projections_rule)
 
         rules = RULES if not excluded_rules else tuple(rule for rule in RULES if rule not in excluded_rules)
 
         try:
-            optimized = sqlglot_optimizer.optimize(
-                expression, schema=cast("dict[str, object] | None", self.schema), dialect=self.dialect_name, rules=rules
-            )
+            try:
+                optimized = sqlglot_optimizer.optimize(
+                    expression,
+                    schema=cast("dict[str, object] | None", self.schema),
+                    dialect=self.dialect_name,
+                    rules=rules,
+                )
+            except SQLGlotOptimizeError:
+                if _pushdown_projections_rule in excluded_rules:
+                    raise
+                fallback_rules = tuple(rule for rule in rules if rule is not _pushdown_projections_rule)
+                optimized = sqlglot_optimizer.optimize(
+                    expression,
+                    schema=cast("dict[str, object] | None", self.schema),
+                    dialect=self.dialect_name,
+                    rules=fallback_rules,
+                )
             cache.put_optimized(cache_key, optimized.copy())
         except Exception:
             logger.debug("Expression optimization failed, using original expression")

@@ -47,19 +47,23 @@ class SpannerLitestarConfig(LitestarConfig):
     """Index DDL options."""
 
 
+def _extract_spanner_litestar_options(config: Any) -> "tuple[int, str | None, str | None]":
+    litestar_cfg = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
+    shard_count = int(litestar_cfg.get("shard_count", 0)) if litestar_cfg.get("shard_count") else 0
+    table_options = cast("str | None", litestar_cfg.get("table_options"))
+    index_options = cast("str | None", litestar_cfg.get("index_options"))
+    return shard_count, table_options, index_options
+
+
 class _SpannerLitestarStoreCommonMixin:
     """Shared SQL, DDL, and parameter helpers for Spanner Litestar session stores."""
+
+    __slots__ = ()
 
     _table_name: str
     _shard_count: int
     _table_options: "str | None"
     _index_options: "str | None"
-
-    def _init_spanner_litestar_options(self, config: Any) -> None:
-        litestar_cfg = cast("dict[str, Any]", config.extension_config.get("litestar", {}))
-        self._shard_count = int(litestar_cfg.get("shard_count", 0)) if litestar_cfg.get("shard_count") else 0
-        self._table_options = litestar_cfg.get("table_options")
-        self._index_options = litestar_cfg.get("index_options")
 
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "datetime | None":
         if dt is None:
@@ -214,7 +218,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
 
     def __init__(self, config: "SpannerSyncConfig") -> None:
         super().__init__(config)
-        self._init_spanner_litestar_options(config)
+        self._shard_count, self._table_options, self._index_options = _extract_spanner_litestar_options(config)
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         return await async_(self._get)(key, renew_for)
@@ -329,7 +333,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
 
     def __init__(self, config: "SpannerAsyncConfig") -> None:
         super().__init__(config)
-        self._init_spanner_litestar_options(config)
+        self._shard_count, self._table_options, self._index_options = _extract_spanner_litestar_options(config)
 
     async def _database(self) -> "AsyncDatabase":
         return await self._config.get_database()
@@ -516,4 +520,3 @@ class _SpannerAsyncExecuteUpdateCountJob:
         if inspect.isawaitable(res):
             res = await res
         return int(res)
-

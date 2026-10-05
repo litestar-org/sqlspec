@@ -258,7 +258,7 @@ def create_parameters(parameters: Any, json_serializer: "Callable[[Any], str] | 
                 continue
             declared_type: type[Any] | None = None
             if type(value) is TypedParameter:
-                declared_type = value.original_type
+                declared_type = None if isinstance(value.original_type, str) else value.original_type
                 actual_value = value.value
             elif isinstance(value, Enum):
                 actual_value = value.value

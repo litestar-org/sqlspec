@@ -493,9 +493,8 @@ def apply_column_pruning(
         # If qualification fails, return unchanged expression
         return expression
 
-    # Apply pushdown_projections to remove unused columns
     try:
-        pruned: exp.Expr = pushdown_projections_module.pushdown_projections(qualified, dialect=dialect)
+        pruned: exp.Expr = pushdown_projections_module.pushdown_projections(qualified)
     except Exception:
         # If pushdown fails, return the qualified expression
         pruned = qualified
