@@ -105,7 +105,9 @@ async def spanner_async_config(
 
 
 @pytest.fixture
-async def spanner_async_session(spanner_async_config: "SpannerAsyncConfig") -> "AsyncGenerator[SpannerAsyncDriver, None]":
+async def spanner_async_session(
+    spanner_async_config: "SpannerAsyncConfig",
+) -> "AsyncGenerator[SpannerAsyncDriver, None]":
     """Provide a read-only async Spanner session."""
     sql = SQLSpec()
     registered_config = sql.add_config(spanner_async_config)

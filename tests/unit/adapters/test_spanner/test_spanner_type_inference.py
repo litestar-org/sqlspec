@@ -3,10 +3,31 @@
 from datetime import timedelta
 from decimal import Decimal
 
+import pytest
+from google.cloud.spanner_v1.data_types import Interval
 from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.type_converter import coerce_params_for_spanner, infer_spanner_param_types
 from sqlspec.core import TypedParameter
+
+
+@pytest.mark.parametrize("duration", [timedelta(), timedelta(days=2, microseconds=123456), timedelta(microseconds=-1)])
+def test_coerce_interval_parameters(duration: timedelta) -> None:
+    expected = Interval(days=duration.days, nanos=(duration.seconds * 1_000_000 + duration.microseconds) * 1000)
+    params = {
+        "duration": duration,
+        "typed": TypedParameter(duration, "INTERVAL"),
+        "durations": [None, duration],
+        "tuple_durations": (duration, None),
+        "null": TypedParameter(None, timedelta),
+    }
+    assert coerce_params_for_spanner(params) == {
+        "duration": expected,
+        "typed": expected,
+        "durations": [None, expected],
+        "tuple_durations": [expected, None],
+        "null": None,
+    }
 
 
 def test_infer_decimal_param_types() -> None:
@@ -83,4 +104,3 @@ def test_infer_interval_timedelta_params() -> None:
     assert types["durations"].array_element_type.code == TypeCode.INTERVAL
     assert types["null_duration"].code == TypeCode.INTERVAL
     assert types["declared_interval"].code == TypeCode.INTERVAL
-

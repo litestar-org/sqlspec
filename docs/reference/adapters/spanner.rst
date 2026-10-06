@@ -118,6 +118,14 @@ shutdown until a fixed SDK is available.
 Async Configuration
 ===================
 
+An async write session commits on successful context exit and rolls back on an
+exception. If you explicitly call ``await driver.commit()`` or
+``await driver.rollback()``, context exit preserves that completed transaction.
+
+Both adapters bind ``datetime.timedelta`` parameters as Spanner ``INTERVAL``
+values, including arrays with null elements. Conversion preserves days and
+microseconds without rounding through floating-point seconds.
+
 .. autoclass:: sqlspec.adapters.spanner.SpannerAsyncConfig
    :members:
    :show-inheritance:
@@ -238,4 +246,3 @@ transaction DML, including only the final statement of a script.
 Opt-in Arrow Batch Write ingestion works from database-backed read sessions.
 Mutation groups commit independently. Arrow overwrite retains transactional
 delete-and-insert behavior without partitioned DML or Batch Write.
-

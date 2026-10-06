@@ -303,7 +303,9 @@ class _SpannerADKStoreCommonMixin:
         }
         return [(delete_events_sql, params, types), (delete_session_sql, params, types)]
 
-    def _build_insert_event_statement(self, event_record: "StoredEvent") -> "tuple[str, dict[str, Any], dict[str, Any]]":
+    def _build_insert_event_statement(
+        self, event_record: "StoredEvent"
+    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
         event_params: dict[str, Any] = {
             "id": event_record["id"],
             "app_name": event_record["app_name"],
@@ -430,9 +432,7 @@ class _SpannerADKStoreCommonMixin:
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = @app_name LIMIT 1"
         return (sql, {"app_name": app_name}, {"app_name": SPANNER_PARAM_TYPES.STRING})
 
-    def _build_get_user_state_query(
-        self, app_name: str, user_id: str
-    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+    def _build_get_user_state_query(self, app_name: str, user_id: str) -> "tuple[str, dict[str, Any], dict[str, Any]]":
         sql = f"""
             SELECT state
             FROM {self._user_state_table}
@@ -471,9 +471,7 @@ class _SpannerADKStoreCommonMixin:
         sql = f"SELECT value FROM {self._metadata_table} WHERE key = @key LIMIT 1"
         return (sql, {"key": key}, {"key": SPANNER_PARAM_TYPES.STRING})
 
-    def _build_set_metadata_statement(
-        self, key: str, value: str
-    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+    def _build_set_metadata_statement(self, key: str, value: str) -> "tuple[str, dict[str, Any], dict[str, Any]]":
         sql = f"""
             INSERT OR UPDATE {self._metadata_table} (key, value)
             VALUES (@key, @value)
@@ -1096,7 +1094,9 @@ class SpannerAsyncADKStore(_SpannerADKStoreCommonMixin, BaseAsyncADKStore[Spanne
             return None
         return self._decode_session_row(rows[0])
 
-    async def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
+    async def _update_session_state(
+        self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]"
+    ) -> None:
         await self._run_write([self._build_update_session_state_statement(app_name, user_id, session_id, state)])
 
     async def _list_sessions(
@@ -1643,7 +1643,9 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseAsyncADK
         """Delete all memory entries for a specific session."""
         return await self._delete_entries_by_session(session_id)
 
-    async def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
+    async def delete_entries_older_than(
+        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
+    ) -> int:
         """Delete memory entries older than specified days."""
         return await self._delete_entries_older_than(days, app_name, scope)
 
@@ -1753,7 +1755,9 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseAsyncADK
         sql, params, types = self._build_delete_entries_by_session_statement(session_id)
         return await self._execute_update(sql, params, types)
 
-    async def _delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
+    async def _delete_entries_older_than(
+        self, days: int, app_name: "str | None" = None, scope: "str | None" = None
+    ) -> int:
         sql, params, types = self._build_delete_entries_older_than_statement(days, app_name, scope)
         return await self._execute_update(sql, params, types)
 

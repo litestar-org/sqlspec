@@ -270,4 +270,3 @@ async def test_async_create_and_drop_table_type_error_on_wrong_config() -> None:
 
     with pytest.raises(TypeError, match="SpannerAsyncConfig"):
         await store.drop_table()
-

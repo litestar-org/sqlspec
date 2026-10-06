@@ -34,11 +34,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 
-__all__ = (
-    "SpannerAsyncDataDictionary",
-    "SpannerDataDictionary",
-    "SpannerSyncDataDictionary",
-)
+__all__ = ("SpannerAsyncDataDictionary", "SpannerDataDictionary", "SpannerSyncDataDictionary")
 
 _DEFAULT_METADATA_DOMAINS = (
     "schemas",

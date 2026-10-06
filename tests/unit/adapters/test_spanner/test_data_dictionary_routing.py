@@ -217,17 +217,13 @@ def test_driver_data_dictionary_dialect_mode_routing() -> None:
     assert async_driver_gsql.data_dictionary.mode == "googlesql"
 
     async_driver_pg = SpannerAsyncDriver(
-        connection=cast("Any", object()),
-        statement_config=StatementConfig(dialect="spangres"),
+        connection=cast("Any", object()), statement_config=StatementConfig(dialect="spangres")
     )
     assert isinstance(async_driver_pg.data_dictionary, SpannerAsyncDataDictionary)
     assert async_driver_pg.data_dictionary.mode == "postgresql"
 
     sync_driver_pg = SpannerSyncDriver(
-        connection=cast("Any", object()),
-        statement_config=StatementConfig(dialect="spangres"),
+        connection=cast("Any", object()), statement_config=StatementConfig(dialect="spangres")
     )
     assert isinstance(sync_driver_pg.data_dictionary, SpannerDataDictionary)
     assert sync_driver_pg.data_dictionary.mode == "postgresql"
-
-

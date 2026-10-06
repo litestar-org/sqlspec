@@ -11,10 +11,44 @@ from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerAsyncDriver
 pytestmark = [pytest.mark.spanner, pytest.mark.anyio]
 
 
+@pytest.mark.parametrize("commit", [False, True])
+async def test_async_explicit_transaction_completion(
+    spanner_async_config: SpannerAsyncConfig, test_users_table: str, commit: bool
+) -> None:
+    user_id = str(uuid4())
+    async with spanner_async_config.provide_write_session() as session:
+        await session.execute(
+            f"INSERT INTO {test_users_table} (id, name) VALUES (@id, @name)", id=user_id, name="transaction completion"
+        )
+        if commit:
+            await session.commit()
+            await session.commit()
+        else:
+            await session.rollback()
+            await session.rollback()
+    async with spanner_async_config.provide_read_session() as session:
+        assert await session.select_value(f"SELECT COUNT(*) FROM {test_users_table} WHERE id = @id", id=user_id) == int(
+            commit
+        )
+    if commit:
+        async with spanner_async_config.provide_write_session() as session:
+            await session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
+
+
 async def test_async_connection_pooling(spanner_async_session: "SpannerAsyncDriver") -> None:
     """Test acquiring an async session and executing a scalar query."""
     result = await spanner_async_session.select_value("SELECT 1")
     assert result == 1
+
+
+async def test_async_rollback_discards_buffered_arrow_mutations(
+    spanner_async_config: SpannerAsyncConfig, test_arrow_table: str
+) -> None:
+    async with spanner_async_config.provide_write_session() as session:
+        await session.load_from_arrow(test_arrow_table, pa.table({"id": [103], "name": ["rolled back"], "value": [1]}))
+        await session.rollback()
+    async with spanner_async_config.provide_read_session() as session:
+        assert await session.select_value(f"SELECT COUNT(*) FROM {test_arrow_table} WHERE id = @id", id=103) == 0
 
 
 async def test_async_session_management(spanner_async_config: "SpannerAsyncConfig") -> None:
@@ -48,8 +82,7 @@ async def test_async_driver_select_one_and_dml(
 
     async with spanner_async_config.provide_session() as session:
         row = await session.select_one(
-            f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id",
-            id=user_id,
+            f"SELECT id, name, email, age FROM {test_users_table} WHERE id = @id", id=user_id
         )
         assert row is not None
         assert str(row["id"]) == user_id
@@ -59,9 +92,7 @@ async def test_async_driver_select_one_and_dml(
 
     async with spanner_async_config.provide_write_session() as session:
         update_result = await session.execute(
-            f"UPDATE {test_users_table} SET age = @age WHERE id = @id",
-            id=user_id,
-            age=29,
+            f"UPDATE {test_users_table} SET age = @age WHERE id = @id", id=user_id, age=29
         )
         assert update_result.rows_affected == 1
 
@@ -70,9 +101,7 @@ async def test_async_driver_select_one_and_dml(
         assert delete_result.rows_affected == 1
 
 
-async def test_async_driver_execute_many(
-    spanner_async_config: "SpannerAsyncConfig", test_users_table: str
-) -> None:
+async def test_async_driver_execute_many(spanner_async_config: "SpannerAsyncConfig", test_users_table: str) -> None:
     """Test async execute_many() using native batch_update."""
     user_ids = [str(uuid4()) for _ in range(3)]
     params = [
@@ -82,16 +111,12 @@ async def test_async_driver_execute_many(
 
     async with spanner_async_config.provide_write_session() as session:
         result = await session.execute_many(
-            f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            params,
+            f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)", params
         )
         assert result.rows_affected == 3
 
     async with spanner_async_config.provide_session() as session:
-        rows = await session.select(
-            f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids)",
-            ids=user_ids,
-        )
+        rows = await session.select(f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=user_ids)
         assert len(rows) == 3
 
     async with spanner_async_config.provide_write_session() as session:
@@ -99,9 +124,7 @@ async def test_async_driver_execute_many(
             await session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=uid)
 
 
-async def test_async_driver_execute_script(
-    spanner_async_config: "SpannerAsyncConfig", test_users_table: str
-) -> None:
+async def test_async_driver_execute_script(spanner_async_config: "SpannerAsyncConfig", test_users_table: str) -> None:
     """Test async execute_script() across multiple DML statements."""
     uid1 = str(uuid4())
     uid2 = str(uuid4())
@@ -120,9 +143,7 @@ async def test_async_driver_execute_script(
         await session.execute(f"DELETE FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=[uid1, uid2])
 
 
-async def test_async_driver_select_stream(
-    spanner_async_config: "SpannerAsyncConfig", test_users_table: str
-) -> None:
+async def test_async_driver_select_stream(spanner_async_config: "SpannerAsyncConfig", test_users_table: str) -> None:
     """Test async select_stream() yielding rows."""
     user_ids = [str(uuid4()) for _ in range(2)]
 
@@ -138,8 +159,7 @@ async def test_async_driver_select_stream(
 
     async with spanner_async_config.provide_session() as session:
         async with session.select_stream(
-            f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY name",
-            {"ids": user_ids},
+            f"SELECT id, name FROM {test_users_table} WHERE id IN UNNEST(@ids) ORDER BY name", {"ids": user_ids}
         ) as stream:
             collected = [row async for row in stream]
 
@@ -149,9 +169,7 @@ async def test_async_driver_select_stream(
         await session.execute(f"DELETE FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=user_ids)
 
 
-async def test_async_driver_arrow_roundtrip(
-    spanner_async_config: "SpannerAsyncConfig", test_arrow_table: str
-) -> None:
+async def test_async_driver_arrow_roundtrip(spanner_async_config: "SpannerAsyncConfig", test_arrow_table: str) -> None:
     """Test async load_from_arrow() and select_to_arrow()."""
     table = pa.table({"id": [101, 102], "name": ["Arrow 1", "Arrow 2"], "value": [10, 20]})
 

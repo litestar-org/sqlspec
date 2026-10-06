@@ -63,7 +63,6 @@ class _FakeAsyncResultSet:
         self.closed = True
 
 
-
 async def test_spanner_async_exception_handler_maps_google_api_errors() -> None:
     """Verify SpannerAsyncExceptionHandler maps GoogleAPICallError subclasses to SQLSpecError."""
     handler = SpannerAsyncExceptionHandler()
@@ -85,8 +84,7 @@ async def test_spanner_async_select_stream_source_chunks_and_resolves_metadata()
     json_cls = cast("Any", JsonObject)
     fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.JSON)]
     fake_rs = _FakeAsyncResultSet(
-        rows=[(1, json_cls({"k": "v1"})), (2, json_cls({"k": "v2"})), (3, json_cls({"k": "v3"}))],
-        fields=fields,
+        rows=[(1, json_cls({"k": "v1"})), (2, json_cls({"k": "v2"})), (3, json_cls({"k": "v3"}))], fields=fields
     )
 
     class _FakeConnection:
@@ -120,12 +118,7 @@ async def test_spanner_async_select_stream_source_chunks_and_resolves_metadata()
             return resolve_row_plan(result_fields, {}, json_deserializer=from_json)
 
     source = _SpannerAsyncSelectStreamSource(
-        cast("Any", _FakeDriver()),
-        "SELECT id, payload FROM items",
-        {"p": 1},
-        {},
-        2,
-        {"timeout": 5.0},
+        cast("Any", _FakeDriver()), "SELECT id, payload FROM items", {"p": 1}, {}, 2, {"timeout": 5.0}
     )
     stream: AsyncRowStream[dict[str, Any]] = AsyncRowStream(source)
     async with stream as active_stream:
@@ -225,10 +218,7 @@ async def test_async_driver_select_stream_and_select_to_arrow() -> None:
 
     mock_conn = MagicMock()
     mock_conn.execute_sql = AsyncMock(
-        side_effect=lambda *args, **kwargs: _FakeAsyncResultSet(
-            rows=[(1, "alice"), (2, "bob")],
-            fields=fields,
-        )
+        side_effect=lambda *args, **kwargs: _FakeAsyncResultSet(rows=[(1, "alice"), (2, "bob")], fields=fields)
     )
 
     driver = SpannerAsyncDriver(connection=mock_conn)
@@ -298,8 +288,7 @@ async def test_async_driver_load_from_arrow_transactional_and_overwrite(monkeypa
     monkeypatch.setattr(spanner_driver_module, "SpannerAsyncTransaction", _FakeAsyncMutationTxn)
     txn = _FakeAsyncMutationTxn()
     driver = SpannerAsyncDriver(
-        connection=cast("Any", txn),
-        driver_features={"storage_capabilities": _ARROW_CAPABILITIES},
+        connection=cast("Any", txn), driver_features={"storage_capabilities": _ARROW_CAPABILITIES}
     )
 
     arrow_table = pa.table({"id": [1, 2], "name": ["a", "b"]})
@@ -396,8 +385,7 @@ async def test_async_driver_load_from_arrow_empty_and_multi_chunk(monkeypatch: p
     monkeypatch.setattr(spanner_driver_module, "SpannerAsyncTransaction", _FakeAsyncMutationTxn)
     txn = _FakeAsyncMutationTxn()
     driver = SpannerAsyncDriver(
-        connection=cast("Any", txn),
-        driver_features={"storage_capabilities": _ARROW_CAPABILITIES},
+        connection=cast("Any", txn), driver_features={"storage_capabilities": _ARROW_CAPABILITIES}
     )
 
     empty_table = pa.table({"id": pa.array([], type=pa.int64()), "name": pa.array([], type=pa.string())})
@@ -405,11 +393,8 @@ async def test_async_driver_load_from_arrow_empty_and_multi_chunk(monkeypatch: p
     assert empty_job.telemetry["rows_processed"] == 0
     assert txn.insert_or_update_calls == []
 
-    monkeypatch.setattr(spanner_driver_module, "_MAX_MUTATIONS_PER_COMMIT", 4)
+    monkeypatch.setattr("sqlspec.adapters.spanner.core._MAX_MUTATIONS_PER_COMMIT", 4)
     multi_table = pa.table({"id": [1, 2, 3, 4, 5], "name": ["a", "b", "c", "d", "e"]})
     multi_job = await driver.load_from_arrow("users", multi_table)
     assert multi_job.telemetry["rows_processed"] == 5
     assert [count for _, _, count in txn.insert_or_update_calls] == [2, 2, 1]
-
-
-

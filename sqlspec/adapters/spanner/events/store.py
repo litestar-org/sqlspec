@@ -224,4 +224,3 @@ class SpannerAsyncEventQueueStore(_SpannerEventQueueStoreMixin[SpannerAsyncConfi
         result = operation.result()
         if inspect.isawaitable(result):
             await result
-

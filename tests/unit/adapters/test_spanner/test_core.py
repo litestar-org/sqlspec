@@ -175,4 +175,3 @@ def test_convert_json_row_value_zero_copy_unwrapping_with_default_deserializer(m
     assert data == [({"a": 1}, [1, 2, 3], "hello", None)]
     assert type(data[0][0]) is dict
     assert type(data[0][1]) is list
-

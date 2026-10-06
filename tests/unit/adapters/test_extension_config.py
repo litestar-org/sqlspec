@@ -246,5 +246,3 @@ def test_all_adapters_accept_extension_config(config_class: type, init_kwargs: d
 
     assert hasattr(config, "extension_config")
     assert config.extension_config == extension_config
-
-

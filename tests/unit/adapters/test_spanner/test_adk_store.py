@@ -431,7 +431,9 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
 
     snapshot = MagicMock()
 
-    async def _execute_sql(sql: str, params: dict[str, Any] | None = None, param_types: dict[str, Any] | None = None) -> Any:
+    async def _execute_sql(
+        sql: str, params: dict[str, Any] | None = None, param_types: dict[str, Any] | None = None
+    ) -> Any:
         del sql, params, param_types
 
         async def _rows() -> Any:
@@ -584,4 +586,3 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
         deleted_old = await store.delete_entries_older_than(7, app_name="app")
         assert deleted_old == 2
         assert exec_update.await_count == 2
-

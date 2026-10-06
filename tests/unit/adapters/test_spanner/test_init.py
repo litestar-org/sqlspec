@@ -81,4 +81,3 @@ def test_spanner_adapter_exports_sync_and_async_symbols() -> None:
     assert expected.issubset(set(spanner_pkg.__all__))
     for name in spanner_pkg.__all__:
         assert getattr(spanner_pkg, name, None) is not None
-

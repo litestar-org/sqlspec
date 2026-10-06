@@ -31,13 +31,21 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from sqlspec.adapters.spanner._typing import SpannerDirectedReadOptions as DirectedReadOptions
+    from sqlspec.adapters.spanner._typing import SpannerExecuteSqlRequest as ExecuteSqlRequest
+    from sqlspec.adapters.spanner._typing import SpannerRequestOptions as RequestOptions
+    from sqlspec.adapters.spanner._typing import SpannerRetry as Retry
     from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowReturnFormat, ArrowTable
 
 __all__ = (
+    "SpannerExecuteOptions",
     "apply_driver_features",
+    "build_execute_kwargs",
     "build_param_type_signature",
     "build_profile",
+    "build_session_driver_features",
     "build_statement_config",
+    "chunk_mutation_rows",
     "coerce_params",
     "collect_rows",
     "create_arrow_data",
@@ -45,6 +53,7 @@ __all__ = (
     "default_statement_config",
     "driver_profile",
     "infer_param_types",
+    "pop_execute_options",
     "resolve_column_names",
     "resolve_row_plan",
     "supports_batch_update",
@@ -52,6 +61,111 @@ __all__ = (
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 128
+_MAX_MUTATIONS_PER_COMMIT = 80_000
+
+
+class SpannerExecuteOptions:
+    """Per-call Spanner execution options captured for a single dispatch."""
+
+    __slots__ = ("directed_read_options", "last_statement", "query_options", "request_options", "retry", "timeout")
+
+    def __init__(
+        self,
+        *,
+        request_options: "RequestOptions | dict[str, Any] | None" = None,
+        query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
+        directed_read_options: "DirectedReadOptions | None" = None,
+        retry: "Retry | None" = None,
+        timeout: "float | None" = None,
+        last_statement: bool = False,
+    ) -> None:
+        self.request_options = request_options
+        self.query_options = query_options
+        self.directed_read_options = directed_read_options
+        self.retry = retry
+        self.timeout = timeout
+        self.last_statement = last_statement
+
+
+def build_execute_kwargs(
+    driver_features: dict[str, Any],
+    pending: "SpannerExecuteOptions | None",
+    *,
+    for_read: bool = False,
+    for_batch: bool = False,
+) -> dict[str, Any]:
+    """Merge driver defaults and per-call options for the native execution method."""
+    kwargs: dict[str, Any] = {key: driver_features[key] for key in ("retry", "timeout") if key in driver_features}
+    request_options = driver_features.get("request_options")
+    if request_options is not None:
+        kwargs["request_options"] = request_options
+    if not for_batch:
+        query_options = driver_features.get("query_options")
+        if query_options is not None:
+            kwargs["query_options"] = query_options
+    if for_read and not for_batch:
+        directed_read_options = driver_features.get("directed_read_options")
+        if directed_read_options is not None:
+            kwargs["directed_read_options"] = directed_read_options
+    if pending is not None:
+        if pending.request_options is not None:
+            kwargs["request_options"] = pending.request_options
+        if not for_batch and pending.query_options is not None:
+            kwargs["query_options"] = pending.query_options
+        if pending.retry is not None:
+            kwargs["retry"] = pending.retry
+        if pending.timeout is not None:
+            kwargs["timeout"] = pending.timeout
+        if for_read and not for_batch and pending.directed_read_options is not None:
+            kwargs["directed_read_options"] = pending.directed_read_options
+        if not for_read and pending.last_statement:
+            kwargs["last_statement"] = True
+    return kwargs
+
+
+def pop_execute_options(kwargs: dict[str, Any]) -> "SpannerExecuteOptions | None":
+    """Remove native execution options before processing SQL parameters."""
+    if not any(
+        key in kwargs
+        for key in ("request_options", "query_options", "directed_read_options", "retry", "timeout", "last_statement")
+    ):
+        return None
+    return SpannerExecuteOptions(
+        request_options=kwargs.pop("request_options", None),
+        query_options=kwargs.pop("query_options", None),
+        directed_read_options=kwargs.pop("directed_read_options", None),
+        retry=kwargs.pop("retry", None),
+        timeout=kwargs.pop("timeout", None),
+        last_statement=bool(kwargs.pop("last_statement", False)),
+    )
+
+
+def chunk_mutation_rows(
+    columns: "list[str]",
+    records: "list[tuple[Any, ...]]",
+    coerce_row: "Callable[[dict[str, Any]], dict[str, Any] | None]",
+) -> "list[list[list[Any]]]":
+    """Coerce Arrow rows into chunks bounded by Spanner's mutation-group ceiling."""
+    column_count = len(columns)
+    max_cells = _MAX_MUTATIONS_PER_COMMIT
+    chunks: list[list[list[Any]]] = []
+    values: list[list[Any]] = []
+    pending_cells = 0
+    for record in records:
+        if values and pending_cells + column_count > max_cells:
+            chunks.append(values)
+            values = []
+            pending_cells = 0
+        coerced = coerce_row({f"p{i}": value for i, value in enumerate(record)}) or {}
+        values.append([coerced.get(f"p{i}") for i in range(column_count)])
+        pending_cells += column_count
+        if pending_cells == max_cells:
+            chunks.append(values)
+            values = []
+            pending_cells = 0
+    if values:
+        chunks.append(values)
+    return chunks
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -341,3 +455,35 @@ def _create_spanner_error(error: Any, error_class: type[SQLSpecError], descripti
 driver_profile = build_profile()
 
 default_statement_config = build_statement_config()
+
+
+def build_session_driver_features(
+    features: dict[str, Any],
+    *,
+    request_options: "RequestOptions | dict[str, Any] | None",
+    directed_read_options: "DirectedReadOptions | None",
+    query_options: "ExecuteSqlRequest.QueryOptions | dict[str, Any] | None" = None,
+    retry: "Retry | None",
+    timeout: "float | None",
+) -> "dict[str, Any]":
+    """Apply session overrides without changing the configuration's defaults."""
+    if (
+        request_options is None
+        and directed_read_options is None
+        and query_options is None
+        and retry is None
+        and timeout is None
+    ):
+        return features
+    driver_features = dict(features)
+    if request_options is not None:
+        driver_features["request_options"] = request_options
+    if directed_read_options is not None:
+        driver_features["directed_read_options"] = directed_read_options
+    if query_options is not None:
+        driver_features["query_options"] = query_options
+    if retry is not None:
+        driver_features["retry"] = retry
+    if timeout is not None:
+        driver_features["timeout"] = timeout
+    return driver_features

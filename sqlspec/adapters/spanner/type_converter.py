@@ -22,6 +22,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+from sqlspec.adapters.spanner._typing import SpannerInterval as Interval
 from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.core import TypedParameter
@@ -196,13 +197,24 @@ def coerce_params_for_spanner(
         elif isinstance(value, datetime) and value.tzinfo is None:
             coerced[key] = value.replace(tzinfo=timezone.utc)
             changed = True
+        elif isinstance(value, timedelta):
+            coerced[key] = Interval(days=value.days, nanos=(value.seconds * 1_000_000 + value.microseconds) * 1000)
+            changed = True
         elif isinstance(value, json_object_type):
             coerced[key] = value
         elif isinstance(value, dict):
             coerced[key] = spanner_json(value)
             changed = True
         elif isinstance(value, (list, tuple)):
-            if should_json_encode_sequence(value):
+            if any(isinstance(item, timedelta) for item in value):
+                coerced[key] = [
+                    Interval(days=item.days, nanos=(item.seconds * 1_000_000 + item.microseconds) * 1000)
+                    if isinstance(item, timedelta)
+                    else item
+                    for item in value
+                ]
+                changed = True
+            elif should_json_encode_sequence(value):
                 coerced[key] = spanner_json(list(value))
                 changed = True
             elif isinstance(value, tuple):

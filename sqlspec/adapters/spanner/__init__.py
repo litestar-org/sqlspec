@@ -79,4 +79,3 @@ __all__ = (
     "spanner_to_uuid",
     "uuid_to_spanner",
 )
-

@@ -9,6 +9,15 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+----------
+
+* Spanner adds a native async driver and async stores. Sync APIs still work.
+  Async sessions now use the right SDK types. They keep an explicit commit or
+  rollback when the session ends.
+* Spanner now binds ``datetime.timedelta`` values and lists as ``INTERVAL``.
+  This keeps the full precision of each value and allows nulls in lists.
+
 v0.65.0 - IBM Db2 adapter, dialect isolation, and native adapter hardening
 -------------------------------------------------------------------------
 

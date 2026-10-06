@@ -193,9 +193,7 @@ async def test_async_store_get_exists_expires_in() -> None:
     db = _mock_async_database()
     future_time = datetime.now(timezone.utc) + timedelta(seconds=120)
     driver = MagicMock()
-    driver.select_one_or_none = AsyncMock(
-        return_value={"data": bytes_to_spanner(b"abc"), "expires_at": future_time}
-    )
+    driver.select_one_or_none = AsyncMock(return_value={"data": bytes_to_spanner(b"abc"), "expires_at": future_time})
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess", "shard_count": 4}}
@@ -213,4 +211,3 @@ async def test_async_store_get_exists_expires_in() -> None:
     ttl = await store.expires_in("s1")
     assert ttl is not None
     assert ttl > 0
-

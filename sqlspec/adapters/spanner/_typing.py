@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1._async.client import Client as SpannerAsyncClient
     from google.cloud.spanner_v1._async.database import Database as SpannerAsyncDatabase
     from google.cloud.spanner_v1._async.database import SnapshotCheckout as AsyncSnapshotCheckout
+    from google.cloud.spanner_v1._async.database_sessions_manager import TransactionType as SpannerAsyncTransactionType
     from google.cloud.spanner_v1._async.pool import AbstractSessionPool as SpannerAsyncAbstractSessionPool
     from google.cloud.spanner_v1._async.pool import BurstyPool as SpannerAsyncBurstyPool
     from google.cloud.spanner_v1._async.pool import FixedSizePool as SpannerAsyncFixedSizePool
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1._async.snapshot import Snapshot as SpannerAsyncSnapshot
     from google.cloud.spanner_v1._async.streamed import StreamedResultSet as SpannerAsyncStreamedResultSet
     from google.cloud.spanner_v1._async.transaction import Transaction as _SpannerAsyncTransaction
+    from google.cloud.spanner_v1.data_types import Interval as SpannerInterval
     from google.cloud.spanner_v1.data_types import JsonObject as SpannerJsonObject
     from google.cloud.spanner_v1.database import Database as SpannerDatabase
     from google.cloud.spanner_v1.database import SnapshotCheckout
@@ -144,6 +146,7 @@ __all__ = (
     "SpannerAsyncStreamedResultSet",
     "SpannerAsyncTransaction",
     "SpannerAsyncTransactionPingingPool",
+    "SpannerAsyncTransactionType",
     "SpannerBurstyPool",
     "SpannerClient",
     "SpannerClientInfo",
@@ -158,6 +161,7 @@ __all__ = (
     "SpannerExecuteSqlRequest",
     "SpannerFixedSizePool",
     "SpannerGoogleAPICallError",
+    "SpannerInterval",
     "SpannerJsonObject",
     "SpannerNotFound",
     "SpannerPingingPool",
@@ -320,6 +324,8 @@ class SpannerAsyncSessionContext:
 
 
 _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
+    "SpannerAsyncTransactionType": ("google.cloud.spanner_v1._async.database_sessions_manager", "TransactionType"),
+    "SpannerInterval": ("google.cloud.spanner_v1.data_types", "Interval"),
     "AsyncAbstractSessionPool": ("google.cloud.spanner_v1._async.pool", "AbstractSessionPool"),
     "AsyncBatch": ("google.cloud.spanner_v1._async.batch", "Batch"),
     "AsyncBurstyPool": ("google.cloud.spanner_v1._async.pool", "BurstyPool"),

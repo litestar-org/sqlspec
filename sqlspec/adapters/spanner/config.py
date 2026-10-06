@@ -14,6 +14,7 @@ from sqlspec.adapters.spanner._typing import (
     AsyncTransactionPingingPool,
     SpannerAsyncConnection,
     SpannerAsyncSessionContext,
+    SpannerAsyncTransactionType,
     SpannerConnection,
     SpannerGoogleAPICallError,
     SpannerSessionContext,
@@ -27,7 +28,12 @@ from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePo
 from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
 from sqlspec.adapters.spanner._typing import SpannerTransactionPingingPool as TransactionPingingPool
 from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
-from sqlspec.adapters.spanner.core import apply_driver_features, create_mapped_exception, default_statement_config
+from sqlspec.adapters.spanner.core import (
+    apply_driver_features,
+    build_session_driver_features,
+    create_mapped_exception,
+    default_statement_config,
+)
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
@@ -607,12 +613,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
             **kwargs,
         )
 
-    def run_in_transaction(
-        self,
-        fn: "Callable[..., Any]",
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+    def run_in_transaction(self, fn: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
         """Execute a callable inside Spanner's retryable transaction runner.
 
         Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
@@ -623,9 +624,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
 
         def _work(transaction: "SpannerConnection", *work_args: Any) -> Any:
             driver = self.driver_type(
-                connection=transaction,
-                statement_config=self.statement_config,
-                driver_features=self.driver_features,
+                connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
             )
             driver = self._prepare_driver(driver)
             try:
@@ -649,26 +648,14 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerConnection", "AbstractSession
         retry: "Retry | None",
         timeout: "float | None",
     ) -> "dict[str, Any]":
-        if (
-            request_options is None
-            and directed_read_options is None
-            and query_options is None
-            and retry is None
-            and timeout is None
-        ):
-            return self.driver_features
-        driver_features = dict(self.driver_features)
-        if request_options is not None:
-            driver_features["request_options"] = request_options
-        if directed_read_options is not None:
-            driver_features["directed_read_options"] = directed_read_options
-        if query_options is not None:
-            driver_features["query_options"] = query_options
-        if retry is not None:
-            driver_features["retry"] = retry
-        if timeout is not None:
-            driver_features["timeout"] = timeout
-        return driver_features
+        return build_session_driver_features(
+            self.driver_features,
+            request_options=request_options,
+            directed_read_options=directed_read_options,
+            query_options=query_options,
+            retry=retry,
+            timeout=timeout,
+        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SpannerSyncConfig types.
@@ -713,7 +700,7 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
         database = await self._config.get_database()
         if self._transaction:
             manager = cast("Any", database).sessions_manager
-            self._session = await manager.get_session(TransactionType.READ_WRITE)
+            self._session = await manager.get_session(SpannerAsyncTransactionType.READ_WRITE)
             try:
                 txn = self._session.transaction()
                 await txn.__aenter__()
@@ -735,6 +722,8 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
             try:
                 if self._connection is not None:
                     txn = cast("Any", self._connection)
+                    if getattr(txn, "committed", None) is not None or getattr(txn, "rolled_back", False):
+                        return False
                     if exc_type is None:
                         txn_id = getattr(txn, "_transaction_id", None)
                         has_pending_mutations = bool(getattr(txn, "_mutations", None))
@@ -877,9 +866,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         if self._database is None:
             client = self._get_client()
             instance = cast("Any", client).instance(instance_id, **self._instance_kwargs())
-            database_result = instance.database(
-                database_id, pool=self.connection_instance, **self._database_kwargs()
-            )
+            database_result = instance.database(database_id, pool=self.connection_instance, **self._database_kwargs())
             self._database = cast(
                 "AsyncDatabase", await database_result if inspect.isawaitable(database_result) else database_result
             )
@@ -1061,12 +1048,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
             **kwargs,
         )
 
-    async def run_in_transaction(
-        self,
-        fn: "Callable[..., Any]",
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+    async def run_in_transaction(self, fn: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
         """Execute an async callable inside Spanner's async retryable transaction runner.
 
         Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
@@ -1077,9 +1059,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
 
         async def _work(transaction: "SpannerAsyncConnection", *work_args: Any) -> Any:
             driver = self.driver_type(
-                connection=transaction,
-                statement_config=self.statement_config,
-                driver_features=self.driver_features,
+                connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
             )
             driver = self._prepare_driver(driver)
             try:
@@ -1104,26 +1084,14 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         retry: "Retry | None",
         timeout: "float | None",
     ) -> "dict[str, Any]":
-        if (
-            request_options is None
-            and directed_read_options is None
-            and query_options is None
-            and retry is None
-            and timeout is None
-        ):
-            return self.driver_features
-        driver_features = dict(self.driver_features)
-        if request_options is not None:
-            driver_features["request_options"] = request_options
-        if directed_read_options is not None:
-            driver_features["directed_read_options"] = directed_read_options
-        if query_options is not None:
-            driver_features["query_options"] = query_options
-        if retry is not None:
-            driver_features["retry"] = retry
-        if timeout is not None:
-            driver_features["timeout"] = timeout
-        return driver_features
+        return build_session_driver_features(
+            self.driver_features,
+            request_options=request_options,
+            directed_read_options=directed_read_options,
+            query_options=query_options,
+            retry=retry,
+            timeout=timeout,
+        )
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SpannerAsyncConfig types.
@@ -1148,4 +1116,3 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         """Return queue defaults for Spanner JSON handling."""
 
         return EventRuntimeHints()
-
