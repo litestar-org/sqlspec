@@ -6,61 +6,9 @@ import pyarrow as pa
 import pytest
 
 from sqlspec import SQLResult
-from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerAsyncDriver
+from sqlspec.adapters.spanner import SpannerAsyncConfig
 
 pytestmark = [pytest.mark.spanner, pytest.mark.anyio]
-
-
-@pytest.mark.parametrize("commit", [False, True])
-async def test_async_explicit_transaction_completion(
-    spanner_async_config: SpannerAsyncConfig, test_users_table: str, commit: bool
-) -> None:
-    user_id = str(uuid4())
-    async with spanner_async_config.provide_write_session() as session:
-        await session.execute(
-            f"INSERT INTO {test_users_table} (id, name) VALUES (@id, @name)", id=user_id, name="transaction completion"
-        )
-        if commit:
-            await session.commit()
-            await session.commit()
-        else:
-            await session.rollback()
-            await session.rollback()
-    async with spanner_async_config.provide_read_session() as session:
-        assert await session.select_value(f"SELECT COUNT(*) FROM {test_users_table} WHERE id = @id", id=user_id) == int(
-            commit
-        )
-    if commit:
-        async with spanner_async_config.provide_write_session() as session:
-            await session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)
-
-
-async def test_async_connection_pooling(spanner_async_session: "SpannerAsyncDriver") -> None:
-    """Test acquiring an async session and executing a scalar query."""
-    result = await spanner_async_session.select_value("SELECT 1")
-    assert result == 1
-
-
-async def test_async_rollback_discards_buffered_arrow_mutations(
-    spanner_async_config: SpannerAsyncConfig, test_arrow_table: str
-) -> None:
-    async with spanner_async_config.provide_write_session() as session:
-        await session.load_from_arrow(test_arrow_table, pa.table({"id": [103], "name": ["rolled back"], "value": [1]}))
-        await session.rollback()
-    async with spanner_async_config.provide_read_session() as session:
-        assert await session.select_value(f"SELECT COUNT(*) FROM {test_arrow_table} WHERE id = @id", id=103) == 0
-
-
-async def test_async_session_management(spanner_async_config: "SpannerAsyncConfig") -> None:
-    """Test async session lifecycle."""
-    async with spanner_async_config.provide_session() as session:
-        assert await session.select_value("SELECT 1") == 1
-
-
-async def test_async_driver_select_value_with_params(spanner_async_session: "SpannerAsyncDriver") -> None:
-    """Test async select_value() with parameters."""
-    result = await spanner_async_session.select_value("SELECT @val", val=100)
-    assert result == 100
 
 
 async def test_async_driver_select_one_and_dml(
@@ -185,31 +133,3 @@ async def test_async_driver_arrow_roundtrip(spanner_async_config: "SpannerAsyncC
 
     async with spanner_async_config.provide_write_session() as session:
         await session.execute(f"DELETE FROM {test_arrow_table} WHERE id IN (101, 102)")
-
-
-async def test_async_config_run_in_transaction(
-    spanner_async_config: "SpannerAsyncConfig", test_users_table: str
-) -> None:
-    """Test SpannerAsyncConfig.run_in_transaction() executing read-write work."""
-    user_id = str(uuid4())
-
-    async def _work(driver: "SpannerAsyncDriver") -> str:
-        await driver.execute(
-            f"INSERT INTO {test_users_table} (id, name, email, age) VALUES (@id, @name, @email, @age)",
-            id=user_id,
-            name="Tx Runner",
-            email="tx@example.com",
-            age=50,
-        )
-        return user_id
-
-    returned_id = await spanner_async_config.run_in_transaction(_work)
-    assert returned_id == user_id
-
-    async with spanner_async_config.provide_session() as session:
-        row = await session.select_one_or_none(f"SELECT name FROM {test_users_table} WHERE id = @id", id=user_id)
-        assert row is not None
-        assert row["name"] == "Tx Runner"
-
-    async with spanner_async_config.provide_write_session() as session:
-        await session.execute(f"DELETE FROM {test_users_table} WHERE id = @id", id=user_id)

@@ -9,16 +9,13 @@ from google.cloud import spanner
 from pytest_databases.docker.spanner import SpannerService
 
 from sqlspec import SQLSpec
-from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerAsyncDriver, SpannerSyncConfig, SpannerSyncDriver
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig, SpannerSyncDriver
 
 if TYPE_CHECKING:
     from google.cloud.spanner_v1.database import Database
 
 __all__ = (
     "spanner_async_config",
-    "spanner_async_read_session",
-    "spanner_async_session",
-    "spanner_async_write_session",
     "spanner_config",
     "spanner_database",
     "spanner_read_session",
@@ -27,7 +24,7 @@ __all__ = (
 )
 
 
-def _spanner_connection_config(spanner_service: "SpannerService") -> "dict[str, Any]":
+def build_spanner_connection_config(spanner_service: "SpannerService") -> "dict[str, Any]":
     return {
         "project": spanner_service.project,
         "instance_id": spanner_service.instance_name,
@@ -61,7 +58,7 @@ def spanner_config(
     spanner_service: "SpannerService", spanner_connection: "spanner.Client", spanner_database: "Database"
 ) -> "Generator[SpannerSyncConfig, None, None]":
     """Create a Spanner configuration after ensuring the database exists."""
-    config = SpannerSyncConfig(connection_config=_spanner_connection_config(spanner_service))
+    config = SpannerSyncConfig(connection_config=build_spanner_connection_config(spanner_service))
     try:
         yield config
     finally:
@@ -91,46 +88,17 @@ def spanner_read_session(spanner_config: "SpannerSyncConfig") -> "Generator[Span
         yield session
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def spanner_async_config(
     spanner_service: "SpannerService", spanner_database: "Database"
 ) -> "AsyncGenerator[SpannerAsyncConfig, None]":
     """Create an async Spanner configuration after ensuring the database exists."""
     del spanner_database
-    config = SpannerAsyncConfig(connection_config=_spanner_connection_config(spanner_service))
+    config = SpannerAsyncConfig(connection_config=build_spanner_connection_config(spanner_service))
     try:
         yield config
     finally:
         await config.close_pool()
-
-
-@pytest.fixture
-async def spanner_async_session(
-    spanner_async_config: "SpannerAsyncConfig",
-) -> "AsyncGenerator[SpannerAsyncDriver, None]":
-    """Provide a read-only async Spanner session."""
-    sql = SQLSpec()
-    registered_config = sql.add_config(spanner_async_config)
-    async with sql.provide_session(registered_config) as session:
-        yield session
-
-
-@pytest.fixture
-async def spanner_async_write_session(
-    spanner_async_config: "SpannerAsyncConfig",
-) -> "AsyncGenerator[SpannerAsyncDriver, None]":
-    """Provide a write-capable async Spanner session."""
-    async with spanner_async_config.provide_write_session() as session:
-        yield session
-
-
-@pytest.fixture
-async def spanner_async_read_session(
-    spanner_async_config: "SpannerAsyncConfig",
-) -> "AsyncGenerator[SpannerAsyncDriver, None]":
-    """Provide a read-only async Spanner session."""
-    async with spanner_async_config.provide_read_session() as session:
-        yield session
 
 
 def run_ddl(database: "Database", statements: "list[str]", timeout: int = 300) -> None:

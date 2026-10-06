@@ -10,6 +10,7 @@ from google.cloud.spanner_v1._async.database_sessions_manager import (
 )
 from google.cloud.spanner_v1.database_sessions_manager import DatabaseSessionsManager
 
+from tests.integration.adapters.spanner.spanner._modes import SpannerModeConfig
 from tests.integration.fixtures.spanner import drop_table_if_exists, run_ddl
 
 if TYPE_CHECKING:
@@ -75,6 +76,13 @@ def spanner_emulator_log_filter() -> Generator[None, None, None]:
     finally:
         sys.stdout = stdout
         sys.stderr = stderr
+
+
+@pytest.fixture(params=("sync", "async"))
+def spanner_mode_config(request: pytest.FixtureRequest) -> SpannerModeConfig:
+    """Provide the sync or async Spanner configuration for mode-parametrized tests."""
+    fixture_name = "spanner_config" if request.param == "sync" else "spanner_async_config"
+    return cast("SpannerModeConfig", request.getfixturevalue(fixture_name))
 
 
 @pytest.fixture

@@ -93,9 +93,6 @@ from tests.integration.fixtures.postgres import (
 )
 from tests.integration.fixtures.spanner import (
     spanner_async_config,
-    spanner_async_read_session,
-    spanner_async_session,
-    spanner_async_write_session,
     spanner_config,
     spanner_database,
     spanner_read_session,
@@ -199,9 +196,6 @@ __all__ = (
     "pymysql_driver",
     "pymysql_transaction_config",
     "spanner_async_config",
-    "spanner_async_read_session",
-    "spanner_async_session",
-    "spanner_async_write_session",
     "spanner_config",
     "spanner_database",
     "spanner_read_session",
