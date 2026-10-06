@@ -22,7 +22,7 @@ from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionar
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.adapters.psycopg.data_dictionary import PsycopgAsyncDataDictionary, PsycopgSyncDataDictionary
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
-from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.adapters.sqlite.data_dictionary import SqliteDataDictionary
 from sqlspec.data_dictionary import IndexMetadata, VersionInfo
 from sqlspec.driver import SyncDriverAdapterBase
@@ -95,7 +95,7 @@ def test_public_data_dictionary_classes_remain_constructible() -> None:
         PsycopgAsyncDataDictionary,
         PsycopgSyncDataDictionary,
         PyMysqlDataDictionary,
-        SpannerDataDictionary,
+        SpannerSyncDataDictionary,
         SqliteDataDictionary,
     )
 

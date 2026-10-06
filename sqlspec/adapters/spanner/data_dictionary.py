@@ -1,6 +1,5 @@
 """Spanner metadata queries using INFORMATION_SCHEMA."""
 
-import inspect
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
@@ -34,7 +33,7 @@ if TYPE_CHECKING:
 
     from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 
-__all__ = ("SpannerAsyncDataDictionary", "SpannerDataDictionary", "SpannerSyncDataDictionary")
+__all__ = ("SpannerAsyncDataDictionary", "SpannerSyncDataDictionary")
 
 _DEFAULT_METADATA_DOMAINS = (
     "schemas",
@@ -73,7 +72,7 @@ _SPANNER_SYSTEM_WARNINGS = (
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
-class SpannerDataDictionary(SyncDataDictionaryBase):
+class SpannerSyncDataDictionary(SyncDataDictionaryBase):
     """Fetch table, column, and index metadata from Spanner."""
 
     dialect: ClassVar[str] = "spanner"
@@ -323,12 +322,9 @@ class SpannerDataDictionary(SyncDataDictionaryBase):
         )
 
 
-SpannerSyncDataDictionary = SpannerDataDictionary
-
-
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
-    """Fetch table, column, and index metadata from Spanner asynchronously."""
+    """Fetch table, column, and index metadata from Spanner."""
 
     dialect: ClassVar[str] = "spanner"
 
@@ -630,37 +626,24 @@ def _get_spanner_ddl_statements(driver: Any) -> "tuple[str, ...]":
     database = _get_spanner_database(driver)
     if database is None:
         return ()
-    get_ddl = getattr(database, "get_ddl", None)
-    if callable(get_ddl):
-        return tuple(str(statement) for statement in cast("Sequence[object]", get_ddl()))
     admin_api = _get_spanner_database_admin_api(database)
     database_name = getattr(database, "name", None)
     if admin_api is None or database_name is None:
         return ()
     response = admin_api.get_database_ddl(database=database_name)
-    statements = getattr(response, "statements", ())
-    return tuple(str(statement) for statement in cast("Sequence[object]", statements))
+    return tuple(str(statement) for statement in cast("Sequence[object]", response.statements))
 
 
 async def _get_spanner_ddl_statements_async(driver: Any) -> "tuple[str, ...]":
     database = _get_spanner_database(driver)
     if database is None:
         return ()
-    get_ddl = getattr(database, "get_ddl", None)
-    if callable(get_ddl):
-        ddl_result = get_ddl()
-        if inspect.isawaitable(ddl_result):
-            ddl_result = await ddl_result
-        return tuple(str(statement) for statement in cast("Sequence[object]", ddl_result))
     admin_api = _get_spanner_database_admin_api(database)
     database_name = getattr(database, "name", None)
     if admin_api is None or database_name is None:
         return ()
-    response = admin_api.get_database_ddl(database=database_name)
-    if inspect.isawaitable(response):
-        response = await response
-    statements = getattr(response, "statements", ())
-    return tuple(str(statement) for statement in cast("Sequence[object]", statements))
+    response = await admin_api.get_database_ddl(database=database_name)
+    return tuple(str(statement) for statement in cast("Sequence[object]", response.statements))
 
 
 def _get_spanner_database(driver: Any) -> Any:

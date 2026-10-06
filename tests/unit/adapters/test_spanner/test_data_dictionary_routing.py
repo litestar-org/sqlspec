@@ -1,14 +1,10 @@
-"""Tests for SpannerDataDictionary query routing."""
+"""Tests for SpannerSyncDataDictionary query routing."""
 
 from typing import Any, cast
 
 import pytest
 
-from sqlspec.adapters.spanner.data_dictionary import (
-    SpannerAsyncDataDictionary,
-    SpannerDataDictionary,
-    SpannerSyncDataDictionary,
-)
+from sqlspec.adapters.spanner.data_dictionary import SpannerAsyncDataDictionary, SpannerSyncDataDictionary
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
 from sqlspec.core import StatementConfig
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
@@ -55,13 +51,13 @@ class MockSpannerDriver:
 
 def test_spanner_data_dictionary_default_mode() -> None:
     """Default mode is googlesql."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     assert dictionary.mode == "googlesql"
 
 
 def test_get_tables_routes_to_googlesql() -> None:
     """get_tables executes query containing GoogleSQL fields and TableMetadata aliases."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     tables = dictionary.get_tables(cast(Any, driver))
 
@@ -76,7 +72,7 @@ def test_get_tables_routes_to_googlesql() -> None:
 
 def test_get_columns_routes_to_googlesql() -> None:
     """get_columns executes query containing GoogleSQL column extensions and ColumnMetadata aliases."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     columns = dictionary.get_columns(cast(Any, driver), table="users")
 
@@ -90,7 +86,7 @@ def test_get_columns_routes_to_googlesql() -> None:
 
 def test_get_indexes_routes_to_googlesql() -> None:
     """get_indexes executes query containing GoogleSQL index extensions and IndexMetadata aliases."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     indexes = dictionary.get_indexes(cast(Any, driver), table="users")
 
@@ -106,7 +102,7 @@ def test_get_indexes_routes_to_googlesql() -> None:
 
 def test_get_foreign_keys_routes_to_googlesql() -> None:
     """get_foreign_keys executes query containing GoogleSQL CTEs."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     fks = dictionary.get_foreign_keys(cast(Any, driver), table="users")
 
@@ -118,7 +114,7 @@ def test_get_foreign_keys_routes_to_googlesql() -> None:
 
 def test_get_query_explicit_mode_override() -> None:
     """Explicit mode override routes to PostgreSQL query templates with expected aliases."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     query = dictionary.get_query("tables", "by_schema", mode="postgresql")
 
     assert "table_catalog" in query.raw_sql
@@ -133,7 +129,7 @@ def test_get_query_explicit_mode_override() -> None:
 @pytest.mark.parametrize("mode", ["googlesql", "postgresql"])
 @pytest.mark.parametrize("domain", ["tables", "columns", "indexes"])
 def test_schema_metadata_binds_only_schema(mode: str, domain: str) -> None:
-    dictionary = SpannerDataDictionary(mode=mode)
+    dictionary = SpannerSyncDataDictionary(mode=mode)
     driver = MockSpannerDriver()
     getattr(dictionary, f"get_{domain}")(cast("Any", driver), schema="public")
 
@@ -182,7 +178,7 @@ class MockAsyncSpannerDriver:
 
 async def test_async_data_dictionary_routing_and_sync_alias() -> None:
     """Verify SpannerAsyncDataDictionary routes GoogleSQL and PostgreSQL queries and SpannerSyncDataDictionary is aliased."""
-    assert SpannerSyncDataDictionary is SpannerDataDictionary
+    assert SpannerSyncDataDictionary is SpannerSyncDataDictionary
 
     dictionary = SpannerAsyncDataDictionary()
     assert dictionary.mode == "googlesql"
@@ -225,5 +221,5 @@ def test_driver_data_dictionary_dialect_mode_routing() -> None:
     sync_driver_pg = SpannerSyncDriver(
         connection=cast("Any", object()), statement_config=StatementConfig(dialect="spangres")
     )
-    assert isinstance(sync_driver_pg.data_dictionary, SpannerDataDictionary)
+    assert isinstance(sync_driver_pg.data_dictionary, SpannerSyncDataDictionary)
     assert sync_driver_pg.data_dictionary.mode == "postgresql"

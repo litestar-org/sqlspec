@@ -1,9 +1,10 @@
 """Unit tests for BigQuery and Spanner metadata packs."""
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 from sqlspec.adapters.bigquery import data_dictionary as bigquery_data_dictionary
-from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.data_dictionary import (
     MetadataFidelity,
     MetadataRisk,
@@ -25,16 +26,24 @@ class _FakeBigQueryDriver:
         return []
 
 
-class _FakeSpannerDatabase:
-    """Minimal Spanner database wrapper for Admin API DDL tests."""
+class _FakeDatabaseAdminApi:
+    """Minimal Database Admin API returning static DDL statements."""
 
     def __init__(self) -> None:
-        self.get_ddl_calls = 0
+        self.requested: list[str] = []
 
-    def get_ddl(self) -> list[str]:
-        """Return static DDL statements."""
-        self.get_ddl_calls += 1
-        return ["CREATE TABLE Singers (SingerId INT64) PRIMARY KEY (SingerId)"]
+    def get_database_ddl(self, *, database: str) -> SimpleNamespace:
+        self.requested.append(database)
+        return SimpleNamespace(statements=["CREATE TABLE Singers (SingerId INT64) PRIMARY KEY (SingerId)"])
+
+
+class _FakeSpannerDatabase:
+    """Minimal Spanner database exposing its instance client's Admin API."""
+
+    def __init__(self) -> None:
+        self.name = "projects/p/instances/i/databases/d"
+        self.admin_api = _FakeDatabaseAdminApi()
+        self._instance = SimpleNamespace(_client=SimpleNamespace(database_admin_api=self.admin_api))
 
 
 class _FakeSpannerDriver:
@@ -114,7 +123,7 @@ def test_spanner_mode_does_not_reuse_googlesql_for_postgresql() -> None:
 
     googlesql = loader.get_domain_query("spanner", "tables", "by_schema", mode="googlesql")
     postgresql = loader.get_domain_query("spanner", "tables", "by_schema", mode="postgresql")
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     profile = dictionary.get_metadata_capabilities(cast(Any, object()), mode="postgresql")
     alias_profile = dictionary.get_metadata_capabilities(cast(Any, object()), mode="spanner_postgresql")
     unknown_profile = dictionary.get_metadata_capabilities(cast(Any, object()), mode="unknown")
@@ -133,7 +142,7 @@ def test_spanner_mode_does_not_reuse_googlesql_for_postgresql() -> None:
 
 def test_spanner_nullable_schema_queries_cast_bind_as_string() -> None:
     """Spanner must not infer a nullable schema bind as both INT64 and STRING."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
 
     for domain in ("tables", "columns", "indexes", "foreign_keys"):
         query_text = dictionary.get_query_text(domain, "by_schema")
@@ -145,7 +154,7 @@ def test_spanner_nullable_schema_queries_cast_bind_as_string() -> None:
 def test_spanner_get_ddl_uses_admin_api_capability() -> None:
     """Spanner native DDL is modeled as Admin API metadata, not SQL text."""
     driver = _FakeSpannerDriver()
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
 
     result = dictionary.get_ddl(cast(Any, driver), "Singers")
     ddl_capability = dictionary.get_metadata_capabilities(cast(Any, driver)).get("ddl")
@@ -154,6 +163,6 @@ def test_spanner_get_ddl_uses_admin_api_capability() -> None:
     assert result.source == MetadataSource.NATIVE_API
     assert result.fidelity == MetadataFidelity.NATIVE
     assert result.ddl == "CREATE TABLE Singers (SingerId INT64) PRIMARY KEY (SingerId)"
-    assert driver.database.get_ddl_calls == 1
+    assert driver.database.admin_api.requested == ["projects/p/instances/i/databases/d"]
     assert ddl_capability.source == MetadataSource.NATIVE_API
     assert MetadataRisk.PRIVILEGED in ddl_capability.risks

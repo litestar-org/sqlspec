@@ -23,7 +23,7 @@ class _UnavailableSpannerAsyncTransaction:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
     from typing import TypeAlias
 
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1._async.batch import MutationGroups as SpannerAsyncMutationGroups
     from google.cloud.spanner_v1._async.client import Client as SpannerAsyncClient
     from google.cloud.spanner_v1._async.database import Database as SpannerAsyncDatabase
-    from google.cloud.spanner_v1._async.database import SnapshotCheckout as AsyncSnapshotCheckout
+    from google.cloud.spanner_v1._async.database import SnapshotCheckout as SpannerAsyncSnapshotCheckout
     from google.cloud.spanner_v1._async.database_sessions_manager import TransactionType as SpannerAsyncTransactionType
     from google.cloud.spanner_v1._async.pool import AbstractSessionPool as SpannerAsyncAbstractSessionPool
     from google.cloud.spanner_v1._async.pool import BurstyPool as SpannerAsyncBurstyPool
@@ -74,23 +74,9 @@ if TYPE_CHECKING:
     from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
     from sqlspec.core import StatementConfig
 
-    AsyncAbstractSessionPool: TypeAlias = SpannerAsyncAbstractSessionPool
-    AsyncBatch: TypeAlias = SpannerAsyncBatch
-    AsyncBurstyPool: TypeAlias = SpannerAsyncBurstyPool
-    AsyncClient: TypeAlias = SpannerAsyncClient
-    AsyncDatabase: TypeAlias = SpannerAsyncDatabase
-    AsyncFixedSizePool: TypeAlias = SpannerAsyncFixedSizePool
-    AsyncMutationGroups: TypeAlias = SpannerAsyncMutationGroups
-    AsyncPingingPool: TypeAlias = SpannerAsyncPingingPool
-    AsyncSession: TypeAlias = SpannerAsyncSession
-    AsyncSnapshot: TypeAlias = SpannerAsyncSnapshot
-    AsyncStreamedResultSet: TypeAlias = SpannerAsyncStreamedResultSet
-    AsyncTransaction: TypeAlias = _SpannerAsyncTransaction
-    AsyncTransactionPingingPool: TypeAlias = SpannerAsyncTransactionPingingPool
-    SpannerConnection: TypeAlias = Snapshot | SnapshotCheckout | _SpannerTransaction
-    SpannerSyncConnection: TypeAlias = SpannerConnection
+    SpannerSyncConnection: TypeAlias = Snapshot | SnapshotCheckout | _SpannerTransaction
     SpannerAsyncConnection: TypeAlias = (
-        SpannerAsyncSnapshot | AsyncSnapshotCheckout | _SpannerAsyncTransaction | SpannerAsyncBatch
+        SpannerAsyncSnapshot | SpannerAsyncSnapshotCheckout | _SpannerAsyncTransaction | SpannerAsyncBatch
     )
     SpannerGoogleAPICallError: TypeAlias = _SpannerGoogleAPICallError
     SpannerTransaction: TypeAlias = _SpannerTransaction
@@ -98,7 +84,6 @@ if TYPE_CHECKING:
 
 
 if not TYPE_CHECKING:
-    SpannerConnection = Any
     SpannerSyncConnection = Any
     SpannerAsyncConnection = Any
     SpannerGoogleAPICallError = (
@@ -112,23 +97,9 @@ if not TYPE_CHECKING:
         import_optional_attr("google.cloud.spanner_v1._async.transaction", "Transaction")
         or _UnavailableSpannerAsyncTransaction
     )
-    AsyncTransaction = SpannerAsyncTransaction
 
 
 __all__ = (
-    "AsyncAbstractSessionPool",
-    "AsyncBatch",
-    "AsyncBurstyPool",
-    "AsyncClient",
-    "AsyncDatabase",
-    "AsyncFixedSizePool",
-    "AsyncMutationGroups",
-    "AsyncPingingPool",
-    "AsyncSession",
-    "AsyncSnapshot",
-    "AsyncStreamedResultSet",
-    "AsyncTransaction",
-    "AsyncTransactionPingingPool",
     "SpannerAbstractSessionPool",
     "SpannerAsyncAbstractSessionPool",
     "SpannerAsyncBatch",
@@ -151,7 +122,6 @@ __all__ = (
     "SpannerClient",
     "SpannerClientInfo",
     "SpannerClientOptions",
-    "SpannerConnection",
     "SpannerCredentials",
     "SpannerDatabase",
     "SpannerDatabaseDialect",
@@ -167,7 +137,6 @@ __all__ = (
     "SpannerPingingPool",
     "SpannerRequestOptions",
     "SpannerRetry",
-    "SpannerSessionContext",
     "SpannerSyncConnection",
     "SpannerSyncCursor",
     "SpannerSyncSessionContext",
@@ -185,10 +154,10 @@ class SpannerSyncCursor:
 
     __slots__ = ("connection",)
 
-    def __init__(self, connection: "SpannerConnection") -> None:
+    def __init__(self, connection: "SpannerSyncConnection") -> None:
         self.connection = connection
 
-    def __enter__(self) -> "SpannerConnection":
+    def __enter__(self) -> "SpannerSyncConnection":
         return self.connection
 
     def __exit__(self, *_: Any) -> None:
@@ -212,21 +181,13 @@ class SpannerAsyncCursor:
         return None
 
 
-class SpannerSessionContext:
+class SpannerSyncSessionContext:
     """Sync context manager for Spanner sessions.
 
-    This class is intentionally excluded from mypyc compilation to avoid ABI
-    boundary issues. It receives callables from uncompiled config classes and
-    instantiates compiled Driver objects, acting as a bridge between compiled
-    and uncompiled code.
-
-    Note: This context manager receives a pre-configured connection context
-    that already has the transaction flag set. The config.provide_session()
-    creates the connection context with the appropriate transaction setting.
-
-    Uses callable-based connection management to decouple from config implementation.
-
-    Spanner requires exception info in release_connection for commit/rollback decisions.
+    Excluded from mypyc compilation: it receives callables from uncompiled
+    config classes and instantiates compiled driver objects. The release
+    callable receives exception details so the connection context can commit
+    or roll back the active transaction.
     """
 
     __slots__ = (
@@ -273,11 +234,14 @@ class SpannerSessionContext:
         return None
 
 
-SpannerSyncSessionContext = SpannerSessionContext
-
-
 class SpannerAsyncSessionContext:
-    """Async context manager for Spanner sessions."""
+    """Async context manager for Spanner sessions.
+
+    Excluded from mypyc compilation: it receives callables from uncompiled
+    config classes and instantiates compiled driver objects. The release
+    callable receives exception details so the connection context can commit
+    or roll back the active transaction.
+    """
 
     __slots__ = (
         "_acquire_connection",
@@ -291,8 +255,8 @@ class SpannerAsyncSessionContext:
 
     def __init__(
         self,
-        acquire_connection: "Callable[[], Any]",
-        release_connection: "Callable[..., Any]",
+        acquire_connection: "Callable[[], Awaitable[Any]]",
+        release_connection: "Callable[..., Awaitable[Any]]",
         statement_config: "StatementConfig",
         driver_features: "dict[str, Any]",
         prepare_driver: "Callable[[SpannerAsyncDriver], SpannerAsyncDriver]",
@@ -326,18 +290,6 @@ class SpannerAsyncSessionContext:
 _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
     "SpannerAsyncTransactionType": ("google.cloud.spanner_v1._async.database_sessions_manager", "TransactionType"),
     "SpannerInterval": ("google.cloud.spanner_v1.data_types", "Interval"),
-    "AsyncAbstractSessionPool": ("google.cloud.spanner_v1._async.pool", "AbstractSessionPool"),
-    "AsyncBatch": ("google.cloud.spanner_v1._async.batch", "Batch"),
-    "AsyncBurstyPool": ("google.cloud.spanner_v1._async.pool", "BurstyPool"),
-    "AsyncClient": ("google.cloud.spanner_v1._async.client", "Client"),
-    "AsyncDatabase": ("google.cloud.spanner_v1._async.database", "Database"),
-    "AsyncFixedSizePool": ("google.cloud.spanner_v1._async.pool", "FixedSizePool"),
-    "AsyncMutationGroups": ("google.cloud.spanner_v1._async.batch", "MutationGroups"),
-    "AsyncPingingPool": ("google.cloud.spanner_v1._async.pool", "PingingPool"),
-    "AsyncSession": ("google.cloud.spanner_v1._async.session", "Session"),
-    "AsyncSnapshot": ("google.cloud.spanner_v1._async.snapshot", "Snapshot"),
-    "AsyncStreamedResultSet": ("google.cloud.spanner_v1._async.streamed", "StreamedResultSet"),
-    "AsyncTransactionPingingPool": ("google.cloud.spanner_v1._async.pool", "TransactionPingingPool"),
     "SpannerAsyncAbstractSessionPool": ("google.cloud.spanner_v1._async.pool", "AbstractSessionPool"),
     "SpannerAsyncBatch": ("google.cloud.spanner_v1._async.batch", "Batch"),
     "SpannerAsyncBurstyPool": ("google.cloud.spanner_v1._async.pool", "BurstyPool"),

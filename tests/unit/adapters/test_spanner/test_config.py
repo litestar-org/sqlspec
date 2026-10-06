@@ -366,6 +366,9 @@ def test_provide_connection_batch_and_snapshot() -> None:
 
     class _Txn:
         _transaction_id = "test-txn-id"
+        _mutations: tuple[object, ...] = ()
+        committed = None
+        rolled_back = False
 
         def __enter__(self):
             return self
@@ -430,6 +433,7 @@ def test_transaction_context_commits_mutations_only_transaction() -> None:
             self._transaction_id = None
             self._mutations = [object()]
             self.committed = None
+            self.rolled_back = False
             self.commit_calls = 0
             self.rollback_calls = 0
 
@@ -494,6 +498,7 @@ def test_transaction_context_does_not_commit_empty_transaction() -> None:
             self._transaction_id = None
             self._mutations: list[object] = []
             self.committed = None
+            self.rolled_back = False
             self.commit_calls = 0
             self.rollback_calls = 0
 
@@ -554,6 +559,9 @@ def test_provide_session_uses_batch_when_transaction_requested() -> None:
 
     class _Txn:
         _transaction_id = "test-txn-id"
+        _mutations: tuple[object, ...] = ()
+        committed = None
+        rolled_back = False
 
         def __enter__(self):
             return self
@@ -610,6 +618,9 @@ def test_provide_write_session_alias() -> None:
 
     class _Txn:
         _transaction_id = "test-txn-id"
+        _mutations: tuple[object, ...] = ()
+        committed = None
+        rolled_back = False
 
         def __enter__(self):
             return self
@@ -763,7 +774,7 @@ async def test_async_config_initialization_and_get_database(monkeypatch: pytest.
         def instance(self, instance_id: str, **kwargs: Any) -> _FakeAsyncInstance:
             return _FakeAsyncInstance(instance_id, kwargs)
 
-        async def close(self) -> None:
+        def close(self) -> None:
             self.closed = True
 
     created_async_clients: list[_FakeAsyncClient] = []
@@ -804,6 +815,7 @@ async def test_async_config_provide_connection_and_sessions() -> None:
             self._transaction_id = b"async-txn-id"
             self._mutations: list[object] = []
             self.committed: Any = None
+            self.rolled_back = False
             self.commit_calls = 0
             self.rollback_calls = 0
 
@@ -913,6 +925,7 @@ async def test_async_connection_context_mutations_empty_rollback_and_aenter_fail
             self._mutations = mutations if mutations is not None else []
             self.fail_enter = fail_enter
             self.committed: Any = None
+            self.rolled_back = False
             self.commit_calls = 0
             self.rollback_calls = 0
 
@@ -1050,9 +1063,8 @@ def test_sync_run_in_transaction_unwraps_deadlock_error_and_retries() -> None:
 
     db_driver = _SyncDB(max_attempts=2)
     sync_driver = SpannerSyncDriver(
-        connection=cast("Any", object()),
+        connection=cast("Any", SimpleNamespace(_session=SimpleNamespace(_database=db_driver))),
         statement_config=default_statement_config,
-        driver_features={"database_provider": lambda: db_driver},
     )
     driver_calls = 0
 
@@ -1133,9 +1145,8 @@ async def test_async_run_in_transaction_unwraps_deadlock_error_and_retries() -> 
 
     db_driver = _AsyncDB(max_attempts=2)
     async_driver = SpannerAsyncDriver(
-        connection=cast("Any", object()),
+        connection=cast("Any", SimpleNamespace(_session=SimpleNamespace(_database=db_driver))),
         statement_config=default_statement_config,
-        driver_features={"database_provider": lambda: db_driver},
     )
     driver_calls = 0
 
@@ -1180,47 +1191,45 @@ def test_sync_pinging_and_transaction_pinging_pool_defaults() -> None:
     assert cast("Any", txn_pinging_pool)._delta == timedelta(seconds=900)
 
 
-async def test_async_config_pool_types_and_sync_alias_mapping() -> None:
-    """SpannerAsyncConfig should support all async pools and map sync pool classes to Async* pools."""
-    default_config = SpannerAsyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
-    default_pool = await default_config.provide_pool()
-    assert isinstance(default_pool, AsyncBurstyPool)
-    assert default_pool.target_size == 10
+async def test_async_config_pool_types() -> None:
+    """SpannerAsyncConfig defaults to an async FixedSizePool and configures each async pool class."""
+    connection = {"project": "p", "instance_id": "i", "database_id": "d"}
+    default_pool = await SpannerAsyncConfig(connection_config=dict(connection)).provide_pool()
+    assert isinstance(default_pool, AsyncFixedSizePool)
+    assert default_pool.size == 10
 
-    fixed_from_sync = SpannerAsyncConfig(
-        connection_config={
-            "project": "p",
-            "instance_id": "i",
-            "database_id": "d",
-            "pool_type": FixedSizePool,
-            "size": 6,
-            "max_age_minutes": 30,
-        }
-    )
-    fixed_pool = await fixed_from_sync.provide_pool()
+    fixed_pool = await SpannerAsyncConfig(
+        connection_config={**connection, "pool_type": AsyncFixedSizePool, "size": 6, "max_age_minutes": 30}
+    ).provide_pool()
     assert isinstance(fixed_pool, AsyncFixedSizePool)
     assert fixed_pool.size == 6
     assert fixed_pool._max_age == timedelta(minutes=30)
 
-    pinging_from_sync = SpannerAsyncConfig(
-        connection_config={"project": "p", "instance_id": "i", "database_id": "d", "pool_type": PingingPool, "size": 4}
-    )
-    pinging_pool = await pinging_from_sync.provide_pool()
+    bursty_pool = await SpannerAsyncConfig(
+        connection_config={**connection, "pool_type": AsyncBurstyPool, "target_size": 7}
+    ).provide_pool()
+    assert isinstance(bursty_pool, AsyncBurstyPool)
+    assert bursty_pool.target_size == 7
+
+    pinging_pool = await SpannerAsyncConfig(
+        connection_config={**connection, "pool_type": AsyncPingingPool, "size": 4}
+    ).provide_pool()
     assert isinstance(pinging_pool, AsyncPingingPool)
     assert pinging_pool.size == 4
     assert cast("Any", pinging_pool)._delta == timedelta(seconds=1800)
 
-    txn_pinging_from_sync = SpannerAsyncConfig(
-        connection_config={
-            "project": "p",
-            "instance_id": "i",
-            "database_id": "d",
-            "pool_type": TransactionPingingPool,
-            "size": 3,
-            "ping_interval": 600,
-        }
-    )
-    txn_pinging_pool = await txn_pinging_from_sync.provide_pool()
+    txn_pinging_pool = await SpannerAsyncConfig(
+        connection_config={**connection, "pool_type": AsyncTransactionPingingPool, "size": 3, "ping_interval": 600}
+    ).provide_pool()
     assert isinstance(txn_pinging_pool, AsyncTransactionPingingPool)
     assert txn_pinging_pool.size == 3
     assert cast("Any", txn_pinging_pool)._delta == timedelta(seconds=600)
+
+
+async def test_pool_type_from_other_variant_is_rejected() -> None:
+    """Each config rejects a session pool class built for the other sync/async variant."""
+    connection = {"project": "p", "instance_id": "i", "database_id": "d"}
+    with pytest.raises(ImproperConfigurationError, match="SpannerAsyncConfig requires an async session pool"):
+        await SpannerAsyncConfig(connection_config={**connection, "pool_type": FixedSizePool}).provide_pool()
+    with pytest.raises(ImproperConfigurationError, match="SpannerSyncConfig requires a sync session pool"):
+        SpannerSyncConfig(connection_config={**connection, "pool_type": AsyncFixedSizePool}).provide_pool()

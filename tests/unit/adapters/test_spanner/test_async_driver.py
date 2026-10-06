@@ -1,5 +1,6 @@
-"""Unit tests for SpannerAsyncDriver, SpannerAsyncExceptionHandler, and _SpannerAsyncSelectStreamSource."""
+"""Unit tests for SpannerAsyncDriver, SpannerAsyncExceptionHandler, and SpannerAsyncStreamSource."""
 
+from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -12,12 +13,8 @@ from google.cloud.spanner_v1.types.type import TypeCode
 from typing_extensions import Self
 
 import sqlspec.adapters.spanner.driver as spanner_driver_module
-from sqlspec.adapters.spanner.core import default_statement_config, resolve_row_plan
-from sqlspec.adapters.spanner.driver import (
-    SpannerAsyncDriver,
-    SpannerAsyncExceptionHandler,
-    _SpannerAsyncSelectStreamSource,
-)
+from sqlspec.adapters.spanner.core import SpannerAsyncStreamSource, default_statement_config, resolve_row_plan
+from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerAsyncExceptionHandler
 from sqlspec.driver import AsyncRowStream
 from sqlspec.exceptions import DeadlockError, SQLConversionError, UniqueViolationError
 from sqlspec.utils.serializers import from_json
@@ -46,21 +43,14 @@ class _FakeAsyncResultSet:
         msg = "SpannerAsyncDriver must not call blocking to_dict_list() on AsyncStreamedResultSet"
         raise AssertionError(msg)
 
-    def __aiter__(self) -> "_FakeAsyncResultSet":
-        self._index = 0
-        return self
-
-    async def __anext__(self) -> tuple[Any, ...]:
-        if self._index >= len(self._rows):
-            raise StopAsyncIteration
-        if self._index == 0:
-            self.metadata = SimpleNamespace(row_type=SimpleNamespace(fields=self._fields))
-        row = self._rows[self._index]
-        self._index += 1
-        return row
-
-    async def close(self) -> None:
-        self.closed = True
+    async def __aiter__(self) -> "AsyncGenerator[tuple[Any, ...], None]":
+        try:
+            for index, row in enumerate(self._rows):
+                if index == 0:
+                    self.metadata = SimpleNamespace(row_type=SimpleNamespace(fields=self._fields))
+                yield row
+        finally:
+            self.closed = True
 
 
 async def test_spanner_async_exception_handler_maps_google_api_errors() -> None:
@@ -80,7 +70,7 @@ async def test_spanner_async_exception_handler_maps_google_api_errors() -> None:
 
 
 async def test_spanner_async_select_stream_source_chunks_and_resolves_metadata() -> None:
-    """Verify _SpannerAsyncSelectStreamSource streams chunks via AsyncRowStream and resolves metadata lazily."""
+    """Verify SpannerAsyncStreamSource streams chunks via AsyncRowStream and resolves metadata lazily."""
     json_cls = cast("Any", JsonObject)
     fields = [_field("id", TypeCode.INT64), _field("payload", TypeCode.JSON)]
     fake_rs = _FakeAsyncResultSet(
@@ -117,7 +107,7 @@ async def test_spanner_async_select_stream_source_chunks_and_resolves_metadata()
         def _resolve_row_plan(self, result_fields: Any) -> tuple[list[str], tuple[tuple[int, Any], ...] | None]:
             return resolve_row_plan(result_fields, {}, json_deserializer=from_json)
 
-    source = _SpannerAsyncSelectStreamSource(
+    source = SpannerAsyncStreamSource(
         cast("Any", _FakeDriver()), "SELECT id, payload FROM items", {"p": 1}, {}, 2, {"timeout": 5.0}
     )
     stream: AsyncRowStream[dict[str, Any]] = AsyncRowStream(source)
@@ -238,6 +228,7 @@ async def test_async_driver_commit_rollback_and_savepoints(monkeypatch: pytest.M
     class _FakeAsyncTxn:
         def __init__(self) -> None:
             self.committed: Any = None
+            self.rolled_back = False
             self._transaction_id = b"txn-1"
             self._mutations: list[Any] = []
             self.commit_calls = 0

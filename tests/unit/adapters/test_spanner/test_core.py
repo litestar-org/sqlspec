@@ -3,14 +3,17 @@
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
     collect_rows,
+    is_query_statement,
     resolve_column_names,
     resolve_row_plan,
+    resolve_transaction_completion,
 )
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
 from sqlspec.core import TypedParameter
@@ -175,3 +178,49 @@ def test_convert_json_row_value_zero_copy_unwrapping_with_default_deserializer(m
     assert data == [({"a": 1}, [1, 2, 3], "hello", None)]
     assert type(data[0][0]) is dict
     assert type(data[0][1]) is list
+
+
+@pytest.mark.parametrize(
+    ("state", "failed", "expected"),
+    [
+        ({"_transaction_id": b"txn"}, False, "commit"),
+        ({"_mutations": [object()]}, False, "commit"),
+        ({}, False, "skip"),
+        ({"_transaction_id": b"txn"}, True, "rollback"),
+        ({"_mutations": [object()]}, True, "rollback"),
+        ({}, True, "rollback"),
+        ({"_transaction_id": b"txn", "rolled_back": True}, False, "skip"),
+        ({"_transaction_id": b"txn", "rolled_back": True}, True, "skip"),
+        ({"_transaction_id": b"txn", "committed": object()}, False, "skip"),
+        ({"_transaction_id": b"txn", "committed": object()}, True, "skip"),
+    ],
+    ids=[
+        "begun-commits",
+        "mutations-commit",
+        "empty-skips",
+        "failure-rolls-back",
+        "failure-discards-buffered-mutations",
+        "failure-before-begin-rolls-back",
+        "rolled-back-skips-commit",
+        "rolled-back-skips-rollback",
+        "committed-skips-commit",
+        "committed-skips-rollback",
+    ],
+)
+def test_resolve_transaction_completion(state: dict[str, Any], failed: bool, expected: str) -> None:
+    transaction = SimpleNamespace(**{
+        "_transaction_id": None,
+        "_mutations": [],
+        "committed": None,
+        "rolled_back": False,
+        **state,
+    })
+    assert resolve_transaction_completion(transaction, failed=failed) == expected
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [("SELECT 1", True), ("WITH t AS (SELECT 1) SELECT * FROM t", True), ("UPDATE t SET a = 1 WHERE TRUE", False)],
+)
+def test_is_query_statement(sql: str, expected: bool) -> None:
+    assert is_query_statement(sql, "spanner") is expected

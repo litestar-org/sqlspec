@@ -1,12 +1,17 @@
 """Spanner session store for Litestar integration."""
 
-import inspect
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
+from sqlspec.adapters.spanner.core import (
+    execute_ddl_async,
+    execute_ddl_sync,
+    list_existing_table_names_async,
+    list_existing_table_names_sync,
+)
 from sqlspec.adapters.spanner.type_converter import bytes_to_spanner, spanner_to_bytes
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -16,16 +21,15 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Protocol
 
-    from sqlspec.adapters.spanner._typing import SpannerAsyncDatabase as AsyncDatabase
+    from sqlspec.adapters.spanner._typing import SpannerAsyncTransaction as AsyncTransaction
     from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
     from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 
-    class _DatabaseProtocol(Protocol):
+    class _SpannerSyncDatabaseProtocol(Protocol):
         def run_in_transaction(self, func: "Callable[[Transaction], Any]") -> Any: ...
 
-        def update_ddl(self, ddl_statements: "list[str]") -> Any: ...
-
-        def list_tables(self) -> Any: ...
+    class _SpannerAsyncDatabaseProtocol(Protocol):
+        async def run_in_transaction(self, func: "Callable[[AsyncTransaction], Any]") -> Any: ...
 
 
 __all__ = ("SpannerAsyncStore", "SpannerLitestarConfig", "SpannerSyncStore")
@@ -248,8 +252,8 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         await async_(self._create_table)()
         await self.reconcile_schema(assume_existing=True)
 
-    def _database(self) -> "_DatabaseProtocol":
-        return cast("_DatabaseProtocol", self._config.get_database())
+    def _database(self) -> "_SpannerSyncDatabaseProtocol":
+        return cast("_SpannerSyncDatabaseProtocol", self._config.get_database())
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = self._build_select_session_sql()
@@ -267,7 +271,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
             update_sql = self._build_renew_session_sql()
             params = self._build_params(key, new_expires)
             types = self._get_param_types(expires_at=True)
-            self._database().run_in_transaction(_SpannerExecuteUpdateJob(update_sql, params, types))
+            self._database().run_in_transaction(_SpannerSyncExecuteUpdateJob(update_sql, params, types))
 
         return spanner_to_bytes(data)
 
@@ -277,17 +281,17 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
         params = self._build_params(key, expires_at, data)
         types = self._get_param_types(session_id=True, expires_at=True, data=True)
         update_sql, insert_sql = self._build_upsert_sql()
-        self._database().run_in_transaction(_SpannerUpsertJob(update_sql, insert_sql, params, types))
+        self._database().run_in_transaction(_SpannerSyncUpsertJob(update_sql, insert_sql, params, types))
 
     def _delete(self, key: str) -> None:
         sql = self._build_delete_sql()
         params = {"session_id": key}
         types = self._get_param_types(session_id=True)
-        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql, params, types))
+        self._database().run_in_transaction(_SpannerSyncExecuteUpdateJob(sql, params, types))
 
     def _delete_all(self) -> None:
         sql = self._build_delete_all_sql()
-        self._database().run_in_transaction(_SpannerExecuteUpdateJob(sql))
+        self._database().run_in_transaction(_SpannerSyncExecuteUpdateJob(sql))
 
     def _exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
@@ -309,16 +313,13 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
 
     def _delete_expired(self) -> int:
         sql = self._build_delete_expired_sql()
-        result = self._database().run_in_transaction(_SpannerExecuteUpdateCountJob(sql))
+        result = self._database().run_in_transaction(_SpannerSyncExecuteUpdateCountJob(sql))
         return cast("int", result)
 
     def _create_table(self) -> None:
-        database = cast("Any", self._config.get_database())
-        existing_tables = {t.table_id for t in database.list_tables()}
-
-        if self._table_name not in existing_tables:
-            ddl_statements = [self._table_ddl(), self._index_ddl()]
-            database.update_ddl(ddl_statements).result(300)
+        database = self._config.get_database()
+        if self._table_name not in list_existing_table_names_sync(database):
+            execute_ddl_sync(database, [self._table_ddl(), self._index_ddl()], timeout=300)
 
 
 class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["SpannerAsyncConfig"]):
@@ -335,8 +336,8 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         super().__init__(config)
         self._shard_count, self._table_options, self._index_options = _extract_spanner_litestar_options(config)
 
-    async def _database(self) -> "AsyncDatabase":
-        return await self._config.get_database()
+    async def _database(self) -> "_SpannerAsyncDatabaseProtocol":
+        return cast("_SpannerAsyncDatabaseProtocol", await self._config.get_database())
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         sql = self._build_select_session_sql()
@@ -355,7 +356,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
             params = self._build_params(key, new_expires)
             types = self._get_param_types(expires_at=True)
             database = await self._database()
-            await cast("Any", database).run_in_transaction(_SpannerAsyncExecuteUpdateJob(update_sql, params, types))
+            await database.run_in_transaction(_SpannerAsyncExecuteUpdateJob(update_sql, params, types))
 
         return spanner_to_bytes(data)
 
@@ -366,19 +367,19 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         types = self._get_param_types(session_id=True, expires_at=True, data=True)
         update_sql, insert_sql = self._build_upsert_sql()
         database = await self._database()
-        await cast("Any", database).run_in_transaction(_SpannerAsyncUpsertJob(update_sql, insert_sql, params, types))
+        await database.run_in_transaction(_SpannerAsyncUpsertJob(update_sql, insert_sql, params, types))
 
     async def delete(self, key: str) -> None:
         sql = self._build_delete_sql()
         params = {"session_id": key}
         types = self._get_param_types(session_id=True)
         database = await self._database()
-        await cast("Any", database).run_in_transaction(_SpannerAsyncExecuteUpdateJob(sql, params, types))
+        await database.run_in_transaction(_SpannerAsyncExecuteUpdateJob(sql, params, types))
 
     async def delete_all(self) -> None:
         sql = self._build_delete_all_sql()
         database = await self._database()
-        await cast("Any", database).run_in_transaction(_SpannerAsyncExecuteUpdateJob(sql))
+        await database.run_in_transaction(_SpannerAsyncExecuteUpdateJob(sql))
 
     async def exists(self, key: str) -> bool:
         sql = self._build_exists_sql()
@@ -401,7 +402,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
     async def delete_expired(self) -> int:
         sql = self._build_delete_expired_sql()
         database = await self._database()
-        result = await cast("Any", database).run_in_transaction(_SpannerAsyncExecuteUpdateCountJob(sql))
+        result = await database.run_in_transaction(_SpannerAsyncExecuteUpdateCountJob(sql))
         return int(result)
 
     async def create_table(self) -> None:
@@ -412,27 +413,12 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
         await self.reconcile_schema(assume_existing=True)
 
     async def _create_table(self) -> None:
-        database = await self._database()
-        tables_iter = cast("Any", database).list_tables()
-        if hasattr(tables_iter, "__aiter__"):
-            existing_tables = {t.table_id async for t in tables_iter}
-        elif inspect.isawaitable(tables_iter):
-            resolved = await tables_iter
-            existing_tables = {t.table_id for t in resolved}
-        else:
-            existing_tables = {t.table_id for t in tables_iter}
-
-        if self._table_name not in existing_tables:
-            ddl_statements = [self._table_ddl(), self._index_ddl()]
-            op = cast("Any", database).update_ddl(ddl_statements)
-            if inspect.isawaitable(op):
-                op = await op
-            res = op.result(300)
-            if inspect.isawaitable(res):
-                await res
+        database = await self._config.get_database()
+        if self._table_name not in await list_existing_table_names_async(database):
+            await execute_ddl_async(database, [self._table_ddl(), self._index_ddl()], timeout=300)
 
 
-class _SpannerExecuteUpdateJob:
+class _SpannerSyncExecuteUpdateJob:
     __slots__ = ("_params", "_sql", "_types")
 
     def __init__(self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None) -> None:
@@ -455,18 +441,14 @@ class _SpannerAsyncExecuteUpdateJob:
         self._params = params
         self._types = types
 
-    async def __call__(self, transaction: Any) -> None:
+    async def __call__(self, transaction: "AsyncTransaction") -> None:
         if self._params is None and self._types is None:
-            res = transaction.execute_update(self._sql)
-            if inspect.isawaitable(res):
-                await res
+            await transaction.execute_update(self._sql)
             return
-        res = transaction.execute_update(self._sql, params=self._params or {}, param_types=self._types)
-        if inspect.isawaitable(res):
-            await res
+        await transaction.execute_update(self._sql, params=self._params or {}, param_types=self._types)
 
 
-class _SpannerUpsertJob:
+class _SpannerSyncUpsertJob:
     __slots__ = ("_insert_sql", "_params", "_types", "_update_sql")
 
     def __init__(self, update_sql: str, insert_sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
@@ -490,16 +472,13 @@ class _SpannerAsyncUpsertJob:
         self._params = params
         self._types = types
 
-    async def __call__(self, transaction: Any) -> None:
-        res = transaction.execute_update(self._update_sql, params=self._params, param_types=self._types)
-        row_ct = await res if inspect.isawaitable(res) else res
+    async def __call__(self, transaction: "AsyncTransaction") -> None:
+        row_ct = await transaction.execute_update(self._update_sql, params=self._params, param_types=self._types)
         if row_ct == 0:
-            ins_res = transaction.execute_update(self._insert_sql, params=self._params, param_types=self._types)
-            if inspect.isawaitable(ins_res):
-                await ins_res
+            await transaction.execute_update(self._insert_sql, params=self._params, param_types=self._types)
 
 
-class _SpannerExecuteUpdateCountJob:
+class _SpannerSyncExecuteUpdateCountJob:
     __slots__ = ("_sql",)
 
     def __init__(self, sql: str) -> None:
@@ -515,8 +494,5 @@ class _SpannerAsyncExecuteUpdateCountJob:
     def __init__(self, sql: str) -> None:
         self._sql = sql
 
-    async def __call__(self, transaction: Any) -> int:
-        res = transaction.execute_update(self._sql)
-        if inspect.isawaitable(res):
-            res = await res
-        return int(res)
+    async def __call__(self, transaction: "AsyncTransaction") -> int:
+        return int(await transaction.execute_update(self._sql))

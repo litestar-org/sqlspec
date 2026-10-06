@@ -1,12 +1,8 @@
 """Spanner driver implementation."""
 
-import contextlib
-import inspect
 from collections.abc import AsyncIterator, Iterator
-from itertools import islice
 from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 
-import sqlglot as _sqlglot
 from sqlglot import exp as _sqlglot_exp
 
 from sqlspec.adapters.spanner._typing import (
@@ -15,14 +11,14 @@ from sqlspec.adapters.spanner._typing import (
     SpannerAsyncSessionContext,
     SpannerAsyncTransaction,
     SpannerGoogleAPICallError,
-    SpannerSessionContext,
     SpannerSyncCursor,
     SpannerSyncSessionContext,
     SpannerTransaction,
-    spanner_exceptions,
 )
 from sqlspec.adapters.spanner.core import (
+    SpannerAsyncStreamSource,
     SpannerExecuteOptions,
+    SpannerSyncStreamSource,
     build_execute_kwargs,
     build_param_type_signature,
     chunk_mutation_rows,
@@ -32,16 +28,16 @@ from sqlspec.adapters.spanner.core import (
     default_statement_config,
     driver_profile,
     infer_param_types,
+    is_query_statement,
     pop_execute_options,
     resolve_row_plan,
+    resolve_transaction_completion,
+    run_in_transaction_async,
+    run_in_transaction_sync,
     supports_batch_update,
     supports_write,
 )
-from sqlspec.adapters.spanner.data_dictionary import (
-    SpannerAsyncDataDictionary,
-    SpannerDataDictionary,
-    SpannerSyncDataDictionary,
-)
+from sqlspec.adapters.spanner.data_dictionary import SpannerAsyncDataDictionary, SpannerSyncDataDictionary
 from sqlspec.core import StatementConfig, register_driver_profile
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
@@ -51,17 +47,16 @@ from sqlspec.driver import (
     ExecutionResult,
     SyncDriverAdapterBase,
     SyncRowStream,
-    rows_to_dicts,
 )
-from sqlspec.exceptions import DeadlockError, SQLConversionError
+from sqlspec.exceptions import SQLConversionError
 from sqlspec.utils.serializers import from_json
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from sqlglot.dialects.dialect import DialectType
 
-    from sqlspec.adapters.spanner._typing import SpannerConnection
+    from sqlspec.adapters.spanner._typing import SpannerSyncConnection
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.core.statement import SQL
@@ -70,15 +65,10 @@ if TYPE_CHECKING:
 
 __all__ = (
     "SpannerAsyncCursor",
-    "SpannerAsyncDataDictionary",
     "SpannerAsyncDriver",
     "SpannerAsyncExceptionHandler",
     "SpannerAsyncSessionContext",
-    "SpannerDataDictionary",
-    "SpannerExceptionHandler",
-    "SpannerSessionContext",
     "SpannerSyncCursor",
-    "SpannerSyncDataDictionary",
     "SpannerSyncDriver",
     "SpannerSyncExceptionHandler",
     "SpannerSyncSessionContext",
@@ -98,7 +88,7 @@ _READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE = (
 )
 
 
-class SpannerExceptionHandler(BaseSyncExceptionHandler):
+class SpannerSyncExceptionHandler(BaseSyncExceptionHandler):
     """Map Spanner client exceptions to SQLSpec exceptions.
 
     Uses deferred exception pattern for mypyc compatibility: exceptions
@@ -118,14 +108,12 @@ class SpannerExceptionHandler(BaseSyncExceptionHandler):
         return False
 
 
-SpannerSyncExceptionHandler = SpannerExceptionHandler
-
-
 class SpannerAsyncExceptionHandler(BaseAsyncExceptionHandler):
-    """Async context manager for handling Spanner API exceptions.
+    """Map Spanner client exceptions to SQLSpec exceptions.
 
-    Maps Google Cloud API exceptions to specific SQLSpecException subclasses.
-    Uses deferred exception pattern for mypyc compatibility.
+    Uses deferred exception pattern for mypyc compatibility: exceptions
+    are stored in pending_exception rather than raised from __aexit__
+    to avoid ABI boundary violations with compiled code.
     """
 
     __slots__ = ()
@@ -148,7 +136,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
     def __init__(
         self,
-        connection: "SpannerConnection",
+        connection: "SpannerSyncConnection",
         statement_config: "StatementConfig | None" = None,
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
@@ -157,12 +145,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             statement_config = default_statement_config
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
-        self._data_dictionary: SpannerDataDictionary | None = None
+        self._data_dictionary: SpannerSyncDataDictionary | None = None
         self._pending_execute_options: SpannerExecuteOptions | None = None
         self._row_plan_cache: dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]] = {}
         self._row_plan_deserializer = cast("Callable[[str], Any]", features.get("json_deserializer", from_json))
 
-    def dispatch_execute(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
         params = cast("dict[str, Any] | None", params)
         param_types_map = self._infer_param_types(params)
@@ -209,12 +197,12 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
         return SyncRowStream(
-            _SpannerSelectStreamSource(
+            SpannerSyncStreamSource(
                 self, sql, coerced_params, param_types_map, chunk_size, self._execute_kwargs(for_read=True)
             )
         )
 
-    def dispatch_execute_many(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_many(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
         if not supports_batch_update(cursor):
             msg = "execute_many requires a Transaction context"
             raise SQLConversionError(msg)
@@ -251,7 +239,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=total_rows, is_many_result=True)
 
-    def dispatch_execute_script(self, cursor: "SpannerConnection", statement: "SQL") -> ExecutionResult:
+    def dispatch_execute_script(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
         is_transaction = supports_write(cursor)
@@ -265,11 +253,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         write_execute_kwargs = self._execute_kwargs()
         dialect_str = str(self.dialect) if self.dialect else "spanner"
         for index, stmt in enumerate(statements):
-            try:
-                parsed = _sqlglot.parse_one(stmt, read=dialect_str)
-                is_select = isinstance(parsed, _sqlglot_exp.Query)
-            except Exception:
-                is_select = stmt.upper().strip().startswith("SELECT")
+            is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
@@ -294,16 +278,22 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return None
 
     def commit(self) -> None:
+        """Commit the active transaction when it has work to commit."""
         if isinstance(self.connection, SpannerTransaction):
-            writer = cast("_SpannerWriteProtocol", self.connection)
-            if writer.committed is not None:
-                return
-            writer.commit()
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler:
+                if resolve_transaction_completion(self.connection, failed=False) == "commit":
+                    cast("_SpannerWriteProtocol", self.connection).commit()
+            self._check_pending_exception(exc_handler)
 
     def rollback(self) -> None:
+        """Roll back the active transaction when it has begun."""
         if isinstance(self.connection, SpannerTransaction):
-            writer = cast("_SpannerWriteProtocol", self.connection)
-            writer.rollback()
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler:
+                if resolve_transaction_completion(self.connection, failed=True) == "rollback":
+                    cast("_SpannerWriteProtocol", self.connection).rollback()
+            self._check_pending_exception(exc_handler)
 
     def create_savepoint(self, name: str) -> None:
         """Raise because Spanner does not support savepoints.
@@ -332,11 +322,11 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         msg = "Spanner does not support savepoints."
         raise NotImplementedError(msg)
 
-    def with_cursor(self, connection: "SpannerConnection") -> "SpannerSyncCursor":
+    def with_cursor(self, connection: "SpannerSyncConnection") -> "SpannerSyncCursor":
         return SpannerSyncCursor(connection)
 
-    def handle_database_exceptions(self) -> "SpannerExceptionHandler":
-        return SpannerExceptionHandler()
+    def handle_database_exceptions(self) -> "SpannerSyncExceptionHandler":
+        return SpannerSyncExceptionHandler()
 
     def execute(
         self,
@@ -495,30 +485,33 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         self._require_capability("arrow_import_enabled")
         arrow_table = self._coerce_arrow_table(source)
 
-        if overwrite:
-            dialect_str = str(self.dialect) if self.dialect else "spanner"
-            table_sql = _sqlglot_exp.to_table(table, dialect=dialect_str).sql(dialect=dialect_str, identify=True)
-            delete_sql = f"DELETE FROM {table_sql} WHERE TRUE"
-            if isinstance(self.connection, SpannerTransaction):
-                writer = cast("_SpannerWriteProtocol", self.connection)
-                writer.execute_update(delete_sql)
-            else:
-                msg = "Delete requires a Transaction context."
-                raise SQLConversionError(msg)
-
-        columns, records = self._arrow_table_to_rows(arrow_table)
-        if records:
-            chunks = self._chunk_mutation_rows(columns, records)
-            if self.driver_features.get("enable_batch_write_api") and not overwrite:
-                self._batch_write_mutations(table, columns, chunks)
-            else:
-                conn = self.connection
-                if not isinstance(conn, SpannerTransaction):
-                    msg = "Arrow import requires a Transaction context."
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
+            if overwrite:
+                dialect_str = str(self.dialect) if self.dialect else "spanner"
+                table_sql = _sqlglot_exp.to_table(table, dialect=dialect_str).sql(dialect=dialect_str, identify=True)
+                delete_sql = f"DELETE FROM {table_sql} WHERE TRUE"
+                if isinstance(self.connection, SpannerTransaction):
+                    writer = cast("_SpannerWriteProtocol", self.connection)
+                    writer.execute_update(delete_sql)
+                else:
+                    msg = "Delete requires a Transaction context."
                     raise SQLConversionError(msg)
-                writer = cast("_SpannerWriteProtocol", conn)
-                for chunk in chunks:
-                    writer.insert_or_update(table, columns, chunk)
+
+            columns, records = self._arrow_table_to_rows(arrow_table)
+            if records:
+                chunks = self._chunk_mutation_rows(columns, records)
+                if self.driver_features.get("enable_batch_write_api") and not overwrite:
+                    self._batch_write_mutations(table, columns, chunks)
+                else:
+                    conn = self.connection
+                    if not isinstance(conn, SpannerTransaction):
+                        msg = "Arrow import requires a Transaction context."
+                        raise SQLConversionError(msg)
+                    writer = cast("_SpannerWriteProtocol", conn)
+                    for chunk in chunks:
+                        writer.insert_or_update(table, columns, chunk)
+        self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
@@ -539,24 +532,18 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     @property
-    def data_dictionary(self) -> "SpannerDataDictionary":
+    def data_dictionary(self) -> "SpannerSyncDataDictionary":
         if self._data_dictionary is None:
             dialect_str = str(self.statement_config.dialect) if self.statement_config.dialect else "spanner"
             mode = "postgresql" if dialect_str in {"spangres", "postgres", "postgresql"} else "googlesql"
-            self._data_dictionary = SpannerDataDictionary(mode=mode)
+            self._data_dictionary = SpannerSyncDataDictionary(mode=mode)
         return self._data_dictionary
 
-    def collect_rows(self, cursor: "SpannerConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+    def collect_rows(self, cursor: "SpannerSyncConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Spanner rows for the direct execution path.
 
-        Note: Spanner's collect_rows requires result set fields and a type converter.
-        The direct execution path may not always have this metadata available,
-        so this falls back to basic collection.
-
-        For the direct path, if result set fields metadata is not available,
-        it returns raw data with no column names. If rows are dicts, it attempts
-        to extract column names from dict keys. For tuple rows without metadata,
-        it returns them as-is.
+        Dict rows supply their keys as column names; other rows are returned
+        unchanged with no column names.
         """
         if not fetched:
             return [], [], 0
@@ -565,7 +552,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
             return fetched, column_names, len(fetched)
         return fetched, [], len(fetched)
 
-    def resolve_rowcount(self, cursor: "SpannerConnection") -> int:
+    def resolve_rowcount(self, cursor: "SpannerSyncConnection") -> int:
         """Resolve rowcount from Spanner cursor for the direct execution path.
 
         Spanner uses execute_update return value, not cursor.rowcount, so this
@@ -582,19 +569,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         return chunk_mutation_rows(columns, records, self._coerce_params)
 
     def _resolve_database(self) -> Any:
-        conn = self.connection
-        session = cast("object", getattr(conn, "_session", None))
-        database = cast("Any", getattr(session, "_database", None)) if session is not None else None
-        if database is None:
-            database = getattr(conn, "database", None)
-        if database is None:
-            provider = self.driver_features.get("database_provider")
-            if callable(provider):
-                database = provider()
-        if database is None:
-            msg = "Spanner Batch Write API requires a database-backed session."
-            raise SQLConversionError(msg)
-        return database
+        return cast("Any", self.connection)._session._database
 
     def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
         """High-throughput ingest via the Spanner Batch Write API (one mutation group per chunk)."""
@@ -612,27 +587,17 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def run_in_transaction(self, fn: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
         """Execute a callable inside Spanner's retryable transaction runner.
 
-        Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
-        so the Spanner SDK retries on transaction abort, and maps terminal
-        ``Aborted`` exceptions back to ``DeadlockError``.
+        ``fn`` is called as ``fn(driver, *args, **kwargs)`` with a driver bound
+        to the runner's transaction. A ``DeadlockError`` caused by
+        ``google.api_core.exceptions.Aborted`` is unwrapped so the runner
+        retries, and a terminal ``Aborted`` is raised as ``DeadlockError``.
         """
-        database = self._resolve_database()
+        return run_in_transaction_sync(self._resolve_database(), self._transaction_driver, fn, *args, **kwargs)
 
-        def _work(transaction: "SpannerConnection", *work_args: Any) -> Any:
-            driver = type(self)(
-                connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
-            )
-            try:
-                return fn(driver, *work_args)
-            except DeadlockError as exc:
-                if isinstance(exc.__cause__, spanner_exceptions.Aborted):
-                    raise exc.__cause__ from None
-                raise
-
-        try:
-            return database.run_in_transaction(_work, *args, **kwargs)
-        except SpannerGoogleAPICallError as exc:
-            raise create_mapped_exception(exc) from exc
+    def _transaction_driver(self, transaction: "SpannerSyncConnection") -> "SpannerSyncDriver":
+        return type(self)(
+            connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
@@ -729,7 +694,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
         return AsyncRowStream(
-            _SpannerAsyncSelectStreamSource(
+            SpannerAsyncStreamSource(
                 self, sql, coerced_params, param_types_map, chunk_size, self._execute_kwargs(for_read=True)
             )
         )
@@ -785,11 +750,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         write_execute_kwargs = self._execute_kwargs()
         dialect_str = str(self.dialect) if self.dialect else "spanner"
         for index, stmt in enumerate(statements):
-            try:
-                parsed = _sqlglot.parse_one(stmt, read=dialect_str)
-                is_select = isinstance(parsed, _sqlglot_exp.Query)
-            except Exception:
-                is_select = stmt.upper().strip().startswith("SELECT")
+            is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
                 raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
             if not is_select and is_transaction:
@@ -817,29 +778,21 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         return None
 
     async def commit(self) -> None:
-        """Commit the current transaction if active and not yet committed."""
+        """Commit the active transaction when it has work to commit."""
         if isinstance(self.connection, SpannerAsyncTransaction):
             exc_handler = self.handle_database_exceptions()
             async with exc_handler:
-                writer = cast("_SpannerAsyncWriteProtocol", self.connection)
-                if writer.committed is None and not getattr(self.connection, "rolled_back", False):
-                    has_mutations = bool(getattr(self.connection, "_mutations", None))
-                    has_txn_id = getattr(self.connection, "_transaction_id", None) is not None
-                    has_txn_attrs = hasattr(self.connection, "_transaction_id") or hasattr(
-                        self.connection, "_mutations"
-                    )
-                    if has_txn_id or has_mutations or not has_txn_attrs:
-                        await writer.commit()
+                if resolve_transaction_completion(self.connection, failed=False) == "commit":
+                    await cast("_SpannerAsyncWriteProtocol", self.connection).commit()
             self._check_pending_exception(exc_handler)
 
     async def rollback(self) -> None:
-        """Rollback the current transaction if active and not yet committed."""
+        """Roll back the active transaction when it has begun."""
         if isinstance(self.connection, SpannerAsyncTransaction):
             exc_handler = self.handle_database_exceptions()
             async with exc_handler:
-                writer = cast("_SpannerAsyncWriteProtocol", self.connection)
-                if writer.committed is None and not getattr(self.connection, "rolled_back", False):
-                    await writer.rollback()
+                if resolve_transaction_completion(self.connection, failed=True) == "rollback":
+                    await cast("_SpannerAsyncWriteProtocol", self.connection).rollback()
             self._check_pending_exception(exc_handler)
 
     async def create_savepoint(self, name: str) -> None:
@@ -848,7 +801,6 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         Raises:
             NotImplementedError: Always.
         """
-        del name
         msg = "Spanner does not support savepoints."
         raise NotImplementedError(msg)
 
@@ -858,7 +810,6 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         Raises:
             NotImplementedError: Always.
         """
-        del name
         msg = "Spanner does not support savepoints."
         raise NotImplementedError(msg)
 
@@ -868,7 +819,6 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         Raises:
             NotImplementedError: Always.
         """
-        del name
         msg = "Spanner does not support savepoints."
         raise NotImplementedError(msg)
 
@@ -1098,8 +1048,11 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     def collect_rows(
         self, cursor: "SpannerAsyncConnection", fetched: "list[Any]"
     ) -> "tuple[list[Any], list[str], int]":
-        """Collect Spanner rows for the direct execution path."""
-        del cursor
+        """Collect Spanner rows for the direct execution path.
+
+        Dict rows supply their keys as column names; other rows are returned
+        unchanged with no column names.
+        """
         if not fetched:
             return [], [], 0
         if isinstance(fetched[0], dict):
@@ -1108,8 +1061,11 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         return fetched, [], len(fetched)
 
     def resolve_rowcount(self, cursor: "SpannerAsyncConnection") -> int:
-        """Resolve rowcount from Spanner cursor for the direct execution path."""
-        del cursor
+        """Resolve rowcount from Spanner cursor for the direct execution path.
+
+        Spanner uses execute_update return value, not cursor.rowcount, so this
+        returns 0.
+        """
         return 0
 
     def _execute_kwargs(self, *, for_read: bool = False, for_batch: bool = False) -> dict[str, Any]:
@@ -1120,70 +1076,36 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     def _chunk_mutation_rows(self, columns: "list[str]", records: "list[tuple[Any, ...]]") -> "list[list[list[Any]]]":
         return chunk_mutation_rows(columns, records, self._coerce_params)
 
-    async def _resolve_database(self) -> Any:
-        conn = self.connection
-        session = cast("object", getattr(conn, "_session", None))
-        database = cast("Any", getattr(session, "_database", None)) if session is not None else None
-        if database is None:
-            database = getattr(conn, "database", None)
-        if database is None:
-            provider = self.driver_features.get("database_provider")
-            if callable(provider):
-                candidate = provider()
-                database = await candidate if inspect.isawaitable(candidate) else candidate
-        if database is None:
-            msg = "Spanner Batch Write API requires a database-backed session."
-            raise SQLConversionError(msg)
-        return database
+    def _resolve_database(self) -> Any:
+        return cast("Any", self.connection)._session._database
 
     async def _batch_write_mutations(self, table: str, columns: "list[str]", chunks: "list[list[list[Any]]]") -> None:
         """High-throughput async ingest via the Spanner Batch Write API (one mutation group per chunk)."""
-        database = await self._resolve_database()
+        database = self._resolve_database()
         async with database.mutation_groups() as mutation_groups:
             for chunk in chunks:
                 group = mutation_groups.group()
                 group.insert_or_update(table, columns, chunk)
-            batch_result = mutation_groups.batch_write()
-            if inspect.isawaitable(batch_result):
-                batch_result = await batch_result
-            if hasattr(batch_result, "__aiter__"):
-                async for response in batch_result:
-                    status = response.status
-                    if status is not None and status.code:
-                        msg = f"Spanner batch_write group failed: {status.message}"
-                        raise SQLConversionError(msg)
-            elif batch_result is not None:
-                for response in batch_result:
-                    status = response.status
-                    if status is not None and status.code:
-                        msg = f"Spanner batch_write group failed: {status.message}"
-                        raise SQLConversionError(msg)
+            async for response in await mutation_groups.batch_write():
+                status = response.status
+                if status is not None and status.code:
+                    msg = f"Spanner batch_write group failed: {status.message}"
+                    raise SQLConversionError(msg)
 
-    async def run_in_transaction(self, fn: "Callable[..., Any]", *args: Any, **kwargs: Any) -> Any:
-        """Execute an async callable inside Spanner's async retryable transaction runner.
+    async def run_in_transaction(self, fn: "Callable[..., Awaitable[Any]]", *args: Any, **kwargs: Any) -> Any:
+        """Execute a coroutine function inside Spanner's async retryable transaction runner.
 
-        Unwraps ``DeadlockError`` caused by ``google.api_core.exceptions.Aborted``
-        so the Spanner SDK retries on transaction abort, and maps terminal
-        ``Aborted`` exceptions back to ``DeadlockError``.
+        ``fn`` is awaited as ``fn(driver, *args, **kwargs)`` with a driver bound
+        to the runner's transaction. A ``DeadlockError`` caused by
+        ``google.api_core.exceptions.Aborted`` is unwrapped so the runner
+        retries, and a terminal ``Aborted`` is raised as ``DeadlockError``.
         """
-        database = await self._resolve_database()
+        return await run_in_transaction_async(self._resolve_database(), self._transaction_driver, fn, *args, **kwargs)
 
-        async def _work(transaction: "SpannerAsyncConnection", *work_args: Any) -> Any:
-            driver = type(self)(
-                connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
-            )
-            try:
-                result = fn(driver, *work_args)
-                return await result if inspect.isawaitable(result) else result
-            except DeadlockError as exc:
-                if isinstance(exc.__cause__, spanner_exceptions.Aborted):
-                    raise exc.__cause__ from None
-                raise
-
-        try:
-            return await database.run_in_transaction(_work, *args, **kwargs)
-        except SpannerGoogleAPICallError as exc:
-            raise create_mapped_exception(exc) from exc
+    def _transaction_driver(self, transaction: "SpannerAsyncConnection") -> "SpannerAsyncDriver":
+        return type(self)(
+            connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
@@ -1281,205 +1203,6 @@ class _SpannerAsyncWriteProtocol(_SpannerAsyncReadProtocol, Protocol):
     async def commit(self) -> None: ...
 
     async def rollback(self) -> None: ...
-
-
-class _SpannerSelectStreamSource:
-    """Native chunk source for Spanner SELECT streaming."""
-
-    __slots__ = (
-        "_chunk_size",
-        "_column_names",
-        "_column_plan",
-        "_driver",
-        "_execute_kwargs",
-        "_param_types",
-        "_params",
-        "_result_set",
-        "_row_iterator",
-        "_sql",
-    )
-
-    def __init__(
-        self,
-        driver: "SpannerSyncDriver",
-        sql: str,
-        params: "dict[str, Any] | None",
-        param_types: "dict[str, Any]",
-        chunk_size: int,
-        execute_kwargs: "dict[str, Any]",
-    ) -> None:
-        self._driver = driver
-        self._sql = sql
-        self._params = params
-        self._param_types = param_types
-        self._chunk_size = chunk_size
-        self._execute_kwargs = execute_kwargs
-        self._column_names: list[str] | None = None
-        self._column_plan: tuple[tuple[int, Any], ...] | None = None
-        self._result_set: _SpannerResultSetProtocol | None = None
-        self._row_iterator: Iterator[Any] | None = None
-
-    def start(self) -> None:
-        handler = self._driver.handle_database_exceptions()
-        with handler:
-            result_set = self._driver.connection.execute_sql(
-                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-            )
-            self._result_set = result_set
-            self._row_iterator = iter(result_set)
-        self._driver._check_pending_exception(handler)
-
-    def fetch_chunk(self) -> "list[dict[str, Any]]":
-        result_set = self._result_set
-        row_iterator = self._row_iterator
-        column_names = self._column_names
-        if result_set is None or row_iterator is None:
-            return []
-
-        handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        with handler:
-            rows = list(islice(row_iterator, self._chunk_size))
-        self._driver._check_pending_exception(handler)
-        if not rows:
-            return []
-
-        if column_names is None:
-            try:
-                metadata = result_set.metadata
-                row_type = metadata.row_type
-                fields = row_type.fields
-            except AttributeError:
-                msg = "Result set metadata not available."
-                raise SQLConversionError(msg)
-            if not fields:
-                msg = "Result set metadata not available."
-                raise SQLConversionError(msg)
-            column_names, column_plan = self._driver._resolve_row_plan(fields)
-            self._column_names = column_names
-            self._column_plan = column_plan
-
-        converted_rows, resolved_column_names = collect_rows(
-            rows, (), column_names=column_names, column_plan=self._column_plan
-        )
-        self._column_names = resolved_column_names
-        return rows_to_dicts(converted_rows, resolved_column_names)
-
-    def close(self, error: bool = False) -> None:
-        result_set = self._result_set
-        if result_set is not None:
-            close = getattr(result_set, "close", None)
-            if callable(close):
-                with contextlib.suppress(Exception):
-                    close()
-        self._result_set = None
-        self._row_iterator = None
-        self._column_names = None
-        self._column_plan = None
-
-
-class _SpannerAsyncSelectStreamSource:
-    """Native async chunk source for Spanner SELECT streaming."""
-
-    __slots__ = (
-        "_chunk_size",
-        "_column_names",
-        "_column_plan",
-        "_driver",
-        "_execute_kwargs",
-        "_param_types",
-        "_params",
-        "_result_set",
-        "_row_iterator",
-        "_sql",
-    )
-
-    def __init__(
-        self,
-        driver: Any,
-        sql: str,
-        params: "dict[str, Any] | None",
-        param_types: "dict[str, Any]",
-        chunk_size: int,
-        execute_kwargs: "dict[str, Any]",
-    ) -> None:
-        self._driver = driver
-        self._sql = sql
-        self._params = params
-        self._param_types = param_types
-        self._chunk_size = chunk_size
-        self._execute_kwargs = execute_kwargs
-        self._column_names: list[str] | None = None
-        self._column_plan: tuple[tuple[int, Any], ...] | None = None
-        self._result_set: _SpannerAsyncResultSetProtocol | None = None
-        self._row_iterator: AsyncIterator[Any] | None = None
-
-    async def start(self) -> None:
-        handler = self._driver.handle_database_exceptions()
-        async with handler:
-            reader = cast("_SpannerAsyncReadProtocol", self._driver.connection)
-            result_set = await reader.execute_sql(
-                self._sql, params=self._params, param_types=self._param_types, **self._execute_kwargs
-            )
-            self._result_set = result_set
-            self._row_iterator = aiter(result_set)
-        self._driver._check_pending_exception(handler)
-
-    async def fetch_chunk(self) -> "list[dict[str, Any]]":
-        result_set = self._result_set
-        row_iterator = self._row_iterator
-        column_names = self._column_names
-        if result_set is None or row_iterator is None:
-            return []
-
-        handler = self._driver.handle_database_exceptions()
-        rows: list[Any] = []
-        async with handler:
-            for _ in range(self._chunk_size):
-                try:
-                    row = await anext(row_iterator)
-                except StopAsyncIteration:
-                    break
-                rows.append(row)
-        self._driver._check_pending_exception(handler)
-        if not rows:
-            return []
-
-        if column_names is None:
-            try:
-                metadata = result_set.metadata
-                row_type = metadata.row_type
-                fields = row_type.fields
-            except AttributeError:
-                msg = "Result set metadata not available."
-                raise SQLConversionError(msg)
-            if not fields:
-                msg = "Result set metadata not available."
-                raise SQLConversionError(msg)
-            column_names, column_plan = self._driver._resolve_row_plan(fields)
-            self._column_names = column_names
-            self._column_plan = column_plan
-
-        converted_rows, resolved_column_names = collect_rows(
-            rows, (), column_names=column_names, column_plan=self._column_plan
-        )
-        self._column_names = resolved_column_names
-        return rows_to_dicts(converted_rows, resolved_column_names)
-
-    async def close(self, error: bool = False) -> None:
-        del error
-        result_set = self._result_set
-        if result_set is not None:
-            close = getattr(result_set, "close", None)
-            if callable(close):
-                with contextlib.suppress(Exception):
-                    maybe_awaitable = close()
-                    if inspect.isawaitable(maybe_awaitable):
-                        await maybe_awaitable
-        self._result_set = None
-        self._row_iterator = None
-        self._column_names = None
-        self._column_plan = None
 
 
 register_driver_profile("spanner", driver_profile)

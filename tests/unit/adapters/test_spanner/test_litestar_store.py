@@ -162,7 +162,7 @@ async def test_async_store_create_table() -> None:
         await store.create_table()
 
     db.update_ddl.assert_awaited_once()
-    op_mock.result.assert_awaited_once_with(300)
+    op_mock.result.assert_awaited_once_with(timeout=300)
     mock_reconcile.assert_awaited_once_with(assume_existing=True)
 
 
@@ -209,5 +209,4 @@ async def test_async_store_get_exists_expires_in() -> None:
     assert exists is True
 
     ttl = await store.expires_in("s1")
-    assert ttl is not None
-    assert ttl > 0
+    assert ttl in range(1, 121)

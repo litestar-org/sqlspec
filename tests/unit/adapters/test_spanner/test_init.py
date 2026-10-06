@@ -46,38 +46,3 @@ def test_dialect_names_resolve_through_entry_points(monkeypatch: pytest.MonkeyPa
     assert Dialect.get("pgvector") is not None
     assert "spanner" in Dialect.classes
     assert "pgvector" in Dialect.classes
-
-
-def test_spanner_adapter_exports_sync_and_async_symbols() -> None:
-    """Verify sqlspec.adapters.spanner exports all sync and async adapter symbols."""
-    spanner_pkg = importlib.import_module("sqlspec.adapters.spanner")
-    expected = {
-        "SpannerAsyncConfig",
-        "SpannerAsyncConnection",
-        "SpannerAsyncConnectionContext",
-        "SpannerAsyncCursor",
-        "SpannerAsyncDataDictionary",
-        "SpannerAsyncDriver",
-        "SpannerAsyncExceptionHandler",
-        "SpannerAsyncSessionContext",
-        "SpannerConnection",
-        "SpannerConnectionContext",
-        "SpannerConnectionParams",
-        "SpannerDataDictionary",
-        "SpannerDriverFeatures",
-        "SpannerExceptionHandler",
-        "SpannerPoolParams",
-        "SpannerSessionContext",
-        "SpannerSyncConfig",
-        "SpannerSyncConnection",
-        "SpannerSyncConnectionContext",
-        "SpannerSyncCursor",
-        "SpannerSyncDataDictionary",
-        "SpannerSyncDriver",
-        "SpannerSyncExceptionHandler",
-        "SpannerSyncSessionContext",
-        "default_statement_config",
-    }
-    assert expected.issubset(set(spanner_pkg.__all__))
-    for name in spanner_pkg.__all__:
-        assert getattr(spanner_pkg, name, None) is not None

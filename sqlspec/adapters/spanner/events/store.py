@@ -8,11 +8,11 @@ Spanner requires:
     - PRIMARY KEY declared inline in CREATE TABLE
 """
 
-import inspect
 import logging
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING
 
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.adapters.spanner.core import execute_ddl_async, execute_ddl_sync
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -20,13 +20,18 @@ __all__ = ("SpannerAsyncEventQueueStore", "SpannerSyncEventQueueStore")
 
 logger = get_logger("sqlspec.adapters.spanner.events.store")
 
-ConfigT = TypeVar("ConfigT", SpannerSyncConfig, SpannerAsyncConfig)
 
-
-class _SpannerEventQueueStoreMixin(BaseEventQueueStore[ConfigT]):
-    """Shared GoogleSQL DDL generation for Spanner sync and async event queue stores."""
+class _SpannerEventStoreMixin:
+    """GoogleSQL DDL hooks for sync and async Spanner event queue stores."""
 
     __slots__ = ()
+
+    if TYPE_CHECKING:
+
+        @property
+        def table_name(self) -> str: ...
+
+        def _index_name(self) -> str: ...
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Spanner-specific column types."""
@@ -47,8 +52,8 @@ class _SpannerEventQueueStoreMixin(BaseEventQueueStore[ConfigT]):
     def _table_ddl(self) -> str:
         """Build Spanner CREATE TABLE with PRIMARY KEY inline.
 
-        Spanner does not support DEFAULT clauses on non-computed columns,
-        so we omit them entirely. Values must be provided at insert time.
+        Spanner does not support DEFAULT clauses on non-computed columns, so
+        the DDL has none; values are provided at insert time.
         """
         payload_type, metadata_type, timestamp_type = self._column_types()
         string_64 = self._string_type(64)
@@ -59,22 +64,12 @@ class _SpannerEventQueueStoreMixin(BaseEventQueueStore[ConfigT]):
 
         return f"CREATE TABLE {self.table_name} (event_id {string_64} NOT NULL, channel {string_128} NOT NULL, payload_json {payload_type} NOT NULL, metadata_json {metadata_type}, status {string_32} NOT NULL, available_at {timestamp_type} NOT NULL, lease_expires_at {timestamp_type}, attempts {integer_type} NOT NULL, created_at {timestamp_type} NOT NULL, acknowledged_at {timestamp_type}){pk_inline}"
 
-    def _index_ddl(self) -> str | None:
+    def _index_ddl(self) -> "str | None":
         """Build Spanner secondary index for queue operations."""
-        index_name = self._index_name()
-        return f"CREATE INDEX {index_name} ON {self.table_name}(channel, status, available_at)"
+        return f"CREATE INDEX {self._index_name()} ON {self.table_name}(channel, status, available_at)"
 
     def _wrap_create_statement(self, statement: str, object_type: str) -> str:
-        """Return statement unchanged because Spanner does not support IF NOT EXISTS.
-
-        Args:
-            statement: The DDL statement.
-            object_type: Type of object (table, index).
-
-        Returns:
-            The statement unchanged.
-        """
-        del object_type
+        """Return statement unchanged because Spanner does not support IF NOT EXISTS."""
         return statement
 
     def _wrap_drop_statement(self, statement: str) -> str:
@@ -99,14 +94,22 @@ class _SpannerEventQueueStoreMixin(BaseEventQueueStore[ConfigT]):
         Spanner requires index to be dropped before the table.
         The caller should handle errors for non-existent objects.
         """
-        index_name = self._index_name()
-        return [f"DROP INDEX {index_name}", f"DROP TABLE {self.table_name}"]
+        return [f"DROP INDEX {self._index_name()}", f"DROP TABLE {self.table_name}"]
+
+    def _log_ddl(self, event: str, statement_count: int) -> None:
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            event,
+            adapter_name="spanner",
+            table_name=self.table_name,
+            statement_count=statement_count,
+        )
 
 
-class SpannerSyncEventQueueStore(_SpannerEventQueueStoreMixin[SpannerSyncConfig]):
-    """Spanner-specific synchronous event queue store with GoogleSQL DDL.
+class SpannerSyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[SpannerSyncConfig]):
+    """Spanner event queue store for synchronous configs.
 
-    Generates optimized DDL for Google Cloud Spanner using GoogleSQL dialect.
     Spanner does not support IF NOT EXISTS, so statements must be executed
     with proper error handling for existing objects.
 
@@ -117,59 +120,39 @@ class SpannerSyncEventQueueStore(_SpannerEventQueueStoreMixin[SpannerSyncConfig]
     __slots__ = ()
 
     def create_table(self) -> None:
-        """Create the event queue table and index.
+        """Create the event queue table and index through ``Database.update_ddl``.
 
-        Executes DDL statements via database.update_ddl() which is the
-        recommended approach for Spanner schema changes.
+        Raises:
+            TypeError: If the store's config is not a SpannerSyncConfig.
         """
         config = self._config
         if not isinstance(config, SpannerSyncConfig):
             msg = "create_table requires SpannerSyncConfig"
             raise TypeError(msg)
-
-        database: Any = config.get_database()
         statements = self.create_statements()
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "events.queue.create",
-            adapter_name="spanner",
-            table_name=self.table_name,
-            statement_count=len(statements),
-        )
-        operation: Any = database.update_ddl(statements)
-        operation.result()
+        self._log_ddl("events.queue.create", len(statements))
+        execute_ddl_sync(config.get_database(), statements)
 
     def drop_table(self) -> None:
-        """Drop the event queue table and index.
+        """Drop the event queue table and index through ``Database.update_ddl``.
 
-        Executes DDL statements via database.update_ddl() which is the
-        recommended approach for Spanner schema changes.
+        Raises:
+            TypeError: If the store's config is not a SpannerSyncConfig.
         """
         config = self._config
         if not isinstance(config, SpannerSyncConfig):
             msg = "drop_table requires SpannerSyncConfig"
             raise TypeError(msg)
-
-        database: Any = config.get_database()
         statements = self.drop_statements()
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "events.queue.drop",
-            adapter_name="spanner",
-            table_name=self.table_name,
-            statement_count=len(statements),
-        )
-        operation: Any = database.update_ddl(statements)
-        operation.result()
+        self._log_ddl("events.queue.drop", len(statements))
+        execute_ddl_sync(config.get_database(), statements)
 
 
-class SpannerAsyncEventQueueStore(_SpannerEventQueueStoreMixin[SpannerAsyncConfig]):
-    """Async Spanner event queue store with native async DDL execution.
+class SpannerAsyncEventQueueStore(_SpannerEventStoreMixin, BaseEventQueueStore[SpannerAsyncConfig]):
+    """Spanner event queue store for asynchronous configs.
 
-    Generates optimized DDL for Google Cloud Spanner using GoogleSQL dialect
-    and executes schema updates via the async database client.
+    Spanner does not support IF NOT EXISTS, so statements must be executed
+    with proper error handling for existing objects.
 
     Args:
         config: SpannerAsyncConfig with extension_config["events"] settings.
@@ -178,49 +161,29 @@ class SpannerAsyncEventQueueStore(_SpannerEventQueueStoreMixin[SpannerAsyncConfi
     __slots__ = ()
 
     async def create_table(self) -> None:
-        """Create the event queue table and index using Spanner async update_ddl."""
+        """Create the event queue table and index through ``Database.update_ddl``.
+
+        Raises:
+            TypeError: If the store's config is not a SpannerAsyncConfig.
+        """
         config = self._config
         if not isinstance(config, SpannerAsyncConfig):
             msg = "create_table requires SpannerAsyncConfig"
             raise TypeError(msg)
-
         statements = self.create_statements()
-        database: Any = await config.get_database()
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "events.queue.create",
-            adapter_name="spanner",
-            table_name=self.table_name,
-            statement_count=len(statements),
-        )
-        operation: Any = database.update_ddl(statements)
-        if inspect.isawaitable(operation):
-            operation = await operation
-        result = operation.result()
-        if inspect.isawaitable(result):
-            await result
+        self._log_ddl("events.queue.create", len(statements))
+        await execute_ddl_async(await config.get_database(), statements)
 
     async def drop_table(self) -> None:
-        """Drop the event queue table and index using Spanner async update_ddl."""
+        """Drop the event queue table and index through ``Database.update_ddl``.
+
+        Raises:
+            TypeError: If the store's config is not a SpannerAsyncConfig.
+        """
         config = self._config
         if not isinstance(config, SpannerAsyncConfig):
             msg = "drop_table requires SpannerAsyncConfig"
             raise TypeError(msg)
-
         statements = self.drop_statements()
-        database: Any = await config.get_database()
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "events.queue.drop",
-            adapter_name="spanner",
-            table_name=self.table_name,
-            statement_count=len(statements),
-        )
-        operation: Any = database.update_ddl(statements)
-        if inspect.isawaitable(operation):
-            operation = await operation
-        result = operation.result()
-        if inspect.isawaitable(result):
-            await result
+        self._log_ddl("events.queue.drop", len(statements))
+        await execute_ddl_async(await config.get_database(), statements)

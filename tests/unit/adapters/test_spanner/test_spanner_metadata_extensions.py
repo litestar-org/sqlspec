@@ -1,8 +1,8 @@
-"""Tests for SpannerDataDictionary metadata extensions and PostgreSQL mode."""
+"""Tests for SpannerSyncDataDictionary metadata extensions and PostgreSQL mode."""
 
 from typing import Any, cast
 
-from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.data_dictionary import MetadataSource, MetadataSupport, SystemMetadataResult
 
 
@@ -22,7 +22,7 @@ class MockSpannerDriver:
 
 def test_get_constraints_by_table() -> None:
     """get_constraints queries constraints for a specific table."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     results = dictionary.get_constraints(cast(Any, driver), table="Albums")
 
@@ -33,7 +33,7 @@ def test_get_constraints_by_table() -> None:
 
 def test_get_constraints_by_schema() -> None:
     """get_constraints queries constraints for an entire schema."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     results = dictionary.get_constraints(cast(Any, driver), schema="catalog")
 
@@ -44,7 +44,7 @@ def test_get_constraints_by_schema() -> None:
 
 def test_get_sequences() -> None:
     """get_sequences queries sequence metadata."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     results = dictionary.get_sequences(cast(Any, driver), sequence_name="OrderSeq")
 
@@ -55,7 +55,7 @@ def test_get_sequences() -> None:
 
 def test_get_change_streams() -> None:
     """get_change_streams queries change stream metadata."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     results = dictionary.get_change_streams(cast(Any, driver), stream_name="StreamAll")
 
@@ -66,7 +66,7 @@ def test_get_change_streams() -> None:
 
 def test_get_system_metadata_query_stats() -> None:
     """get_system_metadata queries SPANNER_SYS.QUERY_STATS_TOP_MINUTE when enabled."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     result = dictionary.get_system_metadata(cast(Any, driver), "query_stats_top", include_performance=True, limit=25)
 
@@ -79,7 +79,7 @@ def test_get_system_metadata_query_stats() -> None:
 
 def test_get_system_metadata_table_sizes() -> None:
     """get_system_metadata queries SPANNER_SYS.TABLE_SIZES_STATS_1HOUR."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     result = dictionary.get_system_metadata(cast(Any, driver), "table_sizes", include_system=True, table="Albums")
 
@@ -91,7 +91,7 @@ def test_get_system_metadata_table_sizes() -> None:
 
 def test_get_system_metadata_gated_by_default() -> None:
     """get_system_metadata returns gated status without opt-in flags."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     result = dictionary.get_system_metadata(cast(Any, driver), "query_stats_top")
 
@@ -101,7 +101,7 @@ def test_get_system_metadata_gated_by_default() -> None:
 
 def test_metadata_capabilities_postgresql_mode() -> None:
     """get_metadata_capabilities reports SUPPORTED for standard domains in PostgreSQL mode."""
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     driver = MockSpannerDriver()
     profile = dictionary.get_metadata_capabilities(driver, mode="postgresql")
 
@@ -113,8 +113,8 @@ def test_metadata_capabilities_postgresql_mode() -> None:
 
 
 def test_postgresql_mode_data_dictionary_routing() -> None:
-    """SpannerDataDictionary initialized with mode='postgresql' routes all queries to postgresql pack."""
-    dictionary = SpannerDataDictionary(mode="postgresql")
+    """SpannerSyncDataDictionary initialized with mode='postgresql' routes all queries to postgresql pack."""
+    dictionary = SpannerSyncDataDictionary(mode="postgresql")
     driver = MockSpannerDriver()
 
     dictionary.get_tables(cast(Any, driver))

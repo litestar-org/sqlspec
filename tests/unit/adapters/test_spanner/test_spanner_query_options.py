@@ -55,10 +55,9 @@ def test_config_provide_session_query_options() -> None:
     """Verify config.provide_session forwards query_options to driver_features."""
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
     query_opts = {"optimizer_version": "5"}
-    features = config._session_driver_features(
-        request_options=None, directed_read_options=None, query_options=query_opts, retry=None, timeout=None
-    )
-    assert features["query_options"] == query_opts
+    context = config.provide_session(query_options=query_opts)
+    assert context._driver_features["query_options"] == query_opts  # pyright: ignore[reportPrivateUsage]
+    assert "query_options" not in config.driver_features
 
 
 def test_driver_execute_many_omits_query_options() -> None:
