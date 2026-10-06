@@ -1,6 +1,8 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for Spanner ADK store behavior."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast, get_args, get_origin
@@ -72,7 +74,7 @@ def test_insert_event_preserves_event_record_timestamp() -> None:
         "event_data": {"content": "hello"},
     }
 
-    with patch.object(store, "_run_write") as run_write:
+    with patch.object(type(store), "_run_write") as run_write:
         store._insert_event(event)  # pyright: ignore[reportPrivateUsage]
 
     statements = run_write.call_args.args[0]
@@ -106,7 +108,10 @@ def test_append_event_and_update_state_preserves_event_record_timestamp() -> Non
         "update_time": timestamp,
     }
 
-    with patch.object(store, "_run_write") as run_write, patch.object(store, "_get_session", return_value=fake_record):
+    with (
+        patch.object(type(store), "_run_write") as run_write,
+        patch.object(type(store), "_get_session", return_value=fake_record),
+    ):
         returned = store.append_event_and_update_state(event, "app", "u1", "session-1", {"turn": 1})
 
     event_sql, event_params, _event_types = run_write.call_args.args[0][0]
@@ -193,7 +198,10 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
         "embedding": None,
     }
 
-    with patch.object(store, "_event_exists", return_value=False), patch.object(store, "_run_write") as run_write:
+    with (
+        patch.object(type(store), "_event_exists", return_value=False),
+        patch.object(type(store), "_run_write") as run_write,
+    ):
         inserted = store.insert_memory_entries([entry])
 
     assert inserted == 1
@@ -258,6 +266,45 @@ def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() ->
     ]
 
 
+async def test_async_spanner_reset_drop_tables_filters_absent_tables() -> None:
+    """The async session store drops only the ADK tables that exist in the database."""
+    config = _mock_config()
+    database = MagicMock()
+
+    async def _list_tables() -> Any:
+        yield SimpleNamespace(table_id="adk_events")
+
+    database.list_tables.side_effect = _list_tables
+    config.get_database = AsyncMock(return_value=database)
+    store = SpannerAsyncADKStore(config)
+
+    statements = await store._reset_drop_tables_sql()
+
+    assert statements == ["DROP INDEX idx_adk_events_timestamp", "DROP TABLE adk_events"]
+
+
+async def test_async_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() -> None:
+    """The async memory store drops only the memory tables and indexes that exist in the database."""
+    config = _mock_config()
+    database = MagicMock()
+
+    async def _list_tables() -> Any:
+        yield SimpleNamespace(table_id="adk_memory_entries")
+
+    database.list_tables.side_effect = _list_tables
+    config.get_database = AsyncMock(return_value=database)
+    store = SpannerAsyncADKMemoryStore(config)
+
+    statements = await store._reset_drop_memory_table_sql()
+
+    assert statements == [
+        "DROP INDEX idx_adk_memory_entries_session",
+        "DROP INDEX idx_adk_memory_entries_app_scope_user_time",
+        "DROP INDEX idx_adk_memory_entries_scope",
+        "DROP TABLE adk_memory_entries",
+    ]
+
+
 def test_spanner_drop_statement_table_handles_if_exists_and_quoted_identifiers() -> None:
     existing = {"adk_events", "adk_memory_entries"}
 
@@ -274,7 +321,7 @@ def test_spanner_drop_statement_table_handles_if_exists_and_quoted_identifiers()
 def test_get_session_returns_none_when_spanner_session_table_missing() -> None:
     store = SpannerSyncADKStore(_mock_config())
 
-    with patch.object(store, "_run_read", side_effect=_spanner_not_found("adk_session not found")):
+    with patch.object(type(store), "_run_read", side_effect=_spanner_not_found("adk_session not found")):
         result = store.get_session("app", "user", "session")
 
     assert result is None
@@ -283,7 +330,7 @@ def test_get_session_returns_none_when_spanner_session_table_missing() -> None:
 def test_list_sessions_returns_empty_when_spanner_session_table_missing() -> None:
     store = SpannerSyncADKStore(_mock_config())
 
-    with patch.object(store, "_run_read", side_effect=_spanner_not_found("adk_session not found")):
+    with patch.object(type(store), "_run_read", side_effect=_spanner_not_found("adk_session not found")):
         result = store.list_sessions("app", "user")
 
     assert result == []
@@ -292,7 +339,7 @@ def test_list_sessions_returns_empty_when_spanner_session_table_missing() -> Non
 def test_get_events_returns_empty_when_spanner_events_table_missing() -> None:
     store = SpannerSyncADKStore(_mock_config())
 
-    with patch.object(store, "_run_read", side_effect=_spanner_not_found("adk_event not found")):
+    with patch.object(type(store), "_run_read", side_effect=_spanner_not_found("adk_event not found")):
         result = store.get_events("app", "user", "session")
 
     assert result == []
@@ -302,23 +349,23 @@ def _normalized(sql: str) -> str:
     return " ".join(sql.split())
 
 
-def _capture_session_list(store: SpannerSyncADKStore) -> "list[tuple[str, dict[str, Any], dict[str, Any]]]":
+@contextmanager
+def _capture_session_list() -> "Iterator[list[tuple[str, dict[str, Any], dict[str, Any]]]]":
     calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     def capture(sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None) -> "list[Any]":
         calls.append((sql, dict(params or {}), dict(types or {})))
         return []
 
-    store._run_read = capture  # type: ignore[method-assign]
-    return calls
+    with patch.object(SpannerSyncADKStore, "_run_read", side_effect=capture):
+        yield calls
 
 
 def test_spanner_list_sessions_binds_order_and_page() -> None:
     """Explicit ordering renders inline while page bounds bind as typed named parameters."""
     store = SpannerSyncADKStore(_mock_config())
-    calls = _capture_session_list(store)
-
-    store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
+    with _capture_session_list() as calls:
+        store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
 
     sql, params, types = calls[0]
     assert _normalized(sql).endswith("ORDER BY create_time ASC, id ASC LIMIT @limit OFFSET @offset")
@@ -331,9 +378,8 @@ def test_spanner_list_sessions_binds_order_and_page() -> None:
 def test_spanner_list_sessions_defaults_to_recent_first_without_a_page() -> None:
     """The default listing keeps recent-first ordering and binds no page values."""
     store = SpannerSyncADKStore(_mock_config())
-    calls = _capture_session_list(store)
-
-    store.list_sessions("app")
+    with _capture_session_list() as calls:
+        store.list_sessions("app")
 
     sql, params, _ = calls[0]
     assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC")
@@ -343,9 +389,8 @@ def test_spanner_list_sessions_defaults_to_recent_first_without_a_page() -> None
 def test_spanner_list_sessions_composes_user_filter_with_a_page() -> None:
     """User filtering composes with the bound page values."""
     store = SpannerSyncADKStore(_mock_config())
-    calls = _capture_session_list(store)
-
-    store.list_sessions("app", "u1", limit=5)
+    with _capture_session_list() as calls:
+        store.list_sessions("app", "u1", limit=5)
 
     sql, params, _ = calls[0]
     assert "AND user_id = @user_id" in sql
@@ -355,9 +400,8 @@ def test_spanner_list_sessions_composes_user_filter_with_a_page() -> None:
 def test_spanner_list_sessions_zero_limit_never_reads() -> None:
     """A zero limit short-circuits before any read is issued."""
     store = SpannerSyncADKStore(_mock_config())
-    calls = _capture_session_list(store)
-
-    assert store.list_sessions("app", limit=0) == []
+    with _capture_session_list() as calls:
+        assert store.list_sessions("app", limit=0) == []
     assert calls == []
 
 
@@ -373,9 +417,7 @@ def test_spanner_list_sessions_zero_limit_never_reads() -> None:
 def test_spanner_list_sessions_rejects_invalid_options(options: "dict[str, Any]") -> None:
     """Invalid ordering or paging fails before a read is issued."""
     store = SpannerSyncADKStore(_mock_config())
-    calls = _capture_session_list(store)
-
-    with pytest.raises(ValueError):
+    with _capture_session_list() as calls, pytest.raises(ValueError):
         store.list_sessions("app", **options)
 
     assert calls == []
@@ -454,8 +496,14 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
     assert len(executed_writes) == 1
 
     fetched = await store.get_session("app", "u1", "s1")
-    assert fetched is not None
-    assert fetched["state"] == {"k": "v"}
+    assert fetched == {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": {"k": "v"},
+        "create_time": now,
+        "update_time": now,
+    }
 
     sessions = await store.list_sessions("app", "u1", limit=5)
     assert len(sessions) == 1
@@ -489,8 +537,8 @@ async def test_async_adk_store_append_event_and_update_state_and_get_events() ->
     }
 
     with (
-        patch.object(store, "_run_write", new_callable=AsyncMock) as run_write,
-        patch.object(store, "_get_session", new_callable=AsyncMock, return_value=fake_record),
+        patch.object(type(store), "_run_write", new_callable=AsyncMock) as run_write,
+        patch.object(type(store), "_get_session", new_callable=AsyncMock, return_value=fake_record),
     ):
         returned = await store.append_event_and_update_state(event, "app", "u1", "session-1", {"turn": 1})
 
@@ -501,7 +549,7 @@ async def test_async_adk_store_append_event_and_update_state_and_get_events() ->
     assert event_params["timestamp"] is timestamp
 
     with patch.object(
-        store,
+        type(store),
         "_run_read",
         new_callable=AsyncMock,
         return_value=[("event-1", "session-1", "inv-1", timestamp, '{"content":"hello"}', "app", "u1")],
@@ -548,15 +596,15 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
     }
 
     with (
-        patch.object(store, "_event_exists", new_callable=AsyncMock, return_value=False),
-        patch.object(store, "_run_write", new_callable=AsyncMock) as run_write,
+        patch.object(type(store), "_event_exists", new_callable=AsyncMock, return_value=False),
+        patch.object(type(store), "_run_write", new_callable=AsyncMock) as run_write,
     ):
         inserted = await store.insert_memory_entries([entry])
     assert inserted == 1
     run_write.assert_awaited_once()
 
     with patch.object(
-        store,
+        type(store),
         "_run_read",
         new_callable=AsyncMock,
         return_value=[
@@ -580,7 +628,7 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
     assert len(results) == 1
     assert results[0]["content_json"] == {"text": "hello"}
 
-    with patch.object(store, "_execute_update", new_callable=AsyncMock, return_value=2) as exec_update:
+    with patch.object(type(store), "_execute_update", new_callable=AsyncMock, return_value=2) as exec_update:
         deleted = await store.delete_entries_by_session("session-1")
         assert deleted == 2
         deleted_old = await store.delete_entries_older_than(7, app_name="app")

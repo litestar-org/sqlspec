@@ -1,6 +1,5 @@
 """Spanner ADK store."""
 
-import inspect
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, cast
@@ -29,9 +28,12 @@ from sqlspec.utils.serializers import from_json, to_json
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.adapters.spanner._typing import SpannerAsyncDatabase as AsyncDatabase
-    from sqlspec.adapters.spanner._typing import SpannerDatabase as Database
-    from sqlspec.adapters.spanner._typing import SpannerTransaction as Transaction
+    from sqlspec.adapters.spanner._typing import (
+        SpannerAsyncDatabase,
+        SpannerAsyncTransaction,
+        SpannerDatabase,
+        SpannerTransaction,
+    )
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 __all__ = (
@@ -44,6 +46,7 @@ __all__ = (
 )
 
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
+_DDL_TIMEOUT_SECONDS = 300
 
 
 class SpannerADKRetentionConfig(TypedDict):
@@ -81,33 +84,25 @@ class SpannerADKConfig(ADKConfig):
     """Spanner row-deletion retention policy settings."""
 
 
-class _SpannerADKStoreCommonMixin:
+class _SpannerADKStoreMixin:
     """Shared SQL, DDL, parameter type, and decoding helpers for Spanner ADK stores."""
 
-    _session_table: str
-    _events_table: str
-    _app_state_table: str
-    _user_state_table: str
-    _metadata_table: str
-    _owner_id_column_ddl: "str | None"
-    _owner_id_column_name: "str | None"
-    _shard_count: int
-    _session_table_options: "str | None"
-    _events_table_options: "str | None"
-    _expires_index_options: "str | None"
-    _session_row_deletion_policy: str
-    _events_row_deletion_policy: str
+    __slots__ = ()
 
-    def _init_spanner_adk_options(self, config: Any) -> None:
-        adk_config = _adk_config(config)
-        self._shard_count = int(adk_config.get("shard_count", 0)) if adk_config.get("shard_count") else 0
-        self._session_table_options = adk_config.get("session_table_options")
-        self._events_table_options = adk_config.get("events_table_options")
-        self._expires_index_options = adk_config.get("expires_index_options")
-        self._session_row_deletion_policy = _spanner_row_deletion_policy(
-            adk_config, "session_ttl_seconds", "create_time"
-        )
-        self._events_row_deletion_policy = _spanner_row_deletion_policy(adk_config, "event_ttl_seconds", "timestamp")
+    if TYPE_CHECKING:
+        _session_table: str
+        _events_table: str
+        _app_state_table: str
+        _user_state_table: str
+        _metadata_table: str
+        _owner_id_column_ddl: str | None
+        _owner_id_column_name: str | None
+        _shard_count: int
+        _session_table_options: str | None
+        _events_table_options: str | None
+        _expires_index_options: str | None
+        _session_row_deletion_policy: str
+        _events_row_deletion_policy: str
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
@@ -592,14 +587,30 @@ CREATE TABLE {self._metadata_table} (
         ]
 
 
-class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerSyncConfig]):
+class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncConfig]):
     """Spanner ADK store backed by synchronous Spanner client."""
+
+    __slots__ = (
+        "_events_row_deletion_policy",
+        "_events_table_options",
+        "_expires_index_options",
+        "_session_row_deletion_policy",
+        "_session_table_options",
+        "_shard_count",
+    )
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        self._init_spanner_adk_options(config)
+        (
+            self._shard_count,
+            self._session_table_options,
+            self._events_table_options,
+            self._expires_index_options,
+            self._session_row_deletion_policy,
+            self._events_row_deletion_policy,
+        ) = _extract_spanner_adk_options(config)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -726,25 +737,27 @@ class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerS
         """Set a metadata value."""
         self._set_metadata(key, value)
 
-    def _database(self) -> "Database":
+    def _database(self) -> "SpannerDatabase":
         return self._config.get_database()
 
     def _reset_drop_tables_sql(self) -> "list[str]":
-        return _filter_existing_spanner_drops(super()._reset_drop_tables_sql(), self._existing_tables())
+        return _filter_existing_spanner_drops(self._reset_drop_statements(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
-        database = self._database()
-        return {table.table_id for table in cast("Any", database).list_tables()}
+        return _list_existing_table_names_sync(self._database())
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
         with self._config.provide_connection() as snapshot:
-            result_set = cast("Any", snapshot).execute_sql(sql, params=params, param_types=types)
-            return list(result_set)
+            reader = cast("_SpannerReadProtocol", snapshot)
+            return list(reader.execute_sql(sql, params=params, param_types=types))
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        cast("Any", self._database()).run_in_transaction(_SpannerWriteJob(statements))
+        cast("Any", self._database()).run_in_transaction(_SpannerSyncWriteJob(statements))
+
+    def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types)))
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -843,15 +856,15 @@ class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerS
 
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql, params, types = self._build_delete_expired_events_statement(before, app_name)
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+        return self._execute_update(sql, params, types)
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql, params, types = self._build_delete_idle_sessions_statement(updated_before, app_name)
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+        return self._execute_update(sql, params, types)
 
     def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql, params, types = self._build_delete_idle_user_states_statement(updated_before, app_name)
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerUpdateJob(sql, params, types)))
+        return self._execute_update(sql, params, types)
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql, params, types = self._build_get_app_state_query(app_name)
@@ -884,11 +897,8 @@ class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerS
         self._run_write([self._build_set_metadata_statement(key, value)])
 
     def _create_tables(self) -> None:
-        database = self._database()
-        existing_tables = self._existing_tables()
-        ddl_statements = self._missing_table_ddl_statements(existing_tables)
-        if ddl_statements:
-            cast("Any", database).update_ddl(ddl_statements).result(300)
+        ddl_statements = self._missing_table_ddl_statements(self._existing_tables())
+        _execute_ddl_sync(self._database(), ddl_statements)
 
     def _sessions_table_ddl(self) -> str:
         return self._build_sessions_table_ddl()
@@ -906,14 +916,30 @@ class SpannerSyncADKStore(_SpannerADKStoreCommonMixin, BaseSyncADKStore[SpannerS
         return self._build_metadata_table_ddl()
 
 
-class SpannerAsyncADKStore(_SpannerADKStoreCommonMixin, BaseAsyncADKStore[SpannerAsyncConfig]):
+class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsyncConfig]):
     """Spanner ADK store backed by asynchronous Spanner client."""
+
+    __slots__ = (
+        "_events_row_deletion_policy",
+        "_events_table_options",
+        "_expires_index_options",
+        "_session_row_deletion_policy",
+        "_session_table_options",
+        "_shard_count",
+    )
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerAsyncConfig) -> None:
         super().__init__(config)
-        self._init_spanner_adk_options(config)
+        (
+            self._shard_count,
+            self._session_table_options,
+            self._events_table_options,
+            self._expires_index_options,
+            self._session_row_deletion_policy,
+            self._events_row_deletion_policy,
+        ) = _extract_spanner_adk_options(config)
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1040,34 +1066,27 @@ class SpannerAsyncADKStore(_SpannerADKStoreCommonMixin, BaseAsyncADKStore[Spanne
         """Set a metadata value."""
         await self._set_metadata(key, value)
 
-    async def _database(self) -> "AsyncDatabase":
+    async def _database(self) -> "SpannerAsyncDatabase":
         return await self._config.get_database()
 
+    async def _reset_drop_tables_sql(self) -> "list[str]":
+        return _filter_existing_spanner_drops(self._reset_drop_statements(), await self._existing_tables())
+
     async def _existing_tables(self) -> "set[str]":
-        database = await self._database()
-        return await _list_existing_table_names_async(database)
+        return await _list_existing_table_names_async(await self._database())
 
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
-        database = await self._database()
-        snapshot_cm = cast("Any", database).snapshot()
-        async with snapshot_cm as snapshot:
-            result_set = snapshot.execute_sql(sql, params=params, param_types=types)
-            if inspect.isawaitable(result_set):
-                result_set = await result_set
-            if hasattr(result_set, "__aiter__"):
-                return [row async for row in result_set]
-            return list(result_set)
+        return await _run_read_async(await self._database(), sql, params, types)
 
     async def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         database = await self._database()
-        await cast("Any", database).run_in_transaction(_SpannerAsyncWriteJob(statements))
+        await database.run_in_transaction(_SpannerAsyncWriteJob(statements))
 
     async def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         database = await self._database()
-        result = await cast("Any", database).run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types))
-        return int(result)
+        return int(await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types)))
 
     async def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1209,10 +1228,8 @@ class SpannerAsyncADKStore(_SpannerADKStoreCommonMixin, BaseAsyncADKStore[Spanne
         await self._run_write([self._build_set_metadata_statement(key, value)])
 
     async def _create_tables(self) -> None:
-        database = await self._database()
-        existing_tables = await _list_existing_table_names_async(database)
-        ddl_statements = self._missing_table_ddl_statements(existing_tables)
-        await _execute_ddl_async(database, ddl_statements, timeout=300)
+        ddl_statements = self._missing_table_ddl_statements(await self._existing_tables())
+        await _execute_ddl_async(await self._database(), ddl_statements)
 
     async def _sessions_table_ddl(self) -> str:
         return self._build_sessions_table_ddl()
@@ -1230,25 +1247,21 @@ class SpannerAsyncADKStore(_SpannerADKStoreCommonMixin, BaseAsyncADKStore[Spanne
         return self._build_metadata_table_ddl()
 
 
-class _SpannerADKMemoryStoreCommonMixin:
+class _SpannerADKMemoryStoreMixin:
     """Shared SQL, DDL, parameter type, and decoding helpers for Spanner ADK memory stores."""
 
-    _memory_table: str
-    _enabled: bool
-    _max_results: int
-    _use_fts: bool
-    _owner_id_column_ddl: "str | None"
-    _owner_id_column_name: "str | None"
-    _shard_count: int
-    _memory_table_options: "str | None"
-    _memory_row_deletion_policy: str
+    __slots__ = ()
 
-    def _init_spanner_memory_options(self, config: Any) -> None:
-        adk_config = _adk_config(config)
-        shard_count = adk_config.get("shard_count")
-        self._shard_count = int(shard_count) if isinstance(shard_count, int) else 0
-        self._memory_table_options = adk_config.get("memory_table_options")
-        self._memory_row_deletion_policy = _spanner_row_deletion_policy(adk_config, "memory_ttl_seconds", "inserted_at")
+    if TYPE_CHECKING:
+        _memory_table: str
+        _enabled: bool
+        _max_results: int
+        _use_fts: bool
+        _owner_id_column_ddl: str | None
+        _owner_id_column_name: str | None
+        _shard_count: int
+        _memory_table_options: str | None
+        _memory_row_deletion_policy: str
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {
@@ -1458,14 +1471,18 @@ CREATE TABLE {self._memory_table} (
         ]
 
 
-class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseSyncADKMemoryStore[SpannerSyncConfig]):
+class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemoryStore[SpannerSyncConfig]):
     """Spanner ADK memory store backed by synchronous Spanner client."""
+
+    __slots__ = ("_memory_row_deletion_policy", "_memory_table_options", "_shard_count")
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        self._init_spanner_memory_options(config)
+        self._shard_count, self._memory_table_options, self._memory_row_deletion_policy = (
+            _extract_spanner_memory_options(config)
+        )
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1499,43 +1516,32 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseSyncADKMe
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days, app_name, scope)
 
-    def _database(self) -> "Database":
+    def _database(self) -> "SpannerDatabase":
         return self._config.get_database()
 
     def _reset_drop_memory_table_sql(self) -> "list[str]":
-        return _filter_existing_spanner_drops(super()._reset_drop_memory_table_sql(), self._existing_tables())
+        return _filter_existing_spanner_drops(self._reset_drop_memory_statements(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
-        database = self._database()
-        return {table.table_id for table in cast("Any", database).list_tables()}
+        return _list_existing_table_names_sync(self._database())
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
         with self._config.provide_connection() as snapshot:
             reader = cast("_SpannerReadProtocol", snapshot)
-            result_set = reader.execute_sql(sql, params=params, param_types=types)
-            return list(result_set)
+            return list(reader.execute_sql(sql, params=params, param_types=types))
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        cast("Any", self._database()).run_in_transaction(_SpannerMemoryWriteJob(statements))
+        cast("Any", self._database()).run_in_transaction(_SpannerSyncWriteJob(statements))
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerMemoryUpdateJob(sql, params, types)))
+        return int(cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types)))
 
     def _create_tables(self) -> None:
-        if not self._enabled:
+        if not self._enabled or self._memory_table in self._existing_tables():
             return
-
-        database = self._database()
-        existing_tables = {t.table_id for t in cast("Any", database).list_tables()}
-
-        ddl_statements: list[str] = []
-        if self._memory_table not in existing_tables:
-            ddl_statements.extend(self._memory_table_ddl())
-
-        if ddl_statements:
-            cast("Any", database).update_ddl(ddl_statements).result(300)
+        _execute_ddl_sync(self._database(), self._memory_table_ddl())
 
     def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
@@ -1606,14 +1612,18 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseSyncADKMe
         return self._execute_update(sql, params, types)
 
 
-class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseAsyncADKMemoryStore[SpannerAsyncConfig]):
+class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemoryStore[SpannerAsyncConfig]):
     """Spanner ADK memory store backed by asynchronous Spanner client."""
+
+    __slots__ = ("_memory_row_deletion_policy", "_memory_table_options", "_shard_count")
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerAsyncConfig) -> None:
         super().__init__(config)
-        self._init_spanner_memory_options(config)
+        self._shard_count, self._memory_table_options, self._memory_row_deletion_policy = (
+            _extract_spanner_memory_options(config)
+        )
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1649,47 +1659,32 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseAsyncADK
         """Delete memory entries older than specified days."""
         return await self._delete_entries_older_than(days, app_name, scope)
 
-    async def _database(self) -> "AsyncDatabase":
+    async def _database(self) -> "SpannerAsyncDatabase":
         return await self._config.get_database()
 
+    async def _reset_drop_memory_table_sql(self) -> "list[str]":
+        return _filter_existing_spanner_drops(self._reset_drop_memory_statements(), await self._existing_tables())
+
     async def _existing_tables(self) -> "set[str]":
-        database = await self._database()
-        return await _list_existing_table_names_async(database)
+        return await _list_existing_table_names_async(await self._database())
 
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
-        database = await self._database()
-        snapshot_cm = cast("Any", database).snapshot()
-        async with snapshot_cm as snapshot:
-            result_set = snapshot.execute_sql(sql, params=params, param_types=types)
-            if inspect.isawaitable(result_set):
-                result_set = await result_set
-            if hasattr(result_set, "__aiter__"):
-                return [row async for row in result_set]
-            return list(result_set)
+        return await _run_read_async(await self._database(), sql, params, types)
 
     async def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         database = await self._database()
-        await cast("Any", database).run_in_transaction(_SpannerAsyncWriteJob(statements))
+        await database.run_in_transaction(_SpannerAsyncWriteJob(statements))
 
     async def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         database = await self._database()
-        result = await cast("Any", database).run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types))
-        return int(result)
+        return int(await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types)))
 
     async def _create_tables(self) -> None:
-        if not self._enabled:
+        if not self._enabled or self._memory_table in await self._existing_tables():
             return
-
-        database = await self._database()
-        existing_tables = await _list_existing_table_names_async(database)
-
-        ddl_statements: list[str] = []
-        if self._memory_table not in existing_tables:
-            ddl_statements.extend(await self._memory_table_ddl())
-
-        await _execute_ddl_async(database, ddl_statements, timeout=300)
+        await _execute_ddl_async(await self._database(), await self._memory_table_ddl())
 
     async def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
@@ -1762,25 +1757,38 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreCommonMixin, BaseAsyncADK
         return await self._execute_update(sql, params, types)
 
 
-async def _list_existing_table_names_async(database: Any) -> "set[str]":
-    tables_iter = database.list_tables()
-    if hasattr(tables_iter, "__aiter__"):
-        return {t.table_id async for t in tables_iter}
-    if inspect.isawaitable(tables_iter):
-        resolved = await tables_iter
-        return {t.table_id for t in resolved}
-    return {t.table_id for t in tables_iter}
+def _list_existing_table_names_sync(database: "SpannerDatabase") -> "set[str]":
+    return {table.table_id for table in cast("Any", database).list_tables()}
 
 
-async def _execute_ddl_async(database: Any, statements: "list[str]", timeout: int = 300) -> None:
-    if not statements:
-        return
-    op = database.update_ddl(statements)
-    if inspect.isawaitable(op):
-        op = await op
-    res = op.result(timeout)
-    if inspect.isawaitable(res):
-        await res
+async def _list_existing_table_names_async(database: "SpannerAsyncDatabase") -> "set[str]":
+    return {table.table_id async for table in database.list_tables()}
+
+
+def _execute_ddl_sync(
+    database: "SpannerDatabase", statements: "list[str]", timeout: int = _DDL_TIMEOUT_SECONDS
+) -> None:
+    if statements:
+        cast("Any", database).update_ddl(statements).result(timeout)
+
+
+async def _execute_ddl_async(
+    database: "SpannerAsyncDatabase", statements: "list[str]", timeout: int = _DDL_TIMEOUT_SECONDS
+) -> None:
+    if statements:
+        operation = await database.update_ddl(statements)
+        await operation.result(timeout)
+
+
+async def _run_read_async(
+    database: "SpannerAsyncDatabase",
+    sql: str,
+    params: "dict[str, Any] | None" = None,
+    types: "dict[str, Any] | None" = None,
+) -> "list[Any]":
+    async with cast("Any", database).snapshot() as snapshot:
+        result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+        return [row async for row in result_set]
 
 
 def _json_param_type() -> Any:
@@ -1788,6 +1796,34 @@ def _json_param_type() -> Any:
         return SPANNER_PARAM_TYPES.JSON
     except AttributeError:
         return SPANNER_PARAM_TYPES.STRING
+
+
+def _extract_spanner_adk_options(config: Any) -> "tuple[int, str | None, str | None, str | None, str, str]":
+    """Return shard count, table options, and row deletion policies for the ADK session tables."""
+    adk_config = _adk_config(config)
+    return (
+        _spanner_shard_count(adk_config),
+        adk_config.get("session_table_options"),
+        adk_config.get("events_table_options"),
+        adk_config.get("expires_index_options"),
+        _spanner_row_deletion_policy(adk_config, "session_ttl_seconds", "create_time"),
+        _spanner_row_deletion_policy(adk_config, "event_ttl_seconds", "timestamp"),
+    )
+
+
+def _extract_spanner_memory_options(config: Any) -> "tuple[int, str | None, str]":
+    """Return shard count, table options, and row deletion policy for the ADK memory table."""
+    adk_config = _adk_config(config)
+    return (
+        _spanner_shard_count(adk_config),
+        adk_config.get("memory_table_options"),
+        _spanner_row_deletion_policy(adk_config, "memory_ttl_seconds", "inserted_at"),
+    )
+
+
+def _spanner_shard_count(adk_config: "SpannerADKConfig") -> int:
+    shard_count = adk_config.get("shard_count")
+    return int(shard_count) if shard_count else 0
 
 
 def _spanner_ttl_days(ttl_seconds: Any) -> int:
@@ -1853,13 +1889,15 @@ def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -
     return None
 
 
-class _SpannerWriteJob:
+class _SpannerSyncWriteJob:
+    """Callable transaction work item for Spanner sync ADK write batches."""
+
     __slots__ = ("_statements",)
 
     def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         self._statements = statements
 
-    def __call__(self, transaction: "Transaction") -> None:
+    def __call__(self, transaction: "SpannerTransaction") -> None:
         if len(self._statements) > 1:
             status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
             if status.code != 0:
@@ -1878,38 +1916,20 @@ class _SpannerAsyncWriteJob:
     def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         self._statements = statements
 
-    async def __call__(self, transaction: Any) -> None:
-        if len(self._statements) > 1 and hasattr(transaction, "batch_update"):
-            batch_result = transaction.batch_update(self._statements)
-            status, _row_counts = await batch_result if inspect.isawaitable(batch_result) else batch_result
-            if status.code != 0:
-                msg = f"Spanner batch update failed (code {status.code}): {status.message}"
-                raise OperationalError(msg)
-            return
-        for sql, params, types in self._statements:
-            res = transaction.execute_update(sql, params=params, param_types=types)
-            if inspect.isawaitable(res):
-                await res
-
-
-class _SpannerMemoryWriteJob:
-    __slots__ = ("_statements",)
-
-    def __init__(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        self._statements = statements
-
-    def __call__(self, transaction: "Transaction") -> None:
+    async def __call__(self, transaction: "SpannerAsyncTransaction") -> None:
         if len(self._statements) > 1:
-            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
+            status, _row_counts = await transaction.batch_update(self._statements)
             if status.code != 0:
                 msg = f"Spanner batch update failed (code {status.code}): {status.message}"
                 raise OperationalError(msg)
             return
         for sql, params, types in self._statements:
-            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+            await transaction.execute_update(sql, params=params, param_types=types)
 
 
-class _SpannerUpdateJob:
+class _SpannerSyncUpdateJob:
+    """Callable transaction work item for Spanner sync ADK single DML updates."""
+
     __slots__ = ("_params", "_sql", "_types")
 
     def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
@@ -1917,7 +1937,7 @@ class _SpannerUpdateJob:
         self._params = params
         self._types = types
 
-    def __call__(self, transaction: "Transaction") -> int:
+    def __call__(self, transaction: "SpannerTransaction") -> int:
         return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
 
 
@@ -1931,23 +1951,8 @@ class _SpannerAsyncUpdateJob:
         self._params = params
         self._types = types
 
-    async def __call__(self, transaction: Any) -> int:
-        res = transaction.execute_update(self._sql, params=self._params, param_types=self._types)
-        if inspect.isawaitable(res):
-            res = await res
-        return int(res)
-
-
-class _SpannerMemoryUpdateJob:
-    __slots__ = ("_params", "_sql", "_types")
-
-    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._sql = sql
-        self._params = params
-        self._types = types
-
-    def __call__(self, transaction: "Transaction") -> int:
-        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
+    async def __call__(self, transaction: "SpannerAsyncTransaction") -> int:
+        return int(await transaction.execute_update(self._sql, params=self._params, param_types=self._types))
 
 
 class _SpannerReadProtocol(Protocol):
