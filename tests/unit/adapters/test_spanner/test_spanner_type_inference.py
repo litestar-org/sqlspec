@@ -16,7 +16,7 @@ def test_coerce_interval_parameters(duration: timedelta) -> None:
     expected = Interval(days=duration.days, nanos=(duration.seconds * 1_000_000 + duration.microseconds) * 1000)
     params = {
         "duration": duration,
-        "typed": TypedParameter(duration, "INTERVAL"),
+        "typed": TypedParameter(duration, semantic_name="INTERVAL"),
         "durations": [None, duration],
         "tuple_durations": (duration, None),
         "null": TypedParameter(None, timedelta),
@@ -63,11 +63,11 @@ def test_infer_boolean_array_param_types() -> None:
 def test_infer_and_coerce_float32_and_vector_params() -> None:
     """Verify FLOAT32 and ARRAY<FLOAT32>/VECTOR TypedParameter inference and coercion."""
     params = {
-        "score": TypedParameter(0.25, "FLOAT32"),
-        "embedding": TypedParameter([0.1, 0.2, 0.3], "ARRAY<FLOAT32>"),
-        "vec": TypedParameter((1, 2, 3), "VECTOR"),
-        "null_score": TypedParameter(None, "FLOAT32"),
-        "null_embedding": TypedParameter(None, "ARRAY<FLOAT32>"),
+        "score": TypedParameter(0.25, semantic_name="FLOAT32"),
+        "embedding": TypedParameter([0.1, 0.2, 0.3], semantic_name="ARRAY<FLOAT32>"),
+        "vec": TypedParameter((1, 2, 3), semantic_name="VECTOR"),
+        "null_score": TypedParameter(None, semantic_name="FLOAT32"),
+        "null_embedding": TypedParameter(None, semantic_name="ARRAY<FLOAT32>"),
     }
     types = infer_spanner_param_types(params)
     assert types["score"].code == TypeCode.FLOAT32
@@ -96,7 +96,7 @@ def test_infer_interval_timedelta_params() -> None:
         "duration": timedelta(days=1, hours=2),
         "durations": [timedelta(minutes=5), timedelta(minutes=10)],
         "null_duration": TypedParameter(None, timedelta),
-        "declared_interval": TypedParameter(timedelta(seconds=30), "INTERVAL"),
+        "declared_interval": TypedParameter(timedelta(seconds=30), semantic_name="INTERVAL"),
     }
     types = infer_spanner_param_types(params)
     assert types["duration"].code == TypeCode.INTERVAL
