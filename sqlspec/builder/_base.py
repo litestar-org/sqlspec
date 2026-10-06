@@ -866,31 +866,24 @@ class QueryBuilder:
             excluded_rules.add(_pushdown_projections_rule)
 
         rules = RULES if not excluded_rules else tuple(rule for rule in RULES if rule not in excluded_rules)
+        rule_sets = [rules]
+        if _pushdown_projections_rule not in excluded_rules:
+            rule_sets.append(tuple(rule for rule in rules if rule is not _pushdown_projections_rule))
 
-        try:
+        schema = cast("dict[str, object] | None", self.schema)
+        for rule_set in rule_sets:
             try:
                 optimized = sqlglot_optimizer.optimize(
-                    expression,
-                    schema=cast("dict[str, object] | None", self.schema),
-                    dialect=self.dialect_name,
-                    rules=rules,
+                    expression, schema=schema, dialect=self.dialect_name, rules=rule_set
                 )
+                cache.put_optimized(cache_key, optimized.copy())
             except SQLGlotOptimizeError:
-                if _pushdown_projections_rule in excluded_rules:
-                    raise
-                fallback_rules = tuple(rule for rule in rules if rule is not _pushdown_projections_rule)
-                optimized = sqlglot_optimizer.optimize(
-                    expression,
-                    schema=cast("dict[str, object] | None", self.schema),
-                    dialect=self.dialect_name,
-                    rules=fallback_rules,
-                )
-            cache.put_optimized(cache_key, optimized.copy())
-        except Exception:
-            logger.debug("Expression optimization failed, using original expression")
-            return expression
-        else:
+                continue
+            except Exception:
+                break
             return optimized
+        logger.debug("Expression optimization failed, using original expression")
+        return expression
 
     def _optimize_insert_with_conflict(
         self, expression: exp.Expr, conflict: exp.OnConflict, *, force: bool
