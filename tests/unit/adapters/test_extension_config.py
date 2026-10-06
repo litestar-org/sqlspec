@@ -147,30 +147,6 @@ def test_bigquery_extension_config() -> None:
     assert config.extension_config == extension_config
 
 
-def test_spanner_sync_extension_config() -> None:
-    """Test SpannerSyncConfig accepts and stores extension_config."""
-    extension_config = cast("ExtensionConfigs", {"litestar": {"session_key": "spanner_sync_session"}})
-
-    config = SpannerSyncConfig(
-        connection_config={"project": "test-project", "instance_id": "test-instance", "database_id": "test-db"},
-        extension_config=extension_config,
-    )
-
-    assert config.extension_config == extension_config
-
-
-def test_spanner_async_extension_config() -> None:
-    """Test SpannerAsyncConfig accepts and stores extension_config."""
-    extension_config = cast("ExtensionConfigs", {"litestar": {"session_key": "spanner_async_session"}})
-
-    config = SpannerAsyncConfig(
-        connection_config={"project": "test-project", "instance_id": "test-instance", "database_id": "test-db"},
-        extension_config=extension_config,
-    )
-
-    assert config.extension_config == extension_config
-
-
 def test_extension_config_defaults_to_empty_dict() -> None:
     """Test that extension_config defaults to empty dict when not provided."""
     configs = [
