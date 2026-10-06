@@ -1,35 +1,72 @@
-"""Integration tests for Spanner EventChannel queue backend."""
+"""Integration tests for the Spanner EventChannel queue backend."""
+
+from typing import Any
 
 import pytest
 
 from sqlspec import SQLSpec
-from sqlspec.adapters.spanner import SpannerSyncConfig
-from sqlspec.adapters.spanner.events import SpannerSyncEventQueueStore
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.adapters.spanner.events import SpannerAsyncEventQueueStore, SpannerSyncEventQueueStore
+from tests.integration.adapters.spanner.spanner._modes import invoke, mode_session
 
-pytestmark = [pytest.mark.spanner, pytest.mark.integration]
+pytestmark = [pytest.mark.spanner, pytest.mark.integration, pytest.mark.anyio]
 
 
-def test_spanner_event_channel_queue_fallback(
-    spanner_events_config: SpannerSyncConfig, spanner_event_store: SpannerSyncEventQueueStore
-) -> None:
-    """Queue-backed events work on Spanner via the table queue backend."""
+async def _publish_and_consume(
+    config: "SpannerSyncConfig | SpannerAsyncConfig",
+    channel_name: str,
+    payload: "dict[str, Any]",
+    **publish_kwargs: Any,
+) -> "tuple[Any, Any]":
     spec = SQLSpec()
-    spec.add_config(spanner_events_config)
-    channel = spec.event_channel(spanner_events_config)
+    spec.add_config(config)
+    channel = spec.event_channel(config)
+    event_id = await invoke(channel.publish(channel_name, payload, **publish_kwargs))
+    iterator: Any = channel.iter_events(channel_name, poll_interval=0.05)
+    if isinstance(config, SpannerAsyncConfig):
+        message = await iterator.__anext__()
+        await iterator.aclose()
+    else:
+        message = next(iterator)
+        iterator.close()
+    await invoke(channel.ack(message.event_id))
+    return event_id, message
 
-    event_id = channel.publish("notifications", {"action": "spanner_event"})
 
-    iterator = channel.iter_events("notifications", poll_interval=0.05)
-    message = next(iterator)
-    channel.ack(message.event_id)
-
-    with spanner_events_config.provide_session() as driver:
-        row = driver.select_one(
-            "SELECT status FROM sqlspec_event_queue WHERE event_id = @event_id", {"event_id": event_id}
+async def test_spanner_event_channel_queue_lifecycle(
+    spanner_events_mode_config: "SpannerSyncConfig | SpannerAsyncConfig",
+    spanner_event_store: "SpannerSyncEventQueueStore | SpannerAsyncEventQueueStore",
+) -> None:
+    """Queue-backed events publish, consume, and ack on both Spanner adapters."""
+    event_id, message = await _publish_and_consume(
+        spanner_events_mode_config, "notifications", {"action": "spanner_event"}
+    )
+    async with mode_session(spanner_events_mode_config) as driver:
+        row = await invoke(
+            driver.select_one(
+                f"SELECT status FROM {spanner_event_store.table_name} WHERE event_id = @event_id",
+                {"event_id": event_id},
+            )
         )
 
-    assert message.payload["action"] == "spanner_event"
+    assert message.event_id == event_id
+    assert message.payload == {"action": "spanner_event"}
     assert row["status"] == "acked"
+
+
+async def test_spanner_event_metadata_roundtrip(
+    spanner_events_mode_config: "SpannerSyncConfig | SpannerAsyncConfig",
+    spanner_event_store: "SpannerSyncEventQueueStore | SpannerAsyncEventQueueStore",
+) -> None:
+    """Event metadata survives the queue round-trip on both Spanner adapters."""
+    metadata = {"source": "test", "priority": 1}
+    event_id, message = await _publish_and_consume(
+        spanner_events_mode_config, "metadata_test", {"data": "value"}, metadata=metadata
+    )
+
+    assert message.event_id == event_id
+    assert message.metadata == metadata
+    assert message.payload == {"data": "value"}
 
 
 def test_spanner_event_store_create_statements(spanner_events_config: SpannerSyncConfig) -> None:
@@ -75,23 +112,3 @@ def test_spanner_event_store_column_types(spanner_events_config: SpannerSyncConf
     assert "JSON" in table_sql
     assert "VARCHAR" not in table_sql
     assert "INTEGER" not in table_sql
-
-
-def test_spanner_event_metadata_roundtrip(
-    spanner_events_config: SpannerSyncConfig, spanner_event_store: SpannerSyncEventQueueStore
-) -> None:
-    """Events with metadata are correctly stored and retrieved."""
-    spec = SQLSpec()
-    spec.add_config(spanner_events_config)
-    channel = spec.event_channel(spanner_events_config)
-
-    metadata = {"source": "test", "priority": 1}
-    event_id = channel.publish("metadata_test", {"data": "value"}, metadata=metadata)
-
-    iterator = channel.iter_events("metadata_test", poll_interval=0.05)
-    message = next(iterator)
-    channel.ack(message.event_id)
-
-    assert message.event_id == event_id
-    assert message.metadata == metadata
-    assert message.payload == {"data": "value"}
