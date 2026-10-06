@@ -102,6 +102,25 @@ For read-write transactions with automatic ``Aborted`` retry semantics, use
        transaction_tag="accounts.transfer",
    )
 
+Native Execution Controls
+=========================
+
+``query_options`` can be configured on the driver, supplied when opening a
+session, or overridden per call. They apply to queries and single DML operations;
+native batch DML does not accept them. ``last_statement=True`` marks final
+transaction DML, including only the final statement of a script.
+
+Opt-in Arrow Batch Write ingestion works from database-backed read sessions.
+Mutation groups commit independently. Arrow overwrite retains transactional
+delete-and-insert behavior without partitioned DML or Batch Write.
+
+Parameter Types
+===============
+
+Both adapters bind ``datetime.timedelta`` parameters as Spanner ``INTERVAL``
+values, including arrays with null elements. Conversion preserves days and
+microseconds without rounding through floating-point seconds.
+
 Sync Configuration
 ==================
 
@@ -121,10 +140,6 @@ Async Configuration
 An async write session commits on successful context exit and rolls back on an
 exception. If you explicitly call ``await driver.commit()`` or
 ``await driver.rollback()``, context exit preserves that completed transaction.
-
-Both adapters bind ``datetime.timedelta`` parameters as Spanner ``INTERVAL``
-values, including arrays with null elements. Conversion preserves days and
-microseconds without rounding through floating-point seconds.
 
 .. autoclass:: sqlspec.adapters.spanner.SpannerAsyncConfig
    :members:
@@ -174,7 +189,7 @@ Async Driver
 Data Dictionary
 ===============
 
-.. autoclass:: sqlspec.adapters.spanner.data_dictionary.SpannerDataDictionary
+.. autoclass:: sqlspec.adapters.spanner.data_dictionary.SpannerSyncDataDictionary
    :members:
    :show-inheritance:
 
@@ -182,26 +197,8 @@ Data Dictionary
    :members:
    :show-inheritance:
 
-Extension Settings
-==================
-
-Use the configuration types below in their corresponding ``extension_config``
-namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
-
-.. autoclass:: sqlspec.adapters.spanner.litestar.SpannerLitestarConfig
-   :members:
-   :show-inheritance:
-
-.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKConfig
-   :members:
-   :show-inheritance:
-
-.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKRetentionConfig
-   :members:
-   :show-inheritance:
-
-Extension Stores
-================
+Extensions
+==========
 
 .. autoclass:: sqlspec.adapters.spanner.adk.SpannerSyncADKStore
    :members:
@@ -235,14 +232,20 @@ Extension Stores
    :members:
    :show-inheritance:
 
-Native execution controls
--------------------------
+Extension Settings
+==================
 
-``query_options`` can be configured on the driver, supplied when opening a
-session, or overridden per call. They apply to queries and single DML operations;
-native batch DML does not accept them. ``last_statement=True`` marks final
-transaction DML, including only the final statement of a script.
+Use the configuration types below in their corresponding ``extension_config``
+namespace: ``"litestar"``, ``"events"``, or ``"adk"`` as supported by this adapter.
 
-Opt-in Arrow Batch Write ingestion works from database-backed read sessions.
-Mutation groups commit independently. Arrow overwrite retains transactional
-delete-and-insert behavior without partitioned DML or Batch Write.
+.. autoclass:: sqlspec.adapters.spanner.litestar.SpannerLitestarConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKConfig
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKRetentionConfig
+   :members:
+   :show-inheritance:

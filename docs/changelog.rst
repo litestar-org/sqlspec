@@ -12,11 +12,47 @@ Recent Updates
 Unreleased
 ----------
 
-* Spanner adds a native async driver and async stores. Sync APIs still work.
-  Async sessions now use the right SDK types. They keep an explicit commit or
-  rollback when the session ends.
-* Spanner now binds ``datetime.timedelta`` values and lists as ``INTERVAL``.
-  This keeps the full precision of each value and allows nulls in lists.
+**Added:**
+
+* Spanner adds a native asyncio adapter built on the async Spanner client:
+  ``SpannerAsyncConfig`` and ``SpannerAsyncDriver`` support pooled sessions,
+  read and write sessions, ``run_in_transaction()`` with ``Aborted`` retries,
+  streaming selects, Arrow import and export, and ``SpannerAsyncDataDictionary``.
+  The sync adapter keeps its existing behavior.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner ships async extension stores: ``SpannerAsyncADKStore`` and
+  ``SpannerAsyncADKMemoryStore`` for ADK, ``SpannerAsyncStore`` for Litestar
+  sessions, and ``SpannerAsyncEventQueueStore`` for event channels.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner binds ``datetime.timedelta`` values and lists as ``INTERVAL``,
+  keeping day and microsecond precision and allowing null list elements.
+  ``FLOAT32`` vectors bind as ``ARRAY<FLOAT32>``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+
+**Changed:**
+
+* Spanner sync classes now use the ``SpannerSync*`` prefix used by other
+  adapters, and the old names are removed: ``SpannerExceptionHandler`` is now
+  ``SpannerSyncExceptionHandler``, ``SpannerDataDictionary`` is now
+  ``SpannerSyncDataDictionary``, ``SpannerConnectionContext`` is now
+  ``SpannerSyncConnectionContext``, ``SpannerSessionContext`` is now
+  ``SpannerSyncSessionContext``, ``SpannerConnection`` is now
+  ``SpannerSyncConnection``, and ``SpannerTransactionType`` is now
+  ``SpannerSyncTransactionType``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+
+**Fixed:**
+
+* Async Spanner write sessions commit on a clean exit and roll back on an
+  exception, and they leave a transaction alone after an explicit
+  ``commit()`` or ``rollback()``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Compiled wheels build again with mypy 2.4, which failed on loops over
+  ``reversed()``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* ``sqlspec`` imports on SQLGlot 30.13 through 30.17 again. The ``??`` JSONB
+  operator rendering is registered only on SQLGlot releases that define it.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 
 v0.65.0 - IBM Db2 adapter, dialect isolation, and native adapter hardening
 -------------------------------------------------------------------------
