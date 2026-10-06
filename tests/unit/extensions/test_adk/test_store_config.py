@@ -406,10 +406,10 @@ def test_sync_memory_store_logs_disabled_with_log_with_context(monkeypatch: pyte
     assert "db_system" in calls[0]["context"]
 
 
-def test_session_store_reset_drop_tables_includes_legacy_metadata_table() -> None:
+async def test_session_store_reset_drop_tables_includes_legacy_metadata_table() -> None:
     store = _AsyncSessionStore(_Config())
 
-    statements = store._reset_drop_tables_sql()
+    statements = await store._reset_drop_tables_sql()
 
     assert "DROP TABLE IF EXISTS adk_internal_metadata" in statements
     assert "DROP TABLE IF EXISTS adk_metadata" in statements
@@ -424,10 +424,10 @@ def test_session_store_reset_drop_tables_includes_legacy_metadata_table() -> Non
     assert store.metadata_table == "adk_internal_metadata"
 
 
-def test_session_store_reset_drop_tables_does_not_duplicate_configured_legacy_metadata_table() -> None:
+async def test_session_store_reset_drop_tables_does_not_duplicate_configured_legacy_metadata_table() -> None:
     store = _AsyncSessionStore(_Config({"metadata_table": "adk_metadata"}))
 
-    statements = store._reset_drop_tables_sql()
+    statements = await store._reset_drop_tables_sql()
 
     assert statements.count("DROP TABLE IF EXISTS adk_metadata") == 1
     assert store.metadata_table == "adk_metadata"

@@ -90,12 +90,12 @@ async def down(context: "MigrationContext | None" = None) -> "list[str]":
         memory_store_class = _get_memory_store_class(context)
         if memory_store_class is not None:
             memory_store = memory_store_class(config=context.config)
-            statements.extend(memory_store._reset_drop_memory_table_sql())  # pyright: ignore[reportPrivateUsage]
+            statements.extend(await _resolve_statements(memory_store._reset_drop_memory_table_sql()))  # pyright: ignore[reportPrivateUsage]
 
     if _is_sessions_enabled(context):
         store_class = _get_store_class(context)
         store_instance = store_class(config=context.config)
-        statements.extend(store_instance._reset_drop_tables_sql())  # pyright: ignore[reportPrivateUsage]
+        statements.extend(await _resolve_statements(store_instance._reset_drop_tables_sql()))  # pyright: ignore[reportPrivateUsage]
 
     return statements
 
@@ -132,6 +132,12 @@ def _get_store_class(context: "MigrationContext | None") -> "type[BaseAsyncADKSt
 
 
 async def _resolve_sql(value: "str | Awaitable[str]") -> str:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _resolve_statements(value: "list[str] | Awaitable[list[str]]") -> "list[str]":
     if inspect.isawaitable(value):
         return await value
     return value

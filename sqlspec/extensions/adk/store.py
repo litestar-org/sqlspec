@@ -130,7 +130,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
         manage_schema, create_schema = self._schema_management_flags()
         return manage_schema and create_schema
 
-    def _reset_drop_tables_sql(self) -> "list[str]":
+    def _reset_drop_statements(self) -> "list[str]":
         """Return all table drops needed before recreating the clean-break schema."""
         statements = list(self._drop_tables_sql())
         for table_profile in ADK_RESET_TABLE_PROFILES:
@@ -678,6 +678,10 @@ class BaseAsyncADKStore(_ADKStoreCommon[ConfigT], ABC):
         """
         raise NotImplementedError
 
+    async def _reset_drop_tables_sql(self) -> "list[str]":
+        """Return the drops that remove configured and legacy ADK session tables."""
+        return self._reset_drop_statements()
+
 
 class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK session stores.
@@ -918,6 +922,10 @@ class BaseSyncADKStore(_ADKStoreCommon[ConfigT], ABC):
     def _drop_tables_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
+
+    def _reset_drop_tables_sql(self) -> "list[str]":
+        """Return the drops that remove configured and legacy ADK session tables."""
+        return self._reset_drop_statements()
 
 
 def normalize_session_list_options(
