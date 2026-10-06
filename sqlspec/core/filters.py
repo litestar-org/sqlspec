@@ -810,7 +810,7 @@ class CursorFilter(PaginationFilter):
         target.order_by(*items, append=False, copy=False)
         if predicates:
             predicate = predicates[-1][0]
-            for after, aoe in reversed(predicates[:-1]):
+            for after, aoe in predicates[-2::-1]:
                 predicate = _fold_and(aoe, _fold_or(after, predicate))
             if predicate is False:
                 target.where(exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0)), copy=False)

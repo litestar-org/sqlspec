@@ -285,7 +285,7 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
 
     if param_info:
         converted_condition = condition_input
-        for param in reversed(param_info):  # Reverse to preserve positions
+        for param in param_info[::-1]:  # Reverse to preserve positions
             if param.style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.POSITIONAL_PYFORMAT,

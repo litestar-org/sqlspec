@@ -840,7 +840,7 @@ class SQL:
                     name += "_p"
                 names[index] = name
                 used.add(name)
-        for info, index in reversed(list(zip(selected, indexes, strict=True))):
+        for info, index in list(zip(selected, indexes, strict=True))[::-1]:
             if info.style in positional_styles:
                 raw = raw[: info.position] + ":" + names[index] + raw[info.position + len(info.placeholder_text) :]
         return raw, {**{name: positional[index] for index, name in names.items()}, **named}

@@ -582,7 +582,7 @@ class ParameterConverter:
 
         segments: list[str] = []
         last_start = len(sql)
-        for param in reversed(param_info):
+        for param in param_info[::-1]:
             param_value = self._parameter_value(parameters, param, unique_params, explicit_indexes)
             literal = self._format_literal(param_value, dialect)
             segments.extend((sql[param.position + len(param.placeholder_text) : last_start], literal))

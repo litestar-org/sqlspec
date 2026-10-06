@@ -189,7 +189,7 @@ class SQLSpecPlugin:
                 await self._acquire_request_connection(request, config_state)
                 acquired_states.append(config_state)
         except Exception:
-            for config_state in reversed(acquired_states):
+            for config_state in acquired_states[::-1]:
                 await self._release_request_connection(request, config_state)
             self._restore_observability_contexts(request, None)
             raise
@@ -202,7 +202,7 @@ class SQLSpecPlugin:
             response: Sanic response instance.
         """
         try:
-            for config_state in reversed(self._config_states):
+            for config_state in self._config_states[::-1]:
                 if config_state.disable_di:
                     continue
                 await self._finalize_request_connection(request, response, config_state)
