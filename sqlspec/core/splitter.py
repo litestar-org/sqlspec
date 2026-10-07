@@ -192,7 +192,7 @@ class DialectConfig:
             (TokenType.COMMENT_LINE, r"--[^\n]*"),
             (TokenType.COMMENT_BLOCK, r"/\*[\s\S]*?\*/"),
             (TokenType.STRING_LITERAL, r"'(?:[^']|'')*'"),
-            (TokenType.QUOTED_IDENTIFIER, r'"[^"]*"|\[[^\]]*\]'),
+            (TokenType.QUOTED_IDENTIFIER, r'"[^"]*"|\[[^\]]*\]|`(?:[^`]|``)*`'),
         ]
 
         patterns.extend(self._get_dialect_specific_patterns())
@@ -551,6 +551,8 @@ _DIALECT_CLASS_MAP: Final[dict[str, type[DialectConfig]]] = {
     "sqlite": SQLiteDialectConfig,
     "duckdb": DuckDBDialectConfig,
     "bigquery": BigQueryDialectConfig,
+    "spanner": BigQueryDialectConfig,
+    "spangres": PostgreSQLDialectConfig,
     "db2": Db2DialectConfig,
 }
 

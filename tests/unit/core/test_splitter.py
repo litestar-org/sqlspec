@@ -51,8 +51,32 @@ def test_dialect_class_map_contains_expected_aliases() -> None:
         "sqlite": splitter_module.SQLiteDialectConfig,
         "duckdb": splitter_module.DuckDBDialectConfig,
         "bigquery": splitter_module.BigQueryDialectConfig,
+        "spanner": splitter_module.BigQueryDialectConfig,
+        "spangres": splitter_module.PostgreSQLDialectConfig,
         "db2": splitter_module.Db2DialectConfig,
     }
+
+
+@pytest.mark.parametrize("dialect", ["mysql", "bigquery", "spanner"])
+def test_split_sql_script_keeps_terminators_inside_backtick_identifiers(dialect: str) -> None:
+    """Backtick-quoted identifiers, including doubled-backtick escapes, never end a statement."""
+    script = "SELECT `a;b`, `c``;d` FROM t; SELECT 2"
+
+    assert split_sql_script(script, dialect=dialect, strip_trailing_terminator=True) == [
+        "SELECT `a;b`, `c``;d` FROM t",
+        "SELECT 2",
+    ]
+
+
+def test_split_sql_script_spanner_keeps_quoted_terminators() -> None:
+    """Spanner scripts split on statement terminators outside backtick and triple-quoted literals."""
+    script = 'CREATE TABLE `a;b` (id INT64) PRIMARY KEY (id);\nINSERT INTO `a;b` (id) VALUES (1);\nSELECT """x;y""";'
+
+    assert split_sql_script(script, dialect="spanner", strip_trailing_terminator=True) == [
+        "CREATE TABLE `a;b` (id INT64) PRIMARY KEY (id)",
+        "INSERT INTO `a;b` (id) VALUES (1)",
+        'SELECT """x;y"""',
+    ]
 
 
 def test_split_sql_script_preserves_statement_output() -> None:
