@@ -9,8 +9,8 @@ important operational fixes.
 Recent Updates
 ==============
 
-Unreleased
-----------
+v0.66.0 - Native AsyncIO Spanner adapter, extension stores, and sync/async parity
+---------------------------------------------------------------------------------
 
 **Added:**
 
@@ -28,6 +28,11 @@ Unreleased
   keeping day and microsecond precision and allowing null list elements.
   Declare ``FLOAT32``, ``ARRAY<FLOAT32>``, or ``VECTOR`` parameters with
   ``TypedParameter(value, semantic_name="FLOAT32")``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner sync and async session pools default ``ping_interval=1800`` on
+  ``PingingPool`` and ``TransactionPingingPool`` to maintain idle session
+  liveness, and pool classes automatically map between sync and async
+  equivalents.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 * Spanner runs SQL and Python migrations on both adapters. DDL statements go
   through the database ``update_ddl`` schema API, scripts apply consecutive DDL
@@ -61,6 +66,10 @@ Unreleased
 * Spanner DML with ``THEN RETURN`` (including ``WITH ACTION``) returns its
   rows on both adapters instead of discarding them and reporting only a row
   count.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner JSON row conversion unwraps ``JsonObject`` cells directly when using
+  the default deserializer (``msgspec.json.decode``), eliminating redundant
+  string serialization round-trips.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 * Script splitting keeps semicolons inside backtick-quoted identifiers, which
   split MySQL, BigQuery, and Spanner scripts in the wrong place.
@@ -255,12 +264,16 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   It shows how to move through pages in both directions and sign page tokens.
   Examples cover service ``paginate()`` and direct driver ``select()``
   with ``CursorFilter.build_page()``, plus Litestar and FastAPI filter setup.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * FastAPI filter dependencies support cursor pagination, including signed
   tokens, dynamic sorting, page-size bounds, and HTTP 422 cursor errors.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Litestar filter dependencies support cursor pagination with signed tokens,
   bounded page sizes, dynamic sorting, and client validation errors.
+  (`#800 <https://github.com/litestar-org/sqlspec/pull/800>`_,
+  `#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * Pass a cursor or offset filter to service ``paginate()`` to choose the page
   type. Both sync and async calls return typed rows and can use your session.
   Use ``paginate_limit_offset()`` or ``paginate_cursor()`` to select a mode
@@ -268,18 +281,22 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   Litestar routes can return either page type with typed items and an OpenAPI
   union response. ``Pagination[T]`` aliases both page types for concise return
   annotations.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Use cursor filters with sync and async driver ``select()`` calls.
   ``CursorFilter.build_page()`` builds a page from the rows.
   Tests cover quoted BigQuery table names and the SQL Server dialect alias.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Added type-preserving pagination cursor tokens with optional HMAC signing and
   a generic ``CursorPagination`` response container. Malformed cursor inputs raise
   ``InvalidCursorError`` consistently in Python and compiled installations.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * Added ``CursorKey`` and ``CursorFilter`` for bidirectional keyset pagination,
   including explicit NULL placement, composite sort keys, and page cursor creation.
   Use a field name to sort from low to high. Use pairs to set each field's
   sort order, or ``CursorKey`` for more control.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Defer public exports, query builders, and migration helpers in pure-Python installations
   on first access to accelerate cold import performance.
@@ -302,10 +319,12 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * Examples, tests, and documentation tooling use explicit forward references;
   lint now enforces the future-annotations import ban throughout the repository.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Generated filter dependencies reject ``pageSize`` values above
   ``pagination_max_size`` (default ``1000``); set ``pagination_max_size`` in
   ``FilterConfig`` to change the limit.
+  (`#800 <https://github.com/litestar-org/sqlspec/pull/800>`_)
 * SQLSpec-built ordering (``OrderByFilter``, ``SQL.order_by``, builder
   ``order_by``, ``Column.asc()``/``desc()``, and window ordering) leaves NULL
   placement to the database unless requested. It no longer adds implicit
@@ -317,6 +336,7 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
   ``Column.asc()`` and expression-based window ordering move NULL rows to first.
   Request placement with ``OrderByFilter(nulls=...)``, ``Column.asc(nulls=...)`` /
   ``Column.desc(nulls=...)``, or a string such as ``"id DESC NULLS LAST"``.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Pure-Python installations defer unused query builders and migration commands.
   Compiled wheels retain eager exports to preserve concurrent access after
@@ -394,90 +414,119 @@ v0.64.0 - Startup performance, connection normalization, and adapter lifecycle h
 
 * Parameter-only statement copies preserve the shared parameter-validator cache
   and its configured size when rebinding values.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Adapters, services, and builders import shared driver, ordering, and parameter
   helpers through their owning packages instead of private implementation modules.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Cursor provider dependency caches distinguish byte secrets from their text
   representation, preserving each endpoint's configured signing key.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Framework dependency caches preserve configured list order so the first
   sort field and cursor key sequence retain their declared meaning.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Explicit NULL placement remains explicit for PostgreSQL-compatible adapters,
   including CockroachDB, whose default NULL ordering differs from PostgreSQL.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Arrow ODBC renders SQL Server ``TOP`` page-size controls as validated integers
   while retaining bound data parameters, including queries with CTEs. Native
   ``select_to_arrow`` applies the same SQL Server pagination controls.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * ``SQL.order_by("id", desc=True)`` now sorts descending, and
   ``Select.order_by("id", desc=True)`` no longer emits a doubled direction.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * ``limit``, ``offset``, and ``paginate`` on set operations render valid
   SQL Server pagination while retaining the requested result ordering.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Statement filters and ``SQL.where``/``SQL.order_by`` apply to the whole
   result of ``UNION``, ``INTERSECT``, and ``EXCEPT`` queries, preserving CTEs
   and result ordering. Pagination filters produce valid set-operation SQL.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 
 * Preserve parameter alignment when repeated BigQuery queries inline NULL values,
   including copied statements and transitions between NULL and non-NULL values.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Psycopg percent escaping preserves existing ``%%`` pairs and modulo expressions
   when parameters are bound, including repeated preparation, and retains returned
   rows when legacy modulo syntax cannot be classified by the SQL parser.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Missing positional bindings no longer consume values reserved for named placeholders,
   including names that collide with generated parameter aliases and script literals.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * Repeated and reordered numeric placeholders bind by their written indexes when
   converted to another placeholder style; native numeric mappings retain written
   index order on the first call and cache hits.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * Sequences for named placeholders and mappings for positional placeholders bind
   consistently on the first execution and cache hits, including repeated names.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * Ambiguous mixes of numeric and ordinal placeholders reject sequence payloads
   instead of silently binding values to the wrong slots.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * PostgreSQL ``??`` escapes become ``?`` operators, including after filters modify
   the statement; output transformers receive the driver's execution placeholder style.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * Spanner ``execute_many`` converts tuple rows and mixed placeholder mappings before
   calling the driver, preserving bindings on cache hits.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Filters supplied to the ``SQL`` constructor are applied once before call-site
   filters, including when statements are reused.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Statements combining positional and named values now bind each value to its
   own placeholder, including filters and ``where_*`` helpers.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * PostgreSQL JSONB existence operators followed by literals or bound parameters
   are recognized without consuming a parameter slot.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * DuckDB ``execute_many`` preserves INSERT expressions, conflict clauses, and column
   order and defaults by restricting bulk loading to plain VALUES inserts.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 * Psycopg preserves literal percent characters alongside bound parameters,
   including cached statements, batch execution, streams, and pipelines.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Parameters supplied to ``execute_script`` use dialect-correct escaped literals.
   A placeholder without a value now raises instead of rendering as ``NULL``.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * The MySQL adapters (``aiomysql``, ``asyncmy``, ``mysqlconnector``, ``pymysql``)
   now pass statement parameters to the driver for binding.
   Cross-adapter safety checks cover quotes, backslashes, and placeholder-like
   text supplied as bound values.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 
 * Statement modifiers on empty or unparsable SQL raise ``SQLParsingError``
   instead of leaking a sqlglot ``ParseError``, including during concurrent resets.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Tests, including Litestar connection-provider tests, close aiosqlite pools before
   their event loops shut down, and unhandled worker-thread exceptions now fail the test suite.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * The SQLite and aiosqlite pools retry enabling WAL mode when several connections
   first open a new database at the same time; previously this could fail with
   ``database is locked``.
+  (`#801 <https://github.com/litestar-org/sqlspec/pull/801>`_)
 
 * Close async example connection pools before their event loops shut down.
+  (`#799 <https://github.com/litestar-org/sqlspec/pull/799>`_)
 
 * Correct Litestar filter query parameter titles and pagination schema documentation.
+  (`#800 <https://github.com/litestar-org/sqlspec/pull/800>`_)
 
 * Driver exception handling uses native error classes through adapter facades.
   SQL Server and Arrow ODBC no longer fall back to catching every exception when
@@ -523,6 +572,7 @@ v0.63.1 - Slotted service subclass compatibility
   as ordinary slotted Python classes in compiled wheels. Application subclasses preserve generic typing
   and ``__slots__`` without downstream slotscheck exclusions. Query execution and transaction management
   remain mypyc-compiled in a private runtime module.
+  (`#785 <https://github.com/litestar-org/sqlspec/pull/785>`_)
 
 **Changed:**
 
@@ -530,7 +580,9 @@ v0.63.1 - Slotted service subclass compatibility
   :class:`~sqlspec.service.SQLSpecAsyncService` and :class:`~sqlspec.service.SQLSpecSyncService`,
   including inherited queries, transaction contexts, overridden session acquisition, and queries inside
   a caller's exception handler.
+  (`#785 <https://github.com/litestar-org/sqlspec/pull/785>`_)
 * Update slotscheck and the Codecov action pin.
+  (`#785 <https://github.com/litestar-org/sqlspec/pull/785>`_)
 
 v0.63.0 - Transactions, table fixtures, SQL fragments, storage, and kwargs parameter binding
 ---------------------------------------------------------------------------------------------------
