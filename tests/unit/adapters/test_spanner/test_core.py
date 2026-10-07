@@ -3,17 +3,22 @@
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
+    build_statement_config,
     collect_rows,
+    is_query_statement,
     resolve_column_names,
     resolve_row_plan,
+    resolve_transaction_completion,
 )
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
-from sqlspec.core import TypedParameter
+from sqlspec.core import SQL, TypedParameter
+from sqlspec.utils.serializers import from_json
 
 
 def _field(name: str, code: int) -> SimpleNamespace:
@@ -145,3 +150,88 @@ def test_resolve_column_names_reuses_cached_fields() -> None:
     assert first == ["id", "name"]
     assert second is first
     assert len(cache) == 1
+
+
+def test_convert_json_row_value_zero_copy_unwrapping_with_default_deserializer(monkeypatch: Any) -> None:
+    """Verify JsonObject is unwrapped directly without calling serialize() when using default from_json."""
+    fields = [
+        _field("obj", TypeCode.JSON),
+        _field("arr", TypeCode.JSON),
+        _field("scalar", TypeCode.JSON),
+        _field("null_val", TypeCode.JSON),
+    ]
+    json_cls = cast("Any", JsonObject)
+    json_obj = json_cls({"a": 1})
+    json_arr = json_cls([1, 2, 3])
+    json_scalar = json_cls("hello")
+    json_null = json_cls(None)
+
+    def fail_serialize(self: Any) -> str:
+        msg = "serialize() should not be called when json_deserializer is from_json"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(JsonObject, "serialize", fail_serialize)
+
+    column_names, column_plan = resolve_row_plan(fields, {}, json_deserializer=from_json)
+    rows = [(json_obj, json_arr, json_scalar, json_null)]
+    data, _ = collect_rows(rows, fields, column_names=column_names, column_plan=column_plan)
+
+    assert data == [({"a": 1}, [1, 2, 3], "hello", None)]
+    assert type(data[0][0]) is dict
+    assert type(data[0][1]) is list
+
+
+@pytest.mark.parametrize(
+    ("state", "failed", "expected"),
+    [
+        ({"_transaction_id": b"txn"}, False, "commit"),
+        ({"_mutations": [object()]}, False, "commit"),
+        ({}, False, "skip"),
+        ({"_transaction_id": b"txn"}, True, "rollback"),
+        ({"_mutations": [object()]}, True, "rollback"),
+        ({}, True, "rollback"),
+        ({"_transaction_id": b"txn", "rolled_back": True}, False, "skip"),
+        ({"_transaction_id": b"txn", "rolled_back": True}, True, "skip"),
+        ({"_transaction_id": b"txn", "committed": object()}, False, "skip"),
+        ({"_transaction_id": b"txn", "committed": object()}, True, "skip"),
+    ],
+    ids=[
+        "begun-commits",
+        "mutations-commit",
+        "empty-skips",
+        "failure-rolls-back",
+        "failure-discards-buffered-mutations",
+        "failure-before-begin-rolls-back",
+        "rolled-back-skips-commit",
+        "rolled-back-skips-rollback",
+        "committed-skips-commit",
+        "committed-skips-rollback",
+    ],
+)
+def test_resolve_transaction_completion(state: dict[str, Any], failed: bool, expected: str) -> None:
+    transaction = SimpleNamespace(**{
+        "_transaction_id": None,
+        "_mutations": [],
+        "committed": None,
+        "rolled_back": False,
+        **state,
+    })
+    assert resolve_transaction_completion(transaction, failed=failed) == expected
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [("SELECT 1", True), ("WITH t AS (SELECT 1) SELECT * FROM t", True), ("UPDATE t SET a = 1 WHERE TRUE", False)],
+)
+def test_is_query_statement(sql: str, expected: bool) -> None:
+    assert is_query_statement(sql, "spanner") is expected
+
+
+def test_then_return_statement_returns_rows() -> None:
+    """Verify ``THEN RETURN`` DML is classified as returning rows."""
+    statement = SQL(
+        "INSERT INTO t (id) VALUES (@id) THEN RETURN id", {"id": 1}, statement_config=build_statement_config()
+    )
+    statement.compile()
+
+    assert statement.returns_rows()

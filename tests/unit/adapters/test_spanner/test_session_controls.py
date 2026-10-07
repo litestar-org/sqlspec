@@ -22,14 +22,13 @@ def test_provide_session_uses_config_driver_features(monkeypatch: pytest.MonkeyP
         connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
         driver_features={"request_options": request_options},
     )
-    monkeypatch.setattr(spanner_config, "SpannerSessionContext", _SessionContext)
+    monkeypatch.setattr(spanner_config, "SpannerSyncSessionContext", _SessionContext)
 
     context = config.provide_session()
 
     assert isinstance(context, _SessionContext)
     assert captured["driver_features"] is config.driver_features
     assert captured["driver_features"]["request_options"] is request_options
-    assert "database_provider" not in captured["driver_features"]
 
 
 def test_provide_session_accepts_spanner_execution_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,7 +46,7 @@ def test_provide_session_accepts_spanner_execution_overrides(monkeypatch: pytest
         connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
         driver_features={"request_options": config_request_options},
     )
-    monkeypatch.setattr(spanner_config, "SpannerSessionContext", _SessionContext)
+    monkeypatch.setattr(spanner_config, "SpannerSyncSessionContext", _SessionContext)
 
     config.provide_session(
         request_options=session_request_options, directed_read_options=directed_read_options, retry=retry, timeout=12.0
@@ -59,7 +58,6 @@ def test_provide_session_accepts_spanner_execution_overrides(monkeypatch: pytest
     assert captured["driver_features"]["retry"] is retry
     assert captured["driver_features"]["timeout"] == 12.0
     assert config.driver_features["request_options"] is config_request_options
-    assert "database_provider" not in captured["driver_features"]
 
 
 def test_close_pool_closes_the_database() -> None:
@@ -71,7 +69,7 @@ def test_close_pool_closes_the_database() -> None:
             calls.append("database")
 
     class _Pool:
-        def close(self) -> None:
+        def clear(self) -> None:
             calls.append("pool")
 
     config = SpannerSyncConfig(connection_config={"project": "p", "instance_id": "i", "database_id": "d"})
@@ -89,6 +87,9 @@ def test_write_transactions_reuse_pooled_sessions() -> None:
 
     class _Txn:
         _transaction_id = "txn"
+        _mutations: tuple[object, ...] = ()
+        committed = None
+        rolled_back = False
 
         def __enter__(self) -> "Self":
             return self

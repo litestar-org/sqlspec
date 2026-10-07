@@ -233,7 +233,7 @@ class MigrationSquasher:
                 migration_down_sql.append([])
 
         # DOWN statements in REVERSE order
-        for down_sql in reversed(migration_down_sql):
+        for down_sql in migration_down_sql[::-1]:
             down_statements.extend(down_sql)
 
         return up_statements, down_statements

@@ -92,6 +92,7 @@ from tests.integration.fixtures.postgres import (
     psycopg_sync_config,
 )
 from tests.integration.fixtures.spanner import (
+    spanner_async_config,
     spanner_config,
     spanner_database,
     spanner_read_session,
@@ -194,6 +195,7 @@ __all__ = (
     "pymysql_config",
     "pymysql_driver",
     "pymysql_transaction_config",
+    "spanner_async_config",
     "spanner_config",
     "spanner_database",
     "spanner_read_session",

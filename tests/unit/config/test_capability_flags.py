@@ -24,6 +24,7 @@ CONFIG_CLASSES: tuple[tuple[str, str], ...] = (
     ("sqlspec.adapters.psycopg.config", "PsycopgSyncConfig"),
     ("sqlspec.adapters.pymssql.config", "PymssqlConfig"),
     ("sqlspec.adapters.pymysql.config", "PyMysqlConfig"),
+    ("sqlspec.adapters.spanner.config", "SpannerAsyncConfig"),
     ("sqlspec.adapters.spanner.config", "SpannerSyncConfig"),
     ("sqlspec.adapters.sqlite.config", "SqliteConfig"),
 )

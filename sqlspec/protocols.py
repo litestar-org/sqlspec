@@ -282,12 +282,14 @@ class SpannerParamTypesProtocol(SupportsJsonTypeProtocol, Protocol):
 
     BOOL: Any
     INT64: Any
+    FLOAT32: Any
     FLOAT64: Any
     NUMERIC: Any
     STRING: Any
     BYTES: Any
     TIMESTAMP: Any
     DATE: Any
+    INTERVAL: Any
     Array: "Callable[[Any], Any]"
 
 

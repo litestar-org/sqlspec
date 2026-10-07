@@ -14,6 +14,7 @@ from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.oracledb import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.psqlpy import PsqlpyConfig
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgSyncConfig
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import ExtensionConfigs
 
@@ -163,6 +164,8 @@ def test_extension_config_defaults_to_empty_dict() -> None:
         BigQueryConfig(connection_config={"project": "test"}),
         Db2SyncConfig(connection_config={"database": "test"}),
         Db2AsyncConfig(connection_config={"database": "test"}),
+        SpannerSyncConfig(connection_config={"project": "test", "instance_id": "inst", "database_id": "db"}),
+        SpannerAsyncConfig(connection_config={"project": "test", "instance_id": "inst", "database_id": "db"}),
     ]
 
     for config in configs:
@@ -207,6 +210,8 @@ def test_extension_config_with_multiple_extensions() -> None:
         (BigQueryConfig, {"connection_config": {"project": "test"}}),
         (Db2SyncConfig, {"connection_config": {"database": "test"}}),
         (Db2AsyncConfig, {"connection_config": {"database": "test"}}),
+        (SpannerSyncConfig, {"connection_config": {"project": "test", "instance_id": "inst", "database_id": "db"}}),
+        (SpannerAsyncConfig, {"connection_config": {"project": "test", "instance_id": "inst", "database_id": "db"}}),
     ],
 )
 def test_all_adapters_accept_extension_config(config_class: type, init_kwargs: dict) -> None:

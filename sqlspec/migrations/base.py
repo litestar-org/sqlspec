@@ -728,7 +728,7 @@ out-of-order migrations gracefully.
             return list(reversed(applied))
         parsed_revision = parse_version(revision)
         to_revert = []
-        for migration in reversed(applied):
+        for migration in applied[::-1]:
             parsed_migration_version = parse_version(migration["version_num"])
             if parsed_migration_version > parsed_revision:
                 to_revert.append(migration)

@@ -15,7 +15,7 @@ from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.pymysql.config import PyMysqlConfig
-from sqlspec.adapters.spanner.config import SpannerSyncConfig
+from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite.config import SqliteConfig, SqliteConnectionContext
 from sqlspec.adapters.sqlite.driver import SqliteSessionContext
 from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
@@ -368,6 +368,7 @@ def test_template_only_adapters_inherit_base_provide_session(config_type: type[A
         CockroachPsycopgSyncConfig,
         CockroachPsycopgAsyncConfig,
         SpannerSyncConfig,
+        SpannerAsyncConfig,
     ],
 )
 def test_specialized_adapters_keep_provide_session_override(config_type: type[Any]) -> None:

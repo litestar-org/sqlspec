@@ -38,7 +38,7 @@ from :class:`~sqlspec.extensions.litestar.store.BaseSQLSpecStore`:
 - **SQL Server / ODBC**: ``sqlspec.adapters.arrow_odbc.litestar.ArrowOdbcStore``, ``sqlspec.adapters.pymssql.litestar.PymssqlStore``, and ``sqlspec.adapters.mssql_python.litestar.MssqlPythonStore``
 - **CockroachDB**: ``sqlspec.adapters.cockroach_asyncpg.litestar.CockroachAsyncpgStore``
 - **BigQuery**: ``sqlspec.adapters.bigquery.litestar.BigQueryStore``
-- **Spanner**: ``sqlspec.adapters.spanner.litestar.SpannerSyncStore``
+- **Spanner**: ``sqlspec.adapters.spanner.litestar.SpannerAsyncStore`` and ``sqlspec.adapters.spanner.litestar.SpannerSyncStore``
 - **Oracle**: ``sqlspec.adapters.oracledb.litestar.OracleAsyncStore`` and ``sqlspec.adapters.oracledb.litestar.OracleSyncStore``
 - **Arrow / ADBC**: ``sqlspec.adapters.adbc.litestar.ADBCStore``
 

@@ -574,7 +574,7 @@ def _inline_mssql_pagination_parameters(
 
     if not consumed:
         return sql, parameters
-    for position, value in reversed(replacements):
+    for position, value in replacements[::-1]:
         sql = sql[:position] + value + sql[position + 1 :]
     return sql, [value for index, value in enumerate(parameters) if index not in consumed]
 

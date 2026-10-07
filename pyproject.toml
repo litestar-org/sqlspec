@@ -72,7 +72,7 @@ pydantic = ["pydantic", "pydantic-extra-types"]
 pymssql = ["pymssql"]
 pymysql = ["pymysql"]
 sanic = ["sanic"]
-spanner = ["google-cloud-spanner"]
+spanner = ["google-cloud-spanner>=3.64.0"]
 starlette = ["starlette"]
 uuid = ["uuid-utils>=0.17.0"]
 

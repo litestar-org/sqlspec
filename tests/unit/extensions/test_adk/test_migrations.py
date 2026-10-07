@@ -2,7 +2,9 @@
 """Tests for the packaged ADK schema migration."""
 
 import importlib
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -10,6 +12,7 @@ from sqlspec.adapters.asyncpg import AsyncpgConfig
 from sqlspec.adapters.cockroach_asyncpg import CockroachAsyncpgConfig
 from sqlspec.adapters.psqlpy import PsqlpyConfig, PsqlpyPoolParams
 from sqlspec.adapters.psycopg import PsycopgAsyncConfig, PsycopgPoolParams
+from sqlspec.adapters.spanner import SpannerAsyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.migrations.context import MigrationContext
 
@@ -74,6 +77,33 @@ async def test_create_migration_emits_ddl_only_for_enabled_features(enable_sessi
     assert any("CREATE TABLE IF NOT EXISTS adk_memory " in sql for sql in up_statements) is enable_memory
     assert ("DROP TABLE IF EXISTS adk_session" in down_statements) is enable_sessions
     assert ("DROP TABLE IF EXISTS adk_memory" in down_statements) is enable_memory
+
+
+async def test_create_migration_down_awaits_async_store_reset_drops() -> None:
+    """Rolling back through async stores emits only the drops their awaited reset hooks keep."""
+    config = SpannerAsyncConfig(
+        connection_config={"project": "p", "instance_id": "i", "database_id": "d"},
+        extension_config={"adk": {"enable_memory": True}},
+    )
+    database = MagicMock()
+
+    async def _list_tables() -> Any:
+        yield SimpleNamespace(table_id="adk_event")
+        yield SimpleNamespace(table_id="adk_memory_entries")
+
+    database.list_tables.side_effect = _list_tables
+
+    with patch.object(SpannerAsyncConfig, "get_database", AsyncMock(return_value=database)):
+        statements = await migration.down(MigrationContext(config=config, dialect="spanner"))
+
+    assert statements == [
+        "DROP INDEX idx_adk_memory_entries_session",
+        "DROP INDEX idx_adk_memory_entries_app_scope_user_time",
+        "DROP INDEX idx_adk_memory_entries_scope",
+        "DROP TABLE adk_memory_entries",
+        "DROP INDEX idx_adk_event_timestamp",
+        "DROP TABLE adk_event",
+    ]
 
 
 async def test_create_migration_skips_store_resolution_for_disabled_features(monkeypatch: pytest.MonkeyPatch) -> None:

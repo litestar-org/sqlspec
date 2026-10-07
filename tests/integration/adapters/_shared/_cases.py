@@ -132,6 +132,8 @@ BIGQUERY_MARK = pytest.mark.bigquery
 BIGQUERY_XDIST_MARK = pytest.mark.xdist_group("bigquery")
 DB2_MARK = pytest.mark.db2
 DB2_XDIST_MARK = pytest.mark.xdist_group("db2")
+SPANNER_MARK = pytest.mark.spanner
+SPANNER_XDIST_MARK = pytest.mark.xdist_group("spanner")
 
 
 def _db2_case(mode: Literal["sync", "async"], marks: tuple[Mark | MarkDecorator, ...]) -> DriverCase:

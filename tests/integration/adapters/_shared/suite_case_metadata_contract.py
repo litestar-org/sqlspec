@@ -75,6 +75,8 @@ MIGRATION_LIFECYCLE_CASE_IDS = {
     "psycopg-sync",
     "pymssql-sync",
     "pymysql-sync",
+    "spanner-async",
+    "spanner-sync",
     "sqlite-sync",
 }
 MERGE_CASE_IDS = {"asyncpg-async", "oracledb-async", "oracledb-sync", "psqlpy-async", "psycopg-async", "psycopg-sync"}

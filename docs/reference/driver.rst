@@ -243,8 +243,9 @@ together:
   ``sqlspec.adapters.adbc.data_dictionary.AdbcDataDictionary`` when the driver
   dialect is BigQuery.
 - DuckDB and Spanner currently have native-only adapter dictionaries:
-  ``sqlspec.adapters.duckdb.data_dictionary.DuckDBDataDictionary`` and
-  ``sqlspec.adapters.spanner.data_dictionary.SpannerDataDictionary``.
+  ``sqlspec.adapters.duckdb.data_dictionary.DuckDBDataDictionary``,
+  ``sqlspec.adapters.spanner.data_dictionary.SpannerSyncDataDictionary``, and
+  ``sqlspec.adapters.spanner.data_dictionary.SpannerAsyncDataDictionary``.
 
 Feature Flag Types
 ==================

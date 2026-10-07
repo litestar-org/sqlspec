@@ -1,9 +1,14 @@
 # pyright: reportPrivateUsage=false
-"""Unit tests for SpannerSyncEventQueueStore."""
+"""Unit tests for SpannerSyncEventQueueStore and SpannerAsyncEventQueueStore."""
 
-from unittest.mock import MagicMock, patch
+import inspect
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
-from sqlspec.adapters.spanner.events import SpannerSyncEventQueueStore
+import pytest
+
+from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.adapters.spanner.events import SpannerAsyncEventQueueStore, SpannerSyncEventQueueStore
 
 
 def _mock_spanner_config() -> MagicMock:
@@ -154,49 +159,55 @@ def test_index_name_generation() -> None:
     assert index_name == "idx_test_events_channel_status"
 
 
-def test_create_table_uses_update_ddl() -> None:
-    """Verify create_table calls database.update_ddl with statements."""
-    from sqlspec.adapters.spanner.config import SpannerSyncConfig
+_STORE_VARIANTS = pytest.mark.parametrize(
+    ("store_cls", "config_cls", "mock_factory"),
+    [
+        (SpannerSyncEventQueueStore, SpannerSyncConfig, MagicMock),
+        (SpannerAsyncEventQueueStore, SpannerAsyncConfig, AsyncMock),
+    ],
+    ids=["sync", "async"],
+)
 
-    config = MagicMock(spec=SpannerSyncConfig)
+
+@_STORE_VARIANTS
+@pytest.mark.parametrize(
+    ("operation", "expected_prefixes"),
+    [("create_table", ("CREATE TABLE", "CREATE INDEX")), ("drop_table", ("DROP INDEX", "DROP TABLE"))],
+)
+async def test_ddl_operations_run_through_update_ddl(
+    store_cls: Any,
+    config_cls: type[Any],
+    mock_factory: type[MagicMock],
+    operation: str,
+    expected_prefixes: tuple[str, str],
+) -> None:
+    """create_table and drop_table submit both statements through update_ddl and wait for the operation."""
+    config = MagicMock(spec=config_cls)
     config.extension_config = {"events": {"queue_table": "test_events"}}
-
-    mock_database = MagicMock()
     mock_operation = MagicMock()
-    mock_database.update_ddl.return_value = mock_operation
-    config.get_database.return_value = mock_database
-
-    store = SpannerSyncEventQueueStore(config)
-
-    with patch.object(store, "_config", config):
-        store.create_table()
-
-    mock_database.update_ddl.assert_called_once()
-    call_args = mock_database.update_ddl.call_args[0][0]
-    assert len(call_args) == 2
-    mock_operation.result.assert_called_once()
-
-
-def test_drop_table_uses_update_ddl() -> None:
-    """Verify drop_table calls database.update_ddl with statements."""
-    from sqlspec.adapters.spanner.config import SpannerSyncConfig
-
-    config = MagicMock(spec=SpannerSyncConfig)
-    config.extension_config = {"events": {"queue_table": "test_events"}}
-
+    mock_operation.result = mock_factory(return_value=None)
     mock_database = MagicMock()
-    mock_operation = MagicMock()
-    mock_database.update_ddl.return_value = mock_operation
-    config.get_database.return_value = mock_database
+    mock_database.update_ddl = mock_factory(return_value=mock_operation)
+    config.get_database = mock_factory(return_value=mock_database)
 
-    store = SpannerSyncEventQueueStore(config)
+    result = getattr(store_cls(config), operation)()
+    if inspect.isawaitable(result):
+        await result
 
-    with patch.object(store, "_config", config):
-        store.drop_table()
+    statements = mock_database.update_ddl.call_args.args[0]
+    assert all(statement.startswith(prefix) for statement, prefix in zip(statements, expected_prefixes, strict=True))
+    mock_operation.result.assert_called_once_with(timeout=None)
 
-    mock_database.update_ddl.assert_called_once()
-    call_args = mock_database.update_ddl.call_args[0][0]
-    assert len(call_args) == 2
-    assert "DROP INDEX" in call_args[0]
-    assert "DROP TABLE" in call_args[1]
-    mock_operation.result.assert_called_once()
+
+@_STORE_VARIANTS
+async def test_ddl_operations_reject_other_config_types(
+    store_cls: Any, config_cls: type[Any], mock_factory: type[MagicMock]
+) -> None:
+    """create_table and drop_table raise TypeError when the store's config is not its variant's config."""
+    store = store_cls(_mock_spanner_config())
+
+    for operation in ("create_table", "drop_table"):
+        with pytest.raises(TypeError, match=config_cls.__name__):
+            result = getattr(store, operation)()
+            if inspect.isawaitable(result):
+                await result

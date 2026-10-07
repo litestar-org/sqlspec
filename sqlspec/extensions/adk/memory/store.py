@@ -155,7 +155,8 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         finally:
             self._memory_table = current_table
 
-    def _reset_drop_memory_table_sql(self) -> list[str]:
+    def _reset_drop_memory_statements(self) -> list[str]:
+        """Return drops for the configured memory table and every legacy memory table name."""
         configured = self._memory_table
         candidates = (configured, *[name for name in ADK_RESET_MEMORY_TABLES if name != configured])
         statements: list[str] = []
@@ -315,6 +316,10 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
 
+    async def _reset_drop_memory_table_sql(self) -> "list[str]":
+        """Return the drops that remove configured and legacy ADK memory tables."""
+        return self._reset_drop_memory_statements()
+
 
 class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     """Base class for sync SQLSpec-backed ADK memory stores."""
@@ -408,3 +413,7 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get the DROP TABLE SQL statements for this database dialect."""
         raise NotImplementedError
+
+    def _reset_drop_memory_table_sql(self) -> "list[str]":
+        """Return the drops that remove configured and legacy ADK memory tables."""
+        return self._reset_drop_memory_statements()

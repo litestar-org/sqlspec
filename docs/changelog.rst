@@ -9,6 +9,69 @@ important operational fixes.
 Recent Updates
 ==============
 
+Unreleased
+----------
+
+**Added:**
+
+* Spanner adds a native asyncio adapter built on the async Spanner client:
+  ``SpannerAsyncConfig`` and ``SpannerAsyncDriver`` support pooled sessions,
+  read and write sessions, ``run_in_transaction()`` with ``Aborted`` retries,
+  streaming selects, Arrow import and export, and ``SpannerAsyncDataDictionary``.
+  The sync adapter keeps its existing behavior.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner ships async extension stores: ``SpannerAsyncADKStore`` and
+  ``SpannerAsyncADKMemoryStore`` for ADK, ``SpannerAsyncStore`` for Litestar
+  sessions, and ``SpannerAsyncEventQueueStore`` for event channels.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner binds ``datetime.timedelta`` values and lists as ``INTERVAL``,
+  keeping day and microsecond precision and allowing null list elements.
+  Declare ``FLOAT32``, ``ARRAY<FLOAT32>``, or ``VECTOR`` parameters with
+  ``TypedParameter(value, semantic_name="FLOAT32")``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner runs SQL and Python migrations on both adapters. DDL statements go
+  through the database ``update_ddl`` schema API, scripts apply consecutive DDL
+  as one schema change, and a begun write transaction is committed before a
+  schema change.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+
+**Changed:**
+
+* Spanner sync classes now use the ``SpannerSync*`` prefix used by other
+  adapters, and the old names are removed: ``SpannerExceptionHandler`` is now
+  ``SpannerSyncExceptionHandler``, ``SpannerDataDictionary`` is now
+  ``SpannerSyncDataDictionary``, ``SpannerConnectionContext`` is now
+  ``SpannerSyncConnectionContext``, ``SpannerSessionContext`` is now
+  ``SpannerSyncSessionContext``, and ``SpannerConnection`` is now
+  ``SpannerSyncConnection``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+
+**Fixed:**
+
+* Spanner write sessions, sync and async, commit on a clean exit and roll
+  back on an exception. After an explicit ``commit()`` or ``rollback()`` the
+  next statement runs in a new transaction instead of failing on the finished
+  one. A rollback also discards mutations buffered before the transaction
+  began, such as rows from ``load_from_arrow()``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner column DDL renders unsized text and binary columns as
+  ``STRING(MAX)`` and ``BYTES(MAX)``, and column defaults in the parentheses
+  Spanner requires.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner DML with ``THEN RETURN`` (including ``WITH ACTION``) returns its
+  rows on both adapters instead of discarding them and reporting only a row
+  count.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Script splitting keeps semicolons inside backtick-quoted identifiers, which
+  split MySQL, BigQuery, and Spanner scripts in the wrong place.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Compiled wheels build again with mypy 2.4, which failed on loops over
+  ``reversed()``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* ``sqlspec`` imports on SQLGlot 30.13 through 30.17 again. The ``??`` JSONB
+  operator rendering is registered only on SQLGlot releases that define it.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+
 v0.65.0 - IBM Db2 adapter, dialect isolation, and native adapter hardening
 -------------------------------------------------------------------------
 

@@ -2,7 +2,7 @@
 
 from sqlglot import exp
 
-from sqlspec.adapters.spanner.data_dictionary import SpannerDataDictionary
+from sqlspec.adapters.spanner.data_dictionary import SpannerSyncDataDictionary
 from sqlspec.data_dictionary import get_dialect_config
 from sqlspec.data_dictionary.dialects.spanner.config import SPANNER_CONFIG, SPANNER_FEATURE_FLAGS
 
@@ -12,7 +12,7 @@ def test_spanner_supports_for_update_feature_flag() -> None:
     assert SPANNER_FEATURE_FLAGS["supports_for_update"] is False
     assert SPANNER_CONFIG.get_feature_flag("supports_for_update") is False
 
-    dictionary = SpannerDataDictionary()
+    dictionary = SpannerSyncDataDictionary()
     assert dictionary.get_feature_flag(None, "supports_for_update") is False
 
 

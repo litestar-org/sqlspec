@@ -14,6 +14,7 @@ from pytest_databases.docker.mssql import MSSQLService
 from pytest_databases.docker.mysql import MySQLService
 from pytest_databases.docker.oracle import OracleService
 from pytest_databases.docker.postgres import PostgresService
+from pytest_databases.docker.spanner import SpannerService
 
 from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.adbc.adk import AdbcADKStore
@@ -91,6 +92,7 @@ from sqlspec.adapters.pymssql.adk import PymssqlADKStore
 from sqlspec.adapters.pymysql import PyMysqlConfig, PyMysqlDriver, PyMysqlDriverFeatures
 from sqlspec.adapters.pymysql.adk import PyMysqlADKStore
 from sqlspec.adapters.pymysql.litestar import PyMysqlStore
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver, SqliteDriverFeatures
 from sqlspec.adapters.sqlite.adk import SqliteADKStore
 from sqlspec.adapters.sqlite.litestar import SQLiteStore
@@ -151,6 +153,7 @@ from tests.integration.fixtures.postgres import (
     _postgres_conninfo,
     _psqlpy_dsn,
 )
+from tests.integration.fixtures.spanner import build_spanner_connection_config
 
 
 @pytest.fixture
@@ -2506,6 +2509,32 @@ def migration_config_db2_async(db2_connection_config: "dict[str, Any]") -> Calla
     def make(*, script_location: str, version_table_name: str, suffix: str) -> Db2AsyncConfig:
         return Db2AsyncConfig(
             connection_config=dict(db2_connection_config),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_spanner_sync(spanner_service: SpannerService, spanner_database: Any) -> Callable[..., Any]:
+    """Build Spanner sync configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> SpannerSyncConfig:
+        return SpannerSyncConfig(
+            connection_config=build_spanner_connection_config(spanner_service),
+            migration_config={"script_location": script_location, "version_table_name": version_table_name},
+        )
+
+    return make
+
+
+@pytest.fixture
+def migration_config_spanner_async(spanner_service: SpannerService, spanner_database: Any) -> Callable[..., Any]:
+    """Build Spanner async configs for migration contract tests."""
+
+    def make(*, script_location: str, version_table_name: str, suffix: str) -> SpannerAsyncConfig:
+        return SpannerAsyncConfig(
+            connection_config=build_spanner_connection_config(spanner_service),
             migration_config={"script_location": script_location, "version_table_name": version_table_name},
         )
 

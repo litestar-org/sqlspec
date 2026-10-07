@@ -12,20 +12,15 @@ import pytest
 
 from sqlspec import SQLResult
 from sqlspec.adapters.spanner import SpannerSyncConfig, SpannerSyncDriver
+from tests.integration.adapters.spanner.spanner._modes import SpannerModeConfig, invoke, mode_session
 
-pytestmark = pytest.mark.spanner
-
-
-def test_connection_pooling(spanner_session: "SpannerSyncDriver") -> None:
-    """Test that we can acquire a session and execute a simple query."""
-    result = spanner_session.select_value("SELECT 1")
-    assert result == 1
+pytestmark = [pytest.mark.spanner, pytest.mark.anyio]
 
 
-def test_session_management(spanner_config: "SpannerSyncConfig") -> None:
-    """Test session lifecycle."""
-    with spanner_config.provide_session() as session:
-        assert session.select_value("SELECT 1") == 1
+async def test_session_management(spanner_mode_config: "SpannerModeConfig") -> None:
+    """Test session lifecycle on both adapters."""
+    async with mode_session(spanner_mode_config) as session:
+        assert await invoke(session.select_value("SELECT 1")) == 1
 
 
 def test_driver_select_value(spanner_session: "SpannerSyncDriver") -> None:
@@ -34,10 +29,10 @@ def test_driver_select_value(spanner_session: "SpannerSyncDriver") -> None:
     assert result == 42
 
 
-def test_driver_select_value_with_params(spanner_session: "SpannerSyncDriver") -> None:
-    """Test select_value() with parameters."""
-    result = spanner_session.select_value("SELECT @val", val=100)
-    assert result == 100
+async def test_driver_select_value_with_params(spanner_mode_config: "SpannerModeConfig") -> None:
+    """Test select_value() with parameters on both adapters."""
+    async with mode_session(spanner_mode_config) as session:
+        assert await invoke(session.select_value("SELECT @val", val=100)) == 100
 
 
 def test_driver_select_value_string(spanner_session: "SpannerSyncDriver") -> None:
