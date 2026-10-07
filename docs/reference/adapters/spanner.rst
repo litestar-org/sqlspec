@@ -118,9 +118,10 @@ Schema Changes And Migrations
 
 DDL statements (``CREATE``, ``ALTER``, ``DROP``, ``GRANT``, ``REVOKE``,
 ``RENAME``, and ``ANALYZE``) run through the database ``update_ddl`` schema API
-instead of the session transaction, so they work from read and write sessions.
-In a write session, work the transaction has already begun is committed before
-the schema change, the way DDL implicitly commits on MySQL or Oracle.
+instead of the session transaction. They run from write sessions; read
+sessions reject them as they reject DML. Work the write transaction has already
+begun is committed before the schema change, the way DDL implicitly commits on
+MySQL or Oracle.
 Consecutive DDL statements in a script are applied as one schema change.
 
 A write session keeps working after ``commit()`` or ``rollback()``: the next

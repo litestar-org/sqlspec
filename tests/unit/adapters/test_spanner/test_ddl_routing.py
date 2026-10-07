@@ -11,6 +11,7 @@ import sqlspec.adapters.spanner.driver as spanner_driver_module
 from sqlspec.adapters.spanner._typing import SpannerAsyncSessionContext, SpannerSyncSessionContext
 from sqlspec.adapters.spanner.core import default_statement_config, is_ddl_statement
 from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
+from sqlspec.exceptions import SQLConversionError
 
 
 @pytest.mark.parametrize(
@@ -74,6 +75,16 @@ def _build_driver(mode: str, events: "list[tuple[str, Any]]", *, writable: bool 
     return driver_cls(connection=cast("Any", connection))
 
 
+class _EmptyAsyncResult:
+    """Async result set double with no rows."""
+
+    def __aiter__(self) -> "_EmptyAsyncResult":
+        return self
+
+    async def __anext__(self) -> Any:
+        raise StopAsyncIteration
+
+
 async def _resolve(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value
 
@@ -94,14 +105,25 @@ async def test_execute_routes_ddl_to_update_ddl(mode: str) -> None:
     assert result.rows_affected == 0
 
 
-async def test_execute_runs_ddl_from_read_only_snapshot(mode: str) -> None:
-    """Verify DDL does not need a read-write transaction."""
+@pytest.mark.parametrize(
+    "run",
+    [
+        pytest.param(lambda driver: driver.execute("DROP TABLE IF EXISTS t"), id="execute"),
+        pytest.param(lambda driver: driver.execute_script("SELECT 1; DROP TABLE IF EXISTS t"), id="script"),
+    ],
+)
+async def test_read_only_snapshot_rejects_ddl(mode: str, run: Any) -> None:
+    """Verify read sessions refuse schema changes, as they refuse DML."""
     events: list[tuple[str, Any]] = []
     driver = _build_driver(mode, events, writable=False)
+    driver.connection.execute_sql = (
+        AsyncMock(return_value=_EmptyAsyncResult()) if mode == "async" else MagicMock(return_value=[])
+    )
 
-    await _resolve(driver.execute("DROP TABLE IF EXISTS t"))
+    with pytest.raises(SQLConversionError, match="Cannot execute DDL in a read-only Snapshot context"):
+        await _resolve(run(driver))
 
-    assert events == [("ddl", ["DROP TABLE IF EXISTS t"])]
+    assert events == []
 
 
 async def test_execute_script_batches_consecutive_ddl_in_order(mode: str) -> None:

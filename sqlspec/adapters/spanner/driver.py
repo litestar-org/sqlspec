@@ -91,6 +91,16 @@ _READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE = (
     "the current session must have been opened via SpannerAsyncConfig.provide_read_session()."
 )
 
+_READ_ONLY_SNAPSHOT_DDL_ERROR_MESSAGE = (
+    "Cannot execute DDL in a read-only Snapshot context. "
+    "Use SpannerSyncConfig.provide_session() or provide_write_session() for schema changes."
+)
+
+_READ_ONLY_ASYNC_SNAPSHOT_DDL_ERROR_MESSAGE = (
+    "Cannot execute DDL in a read-only Snapshot context. "
+    "Use SpannerAsyncConfig.provide_session() or provide_write_session() for schema changes."
+)
+
 
 class SpannerSyncExceptionHandler(BaseSyncExceptionHandler):
     """Map Spanner client exceptions to SQLSpec exceptions.
@@ -164,6 +174,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     def dispatch_execute(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
         if is_ddl_statement(sql):
+            if not supports_write(cursor):
+                raise SQLConversionError(_READ_ONLY_SNAPSHOT_DDL_ERROR_MESSAGE)
             self._commit_before_ddl()
             execute_ddl_sync(self._resolve_database(), [sql])
             return self.create_execution_result(cursor, rowcount_override=0)
@@ -270,6 +282,8 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         pending_ddl: list[str] = []
         for index, stmt in enumerate(statements):
             if is_ddl_statement(stmt):
+                if not is_transaction:
+                    raise SQLConversionError(_READ_ONLY_SNAPSHOT_DDL_ERROR_MESSAGE)
                 pending_ddl.append(stmt)
                 count += 1
                 continue
@@ -697,6 +711,8 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     async def dispatch_execute(self, cursor: "SpannerAsyncConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
         if is_ddl_statement(sql):
+            if not supports_write(cursor):
+                raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_DDL_ERROR_MESSAGE)
             await self._commit_before_ddl()
             await execute_ddl_async(self._resolve_database(), [sql])
             return self.create_execution_result(cursor, rowcount_override=0)
@@ -807,6 +823,8 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         pending_ddl: list[str] = []
         for index, stmt in enumerate(statements):
             if is_ddl_statement(stmt):
+                if not is_transaction:
+                    raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_DDL_ERROR_MESSAGE)
                 pending_ddl.append(stmt)
                 count += 1
                 continue
