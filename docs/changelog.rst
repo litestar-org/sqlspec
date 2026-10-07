@@ -37,13 +37,8 @@ Unreleased
   ``SpannerSyncExceptionHandler``, ``SpannerDataDictionary`` is now
   ``SpannerSyncDataDictionary``, ``SpannerConnectionContext`` is now
   ``SpannerSyncConnectionContext``, ``SpannerSessionContext`` is now
-  ``SpannerSyncSessionContext``, ``SpannerConnection`` is now
-  ``SpannerSyncConnection``, and ``SpannerTransactionType`` is now
-  ``SpannerSyncTransactionType``.
-  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
-* Spanner configs reject a session pool class built for the other sync or
-  async variant instead of converting it, and ``SpannerAsyncConfig`` now
-  defaults to the async ``FixedSizePool`` like ``SpannerSyncConfig``.
+  ``SpannerSyncSessionContext``, and ``SpannerConnection`` is now
+  ``SpannerSyncConnection``.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 
 **Fixed:**
