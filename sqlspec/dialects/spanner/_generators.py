@@ -247,6 +247,7 @@ _original_bq_computed_column_transform = BigQueryGenerator.TRANSFORMS.get(exp.Co
 _original_bq_datatype_transform = BigQueryGenerator.TRANSFORMS.get(exp.DataType)
 _original_bq_default_transform = BigQueryGenerator.TRANSFORMS.get(exp.DefaultColumnConstraint)
 _original_bq_hint_transform = BigQueryGenerator.TRANSFORMS.get(exp.Hint)
+_original_bq_returning_transform = BigQueryGenerator.TRANSFORMS.get(exp.Returning)
 _original_bq_select_transform = BigQueryGenerator.TRANSFORMS.get(exp.Select)
 _original_bq_table_transform = BigQueryGenerator.TRANSFORMS.get(exp.Table)
 _original_bq_anonymous_transform = BigQueryGenerator.TRANSFORMS.get(exp.Anonymous)
@@ -605,6 +606,21 @@ def _bq_default_transform(generator: Any, expression: exp.DefaultColumnConstrain
     return str(generator.defaultcolumnconstraint_sql(expression))
 
 
+def _bq_returning_transform(generator: Any, expression: exp.Returning) -> str:
+    """Render ``RETURNING`` as Spanner ``THEN RETURN [WITH ACTION [AS alias]]``."""
+    if _get_dialect_name(generator) == "Spanner":
+        clause = " THEN RETURN"
+        action = expression.args.get("with_action")
+        if action is not None:
+            clause += " WITH ACTION"
+            if isinstance(action, exp.Identifier):
+                clause += f" AS {generator.sql(action)}"
+        return f"{clause} {generator.expressions(expression, flat=True)}"
+    if _original_bq_returning_transform is not None:
+        return str(_original_bq_returning_transform(generator, expression))
+    return str(generator.returning_sql(expression))
+
+
 def _bq_hint_transform(generator: Any, expression: exp.Hint) -> str:
     """Transform hints for Spanner or delegate to original BigQuery transform."""
     if _get_dialect_name(generator) == "Spanner":
@@ -756,6 +772,7 @@ BigQueryGenerator.TRANSFORMS[exp.ComputedColumnConstraint] = _bq_computed_column
 BigQueryGenerator.TRANSFORMS[exp.DataType] = _bq_datatype_transform
 BigQueryGenerator.TRANSFORMS[exp.DefaultColumnConstraint] = _bq_default_transform
 BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
+BigQueryGenerator.TRANSFORMS[exp.Returning] = _bq_returning_transform
 BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
 BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
 BigQueryGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql

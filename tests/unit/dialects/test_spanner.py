@@ -7,6 +7,7 @@ clauses, and DAY-based row deletion intervals.
 
 from pathlib import Path
 
+import pytest
 from sqlglot import Dialect, exp, parse_one
 
 from sqlspec.dialects.spanner import _generators, _parsers
@@ -214,3 +215,33 @@ def test_brace_hint_inside_string_literal_preserved() -> None:
     rendered = parsed.sql(dialect="spanner")
     assert rendered == "SELECT '@{FORCE_INDEX=Idx}' AS literal"
     assert "/*@" not in rendered
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO t (id, name) VALUES (1, 'a') THEN RETURN id, name",
+        "UPDATE t SET a = 1 WHERE id = 1 THEN RETURN WITH ACTION *",
+        "UPDATE t SET a = 1 WHERE id = 1 THEN RETURN WITH ACTION AS act a, id",
+        "DELETE FROM t WHERE TRUE THEN RETURN *",
+        "INSERT INTO t (id) SELECT CASE WHEN x THEN y END FROM s THEN RETURN id",
+    ],
+)
+def test_then_return_round_trips_as_returning(sql: str) -> None:
+    """Verify DML ``THEN RETURN`` parses into a Returning clause and renders back unchanged."""
+    parsed = parse_one(sql, read="spanner")
+
+    assert isinstance(parsed.args.get("returning"), exp.Returning)
+    assert parsed.sql(dialect="spanner") == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    ["SELECT CASE WHEN a THEN b END FROM t", "UPDATE t SET a = (SELECT CASE WHEN x THEN 1 END FROM s) WHERE TRUE"],
+)
+def test_then_outside_top_level_dml_is_unchanged(sql: str) -> None:
+    """Verify ``THEN`` in CASE expressions is never read as ``THEN RETURN``."""
+    parsed = parse_one(sql, read="spanner")
+
+    assert parsed.find(exp.Returning) is None
+    assert parsed.sql(dialect="spanner") == sql

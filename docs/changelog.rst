@@ -58,6 +58,10 @@ Unreleased
   ``STRING(MAX)`` and ``BYTES(MAX)``, and column defaults in the parentheses
   Spanner requires.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner DML with ``THEN RETURN`` (including ``WITH ACTION``) returns its
+  rows on both adapters instead of discarding them and reporting only a row
+  count.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 * Script splitting keeps semicolons inside backtick-quoted identifiers, which
   split MySQL, BigQuery, and Spanner scripts in the wrong place.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)

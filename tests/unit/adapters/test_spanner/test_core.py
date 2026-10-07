@@ -9,6 +9,7 @@ from google.cloud.spanner_v1.types.type import TypeCode
 
 from sqlspec.adapters.spanner.core import (
     build_param_type_signature,
+    build_statement_config,
     collect_rows,
     is_query_statement,
     resolve_column_names,
@@ -16,7 +17,7 @@ from sqlspec.adapters.spanner.core import (
     resolve_transaction_completion,
 )
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver
-from sqlspec.core import TypedParameter
+from sqlspec.core import SQL, TypedParameter
 from sqlspec.utils.serializers import from_json
 
 
@@ -224,3 +225,13 @@ def test_resolve_transaction_completion(state: dict[str, Any], failed: bool, exp
 )
 def test_is_query_statement(sql: str, expected: bool) -> None:
     assert is_query_statement(sql, "spanner") is expected
+
+
+def test_then_return_statement_returns_rows() -> None:
+    """Verify ``THEN RETURN`` DML is classified as returning rows."""
+    statement = SQL(
+        "INSERT INTO t (id) VALUES (@id) THEN RETURN id", {"id": 1}, statement_config=build_statement_config()
+    )
+    statement.compile()
+
+    assert statement.returns_rows()

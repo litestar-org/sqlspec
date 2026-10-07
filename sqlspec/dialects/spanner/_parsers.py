@@ -11,12 +11,12 @@ All clauses normalize to the canonical property nodes defined alongside the
 generators, so either dialect can re-render them.
 """
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import Any, Final, cast
 
 from sqlglot import exp
 from sqlglot.parsers.bigquery import BigQueryParser
 from sqlglot.parsers.postgres import PostgresParser
-from sqlglot.tokenizer_core import TokenType
+from sqlglot.tokenizer_core import Token, TokenType
 
 from sqlspec.dialects.spanner._expressions import (
     CosineDistance,
@@ -32,9 +32,6 @@ from sqlspec.dialects.spanner._generators import (
     _normalize_interval_expression,
 )
 
-if TYPE_CHECKING:
-    from sqlglot.tokenizer_core import Token
-
 __all__ = (
     "SpangresParser",
     "SpannerParser",
@@ -46,6 +43,8 @@ __all__ = (
 )
 
 _PROPERTY_PARSERS_REGISTERED_ATTR: Final[str] = "_sqlspec_spanner_property_parsers"
+_WITH_ACTION_SENTINEL: Final[str] = "__sqlspec_then_return_with_action__"
+_DML_STATEMENT_TOKENS: Final[frozenset[TokenType]] = frozenset({TokenType.INSERT, TokenType.UPDATE, TokenType.DELETE})
 _SPANNER_DIALECT_NAMES: Final[frozenset[str]] = frozenset({"Spangres", "Spanner"})
 
 
@@ -397,7 +396,92 @@ def normalize_spanner_tokens(tokens: "list[Token]", sql: str = "") -> "list[Toke
             pending_comments = []
         result.append(token)
         index += 1
+    return _collapse_then_return(result)
+
+
+def _is_word(token: "Token", word: str) -> bool:
+    return token.token_type in {TokenType.VAR, TokenType.IDENTIFIER} and token.text.upper() == word
+
+
+def _collapse_then_return(tokens: "list[Token]") -> "list[Token]":
+    """Fold top-level DML ``THEN RETURN [WITH ACTION [AS alias]]`` into a ``RETURNING`` clause.
+
+    ``WITH ACTION`` becomes a leading sentinel column, followed by a comma, that
+    ``attach_hints`` moves onto the parsed ``Returning`` node.
+
+    Args:
+        tokens: Tokens with Spanner hints already normalized.
+
+    Returns:
+        Tokens where each DML ``THEN RETURN`` is a single ``RETURNING`` token.
+    """
+    result: list[Token] = []
+    statement_kind: TokenType | None = None
+    depth = 0
+    index = 0
+    total = len(tokens)
+    while index < total:
+        token = tokens[index]
+        token_type = token.token_type
+        if token_type == TokenType.SEMICOLON:
+            statement_kind = None
+            depth = 0
+        elif statement_kind is None:
+            statement_kind = token_type
+        if token_type == TokenType.L_PAREN:
+            depth += 1
+        elif token_type == TokenType.R_PAREN:
+            depth -= 1
+        if (
+            token_type == TokenType.THEN
+            and depth == 0
+            and statement_kind in _DML_STATEMENT_TOKENS
+            and index + 1 < total
+            and _is_word(tokens[index + 1], "RETURN")
+        ):
+            return_token = tokens[index + 1]
+            result.append(
+                Token(
+                    TokenType.RETURNING,
+                    "THEN RETURN",
+                    token.line,
+                    token.col,
+                    token.start,
+                    return_token.end,
+                    [*token.comments, *return_token.comments],
+                )
+            )
+            index += 2
+            if (
+                index + 1 < total
+                and tokens[index].token_type == TokenType.WITH
+                and _is_word(tokens[index + 1], "ACTION")
+            ):
+                action = tokens[index + 1]
+                result.append(
+                    Token(TokenType.VAR, _WITH_ACTION_SENTINEL, action.line, action.col, action.start, action.end)
+                )
+                index += 2
+                if index + 1 < total and tokens[index].token_type == TokenType.ALIAS:
+                    result.extend(tokens[index : index + 2])
+                    index += 2
+                result.append(Token(TokenType.COMMA, ",", action.line, action.col, action.end, action.end))
+            continue
+        result.append(token)
+        index += 1
     return result
+
+
+def _attach_then_return_action(returning: exp.Returning) -> None:
+    expressions = list(returning.expressions)
+    if not expressions:
+        return
+    first = expressions[0]
+    column = first.this if isinstance(first, exp.Alias) else first
+    if not isinstance(column, exp.Column) or column.name != _WITH_ACTION_SENTINEL:
+        return
+    returning.set("expressions", expressions[1:])
+    returning.set("with_action", first.args["alias"] if isinstance(first, exp.Alias) else exp.true())
 
 
 def parse_hint_expression(raw_hint: str) -> exp.Hint:
@@ -419,8 +503,10 @@ def parse_hint_expression(raw_hint: str) -> exp.Hint:
 
 
 def attach_hints(expression: exp.Expr) -> None:
-    """Attach parsed hints from node comments to AST nodes."""
+    """Attach parsed hints from node comments to AST nodes and resolve ``THEN RETURN WITH ACTION``."""
     for node in expression.walk():
+        if isinstance(node, exp.Returning):
+            _attach_then_return_action(node)
         comments = getattr(node, "comments", None)
         if not comments:
             continue

@@ -34,6 +34,29 @@ async def test_explicit_transaction_completion(
     assert count == int(commit)
 
 
+async def test_write_session_continues_after_commit(
+    spanner_mode_config: SpannerModeConfig, test_users_table: str
+) -> None:
+    """Statements after an explicit commit run in a new transaction that commits on exit."""
+    first_id = str(uuid4())
+    second_id = str(uuid4())
+    async with mode_session(spanner_mode_config, "write") as session:
+        await invoke(
+            session.execute(f"INSERT INTO {test_users_table} (id, name) VALUES (@id, @name)", id=first_id, name="one")
+        )
+        await invoke(session.commit())
+        await invoke(
+            session.execute(f"INSERT INTO {test_users_table} (id, name) VALUES (@id, @name)", id=second_id, name="two")
+        )
+    async with mode_session(spanner_mode_config, "read") as session:
+        count = await invoke(
+            session.select_value(
+                f"SELECT COUNT(*) FROM {test_users_table} WHERE id IN UNNEST(@ids)", ids=[first_id, second_id]
+            )
+        )
+    assert count == 2
+
+
 async def test_rollback_discards_buffered_arrow_mutations(
     spanner_mode_config: SpannerModeConfig, test_arrow_table: str
 ) -> None:
