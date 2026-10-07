@@ -35,6 +35,13 @@ _INTERLEAVE_IN_NAME = "INTERLEAVE_IN"
 
 _SPANNER_PROPERTY_NAMES: Final[frozenset[str]] = frozenset({_INTERLEAVE_NAME, _INTERLEAVE_IN_NAME, _ROW_DELETION_NAME})
 _DAYS_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\s*(\d+)\s*days?\s*$", re.IGNORECASE)
+_SPANNER_UNSIZED_COLUMN_TYPES: Final[dict[exp.DType, str]] = {
+    exp.DType.TEXT: "STRING(MAX)",
+    exp.DType.VARCHAR: "STRING(MAX)",
+    exp.DType.NVARCHAR: "STRING(MAX)",
+    exp.DType.BINARY: "BYTES(MAX)",
+    exp.DType.VARBINARY: "BYTES(MAX)",
+}
 
 _original_bq_property_sql = BigQueryGenerator.property_sql
 _original_bq_properties_sql = BigQueryGenerator.properties_sql
@@ -238,6 +245,7 @@ _original_bq_alter_transform = BigQueryGenerator.TRANSFORMS.get(exp.Alter)
 _original_bq_drop_transform = BigQueryGenerator.TRANSFORMS.get(exp.Drop)
 _original_bq_computed_column_transform = BigQueryGenerator.TRANSFORMS.get(exp.ComputedColumnConstraint)
 _original_bq_datatype_transform = BigQueryGenerator.TRANSFORMS.get(exp.DataType)
+_original_bq_default_transform = BigQueryGenerator.TRANSFORMS.get(exp.DefaultColumnConstraint)
 _original_bq_hint_transform = BigQueryGenerator.TRANSFORMS.get(exp.Hint)
 _original_bq_select_transform = BigQueryGenerator.TRANSFORMS.get(exp.Select)
 _original_bq_table_transform = BigQueryGenerator.TRANSFORMS.get(exp.Table)
@@ -573,9 +581,28 @@ def _bq_datatype_transform(generator: Any, expression: exp.DataType) -> str:
             return "FLOAT64"
         if type_value == exp.DataType.Type.USERDEFINED and expression.args.get("kind") == "TOKENLIST":
             return "TOKENLIST"
+        unsized = _SPANNER_UNSIZED_COLUMN_TYPES.get(type_value)
+        if (
+            unsized is not None
+            and not expression.expressions
+            and isinstance(expression.find_ancestor(exp.ColumnDef, exp.Cast), exp.ColumnDef)
+        ):
+            return unsized
     if _original_bq_datatype_transform is not None:
         return str(_original_bq_datatype_transform(generator, expression))
     return str(BigQueryGenerator.datatype_sql(generator, expression))
+
+
+def _bq_default_transform(generator: Any, expression: exp.DefaultColumnConstraint) -> str:
+    """Render Spanner column defaults as the parenthesized expression Spanner requires."""
+    if _get_dialect_name(generator) == "Spanner":
+        default = expression.this
+        if isinstance(default, exp.Paren):
+            return f"DEFAULT {generator.sql(default)}"
+        return f"DEFAULT ({generator.sql(default)})"
+    if _original_bq_default_transform is not None:
+        return str(_original_bq_default_transform(generator, expression))
+    return str(generator.defaultcolumnconstraint_sql(expression))
 
 
 def _bq_hint_transform(generator: Any, expression: exp.Hint) -> str:
@@ -727,6 +754,7 @@ BigQueryGenerator.TRANSFORMS[exp.Alter] = _bq_alter_transform
 BigQueryGenerator.TRANSFORMS[exp.Drop] = _bq_drop_transform
 BigQueryGenerator.TRANSFORMS[exp.ComputedColumnConstraint] = _bq_computed_column_transform
 BigQueryGenerator.TRANSFORMS[exp.DataType] = _bq_datatype_transform
+BigQueryGenerator.TRANSFORMS[exp.DefaultColumnConstraint] = _bq_default_transform
 BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
 BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
 BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
