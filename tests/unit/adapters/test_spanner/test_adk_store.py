@@ -444,7 +444,7 @@ async def test_async_adk_store_create_tables_with_async_generator_list_tables() 
     ddl_statements = database.update_ddl.call_args.args[0]
     assert not any("CREATE TABLE adk_session" in stmt for stmt in ddl_statements)
     assert any("CREATE TABLE adk_event" in stmt for stmt in ddl_statements)
-    op_mock.result.assert_awaited_once_with(300)
+    op_mock.result.assert_awaited_once_with(timeout=300)
 
 
 async def test_async_adk_store_create_get_list_delete_session() -> None:

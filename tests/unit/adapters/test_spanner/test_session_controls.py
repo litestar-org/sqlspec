@@ -29,7 +29,6 @@ def test_provide_session_uses_config_driver_features(monkeypatch: pytest.MonkeyP
     assert isinstance(context, _SessionContext)
     assert captured["driver_features"] is config.driver_features
     assert captured["driver_features"]["request_options"] is request_options
-    assert "database_provider" not in captured["driver_features"]
 
 
 def test_provide_session_accepts_spanner_execution_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -59,7 +58,6 @@ def test_provide_session_accepts_spanner_execution_overrides(monkeypatch: pytest
     assert captured["driver_features"]["retry"] is retry
     assert captured["driver_features"]["timeout"] == 12.0
     assert config.driver_features["request_options"] is config_request_options
-    assert "database_provider" not in captured["driver_features"]
 
 
 def test_close_pool_closes_the_database() -> None:

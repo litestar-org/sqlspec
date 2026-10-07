@@ -77,8 +77,7 @@ also accept explicit Spanner controls for the returned session context:
        await driver.execute("UPDATE orders SET status = @status WHERE id = @id", status="paid", id="o-1")
 
 The explicit ``provide_session()`` arguments are copied into the returned
-driver's feature set and do not mutate ``config.driver_features``. They also do
-not hide a ``database_provider`` feature for unrelated database-level methods.
+driver's feature set and do not mutate ``config.driver_features``.
 
 ``provide_read_session()`` is the read-only helper for single-use snapshot
 reads. For DDL, DML, and write-capable transactions, use ``provide_session()``

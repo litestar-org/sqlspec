@@ -12,6 +12,12 @@ import sqlspec.dialects.spanner  # noqa: F401
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
+from sqlspec.adapters.spanner.core import (
+    execute_ddl_async,
+    execute_ddl_sync,
+    list_existing_table_names_async,
+    list_existing_table_names_sync,
+)
 from sqlspec.config import ADKConfig
 from sqlspec.exceptions import OperationalError
 from sqlspec.extensions.adk import (
@@ -744,7 +750,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         return _filter_existing_spanner_drops(self._reset_drop_statements(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
-        return _list_existing_table_names_sync(self._database())
+        return list_existing_table_names_sync(self._database())
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -898,7 +904,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
 
     def _create_tables(self) -> None:
         ddl_statements = self._missing_table_ddl_statements(self._existing_tables())
-        _execute_ddl_sync(self._database(), ddl_statements)
+        execute_ddl_sync(self._database(), ddl_statements, timeout=_DDL_TIMEOUT_SECONDS)
 
     def _sessions_table_ddl(self) -> str:
         return self._build_sessions_table_ddl()
@@ -1073,7 +1079,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         return _filter_existing_spanner_drops(self._reset_drop_statements(), await self._existing_tables())
 
     async def _existing_tables(self) -> "set[str]":
-        return await _list_existing_table_names_async(await self._database())
+        return await list_existing_table_names_async(await self._database())
 
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -1229,7 +1235,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
 
     async def _create_tables(self) -> None:
         ddl_statements = self._missing_table_ddl_statements(await self._existing_tables())
-        await _execute_ddl_async(await self._database(), ddl_statements)
+        await execute_ddl_async(await self._database(), ddl_statements, timeout=_DDL_TIMEOUT_SECONDS)
 
     async def _sessions_table_ddl(self) -> str:
         return self._build_sessions_table_ddl()
@@ -1523,7 +1529,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         return _filter_existing_spanner_drops(self._reset_drop_memory_statements(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
-        return _list_existing_table_names_sync(self._database())
+        return list_existing_table_names_sync(self._database())
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -1541,7 +1547,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
     def _create_tables(self) -> None:
         if not self._enabled or self._memory_table in self._existing_tables():
             return
-        _execute_ddl_sync(self._database(), self._memory_table_ddl())
+        execute_ddl_sync(self._database(), self._memory_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
 
     def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
@@ -1666,7 +1672,7 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         return _filter_existing_spanner_drops(self._reset_drop_memory_statements(), await self._existing_tables())
 
     async def _existing_tables(self) -> "set[str]":
-        return await _list_existing_table_names_async(await self._database())
+        return await list_existing_table_names_async(await self._database())
 
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -1684,7 +1690,7 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
     async def _create_tables(self) -> None:
         if not self._enabled or self._memory_table in await self._existing_tables():
             return
-        await _execute_ddl_async(await self._database(), await self._memory_table_ddl())
+        await execute_ddl_async(await self._database(), await self._memory_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
 
     async def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
@@ -1755,29 +1761,6 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
     ) -> int:
         sql, params, types = self._build_delete_entries_older_than_statement(days, app_name, scope)
         return await self._execute_update(sql, params, types)
-
-
-def _list_existing_table_names_sync(database: "SpannerDatabase") -> "set[str]":
-    return {table.table_id for table in cast("Any", database).list_tables()}
-
-
-async def _list_existing_table_names_async(database: "SpannerAsyncDatabase") -> "set[str]":
-    return {table.table_id async for table in database.list_tables()}
-
-
-def _execute_ddl_sync(
-    database: "SpannerDatabase", statements: "list[str]", timeout: int = _DDL_TIMEOUT_SECONDS
-) -> None:
-    if statements:
-        cast("Any", database).update_ddl(statements).result(timeout)
-
-
-async def _execute_ddl_async(
-    database: "SpannerAsyncDatabase", statements: "list[str]", timeout: int = _DDL_TIMEOUT_SECONDS
-) -> None:
-    if statements:
-        operation = await database.update_ddl(statements)
-        await operation.result(timeout)
 
 
 async def _run_read_async(

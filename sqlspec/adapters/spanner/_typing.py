@@ -60,7 +60,7 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1.data_types import JsonObject as SpannerJsonObject
     from google.cloud.spanner_v1.database import Database as SpannerDatabase
     from google.cloud.spanner_v1.database import SnapshotCheckout
-    from google.cloud.spanner_v1.database_sessions_manager import TransactionType as SpannerTransactionType
+    from google.cloud.spanner_v1.database_sessions_manager import TransactionType as SpannerSyncTransactionType
     from google.cloud.spanner_v1.pool import AbstractSessionPool as SpannerAbstractSessionPool
     from google.cloud.spanner_v1.pool import BurstyPool as SpannerBurstyPool
     from google.cloud.spanner_v1.pool import FixedSizePool as SpannerFixedSizePool
@@ -140,9 +140,9 @@ __all__ = (
     "SpannerSyncConnection",
     "SpannerSyncCursor",
     "SpannerSyncSessionContext",
+    "SpannerSyncTransactionType",
     "SpannerTransaction",
     "SpannerTransactionPingingPool",
-    "SpannerTransactionType",
     "SpannerTypeCode",
     "spanner_exceptions",
     "spanner_param_types",
@@ -311,7 +311,7 @@ _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
     "SpannerClient": ("google.cloud.spanner_v1", "Client"),
     "spanner_param_types": ("google.cloud.spanner_v1", "param_types"),
     "SpannerJsonObject": ("google.cloud.spanner_v1.data_types", "JsonObject"),
-    "SpannerTransactionType": ("google.cloud.spanner_v1.database_sessions_manager", "TransactionType"),
+    "SpannerSyncTransactionType": ("google.cloud.spanner_v1.database_sessions_manager", "TransactionType"),
     "SpannerTypeCode": ("google.cloud.spanner_v1.types.type", "TypeCode"),
     "SpannerClientInfo": ("google.api_core.client_info", "ClientInfo"),
     "SpannerClientOptions": ("google.api_core.client_options", "ClientOptions"),

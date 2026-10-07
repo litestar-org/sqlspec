@@ -26,7 +26,8 @@ Unreleased
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 * Spanner binds ``datetime.timedelta`` values and lists as ``INTERVAL``,
   keeping day and microsecond precision and allowing null list elements.
-  ``FLOAT32`` vectors bind as ``ARRAY<FLOAT32>``.
+  Declare ``FLOAT32``, ``ARRAY<FLOAT32>``, or ``VECTOR`` parameters with
+  ``TypedParameter(value, semantic_name="FLOAT32")``.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 
 **Changed:**
@@ -40,12 +41,17 @@ Unreleased
   ``SpannerSyncConnection``, and ``SpannerTransactionType`` is now
   ``SpannerSyncTransactionType``.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner configs reject a session pool class built for the other sync or
+  async variant instead of converting it, and ``SpannerAsyncConfig`` now
+  defaults to the async ``FixedSizePool`` like ``SpannerSyncConfig``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 
 **Fixed:**
 
-* Async Spanner write sessions commit on a clean exit and roll back on an
-  exception, and they leave a transaction alone after an explicit
-  ``commit()`` or ``rollback()``.
+* Spanner write sessions, sync and async, commit on a clean exit and roll
+  back on an exception, and they leave a transaction alone after an explicit
+  ``commit()`` or ``rollback()``. A rollback also discards mutations buffered
+  before the transaction began, such as rows from ``load_from_arrow()``.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 * Compiled wheels build again with mypy 2.4, which failed on loops over
   ``reversed()``.

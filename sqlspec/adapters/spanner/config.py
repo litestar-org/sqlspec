@@ -16,6 +16,7 @@ from sqlspec.adapters.spanner._typing import (
     SpannerGoogleAPICallError,
     SpannerSyncConnection,
     SpannerSyncSessionContext,
+    SpannerSyncTransactionType,
 )
 from sqlspec.adapters.spanner._typing import SpannerAsyncFixedSizePool as AsyncFixedSizePool
 from sqlspec.adapters.spanner._typing import SpannerAsyncPingingPool as AsyncPingingPool
@@ -23,7 +24,6 @@ from sqlspec.adapters.spanner._typing import SpannerBurstyPool as BurstyPool
 from sqlspec.adapters.spanner._typing import SpannerClient as Client
 from sqlspec.adapters.spanner._typing import SpannerFixedSizePool as FixedSizePool
 from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
-from sqlspec.adapters.spanner._typing import SpannerTransactionType as TransactionType
 from sqlspec.adapters.spanner.core import (
     apply_driver_features,
     build_session_driver_features,
@@ -333,7 +333,7 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
         database = self._config.get_database()
         if self._transaction:
             manager = cast("Any", database).sessions_manager
-            self._session = manager.get_session(TransactionType.READ_WRITE)
+            self._session = manager.get_session(SpannerSyncTransactionType.READ_WRITE)
             try:
                 txn = self._session.transaction()
                 txn.__enter__()
