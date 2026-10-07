@@ -113,6 +113,34 @@ Opt-in Arrow Batch Write ingestion works from database-backed read sessions.
 Mutation groups commit independently. Arrow overwrite retains transactional
 delete-and-insert behavior without partitioned DML or Batch Write.
 
+Schema Changes And Migrations
+=============================
+
+DDL statements (``CREATE``, ``ALTER``, ``DROP``, ``GRANT``, ``REVOKE``,
+``RENAME``, and ``ANALYZE``) run through the database ``update_ddl`` schema API
+instead of the session transaction, so they work from read and write sessions.
+In a write session, work the transaction has already begun is committed before
+the schema change, the way DDL implicitly commits on MySQL or Oracle.
+Consecutive DDL statements in a script are applied as one schema change.
+
+A write session keeps working after ``commit()`` or ``rollback()``: the next
+statement runs in a new transaction on the same session.
+
+SQL and Python migrations run on both adapters. Spanner schema changes are not
+transactional, so a failed migration can leave its earlier statements applied.
+Every table needs a primary key, so write migration DDL in Spanner form:
+
+.. code-block:: sql
+
+   -- name: migrate-0001-up
+   CREATE TABLE users (
+       id INT64 NOT NULL,
+       name STRING(255) NOT NULL
+   ) PRIMARY KEY (id);
+
+   -- name: migrate-0001-down
+   DROP TABLE IF EXISTS users;
+
 Parameter Types
 ===============
 

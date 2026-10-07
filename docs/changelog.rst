@@ -29,6 +29,11 @@ Unreleased
   Declare ``FLOAT32``, ``ARRAY<FLOAT32>``, or ``VECTOR`` parameters with
   ``TypedParameter(value, semantic_name="FLOAT32")``.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner runs SQL and Python migrations on both adapters. DDL statements go
+  through the database ``update_ddl`` schema API, scripts apply consecutive DDL
+  as one schema change, and a begun write transaction is committed before a
+  schema change.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 
 **Changed:**
 
@@ -44,9 +49,17 @@ Unreleased
 **Fixed:**
 
 * Spanner write sessions, sync and async, commit on a clean exit and roll
-  back on an exception, and they leave a transaction alone after an explicit
-  ``commit()`` or ``rollback()``. A rollback also discards mutations buffered
-  before the transaction began, such as rows from ``load_from_arrow()``.
+  back on an exception. After an explicit ``commit()`` or ``rollback()`` the
+  next statement runs in a new transaction instead of failing on the finished
+  one. A rollback also discards mutations buffered before the transaction
+  began, such as rows from ``load_from_arrow()``.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Spanner column DDL renders unsized text and binary columns as
+  ``STRING(MAX)`` and ``BYTES(MAX)``, and column defaults in the parentheses
+  Spanner requires.
+  (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
+* Script splitting keeps semicolons inside backtick-quoted identifiers, which
+  split MySQL, BigQuery, and Spanner scripts in the wrong place.
   (`#831 <https://github.com/litestar-org/sqlspec/pull/831>`_)
 * Compiled wheels build again with mypy 2.4, which failed on loops over
   ``reversed()``.

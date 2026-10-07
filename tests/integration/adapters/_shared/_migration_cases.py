@@ -16,6 +16,8 @@ from tests.integration.adapters._shared._cases import (
     MYSQL_XDIST_MARK,
     ORACLE_XDIST_MARK,
     POSTGRES_XDIST_MARK,
+    SPANNER_MARK,
+    SPANNER_XDIST_MARK,
     SQLITE_XDIST_MARK,
 )
 
@@ -37,6 +39,7 @@ class MigrationCase:
     supports_missing_schema_validation: bool = False
     uses_oracle_ddl: bool = False
     uses_db2_ddl: bool = False
+    uses_spanner_ddl: bool = False
     marks: tuple[Mark | MarkDecorator, ...] = ()
 
 
@@ -120,6 +123,14 @@ SYNC_MIGRATION_CASES = (
     MigrationCase(
         "db2-sync", "migration_config_db2_sync", "db2", "sync", uses_db2_ddl=True, marks=(DB2_MARK, DB2_XDIST_MARK)
     ),
+    MigrationCase(
+        "spanner-sync",
+        "migration_config_spanner_sync",
+        "spanner",
+        "sync",
+        uses_spanner_ddl=True,
+        marks=(SPANNER_MARK, SPANNER_XDIST_MARK),
+    ),
 )
 
 ASYNC_MIGRATION_CASES = (
@@ -193,6 +204,14 @@ ASYNC_MIGRATION_CASES = (
         "async",
         uses_db2_ddl=True,
         marks=(DB2_MARK, DB2_XDIST_MARK, pytest.mark.anyio),
+    ),
+    MigrationCase(
+        "spanner-async",
+        "migration_config_spanner_async",
+        "spanner",
+        "async",
+        uses_spanner_ddl=True,
+        marks=(SPANNER_MARK, SPANNER_XDIST_MARK, pytest.mark.anyio),
     ),
 )
 

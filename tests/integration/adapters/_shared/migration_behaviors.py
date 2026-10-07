@@ -30,13 +30,21 @@ def _migration_paths(case: MigrationCase, behavior: str, tmp_path: Path) -> "tup
     return token, script_location, version_table, table
 
 
-def _create_table_migration(case: MigrationCase, table: str) -> str:
+def _table_ddl(case: MigrationCase, table: str) -> "tuple[str, str]":
     if case.uses_oracle_ddl:
-        create_sql = f"CREATE TABLE {table} (id NUMBER, name VARCHAR2(255) NOT NULL)"
-        drop_sql = f"DROP TABLE {table}"
-    else:
-        create_sql = f"CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"
-        drop_sql = f"DROP TABLE {table}" if case.uses_db2_ddl else f"DROP TABLE IF EXISTS {table}"
+        return f"CREATE TABLE {table} (id NUMBER, name VARCHAR2(255) NOT NULL)", f"DROP TABLE {table}"
+    if case.uses_spanner_ddl:
+        return (
+            f"CREATE TABLE {table} (id INT64 NOT NULL, name STRING(255) NOT NULL) PRIMARY KEY (id)",
+            f"DROP TABLE IF EXISTS {table}",
+        )
+    create_sql = f"CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"
+    drop_sql = f"DROP TABLE {table}" if case.uses_db2_ddl else f"DROP TABLE IF EXISTS {table}"
+    return create_sql, drop_sql
+
+
+def _create_table_migration(case: MigrationCase, table: str) -> str:
+    create_sql, drop_sql = _table_ddl(case, table)
     return f'''"""Create {table}."""
 
 
@@ -52,12 +60,7 @@ def down():
 
 
 def _seeded_table_migration(case: MigrationCase, table: str) -> str:
-    if case.uses_oracle_ddl:
-        create_sql = f"CREATE TABLE {table} (id NUMBER, name VARCHAR2(255) NOT NULL)"
-        drop_sql = f"DROP TABLE {table}"
-    else:
-        create_sql = f"CREATE TABLE {table} (id INTEGER, name VARCHAR(255) NOT NULL)"
-        drop_sql = f"DROP TABLE {table}" if case.uses_db2_ddl else f"DROP TABLE IF EXISTS {table}"
+    create_sql, drop_sql = _table_ddl(case, table)
     return f'''"""Create {table} with seed rows."""
 
 

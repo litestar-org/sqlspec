@@ -27,9 +27,13 @@ from sqlspec.adapters.spanner.core import (
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    execute_ddl_async,
+    execute_ddl_sync,
     infer_param_types,
+    is_ddl_statement,
     is_query_statement,
     pop_execute_options,
+    renew_transaction,
     resolve_row_plan,
     resolve_transaction_completion,
     run_in_transaction_async,
@@ -132,7 +136,13 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
     """Synchronous Spanner driver operating on Snapshot or Transaction contexts."""
 
     dialect: "DialectType" = "spanner"
-    __slots__ = ("_data_dictionary", "_pending_execute_options", "_row_plan_cache", "_row_plan_deserializer")
+    __slots__ = (
+        "_data_dictionary",
+        "_owns_transaction",
+        "_pending_execute_options",
+        "_row_plan_cache",
+        "_row_plan_deserializer",
+    )
 
     def __init__(
         self,
@@ -146,12 +156,17 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
         self._data_dictionary: SpannerSyncDataDictionary | None = None
+        self._owns_transaction = True
         self._pending_execute_options: SpannerExecuteOptions | None = None
         self._row_plan_cache: dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]] = {}
         self._row_plan_deserializer = cast("Callable[[str], Any]", features.get("json_deserializer", from_json))
 
     def dispatch_execute(self, cursor: "SpannerSyncConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
+        if is_ddl_statement(sql):
+            self._commit_before_ddl()
+            execute_ddl_sync(self._resolve_database(), [sql])
+            return self.create_execution_result(cursor, rowcount_override=0)
         params = cast("dict[str, Any] | None", params)
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
@@ -252,7 +267,18 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
         dialect_str = str(self.dialect) if self.dialect else "spanner"
+        pending_ddl: list[str] = []
         for index, stmt in enumerate(statements):
+            if is_ddl_statement(stmt):
+                pending_ddl.append(stmt)
+                count += 1
+                continue
+            if pending_ddl:
+                self._commit_before_ddl()
+                execute_ddl_sync(self._resolve_database(), pending_ddl)
+                pending_ddl = []
+                cursor = self.connection
+                reader = cast("_SpannerReadProtocol", cursor)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
                 raise SQLConversionError(_READ_ONLY_SNAPSHOT_ERROR_MESSAGE)
@@ -270,6 +296,9 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 )
             count += 1
 
+        if pending_ddl:
+            self._commit_before_ddl()
+            execute_ddl_sync(self._resolve_database(), pending_ddl)
         return self.create_execution_result(
             cursor, statement_count=count, successful_statements=count, is_script_result=True
         )
@@ -285,6 +314,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 if resolve_transaction_completion(self.connection, failed=False) == "commit":
                     cast("_SpannerWriteProtocol", self.connection).commit()
             self._check_pending_exception(exc_handler)
+            self._renew_finished_transaction()
 
     def rollback(self) -> None:
         """Roll back the active transaction when it has begun."""
@@ -294,6 +324,7 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
                 if resolve_transaction_completion(self.connection, failed=True) == "rollback":
                     cast("_SpannerWriteProtocol", self.connection).rollback()
             self._check_pending_exception(exc_handler)
+            self._renew_finished_transaction()
 
     def create_savepoint(self, name: str) -> None:
         """Raise because Spanner does not support savepoints.
@@ -594,10 +625,23 @@ class SpannerSyncDriver(SyncDriverAdapterBase):
         """
         return run_in_transaction_sync(self._resolve_database(), self._transaction_driver, fn, *args, **kwargs)
 
+    def _commit_before_ddl(self) -> None:
+        """Commit a begun session transaction before a schema change, as DDL does on MySQL or Oracle."""
+        if self._owns_transaction and isinstance(self.connection, SpannerTransaction):
+            self.commit()
+
+    def _renew_finished_transaction(self) -> None:
+        """Start a new transaction on the session once the owned transaction has finished."""
+        connection = cast("Any", self.connection)
+        if self._owns_transaction and (connection.committed is not None or connection.rolled_back):
+            self.connection = renew_transaction(connection)
+
     def _transaction_driver(self, transaction: "SpannerSyncConnection") -> "SpannerSyncDriver":
-        return type(self)(
+        driver = type(self)(
             connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
         )
+        driver._owns_transaction = False
+        return driver
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
@@ -625,7 +669,13 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
     """Asynchronous Spanner driver operating on AsyncSnapshot or AsyncTransaction contexts."""
 
     dialect: "DialectType" = "spanner"
-    __slots__ = ("_data_dictionary", "_pending_execute_options", "_row_plan_cache", "_row_plan_deserializer")
+    __slots__ = (
+        "_data_dictionary",
+        "_owns_transaction",
+        "_pending_execute_options",
+        "_row_plan_cache",
+        "_row_plan_deserializer",
+    )
 
     def __init__(
         self,
@@ -639,12 +689,17 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
         self._data_dictionary: SpannerAsyncDataDictionary | None = None
+        self._owns_transaction = True
         self._pending_execute_options: SpannerExecuteOptions | None = None
         self._row_plan_cache: dict[int, tuple[Any, list[str], tuple[tuple[int, Any], ...] | None]] = {}
         self._row_plan_deserializer = cast("Callable[[str], Any]", features.get("json_deserializer", from_json))
 
     async def dispatch_execute(self, cursor: "SpannerAsyncConnection", statement: "SQL") -> ExecutionResult:
         sql, params = self._compiled_sql(statement, self.statement_config)
+        if is_ddl_statement(sql):
+            await self._commit_before_ddl()
+            await execute_ddl_async(self._resolve_database(), [sql])
+            return self.create_execution_result(cursor, rowcount_override=0)
         params = cast("dict[str, Any] | None", params)
         param_types_map = self._infer_param_types(params)
         coerced_params = self._coerce_params(params)
@@ -749,7 +804,18 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         read_execute_kwargs = self._execute_kwargs(for_read=True)
         write_execute_kwargs = self._execute_kwargs()
         dialect_str = str(self.dialect) if self.dialect else "spanner"
+        pending_ddl: list[str] = []
         for index, stmt in enumerate(statements):
+            if is_ddl_statement(stmt):
+                pending_ddl.append(stmt)
+                count += 1
+                continue
+            if pending_ddl:
+                await self._commit_before_ddl()
+                await execute_ddl_async(self._resolve_database(), pending_ddl)
+                pending_ddl = []
+                cursor = self.connection
+                reader = cast("_SpannerAsyncReadProtocol", cursor)
             is_select = is_query_statement(stmt, dialect_str)
             if not is_select and not is_transaction:
                 raise SQLConversionError(_READ_ONLY_ASYNC_SNAPSHOT_ERROR_MESSAGE)
@@ -770,6 +836,9 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 _ = [row async for row in rs]
             count += 1
 
+        if pending_ddl:
+            await self._commit_before_ddl()
+            await execute_ddl_async(self._resolve_database(), pending_ddl)
         return self.create_execution_result(
             cursor, statement_count=count, successful_statements=count, is_script_result=True
         )
@@ -785,6 +854,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 if resolve_transaction_completion(self.connection, failed=False) == "commit":
                     await cast("_SpannerAsyncWriteProtocol", self.connection).commit()
             self._check_pending_exception(exc_handler)
+            self._renew_finished_transaction()
 
     async def rollback(self) -> None:
         """Roll back the active transaction when it has begun."""
@@ -794,6 +864,7 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
                 if resolve_transaction_completion(self.connection, failed=True) == "rollback":
                     await cast("_SpannerAsyncWriteProtocol", self.connection).rollback()
             self._check_pending_exception(exc_handler)
+            self._renew_finished_transaction()
 
     async def create_savepoint(self, name: str) -> None:
         """Raise because Spanner does not support savepoints.
@@ -1102,10 +1173,23 @@ class SpannerAsyncDriver(AsyncDriverAdapterBase):
         """
         return await run_in_transaction_async(self._resolve_database(), self._transaction_driver, fn, *args, **kwargs)
 
+    async def _commit_before_ddl(self) -> None:
+        """Commit a begun session transaction before a schema change, as DDL does on MySQL or Oracle."""
+        if self._owns_transaction and isinstance(self.connection, SpannerAsyncTransaction):
+            await self.commit()
+
+    def _renew_finished_transaction(self) -> None:
+        """Start a new transaction on the session once the owned transaction has finished."""
+        connection = cast("Any", self.connection)
+        if self._owns_transaction and (connection.committed is not None or connection.rolled_back):
+            self.connection = renew_transaction(connection)
+
     def _transaction_driver(self, transaction: "SpannerAsyncConnection") -> "SpannerAsyncDriver":
-        return type(self)(
+        driver = type(self)(
             connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
         )
+        driver._owns_transaction = False
+        return driver
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

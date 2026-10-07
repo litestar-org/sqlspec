@@ -389,7 +389,9 @@ class _SpannerSyncSessionConnectionHandler(SyncPoolSessionFactory):
 
     def release_connection(self, _conn: "SpannerSyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
-            self._ctx.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+            context = cast("SpannerSyncConnectionContext", self._ctx)
+            context._connection = _conn
+            context.__exit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
 
@@ -652,6 +654,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         driver = self.driver_type(
             connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
         )
+        driver._owns_transaction = False  # pyright: ignore[reportPrivateUsage]
         return self._prepare_driver(driver)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
@@ -751,6 +754,7 @@ class _SpannerAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
 
     async def release_connection(self, _conn: "SpannerAsyncConnection", **kwargs: Any) -> None:
         if self._ctx is not None:
+            self._ctx._connection = _conn
             await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
             self._ctx = None
 
@@ -1016,6 +1020,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         driver = self.driver_type(
             connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
         )
+        driver._owns_transaction = False  # pyright: ignore[reportPrivateUsage]
         return self._prepare_driver(driver)
 
     def get_signature_namespace(self) -> "dict[str, Any]":

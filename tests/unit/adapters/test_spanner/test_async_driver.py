@@ -223,13 +223,14 @@ async def test_async_driver_select_stream_and_select_to_arrow() -> None:
 
 
 async def test_async_driver_commit_rollback_and_savepoints(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify SpannerAsyncDriver commit, rollback, and savepoint methods."""
+    """Verify SpannerAsyncDriver commit and rollback renew the session transaction, and savepoints raise."""
 
     class _FakeAsyncTxn:
-        def __init__(self) -> None:
+        def __init__(self, session: Any, *, begun: bool) -> None:
+            self._session = session
             self.committed: Any = None
             self.rolled_back = False
-            self._transaction_id = b"txn-1"
+            self._transaction_id = b"txn" if begun else None
             self._mutations: list[Any] = []
             self.commit_calls = 0
             self.rollback_calls = 0
@@ -240,20 +241,29 @@ async def test_async_driver_commit_rollback_and_savepoints(monkeypatch: pytest.M
 
         async def rollback(self) -> None:
             self.rollback_calls += 1
+            self.rolled_back = True
 
+    session = SimpleNamespace()
+    session.transaction = lambda: _FakeAsyncTxn(session, begun=False)
     monkeypatch.setattr(spanner_driver_module, "SpannerAsyncTransaction", _FakeAsyncTxn)
-    txn = _FakeAsyncTxn()
+    txn = _FakeAsyncTxn(session, begun=True)
     driver = SpannerAsyncDriver(connection=cast("Any", txn))
 
     await driver.begin()
     await driver.commit()
+    renewed = cast("Any", driver.connection)
     assert txn.commit_calls == 1
-    await driver.commit()
-    assert txn.commit_calls == 1
+    assert renewed is not txn
+    assert renewed._transaction_id is None
 
-    txn.committed = None
+    await driver.commit()
+    assert renewed.commit_calls == 0
+    assert driver.connection is renewed
+
+    renewed._transaction_id = b"txn-2"
     await driver.rollback()
-    assert txn.rollback_calls == 1
+    assert renewed.rollback_calls == 1
+    assert driver.connection is not renewed
 
     for method in ("create_savepoint", "release_savepoint", "rollback_to_savepoint"):
         with pytest.raises(NotImplementedError, match="Spanner"):

@@ -1,9 +1,10 @@
 """Spanner adapter compiled helpers."""
 
 import contextlib
+import re
 from functools import partial
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import sqlglot
 from sqlglot import exp
@@ -65,10 +66,12 @@ __all__ = (
     "execute_ddl_async",
     "execute_ddl_sync",
     "infer_param_types",
+    "is_ddl_statement",
     "is_query_statement",
     "list_existing_table_names_async",
     "list_existing_table_names_sync",
     "pop_execute_options",
+    "renew_transaction",
     "resolve_column_names",
     "resolve_row_plan",
     "resolve_transaction_completion",
@@ -80,6 +83,10 @@ __all__ = (
 
 COLUMN_CACHE_MAX_SIZE: int = 128
 _MAX_MUTATIONS_PER_COMMIT = 80_000
+_DDL_KEYWORDS: Final[frozenset[str]] = frozenset({"ALTER", "ANALYZE", "CREATE", "DROP", "GRANT", "RENAME", "REVOKE"})
+_LEADING_KEYWORD_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\A(?:\s+|--[^\n]*(?:\n|\Z)|/\*.*?\*/)*([A-Za-z]+)", re.DOTALL
+)
 
 
 class SpannerExecuteOptions:
@@ -480,6 +487,21 @@ def build_session_driver_features(
     return driver_features
 
 
+def is_ddl_statement(sql: str) -> bool:
+    """Return True when a statement is schema DDL that Spanner applies through ``update_ddl``.
+
+    Args:
+        sql: A single SQL statement.
+
+    Returns:
+        True when the first keyword after any leading comments starts a Spanner
+        DDL statement (``CREATE``, ``ALTER``, ``DROP``, ``GRANT``, ``REVOKE``,
+        ``RENAME`` or ``ANALYZE``).
+    """
+    match = _LEADING_KEYWORD_PATTERN.match(sql)
+    return match is not None and match.group(1).upper() in _DDL_KEYWORDS
+
+
 def is_query_statement(sql: str, dialect: str) -> bool:
     """Return True when a script statement returns rows.
 
@@ -495,6 +517,18 @@ def is_query_statement(sql: str, dialect: str) -> bool:
         return isinstance(sqlglot.parse_one(sql, read=dialect), exp.Query)
     except SqlglotError:
         return sql.upper().strip().startswith("SELECT")
+
+
+def renew_transaction(transaction: Any) -> Any:
+    """Return a new read-write transaction on the session that owns ``transaction``.
+
+    Args:
+        transaction: A finished sync or async Spanner ``Transaction``.
+
+    Returns:
+        A transaction of the same kind that has not begun on the server.
+    """
+    return transaction._session.transaction()
 
 
 def resolve_transaction_completion(transaction: Any, *, failed: bool) -> "Literal['commit', 'rollback', 'skip']":
