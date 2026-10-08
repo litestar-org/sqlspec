@@ -1,5 +1,6 @@
 """Spanner ADK store exports."""
 
+from sqlspec.adapters.spanner.adk.artifact_store import SpannerAsyncADKArtifactStore, SpannerSyncADKArtifactStore
 from sqlspec.adapters.spanner.adk.store import (
     SpannerADKConfig,
     SpannerADKRetentionConfig,
@@ -12,8 +13,10 @@ from sqlspec.adapters.spanner.adk.store import (
 __all__ = (
     "SpannerADKConfig",
     "SpannerADKRetentionConfig",
+    "SpannerAsyncADKArtifactStore",
     "SpannerAsyncADKMemoryStore",
     "SpannerAsyncADKStore",
+    "SpannerSyncADKArtifactStore",
     "SpannerSyncADKMemoryStore",
     "SpannerSyncADKStore",
 )
