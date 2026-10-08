@@ -364,6 +364,14 @@ that the backend cannot honor raises ``ImproperConfigurationError``.
 * Oracle Database accepts ``compression``, ``partitioning``, ``in_memory``,
   and ``table_options``. See :ref:`oracledb-extension-storage-options` for how
   SQLSpec handles optional database capabilities.
+* Google Cloud Spanner accepts ``shard_count`` (adds a generated ``shard_id``
+  prefix to the primary key and covering index to prevent split hotspotting)
+  and ``retention_seconds`` (generates a native ``ROW DELETION POLICY
+  (OLDER_THAN(acknowledged_at, INTERVAL N DAY))`` on GoogleSQL or ``TTL
+  INTERVAL 'N days' ON acknowledged_at`` on ``spangres`` instead of running a
+  synchronous ``DELETE`` on every ``ack()``). Spanner queues also poll with
+  lock-free read-only snapshots (``transaction=False``) and execute DML writes
+  inside ``run_in_transaction`` for automatic ``Aborted`` conflict retries.
 
 CockroachDB deliberately does not expose its session-table row TTL for durable
 queues. Queue acknowledgement and retention have different semantics, so

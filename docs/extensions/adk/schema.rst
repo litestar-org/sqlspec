@@ -311,9 +311,12 @@ pgvector Recall and Search Strategies
 When querying memories via :meth:`~sqlspec.extensions.adk.SQLSpecMemoryService.search_memory`,
 SQLSpec supports multiple retrieval modes depending on adapter capabilities and configuration:
 
-1. **Semantic Vector Search (pgvector)**
+1. **Semantic Vector Search (pgvector & Spanner)**
    When an ``embedding`` vector is passed, PostgreSQL uses the pgvector cosine distance
-   operator (``embedding <=> :query_vector::vector``) to rank entries by semantic similarity:
+   operator (``embedding <=> :query_vector::vector``) and Google Cloud Spanner uses
+   ``APPROX_COSINE_DISTANCE(embedding, @embedding, options => JSON '{"num_leaves_to_search": 50}')``
+   (or ``COSINE_DISTANCE(embedding, @embedding)`` when ``vector_index_enabled=False``)
+   to rank entries by semantic similarity:
 
    .. code-block:: sql
 
@@ -323,21 +326,26 @@ SQLSpec supports multiple retrieval modes depending on adapter capabilities and 
       ORDER BY embedding <=> $3::float8[]::vector ASC, timestamp DESC
       LIMIT $4
 
-   Vector indexes are configured via ``vector_index_type``:
+   On PostgreSQL, vector indexes are configured via ``vector_index_type``:
    - ``"hnsw"`` (default): Hierarchical Navigable Small World graphs with ``vector_cosine_ops``.
    - ``"ivfflat"``: Inverted file index with vector cosine distance.
    - ``"scann"``: AlloyDB/ScaNN tree quantization index (tuned via ``scann_num_leaves`` and ``scann_quantizer``).
 
+   On Spanner, setting ``vector_index_enabled=True`` and ``vector_dimensions=768`` emits an
+   ``ARRAY<FLOAT32>(vector_length=>768)`` column and a ``CREATE VECTOR INDEX ... STORING (...)``
+   index tuned via ``scann_tree_depth``, ``scann_num_leaves``, and ``vector_distance_type``.
+
 2. **Full-Text Search (FTS)**
    When ``memory_use_fts`` is ``True``, backends create native full-text indexes (GIN on
    ``to_tsvector('english', content_text)`` on PostgreSQL, FTS5 on SQLite, InnoDB FT on MySQL,
-   Oracle Text on Oracle, or ``TOKENIZE_FULLTEXT`` on Spanner). Queries execute using native
-   stemmed text matching.
+   Oracle Text on Oracle, or ``TOKENIZE_FULLTEXT`` with ``SCORE(content_tokens, @query) DESC``
+   ranking on Spanner). Queries execute using native stemmed text matching.
 
 3. **Hybrid Search with Reciprocal Rank Fusion (RRF)**
-   When both a text ``query`` and a vector ``embedding`` are provided and ``enable_bm25=True``
-   (using PostgreSQL 17/18 with ``pg_textsearch`` or AlloyDB), SQLSpec executes a hybrid query
-   fusing dense vector search and sparse BM25 text rank using Reciprocal Rank Fusion:
+   When both a text ``query`` and a vector ``embedding`` are provided and hybrid search is enabled
+   (``enable_bm25=True`` on PostgreSQL 17/18 with ``pg_textsearch`` or AlloyDB, or
+   ``enable_hybrid_search=True`` with ``memory_use_fts=True`` on Spanner), SQLSpec executes a hybrid
+   query fusing dense vector search and sparse lexical rank using Reciprocal Rank Fusion:
 
    .. code-block:: sql
 
@@ -371,9 +379,14 @@ Indexes Created on Memory Table
 - ``idx_{table}_app_scope_user_time``: composite index on ``(app_name, scope, user_id, timestamp DESC)``
 - ``idx_{table}_scope``: composite index on ``(app_name, scope)``
 - ``idx_{table}_session``: index on ``(session_id)``
+- ``idx_{table}_event_id``: index on ``(event_id)`` (Spanner batched deduplication lookup)
 - ``idx_{table}_fts``: GIN index on ``to_tsvector('english', content_text)`` (when ``memory_use_fts=True``)
 - ``idx_{table}_bm25``: BM25 index on ``content_text`` (when ``enable_bm25=True``)
 - ``idx_{table}_{index_type}``: HNSW, IVFFlat, or ScaNN vector index on ``embedding``
+
+On Spanner, setting ``enable_memory_graph=True`` also creates a ``CREATE OR REPLACE PROPERTY GRAPH``
+overlay connecting the sessions node table and memory entries edge table for ``GRAPH_TABLE``
+queries.
 
 .. _artifact-schema:
 
@@ -400,7 +413,7 @@ Default name: ``adk_artifact``
      - User identifier.
    * - ``session_id``
      - ``VARCHAR`` / ``TEXT`` (nullable)
-     - Session identifier. NULL for user-scoped artifacts.
+     - Session identifier. NULL for user-scoped artifacts (persisted as ``""`` in Spanner's ``NOT NULL`` primary key and restored to ``None`` on read).
    * - ``filename``
      - ``VARCHAR`` / ``TEXT``
      - Artifact filename.
@@ -428,9 +441,11 @@ Table and Extension Configuration
 All table names and extension settings are configured through ``extension_config["adk"]``:
 
 ``sqlspec.config.ADKConfig`` describes shared settings. Use
-``sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig`` or
-``sqlspec.adapters.psycopg.adk.PsycopgADKConfig`` when typing PostgreSQL vector,
-BM25, or ScaNN options. These options are rejected by other adapters.
+``sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig``,
+``sqlspec.adapters.psycopg.adk.PsycopgADKConfig``, or
+``sqlspec.adapters.spanner.adk.SpannerADKConfig`` when typing backend-specific
+vector, BM25, ScaNN, or Property Graph options. These options are rejected by
+other adapters.
 
 .. code-block:: python
 
