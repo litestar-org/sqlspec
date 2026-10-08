@@ -23,6 +23,8 @@ from sqlspec.dialects.spanner._expressions import (
     DotProduct,
     EuclideanDistance,
     Search,
+    SpannerGraphTable,
+    SpannerPropertyGraph,
     get_next_sequence_value,
 )
 from sqlspec.dialects.spanner._generators import (
@@ -226,24 +228,35 @@ def _parse_options_properties(parser: Any) -> exp.Properties | None:
 
 
 def _parse_create_vector_index(parser: Any) -> exp.Index:
-    """Parse CREATE VECTOR INDEX name ON table (cols) [WHERE ...] [OPTIONS (...)]."""
+    """Parse CREATE VECTOR INDEX [IF NOT EXISTS] name ON table (cols) [STORING (cols)] [WHERE ...] [OPTIONS (...)]."""
+    exists = parser._parse_exists(not_=True)
     name = parser._parse_id_var()
     parser._match_text_seq("ON")
     table = exp.Table(this=parser._parse_id_var())
     parser._match(TokenType.L_PAREN)
     cols = parser._parse_csv(parser._parse_column)
     parser._match(TokenType.R_PAREN)
+    storing: list[exp.Expr] | None = None
+    if parser._match_text_seq("STORING"):
+        parser._match(TokenType.L_PAREN)
+        storing = parser._parse_csv(parser._parse_column)
+        parser._match(TokenType.R_PAREN)
     where = parser._parse_where()
     options = _parse_options_properties(parser)
     params = exp.IndexParameters(columns=cols)
     idx = exp.Index(this=name, table=table, params=params, where=where, kind="VECTOR")
+    if exists:
+        idx.set("exists", True)
+    if storing:
+        idx.set("storing", storing)
     if options:
         idx.set("options", options)
     return idx
 
 
 def _parse_create_search_index(parser: Any) -> exp.Index:
-    """Parse CREATE SEARCH INDEX name ON table (cols) [STORING (cols)] [PARTITION BY cols] [ORDER BY order] [OPTIONS (...)]."""
+    """Parse CREATE SEARCH INDEX [IF NOT EXISTS] name ON table (cols) [STORING (cols)] [PARTITION BY cols] [ORDER BY order] [OPTIONS (...)]."""
+    exists = parser._parse_exists(not_=True)
     name = parser._parse_id_var()
     parser._match_text_seq("ON")
     table = exp.Table(this=parser._parse_id_var())
@@ -262,6 +275,8 @@ def _parse_create_search_index(parser: Any) -> exp.Index:
     options = _parse_options_properties(parser)
     params = exp.IndexParameters(columns=cols)
     idx = exp.Index(this=name, table=table, params=params, kind="SEARCH")
+    if exists:
+        idx.set("exists", True)
     if storing:
         idx.set("storing", storing)
     if partition_by:
@@ -324,10 +339,87 @@ def _parse_alter_change_stream(parser: Any) -> exp.Alter:
     return exp.Alter(this=name, kind="CHANGE STREAM", options=options)
 
 
-def _parse_drop_change_stream(parser: Any) -> exp.Drop:
-    """Parse DROP CHANGE STREAM name."""
+def _parse_drop_spanner_object(parser: Any, kind: str) -> exp.Drop:
+    """Parse DROP <kind> [IF EXISTS] name."""
+    exists = parser._parse_exists()
     name = parser._parse_id_var()
-    return exp.Drop(this=name, kind="CHANGE STREAM")
+    return exp.Drop(this=name, kind=kind, exists=exists)
+
+
+def _parse_drop_change_stream(parser: Any) -> exp.Drop:
+    """Parse DROP CHANGE STREAM [IF EXISTS] name."""
+    return _parse_drop_spanner_object(parser, "CHANGE STREAM")
+
+
+def _parse_graph_element_list(parser: Any) -> list[exp.Expr]:
+    """Parse comma-separated graph node/edge table definitions inside NODE/EDGE TABLES (...)."""
+    parser._match(TokenType.L_PAREN)
+    elements: list[exp.Expr] = []
+    while parser._curr is not None and parser._curr.token_type != TokenType.R_PAREN:
+        start_token = parser._curr
+        end_token = start_token
+        depth = 0
+        while parser._curr is not None:
+            curr = parser._curr
+            tt = curr.token_type
+            if depth == 0 and tt in {TokenType.COMMA, TokenType.R_PAREN}:
+                break
+            if tt in {TokenType.L_PAREN, TokenType.L_BRACKET, TokenType.L_BRACE}:
+                depth += 1
+            elif tt in {TokenType.R_PAREN, TokenType.R_BRACKET, TokenType.R_BRACE}:
+                depth = max(0, depth - 1)
+            end_token = curr
+            parser._advance()
+        raw_elem = parser._find_sql(start_token, end_token).strip()
+        if raw_elem:
+            elements.append(exp.var(" ".join(raw_elem.split())))
+        if not parser._match(TokenType.COMMA):
+            break
+    parser._match(TokenType.R_PAREN)
+    return elements
+
+
+def _parse_create_property_graph(parser: Any, *, replace: bool = False) -> exp.Create:
+    """Parse CREATE [OR REPLACE] PROPERTY GRAPH [IF NOT EXISTS] name NODE TABLES (...) [EDGE TABLES (...)]."""
+    exists = parser._parse_exists(not_=True)
+    name = parser._parse_id_var()
+    node_tables: list[exp.Expr] = []
+    if parser._match_text_seq("NODE", "TABLES"):
+        node_tables = _parse_graph_element_list(parser)
+    edge_tables: list[exp.Expr] | None = None
+    if parser._match_text_seq("EDGE", "TABLES"):
+        edge_tables = _parse_graph_element_list(parser)
+    graph = SpannerPropertyGraph(this=name, node_tables=node_tables, edge_tables=edge_tables)
+    return exp.Create(this=graph, kind="PROPERTY GRAPH", exists=exists, replace=replace)
+
+
+def _parse_graph_table(parser: Any) -> SpannerGraphTable:
+    """Parse GRAPH_TABLE(graph MATCH pattern [WHERE expr] COLUMNS (col_expr [AS alias], ...))."""
+    graph = cast("exp.Expr", parser._parse_id_var())
+    parser._match_text_seq("MATCH")
+    start_token = parser._curr
+    end_token = start_token
+    depth = 0
+    while parser._curr is not None:
+        curr = parser._curr
+        tt = curr.token_type
+        if depth == 0 and (tt in {TokenType.R_PAREN, TokenType.WHERE} or curr.text.upper() in {"WHERE", "COLUMNS"}):
+            break
+        if tt in {TokenType.L_PAREN, TokenType.L_BRACKET, TokenType.L_BRACE}:
+            depth += 1
+        elif tt in {TokenType.R_PAREN, TokenType.R_BRACKET, TokenType.R_BRACE}:
+            depth = max(0, depth - 1)
+        end_token = curr
+        parser._advance()
+    match_sql = parser._find_sql(start_token, end_token).strip() if start_token and end_token else ""
+    match_expr = exp.var(" ".join(match_sql.split()))
+    where_expr: exp.Expr | None = None
+    if parser._match(TokenType.WHERE) or parser._match_text_seq("WHERE"):
+        where_expr = cast("exp.Expr", parser._parse_conjunction())
+    columns: list[exp.Expr] = []
+    if parser._match_text_seq("COLUMNS"):
+        columns = parser._parse_wrapped_csv(lambda: parser._parse_alias(parser._parse_conjunction()))
+    return SpannerGraphTable(this=graph, match=match_expr, where=where_expr, columns=columns)
 
 
 def _closing_brace_index(tokens: "list[Token]", start: int) -> int:
@@ -484,6 +576,27 @@ def _attach_then_return_action(returning: exp.Returning) -> None:
     returning.set("with_action", first.args["alias"] if isinstance(first, exp.Alias) else exp.true())
 
 
+def _attach_hidden_column_constraint(column_def: exp.ColumnDef) -> None:
+    constraints = list(column_def.args.get("constraints") or [])
+    if not constraints:
+        return
+    computed: exp.ComputedColumnConstraint | None = None
+    remaining: list[exp.Expr] = []
+    has_hidden = False
+    for constraint in constraints:
+        kind = constraint.kind if isinstance(constraint, exp.ColumnConstraint) else None
+        if isinstance(kind, exp.ComputedColumnConstraint):
+            computed = kind
+            remaining.append(constraint)
+        elif isinstance(kind, exp.Var) and kind.name.upper() == "HIDDEN":
+            has_hidden = True
+        else:
+            remaining.append(constraint)
+    if has_hidden and computed is not None:
+        computed.set("hidden", True)
+        column_def.set("constraints", remaining)
+
+
 def parse_hint_expression(raw_hint: str) -> exp.Hint:
     """Parse hint string into canonical exp.Hint."""
     raw = raw_hint.strip()
@@ -507,6 +620,8 @@ def attach_hints(expression: exp.Expr) -> None:
     for node in expression.walk():
         if isinstance(node, exp.Returning):
             _attach_then_return_action(node)
+        elif isinstance(node, exp.ColumnDef):
+            _attach_hidden_column_constraint(node)
         comments = getattr(node, "comments", None)
         if not comments:
             continue
@@ -534,10 +649,20 @@ def attach_hints(expression: exp.Expr) -> None:
 _original_bq_statement_create: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.CREATE)
 _original_bq_statement_alter: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.ALTER)
 _original_bq_statement_drop: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.DROP)
+_original_bq_constraint_hidden: Any = BigQueryParser.CONSTRAINT_PARSERS.get("HIDDEN")
+
+
+def _parse_hidden_column_constraint(parser: Any) -> exp.Expr | None:
+    """Parse trailing HIDDEN modifier on Spanner generated/tokenlist columns."""
+    if _is_spanner_parser(parser):
+        return exp.var("HIDDEN")
+    if _original_bq_constraint_hidden is not None:
+        return cast("exp.Expr | None", _original_bq_constraint_hidden(parser))
+    return None
 
 
 def _bq_parse_create(self: Any) -> exp.Create | exp.Index | exp.Command:
-    """Parse Spanner CREATE statements including VECTOR INDEX, SEARCH INDEX, SEQUENCE, and CHANGE STREAM."""
+    """Parse Spanner CREATE statements including VECTOR INDEX, SEARCH INDEX, SEQUENCE, CHANGE STREAM, and PROPERTY GRAPH."""
     dialect = getattr(self, "dialect", None)
     if dialect is not None and type(dialect).__name__ == "Spanner":
         if self._match_text_seq("VECTOR", "INDEX"):
@@ -548,6 +673,10 @@ def _bq_parse_create(self: Any) -> exp.Create | exp.Index | exp.Command:
             return _parse_create_sequence(self)
         if self._match_text_seq("CHANGE", "STREAM"):
             return _parse_create_change_stream(self)
+        if self._match_text_seq("PROPERTY", "GRAPH"):
+            return _parse_create_property_graph(self, replace=False)
+        if self._match_text_seq("OR", "REPLACE", "PROPERTY", "GRAPH"):
+            return _parse_create_property_graph(self, replace=True)
     if _original_bq_statement_create is not None:
         return cast("exp.Create | exp.Index | exp.Command", _original_bq_statement_create(self))
     return cast("exp.Create | exp.Index | exp.Command", self._parse_create())
@@ -567,10 +696,17 @@ def _bq_parse_alter(self: Any) -> exp.Alter | exp.Command:
 
 
 def _bq_parse_drop(self: Any) -> exp.Drop | exp.Command:
-    """Parse Spanner DROP statements including CHANGE STREAM."""
+    """Parse Spanner DROP statements including CHANGE STREAM, PROPERTY GRAPH, VECTOR INDEX, and SEARCH INDEX."""
     dialect = getattr(self, "dialect", None)
-    if dialect is not None and type(dialect).__name__ == "Spanner" and self._match_text_seq("CHANGE", "STREAM"):
-        return _parse_drop_change_stream(self)
+    if dialect is not None and type(dialect).__name__ == "Spanner":
+        if self._match_text_seq("CHANGE", "STREAM"):
+            return _parse_drop_spanner_object(self, "CHANGE STREAM")
+        if self._match_text_seq("PROPERTY", "GRAPH"):
+            return _parse_drop_spanner_object(self, "PROPERTY GRAPH")
+        if self._match_text_seq("VECTOR", "INDEX"):
+            return _parse_drop_spanner_object(self, "VECTOR INDEX")
+        if self._match_text_seq("SEARCH", "INDEX"):
+            return _parse_drop_spanner_object(self, "SEARCH INDEX")
     if _original_bq_statement_drop is not None:
         return cast("exp.Drop | exp.Command", _original_bq_statement_drop(self))
     return cast("exp.Drop | exp.Command", self._parse_drop())
@@ -582,6 +718,9 @@ BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
 BigQueryParser.FUNCTIONS["SEARCH"] = _build_search
 
 BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
+BigQueryParser.FUNCTION_PARSERS["GRAPH_TABLE"] = _parse_graph_table
+
+BigQueryParser.CONSTRAINT_PARSERS["HIDDEN"] = _parse_hidden_column_constraint
 
 BigQueryParser.TYPE_CONVERTERS = {
     **BigQueryParser.TYPE_CONVERTERS,
