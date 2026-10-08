@@ -27,6 +27,7 @@ from sqlspec.extensions.adk import (
     StoredSession,
     normalize_session_list_options,
 )
+from sqlspec.extensions.adk._table_utils import ensure_table_name
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyncADKMemoryStore
 from sqlspec.protocols import SpannerParamTypesProtocol
 from sqlspec.utils.serializers import from_json, to_json
@@ -53,6 +54,12 @@ __all__ = (
 
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 _DDL_TIMEOUT_SECONDS = 300
+_EMBEDDING_ROW_INDEX = 12
+_SPANNER_DISTANCE_FUNCTIONS: dict[str, str] = {
+    "COSINE": "COSINE_DISTANCE",
+    "EUCLIDEAN": "EUCLIDEAN_DISTANCE",
+    "DOT_PRODUCT": "DOT_PRODUCT",
+}
 
 
 class SpannerADKRetentionConfig(TypedDict):
@@ -66,6 +73,9 @@ class SpannerADKRetentionConfig(TypedDict):
 
     memory_ttl_seconds: NotRequired[int]
     """Memory row retention in seconds."""
+
+    artifact_ttl_seconds: NotRequired[int]
+    """Artifact row retention in seconds."""
 
 
 class SpannerADKConfig(ADKConfig):
@@ -88,6 +98,30 @@ class SpannerADKConfig(ADKConfig):
 
     retention: NotRequired[SpannerADKRetentionConfig]
     """Spanner row-deletion retention policy settings."""
+
+    vector_dimensions: NotRequired[int | None]
+    """Optional fixed dimensionality for the memory embedding column."""
+
+    vector_distance_type: NotRequired[str]
+    """Distance metric for the memory vector index ('COSINE', 'EUCLIDEAN', 'DOT_PRODUCT')."""
+
+    vector_index_enabled: NotRequired[bool]
+    """Whether to emit CREATE VECTOR INDEX for the memory table."""
+
+    scann_tree_depth: NotRequired[int]
+    """ScaNN tree depth for the memory vector index (2 or 3)."""
+
+    scann_num_leaves: NotRequired[int]
+    """ScaNN leaf count for the memory vector index."""
+
+    enable_hybrid_search: NotRequired[bool]
+    """Enable Reciprocal Rank Fusion when both embedding and FTS query are supplied."""
+
+    enable_memory_graph: NotRequired[bool]
+    """Emit CREATE OR REPLACE PROPERTY GRAPH over the ADK memory table."""
+
+    memory_graph_name: NotRequired[str]
+    """Name of the Spanner Property Graph created over the ADK memory table."""
 
 
 class _SpannerADKStoreMixin:
@@ -1268,6 +1302,15 @@ class _SpannerADKMemoryStoreMixin:
         _shard_count: int
         _memory_table_options: str | None
         _memory_row_deletion_policy: str
+        _vector_dimensions: int
+        _has_explicit_vector_dimensions: bool
+        _vector_distance_type: str
+        _vector_index_enabled: bool
+        _scann_tree_depth: int
+        _scann_num_leaves: int
+        _enable_hybrid_search: bool
+        _enable_memory_graph: bool
+        _memory_graph_name: str
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {
@@ -1281,6 +1324,7 @@ class _SpannerADKMemoryStoreMixin:
             "timestamp": SPANNER_PARAM_TYPES.TIMESTAMP,
             "content_json": _json_param_type(),
             "content_text": SPANNER_PARAM_TYPES.STRING,
+            "embedding": SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.FLOAT32),
             "metadata_json": _json_param_type(),
             "inserted_at": SPANNER_PARAM_TYPES.TIMESTAMP,
         }
@@ -1295,6 +1339,17 @@ class _SpannerADKMemoryStoreMixin:
             return from_json(raw)
         return raw
 
+    def _deduplicate_entries(self, entries: "list[StoredMemory]") -> "list[StoredMemory]":
+        seen: set[str] = set()
+        unique_entries: list[StoredMemory] = []
+        for entry in entries:
+            event_id = entry["event_id"]
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+            unique_entries.append(entry)
+        return unique_entries
+
     def _build_memory_table_ddl(self) -> "list[str]":
         owner_line = ""
         if self._owner_id_column_ddl:
@@ -1303,8 +1358,14 @@ class _SpannerADKMemoryStoreMixin:
         fts_column_line = ""
         fts_index = ""
         if self._use_fts:
-            fts_column_line = "\n  content_tokens TOKENLIST AS (TOKENIZE_FULLTEXT(content_text)) HIDDEN"
+            fts_column_line = ",\n  content_tokens TOKENLIST AS (TOKENIZE_FULLTEXT(content_text)) HIDDEN"
             fts_index = f"CREATE SEARCH INDEX idx_{self._memory_table}_fts ON {self._memory_table}(content_tokens)"
+
+        embedding_type = (
+            f"ARRAY<FLOAT32>(vector_length=>{self._vector_dimensions})"
+            if self._has_explicit_vector_dimensions
+            else "ARRAY<FLOAT32>"
+        )
 
         shard_column = ""
         pk = "PRIMARY KEY (id)"
@@ -1327,6 +1388,7 @@ CREATE TABLE {self._memory_table} (
   timestamp TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
   content_json JSON NOT NULL,
   content_text STRING(MAX) NOT NULL,
+  embedding {embedding_type},
   metadata_json JSON,
   inserted_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true){fts_column_line}{shard_column}
 ) {pk}{options}{self._memory_row_deletion_policy}
@@ -1335,10 +1397,26 @@ CREATE TABLE {self._memory_table} (
         app_scope_user_idx = f"CREATE INDEX idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)"
         scope_idx = f"CREATE INDEX idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)"
         session_idx = f"CREATE INDEX idx_{self._memory_table}_session ON {self._memory_table}(session_id)"
+        event_id_idx = f"CREATE INDEX idx_{self._memory_table}_event_id ON {self._memory_table}(event_id)"
 
-        statements = [table_sql, app_scope_user_idx, scope_idx, session_idx]
+        statements = [table_sql, app_scope_user_idx, scope_idx, session_idx, event_id_idx]
         if fts_index:
             statements.append(fts_index)
+        if self._vector_index_enabled:
+            statements.append(
+                f"CREATE VECTOR INDEX idx_{self._memory_table}_embedding ON {self._memory_table}(embedding) "
+                f"STORING (app_name, scope, user_id, timestamp) "
+                f"WHERE embedding IS NOT NULL "
+                f"OPTIONS (distance_type = '{self._vector_distance_type}', tree_depth = {self._scann_tree_depth}, num_leaves = {self._scann_num_leaves})"
+            )
+        if self._enable_memory_graph:
+            statements.append(
+                f"CREATE OR REPLACE PROPERTY GRAPH {self._memory_graph_name} "
+                f"NODE TABLES ("
+                f"{self._memory_table} AS MemoryNode KEY (id) LABEL Memory "
+                f"PROPERTIES (id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_text)"
+                f")"
+            )
         return statements
 
     def _drop_memory_table_sql(self) -> "list[str]":
@@ -1348,9 +1426,14 @@ CREATE TABLE {self._memory_table} (
             List of SQL statements to drop the memory table and associated indexes.
         """
         statements: list[str] = []
+        if self._enable_memory_graph:
+            statements.append(f"DROP PROPERTY GRAPH {self._memory_graph_name}")
+        if self._vector_index_enabled:
+            statements.append(f"DROP VECTOR INDEX idx_{self._memory_table}_embedding")
         if self._use_fts:
             statements.append(f"DROP SEARCH INDEX idx_{self._memory_table}_fts")
         statements.extend([
+            f"DROP INDEX idx_{self._memory_table}_event_id",
             f"DROP INDEX idx_{self._memory_table}_session",
             f"DROP INDEX idx_{self._memory_table}_app_scope_user_time",
             f"DROP INDEX idx_{self._memory_table}_scope",
@@ -1366,12 +1449,14 @@ CREATE TABLE {self._memory_table} (
         insert_sql = f"""
         INSERT INTO {self._memory_table} (
             id, session_id, app_name, user_id, scope, event_id, author{owner_column},
-            timestamp, content_json, content_text, metadata_json, inserted_at
+            timestamp, content_json, content_text, embedding, metadata_json, inserted_at
         ) VALUES (
             @id, @session_id, @app_name, @user_id, @scope, @event_id, @author{owner_param},
-            @timestamp, @content_json, @content_text, @metadata_json, @inserted_at
+            @timestamp, @content_json, @content_text, @embedding, @metadata_json, @inserted_at
         )
         """
+        raw_embedding = entry.get("embedding")
+        embedding_param = [float(x) for x in raw_embedding] if raw_embedding is not None else None
         params: dict[str, Any] = {
             "id": entry["id"],
             "session_id": entry["session_id"],
@@ -1383,6 +1468,7 @@ CREATE TABLE {self._memory_table} (
             "timestamp": entry["timestamp"],
             "content_json": to_json(entry["content_json"]),
             "content_text": entry["content_text"],
+            "embedding": embedding_param,
             "metadata_json": to_json(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
             "inserted_at": entry["inserted_at"],
         }
@@ -1390,9 +1476,114 @@ CREATE TABLE {self._memory_table} (
             params["owner_id"] = str(owner_id) if owner_id is not None else None
         return (insert_sql, params, self._memory_param_types(self._owner_id_column_name is not None))
 
-    def _build_event_exists_query(self, event_id: str) -> "tuple[str, dict[str, Any], dict[str, Any]]":
-        sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id = @event_id LIMIT 1"
-        return (sql, {"event_id": event_id}, {"event_id": SPANNER_PARAM_TYPES.STRING})
+    def _build_existing_event_ids_query(
+        self, event_ids: "list[str]"
+    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+        sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id IN UNNEST(@event_ids)"
+        return (
+            sql,
+            {"event_ids": event_ids},
+            {"event_ids": SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.STRING)},
+        )
+
+    def _build_search_entries_query(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
+    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+        if embedding is not None and self._use_fts and bool(query.strip()) and self._enable_hybrid_search:
+            return self._build_search_entries_hybrid_rrf_query(
+                query, app_name, user_id, limit, embedding, scope_filter
+            )
+        if embedding is not None:
+            return self._build_search_entries_vector_query(app_name, user_id, limit, embedding, scope_filter)
+        if self._use_fts:
+            return self._build_search_entries_fts_query(query, app_name, user_id, limit, scope_filter)
+        return self._build_search_entries_simple_query(query, app_name, user_id, limit, scope_filter)
+
+    def _build_search_entries_hybrid_rrf_query(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        embedding: "Sequence[float]",
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+        where_scope, scope_params, scope_types = _build_spanner_scope_where(app_name, user_id, scope_filter)
+        candidate_limit = max(limit * 2, 50)
+        distance_fn = _SPANNER_DISTANCE_FUNCTIONS.get(self._vector_distance_type, "COSINE_DISTANCE")
+        sql = f"""
+        WITH vector_matches AS (
+            SELECT id, RANK() OVER (ORDER BY {distance_fn}(embedding, @embedding) ASC) AS rank_vec
+            FROM {self._memory_table}
+            WHERE {where_scope}
+              AND embedding IS NOT NULL
+            LIMIT @candidate_limit
+        ),
+        text_matches AS (
+            SELECT id, RANK() OVER (ORDER BY SCORE(content_tokens, @query) DESC) AS rank_txt
+            FROM {self._memory_table}
+            WHERE {where_scope}
+              AND SEARCH(content_tokens, @query)
+            LIMIT @candidate_limit
+        )
+        SELECT m.id, m.session_id, m.app_name, m.user_id, m.scope, m.event_id, m.author,
+               m.timestamp, m.content_json, m.content_text, m.metadata_json, m.inserted_at, m.embedding,
+               (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+        FROM {self._memory_table} m
+        LEFT JOIN vector_matches v ON m.id = v.id
+        LEFT JOIN text_matches t ON m.id = t.id
+        WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+        ORDER BY rrf_score DESC, m.timestamp DESC
+        LIMIT @limit
+        """
+        params = {
+            **scope_params,
+            "embedding": [float(x) for x in embedding],
+            "query": query,
+            "candidate_limit": candidate_limit,
+            "limit": limit,
+        }
+        types = {
+            **scope_types,
+            "embedding": SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.FLOAT32),
+            "query": SPANNER_PARAM_TYPES.STRING,
+            "candidate_limit": SPANNER_PARAM_TYPES.INT64,
+            "limit": SPANNER_PARAM_TYPES.INT64,
+        }
+        return (sql, params, types)
+
+    def _build_search_entries_vector_query(
+        self,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        embedding: "Sequence[float]",
+        scope_filter: Literal["all", "user", "app"] = "all",
+    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+        where_scope, scope_params, scope_types = _build_spanner_scope_where(app_name, user_id, scope_filter)
+        distance_fn = _SPANNER_DISTANCE_FUNCTIONS.get(self._vector_distance_type, "COSINE_DISTANCE")
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
+        FROM {self._memory_table}
+        WHERE {where_scope}
+          AND embedding IS NOT NULL
+        ORDER BY {distance_fn}(embedding, @embedding) ASC, timestamp DESC
+        LIMIT @limit
+        """
+        params = {**scope_params, "embedding": [float(x) for x in embedding], "limit": limit}
+        types = {
+            **scope_types,
+            "embedding": SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.FLOAT32),
+            "limit": SPANNER_PARAM_TYPES.INT64,
+        }
+        return (sql, params, types)
 
     def _build_search_entries_fts_query(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -1400,11 +1591,11 @@ CREATE TABLE {self._memory_table} (
         where_scope, scope_params, scope_types = _build_spanner_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM {self._memory_table}
         WHERE {where_scope}
           AND SEARCH(content_tokens, @query)
-        ORDER BY timestamp DESC
+        ORDER BY SCORE(content_tokens, @query) DESC, timestamp DESC
         LIMIT @limit
         """
         params = {**scope_params, "query": query, "limit": limit}
@@ -1417,7 +1608,7 @@ CREATE TABLE {self._memory_table} (
         where_scope, scope_params, scope_types = _build_spanner_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM {self._memory_table}
         WHERE {where_scope}
           AND LOWER(content_text) LIKE @pattern
@@ -1471,7 +1662,11 @@ CREATE TABLE {self._memory_table} (
                 "content_text": row[9],
                 "metadata_json": self._decode_json(row[10]),
                 "inserted_at": row[11],
-                "embedding": None,
+                "embedding": (
+                    [float(x) for x in row[_EMBEDDING_ROW_INDEX]]
+                    if len(row) > _EMBEDDING_ROW_INDEX and row[_EMBEDDING_ROW_INDEX] is not None
+                    else None
+                ),
             }
             for row in rows
         ]
@@ -1480,15 +1675,36 @@ CREATE TABLE {self._memory_table} (
 class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemoryStore[SpannerSyncConfig]):
     """Spanner ADK memory store backed by synchronous Spanner client."""
 
-    __slots__ = ("_memory_row_deletion_policy", "_memory_table_options", "_shard_count")
+    __slots__ = (
+        "_enable_hybrid_search",
+        "_enable_memory_graph",
+        "_has_explicit_vector_dimensions",
+        "_memory_graph_name",
+        "_memory_row_deletion_policy",
+        "_memory_table_options",
+        "_scann_tree_depth",
+        "_shard_count",
+        "_vector_distance_type",
+        "_vector_index_enabled",
+    )
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        self._shard_count, self._memory_table_options, self._memory_row_deletion_policy = (
-            _extract_spanner_memory_options(config)
-        )
+        (
+            self._shard_count,
+            self._memory_table_options,
+            self._memory_row_deletion_policy,
+            self._has_explicit_vector_dimensions,
+            self._vector_distance_type,
+            self._vector_index_enabled,
+            self._scann_tree_depth,
+            self._scann_num_leaves,
+            self._enable_hybrid_search,
+            self._enable_memory_graph,
+            self._memory_graph_name,
+        ) = _extract_spanner_memory_options(config, self._memory_table)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1511,8 +1727,8 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit, scope_filter)
+        """Search memory entries by text query or vector embedding."""
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1557,25 +1773,18 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not entries:
+        unique_entries = self._deduplicate_entries(entries)
+        if not unique_entries:
             return 0
 
-        inserted_count = 0
-        statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
-        for entry in entries:
-            if self._event_exists(entry["event_id"]):
-                continue
-            statements.append(self._build_insert_memory_entry_statement(entry, owner_id))
-            inserted_count += 1
-
-        if statements:
-            self._run_write(statements)
-        return inserted_count
-
-    def _event_exists(self, event_id: str) -> bool:
-        sql, params, types = self._build_event_exists_query(event_id)
-        rows = self._run_read(sql, params, types)
-        return bool(rows)
+        event_ids = [entry["event_id"] for entry in unique_entries]
+        check_sql, check_params, check_types = self._build_existing_event_ids_query(event_ids)
+        candidates = [
+            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id))
+            for entry in unique_entries
+        ]
+        job = _SpannerSyncMemoryInsertJob(check_sql, check_params, check_types, candidates)
+        return int(cast("Any", self._database()).run_in_transaction(job))
 
     def _search_entries(
         self,
@@ -1584,28 +1793,19 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query.strip() and embedding is None:
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
-
-        if self._use_fts:
-            return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
-        return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
-
-    def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
-    ) -> "list[StoredMemory]":
-        sql, params, types = self._build_search_entries_fts_query(query, app_name, user_id, limit, scope_filter)
-        rows = self._run_read(sql, params, types)
-        return self._rows_to_records(rows)
-
-    def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
-    ) -> "list[StoredMemory]":
-        sql, params, types = self._build_search_entries_simple_query(query, app_name, user_id, limit, scope_filter)
+        sql, params, types = self._build_search_entries_query(
+            query, app_name, user_id, effective_limit, scope_filter, embedding=embedding
+        )
         rows = self._run_read(sql, params, types)
         return self._rows_to_records(rows)
 
@@ -1621,15 +1821,36 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
 class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemoryStore[SpannerAsyncConfig]):
     """Spanner ADK memory store backed by asynchronous Spanner client."""
 
-    __slots__ = ("_memory_row_deletion_policy", "_memory_table_options", "_shard_count")
+    __slots__ = (
+        "_enable_hybrid_search",
+        "_enable_memory_graph",
+        "_has_explicit_vector_dimensions",
+        "_memory_graph_name",
+        "_memory_row_deletion_policy",
+        "_memory_table_options",
+        "_scann_tree_depth",
+        "_shard_count",
+        "_vector_distance_type",
+        "_vector_index_enabled",
+    )
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerAsyncConfig) -> None:
         super().__init__(config)
-        self._shard_count, self._memory_table_options, self._memory_row_deletion_policy = (
-            _extract_spanner_memory_options(config)
-        )
+        (
+            self._shard_count,
+            self._memory_table_options,
+            self._memory_row_deletion_policy,
+            self._has_explicit_vector_dimensions,
+            self._vector_distance_type,
+            self._vector_index_enabled,
+            self._scann_tree_depth,
+            self._scann_num_leaves,
+            self._enable_hybrid_search,
+            self._enable_memory_graph,
+            self._memory_graph_name,
+        ) = _extract_spanner_memory_options(config, self._memory_table)
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1652,8 +1873,8 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
-        return await self._search_entries(query, app_name, user_id, limit, scope_filter)
+        """Search memory entries by text query or vector embedding."""
+        return await self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1700,25 +1921,19 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not entries:
+        unique_entries = self._deduplicate_entries(entries)
+        if not unique_entries:
             return 0
 
-        inserted_count = 0
-        statements: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
-        for entry in entries:
-            if await self._event_exists(entry["event_id"]):
-                continue
-            statements.append(self._build_insert_memory_entry_statement(entry, owner_id))
-            inserted_count += 1
-
-        if statements:
-            await self._run_write(statements)
-        return inserted_count
-
-    async def _event_exists(self, event_id: str) -> bool:
-        sql, params, types = self._build_event_exists_query(event_id)
-        rows = await self._run_read(sql, params, types)
-        return bool(rows)
+        event_ids = [entry["event_id"] for entry in unique_entries]
+        check_sql, check_params, check_types = self._build_existing_event_ids_query(event_ids)
+        candidates = [
+            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id))
+            for entry in unique_entries
+        ]
+        database = await self._database()
+        job = _SpannerAsyncMemoryInsertJob(check_sql, check_params, check_types, candidates)
+        return int(await database.run_in_transaction(job))
 
     async def _search_entries(
         self,
@@ -1727,28 +1942,19 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
+        if not query.strip() and embedding is None:
+            return []
+
         effective_limit = limit if limit is not None else self._max_results
-
-        if self._use_fts:
-            return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
-        return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
-
-    async def _search_entries_fts(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
-    ) -> "list[StoredMemory]":
-        sql, params, types = self._build_search_entries_fts_query(query, app_name, user_id, limit, scope_filter)
-        rows = await self._run_read(sql, params, types)
-        return self._rows_to_records(rows)
-
-    async def _search_entries_simple(
-        self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
-    ) -> "list[StoredMemory]":
-        sql, params, types = self._build_search_entries_simple_query(query, app_name, user_id, limit, scope_filter)
+        sql, params, types = self._build_search_entries_query(
+            query, app_name, user_id, effective_limit, scope_filter, embedding=embedding
+        )
         rows = await self._run_read(sql, params, types)
         return self._rows_to_records(rows)
 
@@ -1794,13 +2000,41 @@ def _extract_spanner_adk_options(config: Any) -> "tuple[int, str | None, str | N
     )
 
 
-def _extract_spanner_memory_options(config: Any) -> "tuple[int, str | None, str]":
-    """Return shard count, table options, and row deletion policy for the ADK memory table."""
+def _extract_spanner_memory_options(
+    config: Any, memory_table: str
+) -> "tuple[int, str | None, str, bool, str, bool, int, int, bool, bool, str]":
+    """Return Spanner-specific DDL, vector index, hybrid search, and property graph options for ADK memory."""
     adk_config = _adk_config(config)
+    has_explicit_vector_dims = adk_config.get("vector_dimensions") is not None
+    raw_distance = str(adk_config.get("vector_distance_type") or "COSINE").upper()
+    if raw_distance not in _SPANNER_DISTANCE_FUNCTIONS:
+        msg = f"Unsupported Spanner vector_distance_type: {raw_distance!r}"
+        raise ValueError(msg)
+    vector_index_enabled = bool(adk_config.get("vector_index_enabled", False))
+    raw_tree_depth = adk_config.get("scann_tree_depth", 2)
+    scann_tree_depth = int(raw_tree_depth) if isinstance(raw_tree_depth, int) else 2
+    if scann_tree_depth not in {2, 3}:
+        msg = f"scann_tree_depth must be 2 or 3, got {scann_tree_depth!r}"
+        raise ValueError(msg)
+    raw_num_leaves = adk_config.get("scann_num_leaves")
+    scann_num_leaves = int(raw_num_leaves) if isinstance(raw_num_leaves, int) and raw_num_leaves > 0 else 1000
+    enable_hybrid_search = bool(adk_config.get("enable_hybrid_search", True))
+    enable_memory_graph = bool(adk_config.get("enable_memory_graph", False))
+    raw_graph_name = adk_config.get("memory_graph_name")
+    memory_graph_name = str(raw_graph_name) if raw_graph_name else f"{memory_table}_graph"
+    ensure_table_name(memory_graph_name)
     return (
         _spanner_shard_count(adk_config),
         adk_config.get("memory_table_options"),
         _spanner_row_deletion_policy(adk_config, "memory_ttl_seconds", "inserted_at"),
+        has_explicit_vector_dims,
+        raw_distance,
+        vector_index_enabled,
+        scann_tree_depth,
+        scann_num_leaves,
+        enable_hybrid_search,
+        enable_memory_graph,
+        memory_graph_name,
     )
 
 
@@ -1848,10 +2082,6 @@ def _filter_existing_spanner_drops(statements: "list[str]", existing_tables: "se
 def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -> "str | None":
     try:
         parsed = sqlglot.parse_one(statement, read="spanner")
-        if isinstance(parsed, exp.Command) and str(parsed.this).upper() == "DROP":
-            expr_sql = str(parsed.expression or "").strip()
-            if expr_sql.upper().startswith("SEARCH "):
-                parsed = sqlglot.parse_one(f"DROP {expr_sql[7:]}", read="spanner")
     except Exception:
         return None
 
@@ -1865,10 +2095,14 @@ def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -
     kind = str(parsed.args.get("kind") or "").upper()
     if kind == "TABLE":
         return target.name if target.name in existing_tables else None
-    if kind in {"INDEX", "SEARCH INDEX"}:
+    if kind in {"INDEX", "SEARCH INDEX", "VECTOR INDEX"}:
         for table_name in existing_tables:
             if target.name.startswith(f"idx_{table_name}_"):
                 return table_name
+    if kind == "PROPERTY GRAPH" and target.name.endswith("_graph"):
+        base_table = target.name[:-6]
+        if base_table in existing_tables:
+            return base_table
     return None
 
 
@@ -1908,6 +2142,64 @@ class _SpannerAsyncWriteJob:
             return
         for sql, params, types in self._statements:
             await transaction.execute_update(sql, params=params, param_types=types)
+
+
+class _SpannerSyncMemoryInsertJob:
+    """Callable transaction work item for Spanner sync ADK memory batch deduplication and insert."""
+
+    __slots__ = ("_candidates", "_check_params", "_check_sql", "_check_types")
+
+    def __init__(
+        self,
+        check_sql: str,
+        check_params: "dict[str, Any]",
+        check_types: "dict[str, Any]",
+        candidates: "list[tuple[str, tuple[str, dict[str, Any], dict[str, Any]]]]",
+    ) -> None:
+        self._check_sql = check_sql
+        self._check_params = check_params
+        self._check_types = check_types
+        self._candidates = candidates
+
+    def __call__(self, transaction: "SpannerTransaction") -> int:
+        rows = cast("_SpannerReadProtocol", transaction).execute_sql(
+            self._check_sql, params=self._check_params, param_types=self._check_types
+        )
+        existing = {str(row[0]) for row in rows}
+        statements = [stmt for event_id, stmt in self._candidates if event_id not in existing]
+        if not statements:
+            return 0
+        _SpannerSyncWriteJob(statements)(transaction)
+        return len(statements)
+
+
+class _SpannerAsyncMemoryInsertJob:
+    """Callable async transaction work item for Spanner async ADK memory batch deduplication and insert."""
+
+    __slots__ = ("_candidates", "_check_params", "_check_sql", "_check_types")
+
+    def __init__(
+        self,
+        check_sql: str,
+        check_params: "dict[str, Any]",
+        check_types: "dict[str, Any]",
+        candidates: "list[tuple[str, tuple[str, dict[str, Any], dict[str, Any]]]]",
+    ) -> None:
+        self._check_sql = check_sql
+        self._check_params = check_params
+        self._check_types = check_types
+        self._candidates = candidates
+
+    async def __call__(self, transaction: "SpannerAsyncTransaction") -> int:
+        result_set = await cast("Any", transaction).execute_sql(
+            self._check_sql, params=self._check_params, param_types=self._check_types
+        )
+        existing = {str(row[0]) async for row in result_set}
+        statements = [stmt for event_id, stmt in self._candidates if event_id not in existing]
+        if not statements:
+            return 0
+        await _SpannerAsyncWriteJob(statements)(transaction)
+        return len(statements)
 
 
 class _SpannerSyncUpdateJob:
