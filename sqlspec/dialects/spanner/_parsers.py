@@ -342,13 +342,8 @@ def _parse_alter_change_stream(parser: Any) -> exp.Alter:
 def _parse_drop_spanner_object(parser: Any, kind: str) -> exp.Drop:
     """Parse DROP <kind> [IF EXISTS] name."""
     exists = parser._parse_exists()
-    name = parser._parse_id_var()
+    name = parser._parse_table_parts(schema=True)
     return exp.Drop(this=name, kind=kind, exists=exists)
-
-
-def _parse_drop_change_stream(parser: Any) -> exp.Drop:
-    """Parse DROP CHANGE STREAM [IF EXISTS] name."""
-    return _parse_drop_spanner_object(parser, "CHANGE STREAM")
 
 
 def _parse_graph_element_list(parser: Any) -> list[exp.Expr]:
@@ -393,8 +388,15 @@ def _parse_create_property_graph(parser: Any, *, replace: bool = False) -> exp.C
     return exp.Create(this=graph, kind="PROPERTY GRAPH", exists=exists, replace=replace)
 
 
-def _parse_graph_table(parser: Any) -> SpannerGraphTable:
+_original_bq_function_graph_table: Any = BigQueryParser.FUNCTION_PARSERS.get("GRAPH_TABLE")
+
+
+def _parse_graph_table(parser: Any) -> SpannerGraphTable | exp.Expr:
     """Parse GRAPH_TABLE(graph MATCH pattern [WHERE expr] COLUMNS (col_expr [AS alias], ...))."""
+    if not _is_spanner_parser(parser):
+        if _original_bq_function_graph_table is not None:
+            return cast("exp.Expr", _original_bq_function_graph_table(parser))
+        return exp.Anonymous(this="GRAPH_TABLE", expressions=parser._parse_csv(parser._parse_lambda))
     graph = cast("exp.Expr", parser._parse_id_var())
     parser._match_text_seq("MATCH")
     start_token = parser._curr

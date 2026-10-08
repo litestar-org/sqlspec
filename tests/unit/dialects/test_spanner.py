@@ -286,6 +286,8 @@ def test_property_graph_ddl_round_trip(sql: str) -> None:
     """Verify CREATE/DROP PROPERTY GRAPH parses into structured AST and renders identically."""
     parsed = parse_one(sql, read="spanner")
     assert not isinstance(parsed, exp.Command)
+    if isinstance(parsed, exp.Drop):
+        assert isinstance(parsed.this, exp.Table)
     assert parsed.sql(dialect="spanner") == sql
 
 
@@ -338,6 +340,8 @@ def test_vector_and_search_index_ddl_round_trip(sql: str) -> None:
     """Verify CREATE VECTOR INDEX with IF NOT EXISTS/STORING and DROP VECTOR/SEARCH INDEX round-trip."""
     parsed = parse_one(sql, read="spanner")
     assert not isinstance(parsed, exp.Command)
+    if isinstance(parsed, exp.Drop):
+        assert isinstance(parsed.this, exp.Table)
     assert parsed.sql(dialect="spanner") == sql
 
 
