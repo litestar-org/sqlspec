@@ -1476,15 +1476,9 @@ CREATE TABLE {self._memory_table} (
             params["owner_id"] = str(owner_id) if owner_id is not None else None
         return (insert_sql, params, self._memory_param_types(self._owner_id_column_name is not None))
 
-    def _build_existing_event_ids_query(
-        self, event_ids: "list[str]"
-    ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
+    def _build_existing_event_ids_query(self, event_ids: "list[str]") -> "tuple[str, dict[str, Any], dict[str, Any]]":
         sql = f"SELECT event_id FROM {self._memory_table} WHERE event_id IN UNNEST(@event_ids)"
-        return (
-            sql,
-            {"event_ids": event_ids},
-            {"event_ids": SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.STRING)},
-        )
+        return (sql, {"event_ids": event_ids}, {"event_ids": SPANNER_PARAM_TYPES.Array(SPANNER_PARAM_TYPES.STRING)})
 
     def _build_search_entries_query(
         self,
@@ -1496,9 +1490,7 @@ CREATE TABLE {self._memory_table} (
         embedding: "Sequence[float] | None" = None,
     ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
         if embedding is not None and self._use_fts and bool(query.strip()) and self._enable_hybrid_search:
-            return self._build_search_entries_hybrid_rrf_query(
-                query, app_name, user_id, limit, embedding, scope_filter
-            )
+            return self._build_search_entries_hybrid_rrf_query(query, app_name, user_id, limit, embedding, scope_filter)
         if embedding is not None:
             return self._build_search_entries_vector_query(app_name, user_id, limit, embedding, scope_filter)
         if self._use_fts:
@@ -1754,9 +1746,6 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
             reader = cast("_SpannerReadProtocol", snapshot)
             return list(reader.execute_sql(sql, params=params, param_types=types))
 
-    def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        cast("Any", self._database()).run_in_transaction(_SpannerSyncWriteJob(statements))
-
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         return int(cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types)))
 
@@ -1780,8 +1769,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         event_ids = [entry["event_id"] for entry in unique_entries]
         check_sql, check_params, check_types = self._build_existing_event_ids_query(event_ids)
         candidates = [
-            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id))
-            for entry in unique_entries
+            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id)) for entry in unique_entries
         ]
         job = _SpannerSyncMemoryInsertJob(check_sql, check_params, check_types, candidates)
         return int(cast("Any", self._database()).run_in_transaction(job))
@@ -1900,10 +1888,6 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
     ) -> "list[Any]":
         return await _run_read_async(await self._database(), sql, params, types)
 
-    async def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        database = await self._database()
-        await database.run_in_transaction(_SpannerAsyncWriteJob(statements))
-
     async def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         database = await self._database()
         return int(await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types)))
@@ -1928,8 +1912,7 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         event_ids = [entry["event_id"] for entry in unique_entries]
         check_sql, check_params, check_types = self._build_existing_event_ids_query(event_ids)
         candidates = [
-            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id))
-            for entry in unique_entries
+            (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id)) for entry in unique_entries
         ]
         database = await self._database()
         job = _SpannerAsyncMemoryInsertJob(check_sql, check_params, check_types, candidates)

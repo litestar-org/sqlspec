@@ -1,16 +1,19 @@
 """Spanner ADK artifact store (sync and async)."""
 
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner.adk.store import (
+    _DDL_TIMEOUT_SECONDS,
     SPANNER_PARAM_TYPES,
     _adk_config,
     _is_spanner_table_missing,
     _json_param_type,
     _run_read_async,
     _spanner_row_deletion_policy,
+    _SpannerAsyncUpdateJob,
+    _SpannerReadProtocol,
+    _SpannerSyncUpdateJob,
 )
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.spanner.core import (
@@ -36,7 +39,6 @@ if TYPE_CHECKING:
 __all__ = ("USER_SCOPED_SESSION_ID", "SpannerAsyncADKArtifactStore", "SpannerSyncADKArtifactStore")
 
 USER_SCOPED_SESSION_ID = ""
-_DDL_TIMEOUT_SECONDS = 300
 
 
 class _SpannerADKArtifactStoreMixin:
@@ -47,10 +49,8 @@ class _SpannerADKArtifactStoreMixin:
     if TYPE_CHECKING:
         _artifact_table: str
         _artifact_row_deletion_policy: str
-        _artifact_table_options: "str | None"
 
-    def _build_artifact_table_ddl(self) -> "list[str]":
-        options = f" OPTIONS ({self._artifact_table_options})" if self._artifact_table_options else ""
+    def _artifact_table_ddl(self) -> "list[str]":
         ddl = f"""CREATE TABLE IF NOT EXISTS {self._artifact_table} (
     app_name STRING(128) NOT NULL,
     user_id STRING(128) NOT NULL,
@@ -61,7 +61,7 @@ class _SpannerADKArtifactStoreMixin:
     canonical_uri STRING(2048) NOT NULL,
     custom_metadata JSON,
     created_at TIMESTAMP NOT NULL
-) PRIMARY KEY (app_name, user_id, session_id, filename, version){self._artifact_row_deletion_policy}{options}"""
+) PRIMARY KEY (app_name, user_id, session_id, filename, version){self._artifact_row_deletion_policy}"""
         return [ddl]
 
     def _build_drop_artifact_table_sql(self) -> "list[str]":
@@ -322,13 +322,15 @@ ORDER BY app_name ASC, user_id ASC, session_id ASC, filename ASC, version ASC"""
 class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _SpannerADKArtifactStoreMixin):
     """Spanner ADK artifact store backed by synchronous Spanner client."""
 
-    __slots__ = ("_artifact_row_deletion_policy", "_artifact_table_options")
+    __slots__ = ("_artifact_row_deletion_policy",)
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerSyncConfig) -> None:
         super().__init__(config)
-        self._artifact_table_options, self._artifact_row_deletion_policy = _extract_spanner_artifact_options(config)
+        self._artifact_row_deletion_policy = _spanner_row_deletion_policy(
+            _adk_config(config), "artifact_ttl_seconds", "created_at"
+        )
 
     def create_table(self) -> None:
         """Create the artifact versions table if it does not exist."""
@@ -345,7 +347,7 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
     def insert_artifact(self, record: StoredArtifact) -> None:
         """Insert an artifact version metadata row."""
         sql, params, types = self._build_insert_artifact_statement(record)
-        cast("Any", self._database()).run_in_transaction(_SpannerSyncArtifactInsertJob(sql, params, types))
+        cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types))
 
     def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None, version: "int | None" = None
@@ -423,27 +425,26 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
     def _existing_tables(self) -> "set[str]":
         return list_existing_table_names_sync(self._database())
 
-    def _artifact_table_ddl(self) -> "list[str]":
-        return self._build_artifact_table_ddl()
-
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
         with self._config.provide_connection() as snapshot:
-            reader = cast("_SpannerArtifactReadProtocol", snapshot)
+            reader = cast("_SpannerReadProtocol", snapshot)
             return list(reader.execute_sql(sql, params=params, param_types=types))
 
 
 class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig], _SpannerADKArtifactStoreMixin):
     """Spanner ADK artifact store backed by asynchronous Spanner client."""
 
-    __slots__ = ("_artifact_row_deletion_policy", "_artifact_table_options")
+    __slots__ = ("_artifact_row_deletion_policy",)
 
     connector_name: ClassVar[str] = "spanner"
 
     def __init__(self, config: SpannerAsyncConfig) -> None:
         super().__init__(config)
-        self._artifact_table_options, self._artifact_row_deletion_policy = _extract_spanner_artifact_options(config)
+        self._artifact_row_deletion_policy = _spanner_row_deletion_policy(
+            _adk_config(config), "artifact_ttl_seconds", "created_at"
+        )
 
     async def create_table(self) -> None:
         """Create the artifact versions table if it does not exist."""
@@ -463,7 +464,7 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         """Insert an artifact version metadata row."""
         sql, params, types = self._build_insert_artifact_statement(record)
         database = await self._database()
-        await database.run_in_transaction(_SpannerAsyncArtifactInsertJob(sql, params, types))
+        await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types))
 
     async def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None, version: "int | None" = None
@@ -547,58 +548,10 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
     async def _existing_tables(self) -> "set[str]":
         return await list_existing_table_names_async(await self._database())
 
-    def _artifact_table_ddl(self) -> "list[str]":
-        return self._build_artifact_table_ddl()
-
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
         return await _run_read_async(await self._database(), sql, params, types)
-
-
-def _extract_spanner_artifact_options(config: Any) -> "tuple[str | None, str]":
-    """Return table options and row deletion policy for the Spanner ADK artifact table."""
-    adk_config = _adk_config(config)
-    raw_options = adk_config.get("artifact_table_options")
-    table_options = str(raw_options) if isinstance(raw_options, str) else None
-    return (
-        table_options,
-        _spanner_row_deletion_policy(adk_config, "artifact_ttl_seconds", "created_at"),
-    )
-
-
-class _SpannerArtifactReadProtocol(Protocol):
-    def execute_sql(
-        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
-    ) -> Iterable[Any]: ...
-
-
-class _SpannerSyncArtifactInsertJob:
-    """Callable transaction work item for Spanner sync ADK artifact inserts."""
-
-    __slots__ = ("_params", "_sql", "_types")
-
-    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._sql = sql
-        self._params = params
-        self._types = types
-
-    def __call__(self, transaction: "SpannerTransaction") -> int:
-        return int(cast("Any", transaction).execute_update(self._sql, params=self._params, param_types=self._types))
-
-
-class _SpannerAsyncArtifactInsertJob:
-    """Callable async transaction work item for Spanner async ADK artifact inserts."""
-
-    __slots__ = ("_params", "_sql", "_types")
-
-    def __init__(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> None:
-        self._sql = sql
-        self._params = params
-        self._types = types
-
-    async def __call__(self, transaction: "SpannerAsyncTransaction") -> int:
-        return int(await transaction.execute_update(self._sql, params=self._params, param_types=self._types))
 
 
 class _SpannerSyncArtifactDeleteJob:
@@ -614,7 +567,7 @@ class _SpannerSyncArtifactDeleteJob:
 
     def __call__(self, transaction: "SpannerTransaction") -> "list[Any]":
         rows = list(
-            cast("_SpannerArtifactReadProtocol", transaction).execute_sql(
+            cast("_SpannerReadProtocol", transaction).execute_sql(
                 self._select_sql, params=self._params, param_types=self._types
             )
         )
