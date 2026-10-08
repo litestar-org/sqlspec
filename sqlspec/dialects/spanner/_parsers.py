@@ -156,23 +156,6 @@ def _build_property_entry(handler: Any, original: Any) -> Any:
     return _entry
 
 
-def register_spanner_property_parsers() -> None:
-    """Install Spanner property parsers on the BigQuery and Postgres parser classes."""
-    for parser_class in (BigQueryParser, PostgresParser):
-        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
-            continue
-        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
-        for key, handler in (
-            ("INTERLEAVE", _parse_interleave),
-            ("PRIMARY KEY", _parse_primary_key_property),
-            ("ROW", _parse_row_deletion_policy),
-            ("TTL", _parse_ttl),
-        ):
-            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
-        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
-        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
-
-
 def _parse_get_next_sequence_value(parser: Any) -> exp.Anonymous:
     """Parse GET_NEXT_SEQUENCE_VALUE(SEQUENCE sequence_name)."""
     if _is_spanner_parser(parser):
@@ -714,30 +697,42 @@ def _bq_parse_drop(self: Any) -> exp.Drop | exp.Command:
     return cast("exp.Drop | exp.Command", self._parse_drop())
 
 
-BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
-BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
-BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
-BigQueryParser.FUNCTIONS["SEARCH"] = _build_search
+def register_spanner_property_parsers() -> None:
+    """Install Spanner parser extensions on the BigQuery and Postgres parser classes."""
+    for parser_class in (BigQueryParser, PostgresParser):
+        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
+            continue
+        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
+        for key, handler in (
+            ("INTERLEAVE", _parse_interleave),
+            ("PRIMARY KEY", _parse_primary_key_property),
+            ("ROW", _parse_row_deletion_policy),
+            ("TTL", _parse_ttl),
+        ):
+            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
+        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
+        if parser_class is BigQueryParser:
+            BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
+            BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
+            BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
+            BigQueryParser.FUNCTIONS["SEARCH"] = _build_search
+            BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
+            BigQueryParser.FUNCTION_PARSERS["GRAPH_TABLE"] = _parse_graph_table
+            BigQueryParser.CONSTRAINT_PARSERS["HIDDEN"] = _parse_hidden_column_constraint
+            BigQueryParser.TYPE_CONVERTERS = {
+                **BigQueryParser.TYPE_CONVERTERS,
+                exp.DataType.Type.USERDEFINED: _convert_userdefined_type,
+            }
+            BigQueryParser.STATEMENT_PARSERS[TokenType.CREATE] = _bq_parse_create
+            BigQueryParser.STATEMENT_PARSERS[TokenType.ALTER] = _bq_parse_alter
+            BigQueryParser.STATEMENT_PARSERS[TokenType.DROP] = _bq_parse_drop
+        elif parser_class is PostgresParser:
+            PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
+            PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
+            PostgresParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
+            PostgresParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
+        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
 
-BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
-BigQueryParser.FUNCTION_PARSERS["GRAPH_TABLE"] = _parse_graph_table
-
-BigQueryParser.CONSTRAINT_PARSERS["HIDDEN"] = _parse_hidden_column_constraint
-
-BigQueryParser.TYPE_CONVERTERS = {
-    **BigQueryParser.TYPE_CONVERTERS,
-    exp.DataType.Type.USERDEFINED: _convert_userdefined_type,
-}
-
-BigQueryParser.STATEMENT_PARSERS[TokenType.CREATE] = _bq_parse_create
-BigQueryParser.STATEMENT_PARSERS[TokenType.ALTER] = _bq_parse_alter
-BigQueryParser.STATEMENT_PARSERS[TokenType.DROP] = _bq_parse_drop
-
-PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
-PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
-PostgresParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
-
-PostgresParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
 
 register_spanner_property_parsers()
 
