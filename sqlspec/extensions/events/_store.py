@@ -46,6 +46,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
         "queue_table",
         "retention_seconds",
         "select_for_update",
+        "shard_count",
         "skip_locked",
     })
 
