@@ -1,8 +1,10 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for SyncTableEventQueue and AsyncTableEventQueue."""
 
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -427,3 +429,136 @@ def test_sync_table_event_queue_supports_sync() -> None:
     """SyncTableEventQueue supports sync operations only."""
     assert SyncTableEventQueue.supports_sync is True
     assert SyncTableEventQueue.supports_async is False
+
+
+@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
+def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """ack() skips synchronous _cleanup when cleanup_on_ack is False."""
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "ack-no-cleanup.db")})
+    queue = SyncTableEventQueue(config, cleanup_on_ack=False)
+    executed: list[str] = []
+    cleanups: list[datetime] = []
+
+    monkeypatch.setattr(SyncTableEventQueue, "_execute", lambda _self, stmt, _params: executed.append(stmt) or 1)
+    monkeypatch.setattr(SyncTableEventQueue, "_cleanup", lambda _self, now: cleanups.append(now) or 0)
+
+    queue.ack("event-1")
+
+    assert len(executed) == 1
+    assert cleanups == []
+
+
+@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
+def test_fetch_candidate_and_fetch_by_event_id_use_read_only_session_when_unlocked() -> None:
+    """Read-only candidate fetches pass transaction=False when _DEFAULT_SESSION_TRANSACTION is True."""
+    session_calls: list[dict[str, Any]] = []
+
+    class FakeDriver:
+        def select_one_or_none(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    class FakeConfig:
+        _DEFAULT_SESSION_TRANSACTION = True
+        statement_config = StatementConfig(dialect="spanner")
+        supports_async = False
+        extension_config: dict[str, Any] = {}
+
+        def get_observability_runtime(self) -> Any:
+            return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
+
+        @contextmanager
+        def provide_session(self, **kwargs: Any) -> Any:
+            session_calls.append(kwargs)
+            yield FakeDriver()
+
+    config = FakeConfig()
+    unlocked_queue = SyncTableEventQueue(cast("Any", config), select_for_update=False)
+    assert unlocked_queue._fetch_candidate("alerts") is None
+    assert unlocked_queue._fetch_by_event_id("event-1") is None
+    assert session_calls == [{"transaction": False}, {"transaction": False}]
+
+    session_calls.clear()
+    locked_queue = SyncTableEventQueue(cast("Any", config), select_for_update=True)
+    assert locked_queue._fetch_candidate("alerts") is None
+    assert session_calls == [{}]
+
+
+@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
+@pytest.mark.anyio
+async def test_execute_and_publish_many_route_through_driver_run_in_transaction_with_tx_driver() -> None:
+    """_execute and publish_many route DML through driver.run_in_transaction(fn) using tx_driver."""
+    sync_session_kwargs: list[dict[str, Any]] = []
+    sync_tx_calls: list[tuple[str, Any]] = []
+
+    class FakeSyncTxDriver:
+        def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
+            sync_tx_calls.append(("execute", statement))
+            return SimpleNamespace(rows_affected=1)
+
+        def execute_many(self, sql: str, params: Any, **_kwargs: Any) -> Any:
+            sync_tx_calls.append(("execute_many", (sql, len(params))))
+            return SimpleNamespace(rows_affected=len(params))
+
+    class FakeSyncOuterDriver:
+        def run_in_transaction(self, fn: Any) -> Any:
+            return fn(FakeSyncTxDriver())
+
+    class FakeSyncConfig:
+        _DEFAULT_SESSION_TRANSACTION = True
+        statement_config = StatementConfig(dialect="spanner")
+        supports_async = False
+        extension_config: dict[str, Any] = {}
+
+        def get_observability_runtime(self) -> Any:
+            return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
+
+        @contextmanager
+        def provide_session(self, **kwargs: Any) -> Any:
+            sync_session_kwargs.append(kwargs)
+            yield FakeSyncOuterDriver()
+
+    sync_queue = SyncTableEventQueue(cast("Any", FakeSyncConfig()), use_run_in_transaction=True)
+    assert sync_queue._execute("UPDATE t SET x = 1", {"id": "1"}) == 1
+    assert len(sync_queue.publish_many([("alerts", {"a": 1}, None), ("alerts", {"a": 2}, None)])) == 2
+    assert sync_session_kwargs == [{"transaction": False}, {"transaction": False}]
+    assert [kind for kind, _ in sync_tx_calls] == ["execute", "execute_many"]
+
+    async_session_kwargs: list[dict[str, Any]] = []
+    async_tx_calls: list[tuple[str, Any]] = []
+
+    class FakeAsyncTxDriver:
+        async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
+            async_tx_calls.append(("execute", statement))
+            return SimpleNamespace(rows_affected=1)
+
+        async def execute_many(self, sql: str, params: Any, **_kwargs: Any) -> Any:
+            async_tx_calls.append(("execute_many", (sql, len(params))))
+            return SimpleNamespace(rows_affected=len(params))
+
+    class FakeAsyncOuterDriver:
+        async def run_in_transaction(self, fn: Any) -> Any:
+            return await fn(FakeAsyncTxDriver())
+
+    class FakeAsyncConfig:
+        _DEFAULT_SESSION_TRANSACTION = True
+        statement_config = StatementConfig(dialect="spanner")
+        supports_async = True
+        extension_config: dict[str, Any] = {}
+
+        def get_observability_runtime(self) -> Any:
+            return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
+
+        @asynccontextmanager
+        async def provide_session(self, **kwargs: Any) -> Any:
+            async_session_kwargs.append(kwargs)
+            yield FakeAsyncOuterDriver()
+
+    async_queue = AsyncTableEventQueue(cast("Any", FakeAsyncConfig()), use_run_in_transaction=True)
+    assert await async_queue._execute("UPDATE t SET x = 1", {"id": "1"}) == 1
+    assert len(await async_queue.publish_many([("alerts", {"a": 1}, None), ("alerts", {"a": 2}, None)])) == 2
+    assert async_session_kwargs == [{"transaction": False}, {"transaction": False}]
+    assert [kind for kind, _ in async_tx_calls] == ["execute", "execute_many"]
+
+

@@ -695,6 +695,9 @@ class EventsConfig(TypedDict):
     skip_locked: NotRequired[bool]
     """Use SKIP LOCKED for non-blocking event claims. Defaults to False."""
 
+    shard_count: NotRequired[int]
+    """Number of hash shards for queue table and index prefixing (e.g. Cloud Spanner). Defaults to 1."""
+
 
 class OpenTelemetryConfig(TypedDict):
     """Configuration options for OpenTelemetry integration.

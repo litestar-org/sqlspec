@@ -20,6 +20,8 @@ class EventRuntimeHints:
     retention_seconds: int = 86_400
     select_for_update: bool = False
     skip_locked: bool = False
+    cleanup_on_ack: bool = True
+    use_run_in_transaction: bool = False
 
 
 _DEFAULT_HINTS: Final[EventRuntimeHints] = EventRuntimeHints()
