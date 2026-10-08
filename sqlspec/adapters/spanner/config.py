@@ -416,6 +416,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
     )
     _session_context_class: "ClassVar[type[SpannerSyncSessionContext]]" = SpannerSyncSessionContext
     _default_statement_config = default_statement_config
+    _DEFAULT_SESSION_TRANSACTION: ClassVar[bool] = _DEFAULT_SESSION_TRANSACTION
 
     def __init__(
         self,
@@ -780,6 +781,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
     )
     _session_context_class: "ClassVar[type[SpannerAsyncSessionContext]]" = SpannerAsyncSessionContext
     _default_statement_config = default_statement_config
+    _DEFAULT_SESSION_TRANSACTION: ClassVar[bool] = _DEFAULT_SESSION_TRANSACTION
 
     def __init__(
         self,

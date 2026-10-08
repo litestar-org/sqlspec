@@ -93,12 +93,13 @@ def test_oracle_event_runtime_hints_enable_row_locking() -> None:
 
 
 def test_spanner_event_runtime_hints_disable_cleanup_on_ack_and_enable_run_in_transaction() -> None:
-    """Spanner configs disable synchronous ack cleanup and enable run_in_transaction."""
+    """Spanner configs disable synchronous ack cleanup, enable run_in_transaction, and mark default session transaction."""
     conn_cfg = {"project": "test-proj", "instance_id": "test-inst", "database_id": "test-db"}
     for config in (
         SpannerSyncConfig(connection_config=conn_cfg),
         SpannerAsyncConfig(connection_config=conn_cfg),
     ):
+        assert config._DEFAULT_SESSION_TRANSACTION is True
         hints = get_runtime_hints("spanner", config)
         assert hints == EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
 

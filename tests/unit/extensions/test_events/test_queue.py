@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for SyncTableEventQueue and AsyncTableEventQueue."""
 
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -8,11 +9,18 @@ from typing import Any, cast
 
 import pytest
 
+from sqlspec.adapters.spanner import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.core import StatementConfig
 from sqlspec.core.parameters import structural_fingerprint
 from sqlspec.exceptions import EventChannelError
-from sqlspec.extensions.events import AsyncTableEventQueue, EventMessage, SyncTableEventQueue, parse_event_timestamp
+from sqlspec.extensions.events import (
+    AsyncTableEventQueue,
+    EventMessage,
+    SyncTableEventQueue,
+    build_queue_backend,
+    parse_event_timestamp,
+)
 from tests.conftest import is_compiled
 
 
@@ -431,36 +439,32 @@ def test_sync_table_event_queue_supports_sync() -> None:
     assert SyncTableEventQueue.supports_async is False
 
 
-@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
-def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-) -> None:
-    """ack() skips synchronous _cleanup when cleanup_on_ack is False."""
-    config = SqliteConfig(connection_config={"database": str(tmp_path / "ack-no-cleanup.db")})
-    queue = SyncTableEventQueue(config, cleanup_on_ack=False)
-    executed: list[str] = []
-    cleanups: list[datetime] = []
+@pytest.mark.anyio
+async def test_sync_and_async_queue_ack_skips_cleanup_when_cleanup_on_ack_false() -> None:
+    """ack() skips synchronous _cleanup on both sync and async queues when cleanup_on_ack is False."""
+    conn_cfg = {"project": "test-proj", "instance_id": "test-inst", "database_id": "test-db"}
+    sync_config = SpannerSyncConfig(connection_config=conn_cfg)
+    async_config = SpannerAsyncConfig(connection_config=conn_cfg)
 
-    monkeypatch.setattr(SyncTableEventQueue, "_execute", lambda _self, stmt, _params: executed.append(stmt) or 1)
-    monkeypatch.setattr(SyncTableEventQueue, "_cleanup", lambda _self, now: cleanups.append(now) or 0)
+    built_sync = build_queue_backend(sync_config, {}, adapter_name="spanner")
+    built_async = build_queue_backend(async_config, {}, adapter_name="spanner")
+    assert built_sync._cleanup_on_ack is False
+    assert built_sync._use_run_in_transaction is True
+    assert built_async._cleanup_on_ack is False
+    assert built_async._use_run_in_transaction is True
 
-    queue.ack("event-1")
+    sync_statements: list[str] = []
 
-    assert len(executed) == 1
-    assert cleanups == []
+    class FakeSyncSessionDriver:
+        def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
+            sync_statements.append(str(statement))
+            return SimpleNamespace(rows_affected=1)
 
+        def commit(self) -> None:
+            pass
 
-@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
-def test_fetch_candidate_and_fetch_by_event_id_use_read_only_session_when_unlocked() -> None:
-    """Read-only candidate fetches pass transaction=False when _DEFAULT_SESSION_TRANSACTION is True."""
-    session_calls: list[dict[str, Any]] = []
-
-    class FakeDriver:
-        def select_one_or_none(self, *_args: Any, **_kwargs: Any) -> None:
-            return None
-
-    class FakeConfig:
-        _DEFAULT_SESSION_TRANSACTION = True
+    class SyncConfigStub:
+        _DEFAULT_SESSION_TRANSACTION = False
         statement_config = StatementConfig(dialect="spanner")
         supports_async = False
         extension_config: dict[str, Any] = {}
@@ -469,26 +473,102 @@ def test_fetch_candidate_and_fetch_by_event_id_use_read_only_session_when_unlock
             return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
 
         @contextmanager
-        def provide_session(self, **kwargs: Any) -> Any:
-            session_calls.append(kwargs)
-            yield FakeDriver()
+        def provide_session(self, **_kwargs: Any) -> Iterator[Any]:
+            yield FakeSyncSessionDriver()
 
-    config = FakeConfig()
-    unlocked_queue = SyncTableEventQueue(cast("Any", config), select_for_update=False)
-    assert unlocked_queue._fetch_candidate("alerts") is None
-    assert unlocked_queue._fetch_by_event_id("event-1") is None
-    assert session_calls == [{"transaction": False}, {"transaction": False}]
+    sync_queue = SyncTableEventQueue(cast("Any", SyncConfigStub()), cleanup_on_ack=False)
+    sync_queue.ack("event-1")
+    assert len(sync_statements) == 1
+    assert "DELETE FROM" not in sync_statements[0]
 
-    session_calls.clear()
-    locked_queue = SyncTableEventQueue(cast("Any", config), select_for_update=True)
-    assert locked_queue._fetch_candidate("alerts") is None
-    assert session_calls == [{}]
+    async_statements: list[str] = []
+
+    class FakeAsyncSessionDriver:
+        async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
+            async_statements.append(str(statement))
+            return SimpleNamespace(rows_affected=1)
+
+        async def commit(self) -> None:
+            pass
+
+    class AsyncConfigStub:
+        _DEFAULT_SESSION_TRANSACTION = False
+        statement_config = StatementConfig(dialect="spanner")
+        supports_async = True
+        extension_config: dict[str, Any] = {}
+
+        def get_observability_runtime(self) -> Any:
+            return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
+
+        @asynccontextmanager
+        async def provide_session(self, **_kwargs: Any) -> AsyncIterator[Any]:
+            yield FakeAsyncSessionDriver()
+
+    async_queue = AsyncTableEventQueue(cast("Any", AsyncConfigStub()), cleanup_on_ack=False)
+    await async_queue.ack("event-1")
+    assert len(async_statements) == 1
+    assert "DELETE FROM" not in async_statements[0]
 
 
-@pytest.mark.skipif(is_compiled(), reason="mypyc direct method calls bypass queue method monkeypatches")
 @pytest.mark.anyio
-async def test_execute_and_publish_many_route_through_driver_run_in_transaction_with_tx_driver() -> None:
+async def test_fetch_candidate_and_fetch_by_event_id_use_read_only_session_when_unlocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read-only candidate fetches pass transaction=False on SpannerSyncConfig and SpannerAsyncConfig."""
+    sync_session_calls: list[dict[str, Any]] = []
+
+    class FakeSyncDriver:
+        def select_one_or_none(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    @contextmanager
+    def _provide_sync_session(*_args: Any, **kwargs: Any) -> Iterator[Any]:
+        sync_session_calls.append(kwargs)
+        yield FakeSyncDriver()
+
+    conn_cfg = {"project": "test-proj", "instance_id": "test-inst", "database_id": "test-db"}
+    sync_config = SpannerSyncConfig(connection_config=conn_cfg)
+    monkeypatch.setattr(sync_config, "provide_session", _provide_sync_session)
+    unlocked_sync_queue = SyncTableEventQueue(sync_config, select_for_update=False)
+    assert unlocked_sync_queue._fetch_candidate("alerts") is None
+    assert unlocked_sync_queue._fetch_by_event_id("event-1") is None
+    assert sync_session_calls == [{"transaction": False}, {"transaction": False}]
+
+    sync_session_calls.clear()
+    locked_sync_queue = SyncTableEventQueue(sync_config, select_for_update=True)
+    assert locked_sync_queue._fetch_candidate("alerts") is None
+    assert sync_session_calls == [{}]
+
+    async_session_calls: list[dict[str, Any]] = []
+
+    class FakeAsyncDriver:
+        async def select_one_or_none(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    @asynccontextmanager
+    async def _provide_async_session(*_args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        async_session_calls.append(kwargs)
+        yield FakeAsyncDriver()
+
+    async_config = SpannerAsyncConfig(connection_config=conn_cfg)
+    monkeypatch.setattr(async_config, "provide_session", _provide_async_session)
+    unlocked_async_queue = AsyncTableEventQueue(async_config, select_for_update=False)
+    assert await unlocked_async_queue._fetch_candidate("alerts") is None
+    assert await unlocked_async_queue._fetch_by_event_id("event-1") is None
+    assert async_session_calls == [{"transaction": False}, {"transaction": False}]
+
+    async_session_calls.clear()
+    locked_async_queue = AsyncTableEventQueue(async_config, select_for_update=True)
+    assert await locked_async_queue._fetch_candidate("alerts") is None
+    assert async_session_calls == [{}]
+
+
+@pytest.mark.anyio
+async def test_execute_and_publish_many_route_through_driver_run_in_transaction_with_tx_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """_execute and publish_many route DML through driver.run_in_transaction(fn) using tx_driver."""
+    conn_cfg = {"project": "test-proj", "instance_id": "test-inst", "database_id": "test-db"}
     sync_session_kwargs: list[dict[str, Any]] = []
     sync_tx_calls: list[tuple[str, Any]] = []
 
@@ -505,21 +585,14 @@ async def test_execute_and_publish_many_route_through_driver_run_in_transaction_
         def run_in_transaction(self, fn: Any) -> Any:
             return fn(FakeSyncTxDriver())
 
-    class FakeSyncConfig:
-        _DEFAULT_SESSION_TRANSACTION = True
-        statement_config = StatementConfig(dialect="spanner")
-        supports_async = False
-        extension_config: dict[str, Any] = {}
+    @contextmanager
+    def _provide_sync_tx_session(*_args: Any, **kwargs: Any) -> Iterator[Any]:
+        sync_session_kwargs.append(kwargs)
+        yield FakeSyncOuterDriver()
 
-        def get_observability_runtime(self) -> Any:
-            return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
-
-        @contextmanager
-        def provide_session(self, **kwargs: Any) -> Any:
-            sync_session_kwargs.append(kwargs)
-            yield FakeSyncOuterDriver()
-
-    sync_queue = SyncTableEventQueue(cast("Any", FakeSyncConfig()), use_run_in_transaction=True)
+    sync_config = SpannerSyncConfig(connection_config=conn_cfg)
+    monkeypatch.setattr(sync_config, "provide_session", _provide_sync_tx_session)
+    sync_queue = SyncTableEventQueue(sync_config, use_run_in_transaction=True)
     assert sync_queue._execute("UPDATE t SET x = 1", {"id": "1"}) == 1
     assert len(sync_queue.publish_many([("alerts", {"a": 1}, None), ("alerts", {"a": 2}, None)])) == 2
     assert sync_session_kwargs == [{"transaction": False}, {"transaction": False}]
@@ -541,21 +614,14 @@ async def test_execute_and_publish_many_route_through_driver_run_in_transaction_
         async def run_in_transaction(self, fn: Any) -> Any:
             return await fn(FakeAsyncTxDriver())
 
-    class FakeAsyncConfig:
-        _DEFAULT_SESSION_TRANSACTION = True
-        statement_config = StatementConfig(dialect="spanner")
-        supports_async = True
-        extension_config: dict[str, Any] = {}
+    @asynccontextmanager
+    async def _provide_async_tx_session(*_args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        async_session_kwargs.append(kwargs)
+        yield FakeAsyncOuterDriver()
 
-        def get_observability_runtime(self) -> Any:
-            return SimpleNamespace(increment_metric=lambda *_args, **_kwargs: None)
-
-        @asynccontextmanager
-        async def provide_session(self, **kwargs: Any) -> Any:
-            async_session_kwargs.append(kwargs)
-            yield FakeAsyncOuterDriver()
-
-    async_queue = AsyncTableEventQueue(cast("Any", FakeAsyncConfig()), use_run_in_transaction=True)
+    async_config = SpannerAsyncConfig(connection_config=conn_cfg)
+    monkeypatch.setattr(async_config, "provide_session", _provide_async_tx_session)
+    async_queue = AsyncTableEventQueue(async_config, use_run_in_transaction=True)
     assert await async_queue._execute("UPDATE t SET x = 1", {"id": "1"}) == 1
     assert len(await async_queue.publish_many([("alerts", {"a": 1}, None), ("alerts", {"a": 2}, None)])) == 2
     assert async_session_kwargs == [{"transaction": False}, {"transaction": False}]
