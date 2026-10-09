@@ -244,6 +244,14 @@ Extensions
    :members:
    :show-inheritance:
 
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerSyncADKArtifactStore
+   :members:
+   :show-inheritance:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerAsyncADKArtifactStore
+   :members:
+   :show-inheritance:
+
 .. autoclass:: sqlspec.adapters.spanner.litestar.SpannerSyncStore
    :members:
    :show-inheritance:

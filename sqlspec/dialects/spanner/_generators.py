@@ -287,7 +287,10 @@ def _render_approx_cosine_distance(generator: Any, expression: exp.Expr) -> str:
         this = generator.sql(exprs[0])
         expr = generator.sql(exprs[1]) if len(exprs) > 1 else ""
         if len(exprs) > _APPROX_COSINE_MIN_ARGS:
-            opts_sql = generator.sql(exprs[2])
+            opt_arg = exprs[2]
+            if _get_dialect_name(generator) == "Spangres" and isinstance(opt_arg, exp.Kwarg):
+                opt_arg = opt_arg.expression
+            opts_sql = generator.sql(opt_arg)
             return f"APPROX_COSINE_DISTANCE({this}, {expr}, {opts_sql})"
         return f"APPROX_COSINE_DISTANCE({this}, {expr})"
     this = generator.sql(expression, "this")
@@ -313,14 +316,23 @@ def _spanner_index_sql(generator: Any, expression: exp.Index) -> str:
     """Render Spanner INDEX, VECTOR INDEX, or SEARCH INDEX DDL."""
     kind = expression.args.get("kind")
     if kind == "VECTOR":
+        exists_sql = " IF NOT EXISTS" if expression.args.get("exists") else ""
         name = generator.sql(expression, "this")
         table = generator.sql(expression, "table")
         params = generator.sql(expression, "params")
         cols_sql = f"({params})" if not params.startswith("(") else params
-        parts = [f"CREATE VECTOR INDEX {name} ON {table} {cols_sql}"]
+        parts = [f"CREATE VECTOR INDEX{exists_sql} {name} ON {table} {cols_sql}"]
+        storing = expression.args.get("storing")
+        if storing:
+            storing_cols = ", ".join(generator.sql(c) for c in storing)
+            parts.append(f"STORING ({storing_cols})")
         where = expression.args.get("where")
         if where:
-            parts.append(generator.sql(where))
+            if isinstance(where, exp.Where) and isinstance(where.this, exp.Not) and isinstance(where.this.this, exp.Is):
+                is_expr = where.this.this
+                parts.append(f"WHERE {generator.sql(is_expr, 'this')} IS NOT {generator.sql(is_expr, 'expression')}")
+            else:
+                parts.append(generator.sql(where).strip())
         options = expression.args.get("options")
         if options:
             opts_list = [f"{generator.sql(p.this)} = {generator.sql(p.args.get('value'))}" for p in options.expressions]
@@ -328,11 +340,12 @@ def _spanner_index_sql(generator: Any, expression: exp.Index) -> str:
             parts.append(f"OPTIONS ({opts_str})")
         return " ".join(parts)
     if kind == "SEARCH":
+        exists_sql = " IF NOT EXISTS" if expression.args.get("exists") else ""
         name = generator.sql(expression, "this")
         table = generator.sql(expression, "table")
         params = generator.sql(expression, "params")
         cols_sql = f"({params})" if not params.startswith("(") else params
-        parts = [f"CREATE SEARCH INDEX {name} ON {table} {cols_sql}"]
+        parts = [f"CREATE SEARCH INDEX{exists_sql} {name} ON {table} {cols_sql}"]
         storing = expression.args.get("storing")
         if storing:
             storing_cols = ", ".join(generator.sql(c) for c in storing)
@@ -355,8 +368,41 @@ def _spanner_index_sql(generator: Any, expression: exp.Index) -> str:
     return str(generator.index_sql(expression))
 
 
+def _spanner_property_graph_sql(generator: Any, expression: exp.Expr) -> str:
+    """Render Spanner PROPERTY GRAPH body."""
+    name = generator.sql(expression, "graph")
+    node_tables = expression.args.get("node_tables") or []
+    nodes_sql = ", ".join(generator.sql(node) for node in node_tables)
+    sql = f"{name} NODE TABLES ({nodes_sql})"
+    edge_tables = expression.args.get("edge_tables")
+    if edge_tables:
+        edges_sql = ", ".join(generator.sql(edge) for edge in edge_tables)
+        sql = f"{sql} EDGE TABLES ({edges_sql})"
+    return sql
+
+
+def _spanner_graph_table_sql(generator: Any, expression: exp.Expr) -> str:
+    """Render Spanner GRAPH_TABLE(...) expression."""
+    graph = generator.sql(expression, "graph")
+    match_sql = generator.sql(expression, "match")
+    parts = [f"{graph} MATCH {match_sql}"]
+    where_expr = expression.args.get("where")
+    if where_expr is not None:
+        parts.append(f"WHERE {generator.sql(where_expr)}")
+    columns = expression.args.get("columns") or []
+    if columns:
+        cols_sql = ", ".join(generator.sql(col) for col in columns)
+        parts.append(f"COLUMNS ({cols_sql})")
+    inner = " ".join(parts)
+    return f"GRAPH_TABLE({inner})"
+
+
 def _spanner_create_transform(generator: Any, expression: exp.Create) -> str:
-    """Transform CREATE statements for Spanner including TABLE, SEQUENCE, and CHANGE STREAM."""
+    """Transform CREATE statements for Spanner including TABLE, SEQUENCE, CHANGE STREAM, and PROPERTY GRAPH."""
+    if expression.kind == "PROPERTY GRAPH":
+        replace = " OR REPLACE" if expression.args.get("replace") else ""
+        exists = " IF NOT EXISTS" if expression.args.get("exists") else ""
+        return f"CREATE{replace} PROPERTY GRAPH{exists} {generator.sql(expression, 'this')}"
     if expression.kind == "SEQUENCE":
         name = generator.sql(expression, "this")
         exists = " IF NOT EXISTS" if expression.args.get("exists") else ""
@@ -428,11 +474,12 @@ def _spanner_alter_sql(generator: Any, expression: exp.Alter) -> str:
 
 
 def _spanner_drop_sql(generator: Any, expression: exp.Drop) -> str:
-    """Render DROP statements for Spanner including CHANGE STREAM."""
+    """Render DROP statements for Spanner including CHANGE STREAM, PROPERTY GRAPH, VECTOR INDEX, and SEARCH INDEX."""
     kind = expression.args.get("kind")
-    if kind == "CHANGE STREAM":
+    if kind in {"CHANGE STREAM", "PROPERTY GRAPH", "VECTOR INDEX", "SEARCH INDEX"}:
+        exists_sql = " IF EXISTS" if expression.args.get("exists") else ""
         name = generator.sql(expression, "this")
-        return f"DROP CHANGE STREAM {name}"
+        return f"DROP {kind}{exists_sql} {name}"
     if _original_bq_drop_transform is not None:
         return str(_original_bq_drop_transform(generator, expression))
     return str(generator.drop_sql(expression))
@@ -566,7 +613,12 @@ def _bq_drop_transform(generator: Any, expression: exp.Drop) -> str:
 def _bq_computed_column_transform(generator: Any, expression: exp.ComputedColumnConstraint) -> str:
     """Transform COMPUTED COLUMN statements for Spanner or delegate to original BigQuery transform."""
     if _get_dialect_name(generator) == "Spanner":
-        return f"AS {generator.sql(expression, 'this')} STORED"
+        this_sql = generator.sql(expression, "this")
+        if expression.args.get("hidden"):
+            if expression.args.get("persisted"):
+                return f"AS {this_sql} STORED HIDDEN"
+            return f"AS {this_sql} HIDDEN"
+        return f"AS {this_sql} STORED"
     if _original_bq_computed_column_transform is not None:
         return str(_original_bq_computed_column_transform(generator, expression))
     return str(generator.computedcolumnconstraint_sql(expression))
@@ -700,6 +752,10 @@ def _spanner_anonymous_transform(generator: Any, expression: exp.Anonymous) -> s
     dialect_name = _get_dialect_name(generator)
     if dialect_name == "Spanner":
         name = str(expression.this).upper()
+        if name == "SPANNER_PROPERTY_GRAPH":
+            return _spanner_property_graph_sql(generator, expression)
+        if name == "GRAPH_TABLE" and "match" in expression.args:
+            return _spanner_graph_table_sql(generator, expression)
         if name == "GET_NEXT_SEQUENCE_VALUE" and expression.expressions:
             seq = generator.sql(expression.expressions[0])
             return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
@@ -707,7 +763,7 @@ def _spanner_anonymous_transform(generator: Any, expression: exp.Anonymous) -> s
             return _render_approx_cosine_distance(generator, expression)
         if name == "TOKENIZE_FULLTEXT":
             return _render_tokenize_fulltext(generator, expression)
-        if name in {"SEARCH_SUBSTRING", "SCORE", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
+        if name in {"SEARCH_SUBSTRING", "SCORE", "SCORE_NGRAMS", "SNIPPET", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
             args = ", ".join(generator.sql(e) for e in expression.expressions)
             return f"{name}({args})"
     if _original_bq_anonymous_transform is not None:
@@ -725,7 +781,7 @@ def _spangres_anonymous_transform(generator: Any, expression: exp.Anonymous) -> 
             return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
         if name == "APPROX_COSINE_DISTANCE":
             return _render_approx_cosine_distance(generator, expression)
-        if name in {"SEARCH_SUBSTRING", "SCORE", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
+        if name in {"SEARCH_SUBSTRING", "SCORE", "SCORE_NGRAMS", "SNIPPET", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
             args = ", ".join(generator.sql(e) for e in expression.expressions)
             return f"{name}({args})"
     if _original_pg_anonymous_transform is not None:
@@ -754,6 +810,7 @@ def _build_function_fallback_transform(expected_dialect: str, original: Any) -> 
     return _transform
 
 
+_GENERATOR_TRANSFORMS_REGISTERED_ATTR: Final[str] = "_sqlspec_spanner_generator_transforms"
 _original_bq_cosine_distance_transform = BigQueryGenerator.TRANSFORMS.get(CosineDistance)
 _original_bq_euclidean_distance_transform = BigQueryGenerator.TRANSFORMS.get(EuclideanDistance)
 _original_bq_dot_product_transform = BigQueryGenerator.TRANSFORMS.get(DotProduct)
@@ -762,50 +819,66 @@ _original_pg_cosine_distance_transform = PostgresGenerator.TRANSFORMS.get(Cosine
 _original_pg_euclidean_distance_transform = PostgresGenerator.TRANSFORMS.get(EuclideanDistance)
 _original_pg_dot_product_transform = PostgresGenerator.TRANSFORMS.get(DotProduct)
 
-BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
-BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
-BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
-BigQueryGenerator.TRANSFORMS[exp.Index] = _bq_index_transform
-BigQueryGenerator.TRANSFORMS[exp.Alter] = _bq_alter_transform
-BigQueryGenerator.TRANSFORMS[exp.Drop] = _bq_drop_transform
-BigQueryGenerator.TRANSFORMS[exp.ComputedColumnConstraint] = _bq_computed_column_transform
-BigQueryGenerator.TRANSFORMS[exp.DataType] = _bq_datatype_transform
-BigQueryGenerator.TRANSFORMS[exp.DefaultColumnConstraint] = _bq_default_transform
-BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
-BigQueryGenerator.TRANSFORMS[exp.Returning] = _bq_returning_transform
-BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
-BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
-BigQueryGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql
-BigQueryGenerator.TRANSFORMS[exp.Anonymous] = _spanner_anonymous_transform
-BigQueryGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
-    "Spanner", _original_bq_cosine_distance_transform
-)
-BigQueryGenerator.TRANSFORMS[EuclideanDistance] = _build_function_fallback_transform(
-    "Spanner", _original_bq_euclidean_distance_transform
-)
-BigQueryGenerator.TRANSFORMS[DotProduct] = _build_function_fallback_transform(
-    "Spanner", _original_bq_dot_product_transform
-)
-BigQueryGenerator.TRANSFORMS[Search] = _build_function_fallback_transform("Spanner", _original_bq_search_transform)
 
-PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
-PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
-PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
-PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
-PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
-PostgresGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql
-PostgresGenerator.TRANSFORMS[exp.Anonymous] = _spangres_anonymous_transform
-PostgresGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
-    "Spangres", _original_pg_cosine_distance_transform
-)
-PostgresGenerator.TRANSFORMS[EuclideanDistance] = _build_function_fallback_transform(
-    "Spangres", _original_pg_euclidean_distance_transform
-)
-PostgresGenerator.TRANSFORMS[DotProduct] = _build_function_fallback_transform(
-    "Spangres", _original_pg_dot_product_transform
-)
+def _register_spanner_generator_transforms() -> None:
+    """Install Spanner transforms on the BigQuery and Postgres generator classes."""
+    updated = False
+    if not getattr(BigQueryGenerator, _GENERATOR_TRANSFORMS_REGISTERED_ATTR, False):
+        BigQueryGenerator.TRANSFORMS[exp.Property] = _bq_property_transform
+        BigQueryGenerator.TRANSFORMS[exp.Properties] = _bq_properties_transform
+        BigQueryGenerator.TRANSFORMS[exp.Create] = _bq_create_transform
+        BigQueryGenerator.TRANSFORMS[exp.Index] = _bq_index_transform
+        BigQueryGenerator.TRANSFORMS[exp.Alter] = _bq_alter_transform
+        BigQueryGenerator.TRANSFORMS[exp.Drop] = _bq_drop_transform
+        BigQueryGenerator.TRANSFORMS[exp.ComputedColumnConstraint] = _bq_computed_column_transform
+        BigQueryGenerator.TRANSFORMS[exp.DataType] = _bq_datatype_transform
+        BigQueryGenerator.TRANSFORMS[exp.DefaultColumnConstraint] = _bq_default_transform
+        BigQueryGenerator.TRANSFORMS[exp.Hint] = _bq_hint_transform
+        BigQueryGenerator.TRANSFORMS[exp.Returning] = _bq_returning_transform
+        BigQueryGenerator.TRANSFORMS[exp.Select] = _bq_select_transform
+        BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
+        BigQueryGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql
+        BigQueryGenerator.TRANSFORMS[exp.Anonymous] = _spanner_anonymous_transform
+        BigQueryGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
+            "Spanner", _original_bq_cosine_distance_transform
+        )
+        BigQueryGenerator.TRANSFORMS[EuclideanDistance] = _build_function_fallback_transform(
+            "Spanner", _original_bq_euclidean_distance_transform
+        )
+        BigQueryGenerator.TRANSFORMS[DotProduct] = _build_function_fallback_transform(
+            "Spanner", _original_bq_dot_product_transform
+        )
+        BigQueryGenerator.TRANSFORMS[Search] = _build_function_fallback_transform(
+            "Spanner", _original_bq_search_transform
+        )
+        setattr(BigQueryGenerator, _GENERATOR_TRANSFORMS_REGISTERED_ATTR, True)
+        updated = True
 
-invalidate_generator_dispatch(BigQueryGenerator, PostgresGenerator)
+    if not getattr(PostgresGenerator, _GENERATOR_TRANSFORMS_REGISTERED_ATTR, False):
+        PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
+        PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
+        PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
+        PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
+        PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
+        PostgresGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql
+        PostgresGenerator.TRANSFORMS[exp.Anonymous] = _spangres_anonymous_transform
+        PostgresGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
+            "Spangres", _original_pg_cosine_distance_transform
+        )
+        PostgresGenerator.TRANSFORMS[EuclideanDistance] = _build_function_fallback_transform(
+            "Spangres", _original_pg_euclidean_distance_transform
+        )
+        PostgresGenerator.TRANSFORMS[DotProduct] = _build_function_fallback_transform(
+            "Spangres", _original_pg_dot_product_transform
+        )
+        setattr(PostgresGenerator, _GENERATOR_TRANSFORMS_REGISTERED_ATTR, True)
+        updated = True
+
+    if updated:
+        invalidate_generator_dispatch(BigQueryGenerator, PostgresGenerator)
+
+
+_register_spanner_generator_transforms()
 
 SpannerGenerator = BigQueryGenerator
 SpangresGenerator = PostgresGenerator

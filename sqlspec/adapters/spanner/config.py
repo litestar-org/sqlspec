@@ -416,6 +416,7 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
     )
     _session_context_class: "ClassVar[type[SpannerSyncSessionContext]]" = SpannerSyncSessionContext
     _default_statement_config = default_statement_config
+    _DEFAULT_SESSION_TRANSACTION: ClassVar[bool] = _DEFAULT_SESSION_TRANSACTION
 
     def __init__(
         self,
@@ -677,8 +678,8 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         return namespace
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return queue defaults for Spanner JSON handling."""
-        return EventRuntimeHints()
+        """Return queue defaults for Spanner JSON and transaction handling."""
+        return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
 
 
 class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -780,6 +781,7 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
     )
     _session_context_class: "ClassVar[type[SpannerAsyncSessionContext]]" = SpannerAsyncSessionContext
     _default_statement_config = default_statement_config
+    _DEFAULT_SESSION_TRANSACTION: ClassVar[bool] = _DEFAULT_SESSION_TRANSACTION
 
     def __init__(
         self,
@@ -1043,5 +1045,5 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         return namespace
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return queue defaults for Spanner JSON handling."""
-        return EventRuntimeHints()
+        """Return queue defaults for Spanner JSON and transaction handling."""
+        return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)

@@ -4,6 +4,7 @@ import asyncio
 import time
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from typing_extensions import final
@@ -45,6 +46,7 @@ class _BaseTableEventQueue:
         "_ack_statement",
         "_acked_cleanup_statement",
         "_claim_statement",
+        "_cleanup_on_ack",
         "_config",
         "_dialect",
         "_empty_poll_delays",
@@ -59,6 +61,7 @@ class _BaseTableEventQueue:
         "_select_statement",
         "_statement_config",
         "_table_name",
+        "_use_run_in_transaction",
     )
 
     def __init__(
@@ -70,6 +73,8 @@ class _BaseTableEventQueue:
         retention_seconds: int | None = None,
         select_for_update: bool | None = None,
         skip_locked: bool | None = None,
+        cleanup_on_ack: bool = True,
+        use_run_in_transaction: bool = False,
     ) -> None:
         self._config = config
         self._statement_config = config.statement_config
@@ -81,6 +86,8 @@ class _BaseTableEventQueue:
         self._retention_seconds = retention_seconds or 86_400
         self._max_claim_attempts = 5
         self._select_for_update = bool(select_for_update)
+        self._cleanup_on_ack = bool(cleanup_on_ack)
+        self._use_run_in_transaction = bool(use_run_in_transaction)
         self._insert_statement = self._insert_sql()
         self._select_statement = self._select_sql(self._select_for_update, bool(skip_locked))
         self._select_by_id_statement = self._select_by_id_sql()
@@ -275,11 +282,22 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         if not events:
             return []
         event_ids, records = self._batch_insert_parameters(events)
-        with cast(
-            "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
-        ) as driver:
-            driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
-            driver.commit()
+        session_ctx = (
+            _provide_session(self._config, read_only=True)
+            if self._use_run_in_transaction
+            else self._config.provide_session(transaction=True)
+        )
+        with cast("AbstractContextManager[SyncDriverAdapterBase]", session_ctx) as driver:
+            if self._use_run_in_transaction:
+                run_in_tx = getattr(driver, "run_in_transaction", None)
+                if callable(run_in_tx):
+                    run_in_tx(partial(self._execute_many_with_driver, records=records))
+                else:
+                    self._execute_many_with_driver(driver, records)
+                    driver.commit()
+            else:
+                self._execute_many_with_driver(driver, records)
+                driver.commit()
         self._runtime.increment_metric("events.publisher.session")
         self._runtime.increment_metric("events.publisher.statement")
         self._runtime.increment_metric("events.publish", len(records))
@@ -342,7 +360,8 @@ class SyncTableEventQueue(_BaseTableEventQueue):
     def ack(self, event_id: str) -> None:
         now = self._utcnow()
         self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
-        self._cleanup(now)
+        if self._cleanup_on_ack:
+            self._cleanup(now)
         self._runtime.increment_metric("events.ack")
 
     def nack(self, event_id: str) -> None:
@@ -357,12 +376,14 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         self._execute(self._acked_cleanup_statement, {"acked": _ACKED_STATUS, "cutoff": cutoff})
 
     def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
+        """Fetch the next candidate event row, using a read-only session when unlocked."""
         current_time = self._utcnow()
         self._runtime.increment_metric("events.poll.query")
-        with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]",
+            _provide_session(self._config, read_only=not self._select_for_update),
+        ) as driver:
             return driver.select_one_or_none(
-                # SQL allocation here is intentional: DB round-trip dominates by >=100x,
-                # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
                     self._select_statement,
                     self._candidate_parameters(channel, current_time),
@@ -371,15 +392,24 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             )
 
     def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
-        with cast("AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session()) as driver:
+        with cast(
+            "AbstractContextManager[SyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
+        ) as driver:
             return driver.select_one_or_none(
                 SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
             )
 
     def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
-        with cast(
-            "AbstractContextManager[SyncDriverAdapterBase]", self._config.provide_session(transaction=True)
-        ) as driver:
+        session_ctx = (
+            _provide_session(self._config, read_only=True)
+            if self._use_run_in_transaction
+            else self._config.provide_session(transaction=True)
+        )
+        with cast("AbstractContextManager[SyncDriverAdapterBase]", session_ctx) as driver:
+            if self._use_run_in_transaction:
+                run_in_tx = getattr(driver, "run_in_transaction", None)
+                if callable(run_in_tx):
+                    return cast("int", run_in_tx(partial(self._execute_with_driver, sql=sql, parameters=parameters)))
             rows_affected = self._execute_with_driver(driver, sql, parameters)
             driver.commit()
             return rows_affected
@@ -454,6 +484,9 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             return None
         return dict(zip(column_names, rows[0], strict=False))
 
+    def _execute_many_with_driver(self, driver: "SyncDriverAdapterBase", records: "list[dict[str, Any]]") -> None:
+        driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
+
     def _execute_with_driver(self, driver: "SyncDriverAdapterBase", sql: str, parameters: "dict[str, Any]") -> int:
         result = driver.execute(SQL(sql, parameters, statement_config=self._statement_config))
         return result.rows_affected
@@ -494,11 +527,22 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         if not events:
             return []
         event_ids, records = self._batch_insert_parameters(events)
-        async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
-        ) as driver:
-            await driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
-            await driver.commit()
+        session_ctx = (
+            _provide_session(self._config, read_only=True)
+            if self._use_run_in_transaction
+            else self._config.provide_session(transaction=True)
+        )
+        async with cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx) as driver:
+            if self._use_run_in_transaction:
+                run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
+                if callable(run_in_tx):
+                    await cast("Any", run_in_tx)(partial(self._execute_many_with_driver, records=records))
+                else:
+                    await self._execute_many_with_driver(driver, records)
+                    await driver.commit()
+            else:
+                await self._execute_many_with_driver(driver, records)
+                await driver.commit()
         self._runtime.increment_metric("events.publisher.session")
         self._runtime.increment_metric("events.publisher.statement")
         self._runtime.increment_metric("events.publish", len(records))
@@ -553,7 +597,8 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
     async def ack(self, event_id: str) -> None:
         now = self._utcnow()
         await self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
-        await self._cleanup(now)
+        if self._cleanup_on_ack:
+            await self._cleanup(now)
         self._runtime.increment_metric("events.ack")
 
     async def nack(self, event_id: str) -> None:
@@ -568,14 +613,14 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         await self._execute(self._acked_cleanup_statement, {"acked": _ACKED_STATUS, "cutoff": cutoff})
 
     async def _fetch_candidate(self, channel: str) -> "dict[str, Any] | None":
+        """Fetch the next candidate event row, using a read-only session when unlocked."""
         current_time = self._utcnow()
         self._runtime.increment_metric("events.poll.query")
         async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]",
+            _provide_session(self._config, read_only=not self._select_for_update),
         ) as driver:
             return await driver.select_one_or_none(
-                # SQL allocation here is intentional: DB round-trip dominates by >=100x,
-                # and the pipeline LRU avoids re-parsing after first use via structural_fingerprint.
                 SQL(
                     self._select_statement,
                     self._candidate_parameters(channel, current_time),
@@ -585,16 +630,28 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
 
     async def _fetch_by_event_id(self, event_id: str) -> "dict[str, Any] | None":
         async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session()
+            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
         ) as driver:
             return await driver.select_one_or_none(
                 SQL(self._select_by_id_statement, {"event_id": event_id}, statement_config=self._statement_config)
             )
 
     async def _execute(self, sql: str, parameters: "dict[str, Any]") -> int:
-        async with cast(
-            "AbstractAsyncContextManager[AsyncDriverAdapterBase]", self._config.provide_session(transaction=True)
-        ) as driver:
+        session_ctx = (
+            _provide_session(self._config, read_only=True)
+            if self._use_run_in_transaction
+            else self._config.provide_session(transaction=True)
+        )
+        async with cast("AbstractAsyncContextManager[AsyncDriverAdapterBase]", session_ctx) as driver:
+            if self._use_run_in_transaction:
+                run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
+                if callable(run_in_tx):
+                    return cast(
+                        "int",
+                        await cast("Any", run_in_tx)(
+                            partial(self._execute_with_driver, sql=sql, parameters=parameters)
+                        ),
+                    )
             rows_affected = await self._execute_with_driver(driver, sql, parameters)
             await driver.commit()
             return rows_affected
@@ -669,6 +726,11 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             return None
         return dict(zip(column_names, rows[0], strict=False))
 
+    async def _execute_many_with_driver(
+        self, driver: "AsyncDriverAdapterBase", records: "list[dict[str, Any]]"
+    ) -> None:
+        await driver.execute_many(self._insert_statement, records, statement_config=self._statement_config)
+
     async def _execute_with_driver(
         self, driver: "AsyncDriverAdapterBase", sql: str, parameters: "dict[str, Any]"
     ) -> int:
@@ -693,10 +755,21 @@ def build_queue_backend(
         "retention_seconds": _resolve_int_setting(settings, "retention_seconds", runtime_hints.retention_seconds),
         "select_for_update": _resolve_bool_setting(settings, "select_for_update", runtime_hints.select_for_update),
         "skip_locked": _resolve_bool_setting(settings, "skip_locked", runtime_hints.skip_locked),
+        "cleanup_on_ack": _resolve_bool_setting(settings, "cleanup_on_ack", runtime_hints.cleanup_on_ack),
+        "use_run_in_transaction": _resolve_bool_setting(
+            settings, "use_run_in_transaction", runtime_hints.use_run_in_transaction
+        ),
     }
     if config.is_async:
         return AsyncTableEventQueue(config, **kwargs)
     return SyncTableEventQueue(config, **kwargs)
+
+
+def _provide_session(config: Any, *, read_only: bool = False) -> Any:
+    """Open a session, passing ``transaction=False`` for read-only work when transactional by default."""
+    if read_only and getattr(config, "_DEFAULT_SESSION_TRANSACTION", False) is True:
+        return config.provide_session(transaction=False)
+    return config.provide_session()
 
 
 def _resolve_bool_setting(settings: "dict[str, Any]", key: str, default: bool) -> bool:

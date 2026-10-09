@@ -154,9 +154,11 @@ Artifact Storage
 ----------------
 
 The ADK artifact service API and base metadata-store contracts are available in
-``sqlspec.extensions.adk.artifact``. Adapter-specific concrete artifact
-metadata stores are not part of this support matrix; session/event and memory
-support are the backend guarantees listed above.
+``sqlspec.extensions.adk.artifact``. Google Cloud Spanner provides concrete
+sync and async artifact metadata stores
+(:class:`~sqlspec.adapters.spanner.adk.SpannerSyncADKArtifactStore` and
+:class:`~sqlspec.adapters.spanner.adk.SpannerAsyncADKArtifactStore`) in
+``sqlspec.adapters.spanner.adk``.
 
 Backend Details
 ===============
@@ -330,18 +332,27 @@ Spanner
 -------
 
 Google Cloud Spanner provides globally distributed ADK storage in both native
-async (``SpannerAsyncADKStore`` / ``SpannerAsyncADKMemoryStore``) and sync
-(``SpannerSyncADKStore`` / ``SpannerSyncADKMemoryStore``) modes:
+async (``SpannerAsyncADKStore``, ``SpannerAsyncADKMemoryStore``, and
+``SpannerAsyncADKArtifactStore``) and sync (``SpannerSyncADKStore``,
+``SpannerSyncADKMemoryStore``, and ``SpannerSyncADKArtifactStore``) modes:
 
-- Cloud-managed, horizontally scalable.
+- Cloud-managed, horizontally scalable with strong consistency across regions.
 - Optional hash sharding via ``shard_count`` to reduce hot spots.
-- Full-text search support for memory entries with ``TOKENIZE_FULLTEXT`` and
-  search indexes.
-- Explicit table/index option passthrough for deployments that need
-  Spanner-specific DDL tuning.
-- Native row-deletion TTL policies generated from ADK retention settings.
-- Strong consistency across regions.
-- Suitable for multi-region agent deployments.
+- Atomic batched memory deduplication via ``WHERE event_id IN UNNEST(@event_ids)``
+  inside a single ``run_in_transaction`` call backed by ``idx_{table}_event_id``.
+- Vector embeddings (``embedding ARRAY<FLOAT32>``) with optional ``CREATE VECTOR
+  INDEX ... STORING (...)`` and 4-mode ``search_entries`` retrieval: Hybrid
+  Reciprocal Rank Fusion (RRF, ``k=60``) combining ``APPROX_COSINE_DISTANCE`` and
+  ``SEARCH()`` / ``SCORE()``, Vector-Only, Full-Text Search (ordered by
+  ``SCORE(content_tokens, @query) DESC``), and Simple ``LIKE`` fallback.
+- Optional Spanner Property Graph DDL overlay (``enable_memory_graph=True``)
+  defining ``CREATE OR REPLACE PROPERTY GRAPH`` over sessions and memories for
+  ``GRAPH_TABLE`` Hybrid GraphRAG traversals.
+- Concrete artifact metadata stores (``adk_artifact``) with composite primary key
+  ``(app_name, user_id, session_id, filename, version)`` and automatic
+  user-scoped ``session_id=None`` normalization.
+- Explicit table/index option passthrough and native ``ROW DELETION POLICY`` TTL
+  policies generated from ADK retention settings.
 
 BigQuery (Analytics Replica)
 ----------------------------

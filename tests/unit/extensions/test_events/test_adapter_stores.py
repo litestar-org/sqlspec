@@ -385,7 +385,7 @@ def test_spanner_store_separate_index_statement() -> None:
 
     assert index_sql is not None
     assert "CREATE INDEX" in index_sql
-    assert "(channel, status, available_at)" in index_sql
+    assert "(channel, status, created_at, available_at)" in index_sql
 
 
 def test_spanner_store_create_statements_no_if_not_exists() -> None:

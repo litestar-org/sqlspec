@@ -76,6 +76,18 @@ Artifact Stores
    :show-inheritance:
    :no-index:
 
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerAsyncADKArtifactStore
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerSyncADKArtifactStore
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
 Session Listing & Ordering
 ==========================
 
@@ -210,7 +222,7 @@ Configuration
    :show-inheritance:
    :no-index:
 
-Use these types to set up search on PostgreSQL:
+Use these types to set up search and storage on PostgreSQL and Spanner:
 
 .. autoclass:: sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig
    :members:
@@ -218,6 +230,16 @@ Use these types to set up search on PostgreSQL:
    :no-index:
 
 .. autoclass:: sqlspec.adapters.psycopg.adk.PsycopgADKConfig
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKConfig
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: sqlspec.adapters.spanner.adk.SpannerADKRetentionConfig
    :members:
    :show-inheritance:
    :no-index:

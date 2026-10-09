@@ -135,6 +135,67 @@ Spanner
    :show-inheritance:
    :no-index:
 
+The ``spanner`` (GoogleSQL) and ``spangres`` (PostgreSQL-interface) dialects
+support Spanner-specific DDL and analytical SQL:
+
+* **Table Hierarchy & TTL**: ``INTERLEAVE IN [PARENT] <parent> [ON DELETE CASCADE | NO ACTION]`` and bidirectional transpilation between ``ROW DELETION POLICY (OLDER_THAN(col, INTERVAL n DAY))`` (``spanner``) and ``TTL INTERVAL 'n days' ON col`` (``spangres``).
+* **Property Graph**: ``CREATE [OR REPLACE] PROPERTY GRAPH [IF NOT EXISTS] ... NODE TABLES (...) [EDGE TABLES (...)]``, ``DROP PROPERTY GRAPH [IF EXISTS]``, and ``GRAPH_TABLE(<graph> MATCH <pattern> [WHERE <expr>] COLUMNS (...))``.
+* **Vector Search**: ``FLOAT32`` and ``ARRAY<FLOAT32>(vector_length => N)`` columns, ``CREATE VECTOR INDEX [IF NOT EXISTS] ... [STORING (...)] WHERE col IS NOT NULL OPTIONS (...)``, ``DROP VECTOR INDEX [IF EXISTS]``, and distance functions (``COSINE_DISTANCE``, ``APPROX_COSINE_DISTANCE``, ``EUCLIDEAN_DISTANCE``, ``DOT_PRODUCT``).
+* **Full-Text Search**: ``TOKENLIST`` generated columns (including ``AS (TOKENIZE_FULLTEXT(...)) HIDDEN``), ``CREATE SEARCH INDEX``, ``DROP SEARCH INDEX [IF EXISTS]``, ``SEARCH()``, ``SEARCH_SUBSTRING()``, ``SCORE()``, ``SCORE_NGRAMS()``, and ``SNIPPET()``.
+* **Sequences, Returning & Hints**: ``CREATE/ALTER SEQUENCE``, ``GET_NEXT_SEQUENCE_VALUE(SEQUENCE seq)``, ``THEN RETURN [WITH ACTION]``, and ``@{FORCE_INDEX=...}`` / ``/*@ ... */`` hints.
+
+.. autoclass:: sqlspec.dialects.spanner.SpannerPropertyGraph
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autoclass:: sqlspec.dialects.spanner.SpannerGraphTable
+   :members:
+   :show-inheritance:
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.graph_table
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.approx_cosine_distance
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.cosine_distance
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.euclidean_distance
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.dot_product
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.tokenize_fulltext
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.tokenize_substring
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.tokenize_ngrams
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.search
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.search_substring
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.score
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.score_ngrams
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.snippet
+   :no-index:
+
+.. autofunction:: sqlspec.dialects.spanner.get_next_sequence_value
+   :no-index:
+
 Expression Types
 ================
 

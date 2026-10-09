@@ -10,7 +10,15 @@ from pathlib import Path
 import pytest
 from sqlglot import Dialect, exp, parse_one
 
-from sqlspec.dialects.spanner import _generators, _parsers
+from sqlspec.dialects.spanner import (
+    SpannerGraphTable,
+    _generators,
+    _parsers,
+    approx_cosine_distance,
+    graph_table,
+    score_ngrams,
+    snippet,
+)
 from sqlspec.dialects.spanner._generators import _bq_create_transform, _is_post_schema_spanner_property
 
 OFFICIAL_INTERLEAVE_DDL = """
@@ -245,3 +253,118 @@ def test_then_outside_top_level_dml_is_unchanged(sql: str) -> None:
 
     assert parsed.find(exp.Returning) is None
     assert parsed.sql(dialect="spanner") == sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        (
+            "CREATE PROPERTY GRAPH IF NOT EXISTS fin_graph "
+            "NODE TABLES ("
+            "Account KEY (id) LABEL Account PROPERTIES (id, name), "
+            "Person AS p KEY (person_id) DEFAULT LABEL PROPERTIES ARE ALL COLUMNS EXCEPT (secret) "
+            "DYNAMIC LABEL (dyn_label) DYNAMIC PROPERTIES (dyn_props)"
+            ") "
+            "EDGE TABLES ("
+            "Transfers SOURCE KEY (from_id) REFERENCES Account (id) DESTINATION KEY (to_id) REFERENCES Account (id) "
+            "LABEL TRANSFERS PROPERTIES (amount), "
+            "Knows KEY (src_id, dst_id) SOURCE KEY (src_id) REFERENCES p DESTINATION KEY (dst_id) REFERENCES p "
+            "NO PROPERTIES"
+            ")"
+        ),
+        (
+            "CREATE OR REPLACE PROPERTY GRAPH adk_memory_graph "
+            "NODE TABLES ("
+            "adk_memory_entries AS MemoryNode KEY (id) LABEL Memory PROPERTIES (id, app_name, user_id, content_text)"
+            ")"
+        ),
+        "DROP PROPERTY GRAPH IF EXISTS fin_graph",
+        "DROP PROPERTY GRAPH fin_graph",
+    ],
+)
+def test_property_graph_ddl_round_trip(sql: str) -> None:
+    """Verify CREATE/DROP PROPERTY GRAPH parses into structured AST and renders identically."""
+    parsed = parse_one(sql, read="spanner")
+    assert not isinstance(parsed, exp.Command)
+    if isinstance(parsed, exp.Drop):
+        assert isinstance(parsed.this, exp.Table)
+    assert parsed.sql(dialect="spanner") == sql
+
+
+def test_graph_table_query_round_trip_and_builder() -> None:
+    """Verify GRAPH_TABLE in FROM clause round-trips and builds via graph_table()."""
+    sql = (
+        "SELECT id, amount FROM GRAPH_TABLE("
+        "fin_graph "
+        "MATCH (a:Account)-[t:TRANSFERS]->{1, 3}(b:Account) "
+        "WHERE a.id = @account_id "
+        "COLUMNS (b.id AS id, t.amount AS amount)"
+        ")"
+    )
+    parsed = parse_one(sql, read="spanner")
+    assert parsed.find(SpannerGraphTable) is not None
+    assert parsed.sql(dialect="spanner") == sql
+
+    built = graph_table(
+        "fin_graph",
+        "(a:Account)-[t:TRANSFERS]->(b:Account)",
+        ["b.id AS id", "t.amount AS amount"],
+        where="a.id = @account_id",
+    )
+    assert built.sql(dialect="spanner") == (
+        "GRAPH_TABLE("
+        "fin_graph "
+        "MATCH (a:Account)-[t:TRANSFERS]->(b:Account) "
+        "WHERE a.id = @account_id "
+        "COLUMNS (b.id AS id, t.amount AS amount)"
+        ")"
+    )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        (
+            "CREATE VECTOR INDEX IF NOT EXISTS idx_emb ON docs (embedding) "
+            "STORING (app_name, user_id) "
+            "WHERE embedding IS NOT NULL "
+            "OPTIONS (distance_type = 'COSINE', tree_depth = 2, num_leaves = 1000)"
+        ),
+        "DROP VECTOR INDEX IF EXISTS idx_emb",
+        "DROP VECTOR INDEX idx_emb",
+        "DROP SEARCH INDEX IF EXISTS idx_fts",
+        "DROP SEARCH INDEX idx_fts",
+    ],
+)
+def test_vector_and_search_index_ddl_round_trip(sql: str) -> None:
+    """Verify CREATE VECTOR INDEX with IF NOT EXISTS/STORING and DROP VECTOR/SEARCH INDEX round-trip."""
+    parsed = parse_one(sql, read="spanner")
+    assert not isinstance(parsed, exp.Command)
+    if isinstance(parsed, exp.Drop):
+        assert isinstance(parsed.this, exp.Table)
+    assert parsed.sql(dialect="spanner") == sql
+
+
+def test_vector_and_search_expression_builders_and_hidden_tokenlist() -> None:
+    """Verify approx_cosine_distance options kwarg, snippet, score_ngrams, and HIDDEN TOKENLIST column."""
+    dist_expr = approx_cosine_distance(
+        exp.column("embedding"), exp.Placeholder(this="q"), options=exp.var("JSON '{\"num_leaves_to_search\": 50}'")
+    )
+    assert dist_expr.sql(dialect="spanner") == (
+        "APPROX_COSINE_DISTANCE(embedding, @q, options => JSON '{\"num_leaves_to_search\": 50}')"
+    )
+
+    snip_expr = snippet(exp.column("tokens"), exp.Literal.string("term"))
+    assert snip_expr.sql(dialect="spanner") == "SNIPPET(tokens, 'term')"
+
+    ngrams_expr = score_ngrams(exp.column("tokens"), exp.Literal.string("term"))
+    assert ngrams_expr.sql(dialect="spanner") == "SCORE_NGRAMS(tokens, 'term')"
+
+    ddl = (
+        "CREATE TABLE docs ("
+        "id STRING(64), "
+        "body STRING(MAX), "
+        "tokens TOKENLIST AS (TOKENIZE_FULLTEXT(body)) HIDDEN"
+        ") PRIMARY KEY (id)"
+    )
+    assert _render(ddl) == ddl

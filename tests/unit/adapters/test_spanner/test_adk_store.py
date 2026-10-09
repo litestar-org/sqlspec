@@ -48,13 +48,21 @@ def test_spanner_adk_config_types_adapter_local_optimizations() -> None:
         "memory_table_options": str,
         "expires_index_options": str,
         "retention": SpannerADKRetentionConfig,
+        "vector_dimensions": int | None,
+        "vector_distance_type": str,
+        "vector_index_enabled": bool,
+        "scann_tree_depth": int,
+        "scann_num_leaves": int,
+        "enable_hybrid_search": bool,
+        "enable_memory_graph": bool,
+        "memory_graph_name": str,
     }
     for feature_name, expected_type in expected_types.items():
         annotation = cast("Any", SpannerADKConfig.__annotations__[feature_name])
         assert get_origin(annotation) is NotRequired
         assert get_args(annotation) == (expected_type,)
 
-    for feature_name in ("session_ttl_seconds", "event_ttl_seconds", "memory_ttl_seconds"):
+    for feature_name in ("session_ttl_seconds", "event_ttl_seconds", "memory_ttl_seconds", "artifact_ttl_seconds"):
         annotation = cast("Any", SpannerADKRetentionConfig.__annotations__[feature_name])
         assert get_origin(annotation) is NotRequired
         assert get_args(annotation) == (int,)
@@ -98,7 +106,6 @@ def test_append_event_and_update_state_preserves_event_record_timestamp() -> Non
         "timestamp": timestamp,
         "event_data": {"content": "hello"},
     }
-    # Stub the post-write SELECT — the contract requires returning the refreshed record.
     fake_record = {
         "id": "session-1",
         "app_name": "app",
@@ -180,9 +187,50 @@ def test_spanner_session_store_drops_expiration_indexes_before_tables() -> None:
 
 
 def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
-    store = SpannerSyncADKMemoryStore(_mock_config())
+    config = _mock_config()
+    database = config.get_database.return_value
+    executed_queries: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    def _run_in_txn(job: Any) -> Any:
+        txn = MagicMock()
+
+        def _exec_sql(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> list[tuple[str]]:
+            executed_queries.append((sql, params, param_types))
+            return [("event-existing",)]
+
+        def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+            executed_writes.append((sql, params, param_types))
+            return 1
+
+        def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+            executed_writes.extend(stmts)
+            return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+        txn.execute_sql = _exec_sql
+        txn.execute_update = _exec_update
+        txn.batch_update = _batch_update
+        return job(txn)
+
+    database.run_in_transaction.side_effect = _run_in_txn
+    store = SpannerSyncADKMemoryStore(config)
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
-    entry: StoredMemory = {
+    entry_existing: StoredMemory = {
+        "id": "memory-0",
+        "session_id": "session-1",
+        "app_name": "app",
+        "user_id": "user",
+        "scope": "user",
+        "event_id": "event-existing",
+        "author": "assistant",
+        "timestamp": timestamp,
+        "content_json": {"text": "old"},
+        "content_text": "old",
+        "metadata_json": None,
+        "inserted_at": timestamp,
+        "embedding": None,
+    }
+    entry_new: StoredMemory = {
         "id": "memory-1",
         "session_id": "session-1",
         "app_name": "app",
@@ -195,25 +243,31 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
         "content_text": "hello",
         "metadata_json": {"source": "unit"},
         "inserted_at": timestamp,
-        "embedding": None,
+        "embedding": [0.25, 0.75],
     }
+    entry_dup: StoredMemory = {**entry_new, "id": "memory-2"}
 
-    with (
-        patch.object(type(store), "_event_exists", return_value=False),
-        patch.object(type(store), "_run_write") as run_write,
-    ):
-        inserted = store.insert_memory_entries([entry])
+    inserted = store.insert_memory_entries([entry_existing, entry_new, entry_dup])
 
     assert inserted == 1
-    statements = run_write.call_args.args[0]
-    sql, params, _types = statements[0]
+    assert len(executed_queries) == 1
+    select_sql, select_params, select_types = executed_queries[0]
+    assert "WHERE event_id IN UNNEST(@event_ids)" in select_sql
+    assert select_params["event_ids"] == ["event-existing", "event-1"]
+    assert select_types["event_ids"] == cast("Any", param_types).Array(param_types.STRING)
+
+    assert len(executed_writes) == 1
+    sql, params, types = executed_writes[0]
     assert "INSERT INTO adk_memory" in sql
+    assert "embedding" in sql
     assert params["content_json"] == '{"text":"hello"}'
     assert params["metadata_json"] == '{"source":"unit"}'
     assert params["inserted_at"] is timestamp
+    assert params["embedding"] == [0.25, 0.75]
+    assert types["embedding"] == cast("Any", param_types).Array(param_types.FLOAT32)
 
 
-def test_spanner_memory_rows_to_records_decodes_json_fields() -> None:
+def test_spanner_memory_rows_to_records_decodes_json_and_embedding_fields() -> None:
     store = SpannerSyncADKMemoryStore(_mock_config())
     timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
 
@@ -231,6 +285,7 @@ def test_spanner_memory_rows_to_records_decodes_json_fields() -> None:
             "hello",
             '{"source":"unit"}',
             timestamp,
+            [0.5, -0.5],
         )
     ])
 
@@ -238,7 +293,7 @@ def test_spanner_memory_rows_to_records_decodes_json_fields() -> None:
     assert records[0]["metadata_json"] == {"source": "unit"}
     assert records[0]["content_text"] == "hello"
     assert records[0]["scope"] == "user"
-    assert records[0]["embedding"] is None
+    assert records[0]["embedding"] == [0.5, -0.5]
 
 
 def test_spanner_reset_drop_tables_filters_absent_tables() -> None:
@@ -259,6 +314,7 @@ def test_spanner_memory_reset_drop_tables_filters_absent_tables_and_indexes() ->
     statements = store._reset_drop_memory_table_sql()
 
     assert statements == [
+        "DROP INDEX idx_adk_memory_entries_event_id",
         "DROP INDEX idx_adk_memory_entries_session",
         "DROP INDEX idx_adk_memory_entries_app_scope_user_time",
         "DROP INDEX idx_adk_memory_entries_scope",
@@ -298,6 +354,7 @@ async def test_async_spanner_memory_reset_drop_tables_filters_absent_tables_and_
     statements = await store._reset_drop_memory_table_sql()
 
     assert statements == [
+        "DROP INDEX idx_adk_memory_entries_event_id",
         "DROP INDEX idx_adk_memory_entries_session",
         "DROP INDEX idx_adk_memory_entries_app_scope_user_time",
         "DROP INDEX idx_adk_memory_entries_scope",
@@ -315,7 +372,93 @@ def test_spanner_drop_statement_table_handles_if_exists_and_quoted_identifiers()
         _spanner_drop_statement_table("DROP SEARCH INDEX IF EXISTS `idx_adk_memory_entries_fts`", existing)
         == "adk_memory_entries"
     )
+    assert (
+        _spanner_drop_statement_table("DROP VECTOR INDEX IF EXISTS `idx_adk_memory_entries_embedding`", existing)
+        == "adk_memory_entries"
+    )
+    assert (
+        _spanner_drop_statement_table("DROP PROPERTY GRAPH `adk_memory_entries_graph`", existing)
+        == "adk_memory_entries"
+    )
     assert _spanner_drop_statement_table("DROP SEARCH INDEX `idx_adk_session_fts`", existing) is None
+
+
+def test_spanner_memory_ddl_supports_vector_index_and_property_graph() -> None:
+    """Verify memory DDL emits event_id index, vector_length, vector index, and property graph overlay."""
+    default_store = SpannerSyncADKMemoryStore(_mock_config())
+    default_ddl = default_store._memory_table_ddl()
+    assert "embedding ARRAY<FLOAT32>" in default_ddl[0]
+    assert "vector_length" not in default_ddl[0]
+    assert "CREATE INDEX idx_adk_memory_event_id ON adk_memory(event_id)" in default_ddl
+
+    configured_store = SpannerSyncADKMemoryStore(
+        _mock_config({
+            "vector_dimensions": 768,
+            "vector_index_enabled": True,
+            "vector_distance_type": "COSINE",
+            "scann_tree_depth": 2,
+            "scann_num_leaves": 1000,
+            "enable_memory_graph": True,
+        })
+    )
+    ddl = configured_store._memory_table_ddl()
+    assert "embedding ARRAY<FLOAT32>(vector_length=>768)" in ddl[0]
+    assert (
+        "CREATE VECTOR INDEX idx_adk_memory_embedding ON adk_memory(embedding) "
+        "STORING (app_name, scope, user_id, timestamp) "
+        "WHERE embedding IS NOT NULL "
+        "OPTIONS (distance_type = 'COSINE', tree_depth = 2, num_leaves = 1000)"
+    ) in ddl
+    assert (
+        "CREATE OR REPLACE PROPERTY GRAPH adk_memory_graph "
+        "NODE TABLES ("
+        "adk_memory AS MemoryNode KEY (id) LABEL Memory "
+        "PROPERTIES (id, session_id, app_name, user_id, scope, event_id, author, timestamp, content_text)"
+        ")"
+    ) in ddl
+
+    drop_sql = configured_store._drop_memory_table_sql()
+    assert drop_sql[0] == "DROP PROPERTY GRAPH adk_memory_graph"
+    assert "DROP VECTOR INDEX idx_adk_memory_embedding" in drop_sql
+
+
+def test_spanner_memory_search_entries_four_modes() -> None:
+    """Verify search_entries supports FTS SCORE(), Vector-Only, Hybrid RRF, and Simple LIKE modes."""
+    fts_store = SpannerSyncADKMemoryStore(_mock_config({"memory_use_fts": True}))
+
+    with patch.object(type(fts_store), "_run_read", return_value=[]) as run_read:
+        fts_store.search_entries("spanner graph", "app", "user", limit=5)
+
+    fts_sql, fts_params, fts_types = run_read.call_args.args
+    assert "SEARCH(content_tokens, @query)" in fts_sql
+    assert "ORDER BY SCORE(content_tokens, @query) DESC, timestamp DESC" in fts_sql
+    assert fts_params["query"] == "spanner graph"
+    assert fts_types["query"] is param_types.STRING
+
+    with patch.object(type(fts_store), "_run_read", return_value=[]) as run_read:
+        fts_store.search_entries("spanner graph", "app", "user", limit=5, embedding=[0.1, 0.2])
+
+    rrf_sql, rrf_params, rrf_types = run_read.call_args.args
+    assert "WITH vector_matches AS" in rrf_sql
+    assert "text_matches AS" in rrf_sql
+    assert "COSINE_DISTANCE(embedding, @embedding)" in rrf_sql
+    assert "SCORE(content_tokens, @query)" in rrf_sql
+    assert "(COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score" in rrf_sql
+    assert "ORDER BY rrf_score DESC, m.timestamp DESC" in rrf_sql
+    assert rrf_params["embedding"] == [0.1, 0.2]
+    assert rrf_params["candidate_limit"] == 50
+    assert rrf_types["embedding"] == cast("Any", param_types).Array(param_types.FLOAT32)
+
+    vec_store = SpannerSyncADKMemoryStore(_mock_config({"memory_use_fts": False}))
+    with patch.object(type(vec_store), "_run_read", return_value=[]) as run_read:
+        vec_store.search_entries("", "app", "user", limit=5, embedding=[0.3, 0.4])
+
+    vec_sql, vec_params, vec_types = run_read.call_args.args
+    assert "WHERE app_name = @app_name" in vec_sql
+    assert "AND embedding IS NOT NULL" in vec_sql
+    assert "ORDER BY COSINE_DISTANCE(embedding, @embedding) ASC, timestamp DESC" in vec_sql
+    assert vec_params["embedding"] == [0.3, 0.4]
+    assert vec_types["embedding"] == cast("Any", param_types).Array(param_types.FLOAT32)
 
 
 def test_get_session_returns_none_when_spanner_session_table_missing() -> None:
@@ -572,6 +715,35 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
     op_mock = MagicMock()
     op_mock.result = AsyncMock(return_value=None)
     database.update_ddl = AsyncMock(return_value=op_mock)
+
+    executed_writes: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    async def _run_in_txn(job: Any) -> Any:
+        txn = MagicMock()
+
+        async def _exec_sql(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> Any:
+            del sql, params, param_types
+
+            async def _rows() -> Any:
+                if False:
+                    yield ("none",)
+
+            return _rows()
+
+        async def _exec_update(sql: str, params: dict[str, Any], param_types: dict[str, Any]) -> int:
+            executed_writes.append((sql, params, param_types))
+            return 1
+
+        async def _batch_update(stmts: list[tuple[str, dict[str, Any], dict[str, Any]]]) -> tuple[Any, list[int]]:
+            executed_writes.extend(stmts)
+            return SimpleNamespace(code=0, message=""), [1] * len(stmts)
+
+        txn.execute_sql = _exec_sql
+        txn.execute_update = _exec_update
+        txn.batch_update = _batch_update
+        return await job(txn)
+
+    database.run_in_transaction = _run_in_txn
     config.get_database = AsyncMock(return_value=database)
 
     store = SpannerAsyncADKMemoryStore(config)
@@ -592,16 +764,12 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
         "content_text": "hello",
         "metadata_json": {"source": "unit"},
         "inserted_at": timestamp,
-        "embedding": None,
+        "embedding": [0.1, 0.2],
     }
 
-    with (
-        patch.object(type(store), "_event_exists", new_callable=AsyncMock, return_value=False),
-        patch.object(type(store), "_run_write", new_callable=AsyncMock) as run_write,
-    ):
-        inserted = await store.insert_memory_entries([entry])
+    inserted = await store.insert_memory_entries([entry])
     assert inserted == 1
-    run_write.assert_awaited_once()
+    assert len(executed_writes) == 1
 
     with patch.object(
         type(store),
@@ -621,12 +789,14 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
                 "hello",
                 '{"source":"unit"}',
                 timestamp,
+                [0.1, 0.2],
             )
         ],
     ):
-        results = await store.search_entries("hello", "app", "user")
+        results = await store.search_entries("hello", "app", "user", embedding=[0.1, 0.2])
     assert len(results) == 1
     assert results[0]["content_json"] == {"text": "hello"}
+    assert results[0]["embedding"] == [0.1, 0.2]
 
     with patch.object(type(store), "_execute_update", new_callable=AsyncMock, return_value=2) as exec_update:
         deleted = await store.delete_entries_by_session("session-1")

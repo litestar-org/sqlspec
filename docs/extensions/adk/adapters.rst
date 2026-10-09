@@ -42,8 +42,10 @@ Import from the adapter's ``adk`` subpackage:
    )
 
 Artifact service base classes live under ``sqlspec.extensions.adk.artifact``.
-They require a concrete metadata-store implementation and are not exported from
-adapter ``adk`` packages.
+Google Cloud Spanner also provides concrete artifact metadata stores
+(:class:`~sqlspec.adapters.spanner.adk.SpannerSyncADKArtifactStore` and
+:class:`~sqlspec.adapters.spanner.adk.SpannerAsyncADKArtifactStore`) in
+``sqlspec.adapters.spanner.adk``.
 
 Example
 =======
