@@ -23,14 +23,7 @@ from sqlglot.generators.bigquery import BigQueryGenerator
 from sqlglot.generators.postgres import PostgresGenerator
 
 from sqlspec.builder._generation import invalidate_generator_dispatch
-from sqlspec.dialects.spanner._expressions import (
-    CosineDistance,
-    DotProduct,
-    EuclideanDistance,
-    Search,
-    SpannerGraphTable,
-    SpannerPropertyGraph,
-)
+from sqlspec.dialects.spanner._expressions import CosineDistance, DotProduct, EuclideanDistance, Search
 
 __all__ = ("SpangresGenerator", "SpannerGenerator")
 
@@ -375,9 +368,9 @@ def _spanner_index_sql(generator: Any, expression: exp.Index) -> str:
     return str(generator.index_sql(expression))
 
 
-def _spanner_property_graph_sql(generator: Any, expression: SpannerPropertyGraph) -> str:
+def _spanner_property_graph_sql(generator: Any, expression: exp.Expr) -> str:
     """Render Spanner PROPERTY GRAPH body."""
-    name = generator.sql(expression, "this")
+    name = generator.sql(expression, "graph")
     node_tables = expression.args.get("node_tables") or []
     nodes_sql = ", ".join(generator.sql(node) for node in node_tables)
     sql = f"{name} NODE TABLES ({nodes_sql})"
@@ -388,9 +381,9 @@ def _spanner_property_graph_sql(generator: Any, expression: SpannerPropertyGraph
     return sql
 
 
-def _spanner_graph_table_sql(generator: Any, expression: SpannerGraphTable) -> str:
+def _spanner_graph_table_sql(generator: Any, expression: exp.Expr) -> str:
     """Render Spanner GRAPH_TABLE(...) expression."""
-    graph = generator.sql(expression, "this")
+    graph = generator.sql(expression, "graph")
     match_sql = generator.sql(expression, "match")
     parts = [f"{graph} MATCH {match_sql}"]
     where_expr = expression.args.get("where")
@@ -759,6 +752,10 @@ def _spanner_anonymous_transform(generator: Any, expression: exp.Anonymous) -> s
     dialect_name = _get_dialect_name(generator)
     if dialect_name == "Spanner":
         name = str(expression.this).upper()
+        if name == "SPANNER_PROPERTY_GRAPH":
+            return _spanner_property_graph_sql(generator, expression)
+        if name == "GRAPH_TABLE" and "match" in expression.args:
+            return _spanner_graph_table_sql(generator, expression)
         if name == "GET_NEXT_SEQUENCE_VALUE" and expression.expressions:
             seq = generator.sql(expression.expressions[0])
             return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
@@ -842,8 +839,6 @@ def _register_spanner_generator_transforms() -> None:
         BigQueryGenerator.TRANSFORMS[exp.Table] = _bq_table_transform
         BigQueryGenerator.TRANSFORMS[exp.Join] = _spanner_join_sql
         BigQueryGenerator.TRANSFORMS[exp.Anonymous] = _spanner_anonymous_transform
-        BigQueryGenerator.TRANSFORMS[SpannerPropertyGraph] = _spanner_property_graph_sql
-        BigQueryGenerator.TRANSFORMS[SpannerGraphTable] = _spanner_graph_table_sql
         BigQueryGenerator.TRANSFORMS[CosineDistance] = _build_function_fallback_transform(
             "Spanner", _original_bq_cosine_distance_transform
         )

@@ -1,11 +1,17 @@
 """Custom AST expressions for Cloud Spanner dialects."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp, parse_one
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from typing_extensions import Self
+
+    _SpannerAnonymousBase = exp.Anonymous
+else:
+    _SpannerAnonymousBase = object
 
 __all__ = (
     "ApproxCosineDistance",
@@ -49,16 +55,41 @@ dot_product = exp.DotProduct
 search = exp.Search
 
 
-class SpannerPropertyGraph(exp.Expression):
-    """AST node for a Cloud Spanner PROPERTY GRAPH definition."""
+class _SpannerAnonymousNodeMeta(type):
+    """Metaclass enabling isinstance() and AST find() against tagged exp.Anonymous nodes."""
 
-    arg_types = {"this": True, "node_tables": True, "edge_tables": False}
+    _anonymous_name: str = ""
+    _required_arg: str = ""
+
+    def __instancecheck__(cls, instance: Any) -> bool:
+        return (
+            isinstance(instance, exp.Anonymous)
+            and str(instance.this).upper() == cls._anonymous_name
+            and (not cls._required_arg or cls._required_arg in instance.args)
+        )
 
 
-class SpannerGraphTable(exp.Expression):
-    """AST node for a Cloud Spanner GRAPH_TABLE(...) query expression."""
+class SpannerPropertyGraph(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for a Cloud Spanner PROPERTY GRAPH definition."""
 
-    arg_types = {"this": True, "match": True, "where": False, "columns": True}
+    _anonymous_name = "SPANNER_PROPERTY_GRAPH"
+    _required_arg = "node_tables"
+
+    def __new__(cls, *, this: Any, node_tables: Any, edge_tables: Any = None) -> "Self":
+        return cast(
+            "Self",
+            exp.Anonymous(this="SPANNER_PROPERTY_GRAPH", graph=this, node_tables=node_tables, edge_tables=edge_tables),
+        )
+
+
+class SpannerGraphTable(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for a Cloud Spanner GRAPH_TABLE(...) query expression."""
+
+    _anonymous_name = "GRAPH_TABLE"
+    _required_arg = "match"
+
+    def __new__(cls, *, this: Any, match: Any, columns: Any, where: Any = None) -> "Self":
+        return cast("Self", exp.Anonymous(this="GRAPH_TABLE", graph=this, match=match, where=where, columns=columns))
 
 
 def approx_cosine_distance(this: Any, expression: Any, options: Any = None) -> exp.Anonymous:

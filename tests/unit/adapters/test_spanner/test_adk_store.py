@@ -254,7 +254,7 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
     select_sql, select_params, select_types = executed_queries[0]
     assert "WHERE event_id IN UNNEST(@event_ids)" in select_sql
     assert select_params["event_ids"] == ["event-existing", "event-1"]
-    assert select_types["event_ids"] == param_types.Array(param_types.STRING)
+    assert select_types["event_ids"] == cast("Any", param_types).Array(param_types.STRING)
 
     assert len(executed_writes) == 1
     sql, params, types = executed_writes[0]
@@ -264,7 +264,7 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
     assert params["metadata_json"] == '{"source":"unit"}'
     assert params["inserted_at"] is timestamp
     assert params["embedding"] == [0.25, 0.75]
-    assert types["embedding"] == param_types.Array(param_types.FLOAT32)
+    assert types["embedding"] == cast("Any", param_types).Array(param_types.FLOAT32)
 
 
 def test_spanner_memory_rows_to_records_decodes_json_and_embedding_fields() -> None:
@@ -447,7 +447,7 @@ def test_spanner_memory_search_entries_four_modes() -> None:
     assert "ORDER BY rrf_score DESC, m.timestamp DESC" in rrf_sql
     assert rrf_params["embedding"] == [0.1, 0.2]
     assert rrf_params["candidate_limit"] == 50
-    assert rrf_types["embedding"] == param_types.Array(param_types.FLOAT32)
+    assert rrf_types["embedding"] == cast("Any", param_types).Array(param_types.FLOAT32)
 
     vec_store = SpannerSyncADKMemoryStore(_mock_config({"memory_use_fts": False}))
     with patch.object(type(vec_store), "_run_read", return_value=[]) as run_read:
@@ -458,7 +458,7 @@ def test_spanner_memory_search_entries_four_modes() -> None:
     assert "AND embedding IS NOT NULL" in vec_sql
     assert "ORDER BY COSINE_DISTANCE(embedding, @embedding) ASC, timestamp DESC" in vec_sql
     assert vec_params["embedding"] == [0.3, 0.4]
-    assert vec_types["embedding"] == param_types.Array(param_types.FLOAT32)
+    assert vec_types["embedding"] == cast("Any", param_types).Array(param_types.FLOAT32)
 
 
 def test_get_session_returns_none_when_spanner_session_table_missing() -> None:

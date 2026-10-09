@@ -569,7 +569,7 @@ def _attach_hidden_column_constraint(column_def: exp.ColumnDef) -> None:
     remaining: list[exp.Expr] = []
     has_hidden = False
     for constraint in constraints:
-        kind = constraint.kind if isinstance(constraint, exp.ColumnConstraint) else None
+        kind = constraint.args.get("kind") if isinstance(constraint, exp.ColumnConstraint) else None
         if isinstance(kind, exp.ComputedColumnConstraint):
             computed = kind
             remaining.append(constraint)

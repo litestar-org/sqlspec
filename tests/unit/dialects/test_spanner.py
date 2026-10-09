@@ -348,9 +348,7 @@ def test_vector_and_search_index_ddl_round_trip(sql: str) -> None:
 def test_vector_and_search_expression_builders_and_hidden_tokenlist() -> None:
     """Verify approx_cosine_distance options kwarg, snippet, score_ngrams, and HIDDEN TOKENLIST column."""
     dist_expr = approx_cosine_distance(
-        exp.column("embedding"),
-        exp.Placeholder(this="q"),
-        options=exp.var("JSON '{\"num_leaves_to_search\": 50}'"),
+        exp.column("embedding"), exp.Placeholder(this="q"), options=exp.var("JSON '{\"num_leaves_to_search\": 50}'")
     )
     assert dist_expr.sql(dialect="spanner") == (
         "APPROX_COSINE_DISTANCE(embedding, @q, options => JSON '{\"num_leaves_to_search\": 50}')"

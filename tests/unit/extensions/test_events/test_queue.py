@@ -626,5 +626,3 @@ async def test_execute_and_publish_many_route_through_driver_run_in_transaction_
     assert len(await async_queue.publish_many([("alerts", {"a": 1}, None), ("alerts", {"a": 2}, None)])) == 2
     assert async_session_kwargs == [{"transaction": False}, {"transaction": False}]
     assert [kind for kind, _ in async_tx_calls] == ["execute", "execute_many"]
-
-

@@ -1,7 +1,7 @@
 """Unit tests for SpannerSyncADKArtifactStore and SpannerAsyncADKArtifactStore."""
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 from google.api_core.exceptions import NotFound
@@ -33,7 +33,7 @@ def _make_sync_config(adk_ext: dict[str, Any] | None = None) -> SpannerSyncConfi
     ext = {"adk": adk_ext} if adk_ext else {}
     return SpannerSyncConfig(
         connection_config={"project": "test-project", "instance_id": "test-instance", "database_id": "test-db"},
-        extension_config=ext,
+        extension_config=cast("Any", ext),
     )
 
 
@@ -41,7 +41,7 @@ def _make_async_config(adk_ext: dict[str, Any] | None = None) -> SpannerAsyncCon
     ext = {"adk": adk_ext} if adk_ext else {}
     return SpannerAsyncConfig(
         connection_config={"project": "test-project", "instance_id": "test-instance", "database_id": "test-db"},
-        extension_config=ext,
+        extension_config=cast("Any", ext),
     )
 
 
@@ -170,7 +170,9 @@ def test_sync_insert_and_get_artifact_user_and_session_scoped(mocker: Any) -> No
     assert read_mock.call_args.args[1]["version"] == 2
     assert read_mock.call_args.args[1]["session_id"] == "sess-1"
 
-    mocker.patch.object(SpannerSyncADKArtifactStore, "_run_read", side_effect=NotFound("Table adk_artifact not found"))
+    mocker.patch.object(
+        SpannerSyncADKArtifactStore, "_run_read", side_effect=cast("Any", NotFound)("Table adk_artifact not found")
+    )
     assert store.get_artifact("app-1", "user-1", "report.pdf") is None
 
 

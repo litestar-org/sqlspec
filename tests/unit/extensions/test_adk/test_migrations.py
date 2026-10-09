@@ -97,6 +97,7 @@ async def test_create_migration_down_awaits_async_store_reset_drops() -> None:
         statements = await migration.down(MigrationContext(config=config, dialect="spanner"))
 
     assert statements == [
+        "DROP INDEX idx_adk_memory_entries_event_id",
         "DROP INDEX idx_adk_memory_entries_session",
         "DROP INDEX idx_adk_memory_entries_app_scope_user_time",
         "DROP INDEX idx_adk_memory_entries_scope",

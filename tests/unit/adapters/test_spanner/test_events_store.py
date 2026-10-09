@@ -13,11 +13,7 @@ from sqlspec.adapters.spanner.events import SpannerAsyncEventQueueStore, Spanner
 from sqlspec.exceptions import ImproperConfigurationError
 
 
-def _mock_spanner_config(
-    events_settings: dict[str, Any] | None = None,
-    *,
-    dialect: str = "spanner",
-) -> MagicMock:
+def _mock_spanner_config(events_settings: dict[str, Any] | None = None, *, dialect: str = "spanner") -> MagicMock:
     """Create a mock SpannerSyncConfig."""
     config = MagicMock()
     settings: dict[str, Any] = {"queue_table": "test_events"}
@@ -90,9 +86,7 @@ def test_table_ddl_inline_primary_key_and_row_deletion_policy() -> None:
 
     sql = store._table_ddl()
 
-    assert sql.endswith(
-        ") PRIMARY KEY (event_id), ROW DELETION POLICY (OLDER_THAN(acknowledged_at, INTERVAL 1 DAY))"
-    )
+    assert sql.endswith(") PRIMARY KEY (event_id), ROW DELETION POLICY (OLDER_THAN(acknowledged_at, INTERVAL 1 DAY))")
 
 
 def test_table_ddl_row_deletion_policy_rounding_and_disabled() -> None:
@@ -288,13 +282,7 @@ async def test_ddl_operations_run_through_update_ddl(
 
 
 @_STORE_VARIANTS
-@pytest.mark.parametrize(
-    ("operation", "existing_tables"),
-    [
-        ("create_table", ("test_events",)),
-        ("drop_table", ()),
-    ],
-)
+@pytest.mark.parametrize(("operation", "existing_tables"), [("create_table", ("test_events",)), ("drop_table", ())])
 async def test_ddl_operations_are_idempotent_when_table_already_exists_or_missing(
     store_cls: Any,
     config_cls: type[Any],

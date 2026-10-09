@@ -282,7 +282,9 @@ class SyncTableEventQueue(_BaseTableEventQueue):
             return []
         event_ids, records = self._batch_insert_parameters(events)
         if self._use_run_in_transaction:
-            with cast("AbstractContextManager[SyncDriverAdapterBase]", _provide_session(self._config, read_only=True)) as driver:
+            with cast(
+                "AbstractContextManager[SyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
+            ) as driver:
                 run_in_tx = getattr(driver, "run_in_transaction", None)
                 if callable(run_in_tx):
                     run_in_tx(
@@ -408,8 +410,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 run_in_tx = getattr(driver, "run_in_transaction", None)
                 if callable(run_in_tx):
                     return cast(
-                        "int",
-                        run_in_tx(lambda tx_driver: self._execute_with_driver(tx_driver, sql, parameters)),
+                        "int", run_in_tx(lambda tx_driver: self._execute_with_driver(tx_driver, sql, parameters))
                     )
                 rows_affected = self._execute_with_driver(driver, sql, parameters)
                 driver.commit()
@@ -533,11 +534,11 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         event_ids, records = self._batch_insert_parameters(events)
         if self._use_run_in_transaction:
             async with cast(
-                "AbstractAsyncContextManager[AsyncDriverAdapterBase]",
-                _provide_session(self._config, read_only=True),
+                "AbstractAsyncContextManager[AsyncDriverAdapterBase]", _provide_session(self._config, read_only=True)
             ) as driver:
                 run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
                 if callable(run_in_tx):
+
                     async def _work(tx_driver: "AsyncDriverAdapterBase") -> None:
                         await tx_driver.execute_many(
                             self._insert_statement, records, statement_config=self._statement_config
@@ -653,6 +654,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
             ) as driver:
                 run_in_tx = cast("Any", getattr(driver, "run_in_transaction", None))
                 if callable(run_in_tx):
+
                     async def _work(tx_driver: "AsyncDriverAdapterBase") -> int:
                         return await self._execute_with_driver(tx_driver, sql, parameters)
 
