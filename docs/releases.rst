@@ -78,7 +78,7 @@ CI/CD Publishing Pipeline
 When a GitHub Release is published, ``.github/workflows/publish.yml`` automatically executes:
 
 1. **Standard Distributions**: Builds standard source distribution (``sdist``) and pure Python wheel packages.
-2. **Compiled Mypyc Wheels**: Compiles high-performance C-extensions via `hatch-mypyc` across a matrix of operating systems (Linux, macOS, Windows) and Python versions (3.10 through 3.14).
+2. **Compiled Mypyc Wheels**: Compiles high-performance C-extensions via `hatch-mypyc` across a matrix of operating systems (Linux, macOS, Windows) and Python versions (3.11 through 3.15).
 3. **Profile-Guided Optimization (PGO)**: Compiles Linux binary wheels using execution profile data (GCC) to optimize critical statement translation and dispatch paths. macOS and Windows use standard mypyc C-extension compilation.
 4. **Smoke Testing**: Validates binary wheel imports across supported architectures before publishing to `PyPI <https://pypi.org/project/sqlspec/>`_.
 
