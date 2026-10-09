@@ -1,14 +1,8 @@
 """Tests for config discovery functionality."""
 
-import sys
 from pathlib import Path
 
 import pytest
-
-if sys.version_info >= (3, 11):
-    pass
-else:
-    pass
 
 from sqlspec.utils.config_tools import discover_config_from_pyproject, find_pyproject_toml, parse_pyproject_config
 
