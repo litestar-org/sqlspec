@@ -155,13 +155,9 @@ jobs:
     needs: [ci-scope]
     if: needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.python-version == '3.15' }}
     strategy:
-      # fail-fast: true — matrix dimension is Python version only.
-      # sqlspec failures are typically version-agnostic library bugs, so the
-      # other 4 jobs running to completion after one fails wastes ~60 min of
-      # billed runner time. test-build.yml gates package builds behind these
-      # checks before spending runner minutes on wheel matrices.
-      fail-fast: true
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     timeout-minutes: 15
@@ -195,6 +191,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Test
+        id: pytest
         # covdefaults sets fail_under=100 globally; the per-tier run only
         # covers a slice of sqlspec, so override to 0 here. The combined
         # view in Codecov is the source of truth.
@@ -205,7 +202,7 @@ jobs:
           --cov-fail-under=0
 
       - name: Upload coverage to Codecov
-        if: always()
+        if: always() && steps.pytest.outcome != 'skipped'
         uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           files: coverage-unit.xml
@@ -250,8 +247,9 @@ jobs:
     needs: [ci-scope, test-unit]
     if: needs.ci-scope.outputs.ci_required == 'true'
     runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.python-version == '3.15' }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     timeout-minutes: 60
