@@ -1,9 +1,7 @@
 """CockroachDB session stores for Litestar integration using psycopg."""
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Literal, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, cast
 
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row
 from sqlspec.config import LitestarConfig
@@ -151,7 +149,7 @@ class CockroachPsycopgAsyncStore(BaseSQLSpecStore["CockroachPsycopgAsyncConfig"]
                 return None
 
             expires_at = row["expires_at"]
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             if expires_at <= now:
                 return 0
@@ -347,7 +345,7 @@ class CockroachPsycopgSyncStore(BaseSQLSpecStore["CockroachPsycopgSyncConfig"]):
                 return None
 
             expires_at = row["expires_at"]
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             if expires_at <= now:
                 return 0

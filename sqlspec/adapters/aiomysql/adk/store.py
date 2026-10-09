@@ -2,9 +2,7 @@
 
 import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlProgrammingError, AiomysqlRawCursor
 from sqlspec.config import ADKConfig

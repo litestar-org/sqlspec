@@ -6,11 +6,10 @@ Tests cover:
 - Connection config normalization
 """
 
-from typing import Any, cast, get_args, get_origin
+from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgConfig,

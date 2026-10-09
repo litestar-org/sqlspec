@@ -1,6 +1,6 @@
 """Integration test verifying TypeCoercionCapabilities against observed PostgreSQL behavior."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -33,7 +33,7 @@ async def test_asyncpg_type_coercion_capabilities_observed(asyncpg_config: "Asyn
     assert caps.json_columns_decoded is True
     assert caps.uuid_binding == "native"
 
-    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=UTC)
     test_json = {"key": "value", "count": 42}
     test_uuid = uuid4()
 
@@ -65,7 +65,7 @@ def test_psycopg_sync_type_coercion_capabilities_observed(psycopg_sync_config: "
     assert caps.json_columns_decoded is True
     assert caps.uuid_binding == "native"
 
-    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=UTC)
     test_json = {"key": "value", "count": 42}
     test_uuid = uuid4()
 
@@ -97,7 +97,7 @@ async def test_psycopg_async_type_coercion_capabilities_observed(psycopg_async_c
     assert caps.json_columns_decoded is True
     assert caps.uuid_binding == "native"
 
-    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=UTC)
     test_json = {"key": "value", "count": 42}
     test_uuid = uuid4()
 

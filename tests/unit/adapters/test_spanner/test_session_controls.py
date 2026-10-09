@@ -1,10 +1,9 @@
 """Unit tests for Spanner session-control behavior."""
 
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
-from typing_extensions import Self
 
 import sqlspec.adapters.spanner.config as spanner_config
 from sqlspec.adapters.spanner.config import SpannerSyncConfig

@@ -1,10 +1,9 @@
 """Aiosqlite ADK adapter-local configuration tests."""
 
-from typing import Any, get_type_hints
+from typing import Any, Self, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec.adapters.aiosqlite.adk import AiosqliteADKConfig, AiosqliteADKMemoryStore, AiosqliteADKStore
 from sqlspec.adapters.aiosqlite.config import AiosqliteConfig

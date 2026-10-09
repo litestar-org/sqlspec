@@ -1,9 +1,7 @@
 """pymssql database configuration."""
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.pymssql._typing import PymssqlConnection, PymssqlCursor, PymssqlRawCursor, PymssqlSessionContext
 from sqlspec.adapters.pymssql.core import apply_driver_features, build_connection_config, default_statement_config

@@ -1,11 +1,10 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for CockroachDB asyncpg ADK store extension configuration."""
 
-from typing import Any, cast, get_args, get_origin
+from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.cockroach_asyncpg.adk import (
     CockroachAsyncpgADKConfig,

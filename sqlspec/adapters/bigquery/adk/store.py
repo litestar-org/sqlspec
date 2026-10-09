@@ -10,10 +10,10 @@ analytics stream into BigQuery.
 """
 
 import math
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, cast
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 from sqlspec.adapters.bigquery.config import BigQueryConfig
@@ -231,7 +231,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         owner_column = f", {self._owner_id_column_name}" if self._owner_id_column_name else ""
         owner_select = ", @owner_id AS owner_id" if self._owner_id_column_name else ""
         owner_update = f", {self._owner_id_column_name} = source.owner_id" if self._owner_id_column_name else ""
@@ -341,7 +341,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if page_limit == 0:
             return []
 
-        window_start = datetime.now(timezone.utc) - timedelta(days=self._lookup_window_days)
+        window_start = datetime.now(UTC) - timedelta(days=self._lookup_window_days)
         sql = f"""
         SELECT id, app_name, user_id, state, create_time, update_time
         FROM {self._qualified(self._session_table)}

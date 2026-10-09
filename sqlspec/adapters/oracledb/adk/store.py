@@ -1,9 +1,9 @@
 """Oracle ADK store for Google Agent Development Kit session/event storage."""
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec import SQL
 from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier

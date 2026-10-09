@@ -3,7 +3,7 @@
 Store behaviors run against the sync and async stores through ``db2_mode``.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -48,7 +48,7 @@ def _session_row() -> FakeDb2Cursor:
 
 
 def _utc_naive_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _assert_naive_utc_near(value: Any, expected: datetime) -> None:
@@ -73,7 +73,7 @@ async def test_create_session_binds_utc_times(db2_mode: DriverMode) -> None:
     assert insert_params[:4] == ("s1", "app", "u1", '{"step":1}')
     _assert_naive_utc_near(insert_params[4], _utc_naive_now())
     assert insert_params[5] == insert_params[4]
-    assert session["create_time"] == datetime(2026, 9, 24, 12, 0, 0, tzinfo=timezone.utc)
+    assert session["create_time"] == datetime(2026, 9, 24, 12, 0, 0, tzinfo=UTC)
     assert session["state"] == {"step": 1}
 
 
@@ -178,10 +178,10 @@ def test_datetime_value_rejects_unknown_types(value: object) -> None:
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (datetime(2026, 1, 1, 12), datetime(2026, 1, 1, 12, tzinfo=timezone.utc)),
-        (datetime(2026, 1, 1, 14, tzinfo=timezone(timedelta(hours=2))), datetime(2026, 1, 1, 12, tzinfo=timezone.utc)),
-        ("2026-01-01T12:00:00", datetime(2026, 1, 1, 12, tzinfo=timezone.utc)),
-        (b"2026-01-01T12:00:00Z", datetime(2026, 1, 1, 12, tzinfo=timezone.utc)),
+        (datetime(2026, 1, 1, 12), datetime(2026, 1, 1, 12, tzinfo=UTC)),
+        (datetime(2026, 1, 1, 14, tzinfo=timezone(timedelta(hours=2))), datetime(2026, 1, 1, 12, tzinfo=UTC)),
+        ("2026-01-01T12:00:00", datetime(2026, 1, 1, 12, tzinfo=UTC)),
+        (b"2026-01-01T12:00:00Z", datetime(2026, 1, 1, 12, tzinfo=UTC)),
     ],
     ids=["naive", "aware", "text", "bytes"],
 )
@@ -326,7 +326,7 @@ async def test_retention_deletes_on_missing_table_return_zero(db2_mode: DriverMo
     """Retention deletes against an absent table report zero rows."""
     store, _ = _session_store(db2_mode, FakeDb2Cursor(error=db2_error(-204, "42704", UNDEFINED_NAME_TEXT)))
 
-    assert await db2_mode.call(getattr(store, method), datetime(2026, 9, 24, tzinfo=timezone.utc)) == 0
+    assert await db2_mode.call(getattr(store, method), datetime(2026, 9, 24, tzinfo=UTC)) == 0
 
 
 async def test_scoped_state_and_metadata_reads(db2_mode: DriverMode) -> None:
@@ -381,7 +381,7 @@ async def test_get_events_binds_naive_utc_after_timestamp(db2_mode: DriverMode) 
     [(sql, params)] = config.executed
     assert params == ("app", "u1", "s1", datetime(2026, 9, 24, 11))
     assert "FETCH FIRST 5 ROWS ONLY" in sql
-    assert event["timestamp"] == datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    assert event["timestamp"] == datetime(2026, 9, 24, 12, tzinfo=UTC)
     assert event["event_data"] == {"text": "hi"}
 
 
@@ -397,7 +397,7 @@ async def test_session_list_delete_and_drop_use_unquoted_tables(db2_mode: Driver
     assert list_params == ("app", "u1", 0, 10)
     assert delete_sql == f"DELETE FROM {store.session_table} WHERE app_name = ? AND user_id = ? AND id = ?"
     assert delete_params == ("app", "u1", "s1")
-    assert session["update_time"] == datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    assert session["update_time"] == datetime(2026, 9, 24, 12, tzinfo=UTC)
     assert store._drop_tables_sql() == [
         f"DROP TABLE {store.metadata_table}",
         f"DROP TABLE {store.user_state_table}",
@@ -485,7 +485,7 @@ async def test_memory_search_decodes_rows_and_session_delete_counts(db2_mode: Dr
     [memory] = await db2_mode.call(store.search_entries, query="hi", app_name="app", user_id="u1", scope_filter="user")
     deleted = await db2_mode.call(store.delete_entries_by_session, "s1")
 
-    assert memory["inserted_at"] == datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    assert memory["inserted_at"] == datetime(2026, 9, 24, 12, tzinfo=UTC)
     assert memory["author"] is None
     assert memory["metadata_json"] is None
     assert deleted == 1
@@ -531,7 +531,7 @@ async def test_zero_limit_reads_skip_the_database(db2_mode: DriverMode, call: An
         lambda store: store.get_app_state("app"),
         lambda store: store.list_sessions("app"),
         lambda store: store.get_events("app", "u1", "s1"),
-        lambda store: store.delete_idle_sessions(datetime(2026, 9, 24, tzinfo=timezone.utc)),
+        lambda store: store.delete_idle_sessions(datetime(2026, 9, 24, tzinfo=UTC)),
     ],
     ids=["scoped-read", "list-sessions", "events", "retention"],
 )
@@ -552,7 +552,7 @@ async def test_append_event_for_unknown_session_raises(db2_mode: DriverMode) -> 
         user_id="u1",
         session_id="s1",
         invocation_id="i1",
-        timestamp=datetime(2026, 9, 24, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 9, 24, tzinfo=UTC),
         event_data={},
     )
 

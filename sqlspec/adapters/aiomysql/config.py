@@ -1,11 +1,10 @@
 """aiomysql database configuration."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 from weakref import WeakSet
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiomysql._typing import (
     AiomysqlConnection,

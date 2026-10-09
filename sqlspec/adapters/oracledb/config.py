@@ -4,9 +4,7 @@ import contextlib
 from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 from ssl import TLSVersion
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.oracledb._json_handlers import register_json_handlers
 from sqlspec.adapters.oracledb._typing import (

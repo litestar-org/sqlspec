@@ -6,7 +6,7 @@ Spanner stores through adapter-local factories instead.
 """
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from inspect import isawaitable
 from typing import Any, TypeVar
 
@@ -61,7 +61,7 @@ async def test_spanner_adk_memory_store_round_trip(
 ) -> None:
     """Spanner ADK memory stores insert, search, and delete entries by session."""
     config, store = spanner_adk_memory_store_factory()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     entry: StoredMemory = {
         "id": "memory-1",
         "session_id": "session-memory",

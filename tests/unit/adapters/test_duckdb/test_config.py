@@ -1,11 +1,10 @@
 """DuckDB configuration tests covering statement config builders."""
 
-from typing import Any, get_type_hints
+from typing import Any, NotRequired, get_type_hints
 from unittest.mock import patch
 from uuid import UUID
 
 import duckdb
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.duckdb.config import (
     DuckDBConfig,

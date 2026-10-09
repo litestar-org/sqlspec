@@ -5,7 +5,7 @@ read-only snapshots, and typed GoogleSQL parameters require Spanner-specific
 fixtures. This module keeps those adapter-local driver/session assertions.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -225,7 +225,7 @@ def test_driver_data_type_bool(spanner_session: "SpannerSyncDriver") -> None:
 
 def test_driver_data_type_timestamp(spanner_session: "SpannerSyncDriver") -> None:
     """Test TIMESTAMP data type handling."""
-    ts = datetime(2024, 1, 15, 12, 30, 45, tzinfo=timezone.utc)
+    ts = datetime(2024, 1, 15, 12, 30, 45, tzinfo=UTC)
     result = spanner_session.select_value("SELECT @val", val=ts)
     assert result.year == 2024
     assert result.month == 1

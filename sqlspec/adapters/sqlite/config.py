@@ -1,9 +1,7 @@
 """SQLite database configuration with thread-local connections."""
 
 from os import PathLike
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
 
 from sqlspec.adapters.sqlite._typing import (
     SqliteConnection,

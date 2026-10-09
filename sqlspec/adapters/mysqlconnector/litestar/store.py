@@ -1,9 +1,7 @@
 """MysqlConnector session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, NotRequired, cast
 
 from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
 from sqlspec.config import LitestarConfig
@@ -195,8 +193,8 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                 return None
 
             expires_at_naive: datetime = cast("datetime", row[0])
-            expires_at_utc = expires_at_naive.replace(tzinfo=timezone.utc)
-            now = datetime.now(timezone.utc)
+            expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+            now = datetime.now(UTC)
 
             if expires_at_utc <= now:
                 return 0
@@ -440,8 +438,8 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 return None
 
             expires_at_naive: datetime = cast("datetime", row[0])
-            expires_at_utc = expires_at_naive.replace(tzinfo=timezone.utc)
-            now = datetime.now(timezone.utc)
+            expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+            now = datetime.now(UTC)
 
             if expires_at_utc <= now:
                 return 0

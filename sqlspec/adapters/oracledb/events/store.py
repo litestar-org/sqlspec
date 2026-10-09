@@ -18,9 +18,9 @@ Configuration (optional override):
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NotRequired
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.adapters.oracledb._storage import oracle_table_feature_report
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, storage_type_from_version

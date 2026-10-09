@@ -6,8 +6,7 @@ from sqlglot import exp, parse_one
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    from typing_extensions import Self
+    from typing import Self
 
     _SpannerAnonymousBase = exp.Anonymous
 else:

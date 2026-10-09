@@ -3,9 +3,7 @@
 import contextlib
 import datetime
 from collections.abc import Sized
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
-
-from typing_extensions import LiteralString
+from typing import TYPE_CHECKING, Any, Final, LiteralString, NamedTuple, cast
 
 from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.adapters.psycopg._typing import psycopg_errors as pg_errors

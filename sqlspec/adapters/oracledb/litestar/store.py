@@ -1,9 +1,7 @@
 """Oracle session store for Litestar integration."""
 
-from datetime import timedelta, timezone
-from typing import TYPE_CHECKING, Any, TypedDict, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, timedelta
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.oracledb._storage import oracle_table_feature_report
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
@@ -290,9 +288,9 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
                 expires_at, db_now = row
 
                 if expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    expires_at = expires_at.replace(tzinfo=UTC)
                 if db_now.tzinfo is None:
-                    db_now = db_now.replace(tzinfo=timezone.utc)
+                    db_now = db_now.replace(tzinfo=UTC)
 
                 if expires_at <= db_now:
                     return 0
@@ -680,9 +678,9 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             expires_at, db_now = row
 
             if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = expires_at.replace(tzinfo=UTC)
             if db_now.tzinfo is None:
-                db_now = db_now.replace(tzinfo=timezone.utc)
+                db_now = db_now.replace(tzinfo=UTC)
 
             if expires_at <= db_now:
                 return 0

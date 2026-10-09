@@ -1,8 +1,6 @@
 """SQLite event queue store."""
 
-from typing import Any
-
-from typing_extensions import NotRequired
+from typing import Any, NotRequired
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.core import apply_extension_pragmas, extension_pragma_statements

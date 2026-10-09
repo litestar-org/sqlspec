@@ -4,7 +4,7 @@ Store behaviors run against ``Db2SyncStore`` and ``Db2AsyncStore`` through ``db2
 """
 
 import importlib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -29,7 +29,7 @@ def _store(
 
 
 def _utc_naive_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _assert_naive_utc_near(value: Any, expected: datetime) -> None:

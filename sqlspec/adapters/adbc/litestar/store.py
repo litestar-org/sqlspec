@@ -13,7 +13,7 @@ Supports:
     - Snowflake: BINARY data type, TIMESTAMP WITH TIME ZONE, ? parameters, MERGE
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -473,9 +473,9 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 return None
 
             if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = expires_at.replace(tzinfo=UTC)
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             if expires_at <= now:
                 return 0

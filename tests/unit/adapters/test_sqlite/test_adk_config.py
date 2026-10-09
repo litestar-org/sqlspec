@@ -1,10 +1,9 @@
 """SQLite ADK adapter-local configuration tests."""
 
-from typing import Any, get_type_hints
+from typing import Any, Self, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec.adapters.sqlite.adk import SqliteADKConfig, SqliteADKMemoryStore, SqliteADKStore
 from sqlspec.adapters.sqlite.config import SqliteConfig

@@ -1,7 +1,7 @@
 """IBM Db2 ADK stores for Google Agent Development Kit session and memory storage."""
 
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from sqlspec.adapters.db2.config import Db2AsyncConfig, Db2SyncConfig
@@ -1050,8 +1050,8 @@ def _datetime_value(value: Any) -> datetime:
     """
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
     if isinstance(value, bytearray):
         value = bytes(value)
     if isinstance(value, bytes):
@@ -1060,8 +1060,8 @@ def _datetime_value(value: Any) -> datetime:
         normalized = value.replace("Z", "+00:00")
         parsed = datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     msg = f"Unsupported Db2 timestamp value: {type(value).__name__}"
     raise TypeError(msg)
 
