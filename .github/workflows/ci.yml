@@ -163,7 +163,7 @@ jobs:
       # checks before spending runner minutes on wheel matrices.
       fail-fast: true
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -253,7 +253,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
     timeout-minutes: 60
     steps:
       - name: Check out repository

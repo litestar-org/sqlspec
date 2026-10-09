@@ -17,11 +17,11 @@ on:
         default: '3.12'
         type: choice
         options:
-          - '3.10'
           - '3.11'
           - '3.12'
           - '3.13'
           - '3.14'
+          - '3.15'
   pull_request:
     paths:
       - '.github/workflows/test-build.yml'
@@ -105,11 +105,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           REQUIRED_CHECKS: |
             quality
-            test-unit (3.10)
             test-unit (3.11)
             test-unit (3.12)
             test-unit (3.13)
             test-unit (3.14)
+            test-unit (3.15)
         shell: bash
         run: |
           set -euo pipefail
@@ -299,7 +299,7 @@ jobs:
       - name: Build wheels with cibuildwheel
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_BUILD: "cp${{ matrix.python-version == '3.10' && '310' || matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' || matrix.python-version == '3.14' && '314' }}-*"
+          CIBW_BUILD: "cp${{ matrix.python-version == '3.11' && '311' || matrix.python-version == '3.12' && '312' || matrix.python-version == '3.13' && '313' || matrix.python-version == '3.14' && '314' || matrix.python-version == '3.15' && '315' }}-*"
           CIBW_BUILD_VERBOSITY: 1
 
           # PR validation builds host arch only — release covers full cross-arch matrix.
