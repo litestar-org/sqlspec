@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import anyio
@@ -37,7 +37,7 @@ def test_adk_memory_store() -> None:
                 invocation_id="inv_1",
                 author="user",
                 content=types.Content(parts=[types.Part(text="Hello")]),
-                timestamp=datetime.now(timezone.utc).timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
             )
             event_record = event_to_record(event, session["app_name"], session["user_id"], session["id"])
             await store.append_event(event_record)

@@ -1,10 +1,9 @@
 """Query cache for fast-path statement execution."""
 
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, final
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import final
 
 if TYPE_CHECKING:
     from sqlspec.core.compiler import OperationProfile, OperationType

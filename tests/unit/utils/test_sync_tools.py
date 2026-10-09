@@ -13,10 +13,9 @@ import inspect
 import threading
 import time
 from collections.abc import Coroutine
-from typing import Any, cast
+from typing import Any, Self, assert_type, cast
 
 import pytest
-from typing_extensions import Self, assert_type
 
 # Detect whether the sync_tools module is mypyc-compiled.
 # When compiled, `patch.object` / `patch()` on C-extension modules is a no-op,

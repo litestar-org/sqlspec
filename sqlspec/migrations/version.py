@@ -6,7 +6,7 @@ Provides structured parsing of migration versions supporting both legacy sequent
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, final
 
@@ -90,8 +90,8 @@ class MigrationVersion:
         if self.type == other.type:
             if self.type == VersionType.SEQUENTIAL:
                 return (self.sequence or 0) < (other.sequence or 0)
-            return (self.timestamp or datetime.min.replace(tzinfo=timezone.utc)) < (
-                other.timestamp or datetime.min.replace(tzinfo=timezone.utc)
+            return (self.timestamp or datetime.min.replace(tzinfo=UTC)) < (
+                other.timestamp or datetime.min.replace(tzinfo=UTC)
             )
 
         return self.type == VersionType.SEQUENTIAL
@@ -198,7 +198,7 @@ def is_timestamp_version(version_str: "str | None") -> bool:
         return False
 
     try:
-        datetime.strptime(version_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        datetime.strptime(version_str, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
     except ValueError:
         return False
     else:
@@ -241,7 +241,7 @@ def parse_version(version_str: "str | None") -> MigrationVersion:
         )
 
     if is_timestamp_version(version_str):
-        dt = datetime.strptime(version_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        dt = datetime.strptime(version_str, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
         return MigrationVersion(
             raw=version_str, type=VersionType.TIMESTAMP, sequence=None, timestamp=dt, extension=None
         )
@@ -283,7 +283,7 @@ def generate_timestamp_version() -> str:
     Returns:
         Timestamp version string.
     """
-    return datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
+    return datetime.now(tz=UTC).strftime("%Y%m%d%H%M%S")
 
 
 def get_next_sequential_number(migrations: "list[MigrationVersion]", extension: "str | None" = None) -> int:

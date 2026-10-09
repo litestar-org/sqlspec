@@ -1,7 +1,7 @@
 """Base classes and scalar helpers for adapter type conversion."""
 
 import json
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -111,7 +111,7 @@ def format_datetime_rfc3339(dt: "datetime") -> str:
         RFC 3339 formatted datetime string.
     """
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.isoformat()
 
 

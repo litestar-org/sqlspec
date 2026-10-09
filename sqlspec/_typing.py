@@ -10,9 +10,9 @@ import enum
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, Self, cast, runtime_checkable
 
-from typing_extensions import Self, TypeVar, dataclass_transform
+from typing_extensions import TypeVar, dataclass_transform
 
 from sqlspec.utils.module_loader import (
     dependency_flag,

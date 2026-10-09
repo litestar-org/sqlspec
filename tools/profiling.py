@@ -7,9 +7,7 @@ and durations in critical execution paths.
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
     from collections.abc import Callable

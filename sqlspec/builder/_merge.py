@@ -9,13 +9,12 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from itertools import starmap
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Self, cast
 from uuid import UUID
 
 from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
-from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin

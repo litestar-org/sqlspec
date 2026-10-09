@@ -1,9 +1,7 @@
 """Runtime hint registry for EventChannel defaults."""
 
 from dataclasses import dataclass
-from typing import Any, Final
-
-from typing_extensions import final
+from typing import Any, Final, final
 
 __all__ = ("EventRuntimeHints", "get_runtime_hints", "resolve_adapter_name")
 

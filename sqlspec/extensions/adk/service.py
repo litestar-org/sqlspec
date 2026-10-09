@@ -2,7 +2,7 @@
 
 import inspect
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from google.adk.errors import StaleSessionError
@@ -144,7 +144,7 @@ class SQLSpecSessionService(BaseSessionService):
 
         if config:
             if config.after_timestamp:
-                after_timestamp = datetime.fromtimestamp(config.after_timestamp, tz=timezone.utc)
+                after_timestamp = datetime.fromtimestamp(config.after_timestamp, tz=UTC)
             limit = config.num_recent_events
 
         if limit == 0:

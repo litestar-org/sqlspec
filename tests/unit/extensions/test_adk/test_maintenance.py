@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -75,7 +75,7 @@ class MockArtifactService:
 
 
 def _elapsed_days(cutoff: datetime) -> float:
-    return (datetime.now(timezone.utc) - cutoff).total_seconds() / 86400.0
+    return (datetime.now(UTC) - cutoff).total_seconds() / 86400.0
 
 
 async def test_prune_sessions_async() -> None:

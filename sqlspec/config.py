@@ -15,9 +15,9 @@ from collections.abc import Callable, Mapping
 from difflib import get_close_matches
 from inspect import Signature, signature
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, NotRequired, TypeAlias, TypeVar, cast
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.core.config_runtime import (

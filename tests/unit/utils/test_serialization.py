@@ -6,7 +6,7 @@ Tests for the byte-aware serialization system through the canonical
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -124,7 +124,7 @@ def test_unicode_handling() -> None:
 
 def test_datetime_serialization() -> None:
     """Test datetime objects are properly handled."""
-    dt = datetime(2023, 12, 25, 10, 30, 0, tzinfo=timezone.utc)
+    dt = datetime(2023, 12, 25, 10, 30, 0, tzinfo=UTC)
     data = {"timestamp": dt}
 
     encoded = encode_json(data, as_bytes=False)
@@ -137,7 +137,7 @@ def test_datetime_serialization() -> None:
 
 def test_datetime_with_timezone() -> None:
     """Test datetime with timezone information."""
-    dt = datetime.now(timezone.utc)
+    dt = datetime.now(UTC)
     data = {"created_at": dt}
 
     encoded = encode_json(data, as_bytes=True)
@@ -404,7 +404,7 @@ def test_numpy_array_with_datetime_integration() -> None:
     """Test numpy array serialization alongside datetime objects."""
     np = pytest.importorskip("numpy")
 
-    dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+    dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
     data = {"timestamp": dt, "values": np.array([100, 200, 300])}
 
     encoded = encode_json(data)
@@ -474,7 +474,7 @@ def test_serialization_without_numpy_standard_types() -> None:
 
 def test_serialization_without_numpy_datetime_support() -> None:
     """Test datetime serialization works without numpy."""
-    dt = datetime(2024, 6, 15, 14, 30, 0, tzinfo=timezone.utc)
+    dt = datetime(2024, 6, 15, 14, 30, 0, tzinfo=UTC)
     data = {"timestamp": dt, "message": "test"}
 
     encoded = encode_json(data)
@@ -531,7 +531,7 @@ def test_numpy_mixed_content_serialization() -> None:
         "id": 123,
         "name": "test",
         "array": np.array([1, 2, 3]),
-        "timestamp": datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        "timestamp": datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
         "uuid": str(uuid4()),
         "nested": {"value": 456, "data": np.array([7, 8, 9])},
     }

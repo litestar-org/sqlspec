@@ -13,12 +13,12 @@ from enum import Enum
 from functools import partial
 from inspect import isclass
 from types import GenericAlias
-from typing import Annotated, Any, Literal, NamedTuple, TypeVar, cast
+from typing import Annotated, Any, Literal, NamedTuple, NotRequired, TypeVar, cast
 from uuid import UUID
 
 from fastapi import Depends, Query
 from fastapi.exceptions import RequestValidationError
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.core import (
     BeforeAfterFilter,
@@ -559,7 +559,7 @@ class _BeforeAfterFilterProvider:
         if isinstance(value, datetime.datetime):
             return value
         try:
-            return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return datetime.datetime.fromisoformat(value)
         except (ValueError, TypeError, AttributeError):
             msg = f"Invalid date format for {alias}"
             raise RequestValidationError(errors=[{"loc": ("query", alias), "msg": msg, "type": "value_error.datetime"}])

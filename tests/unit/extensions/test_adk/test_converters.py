@@ -9,7 +9,7 @@ Tests the NEW contract specified in Chapter 1 of the ADK Clean-Break Overhaul:
 """
 
 import importlib.util
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -58,7 +58,7 @@ def _make_event(
         author=author,
         content=content,
         actions=actions,
-        timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc).timestamp(),
+        timestamp=datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC).timestamp(),
         branch=branch,
         isolation_scope=isolation_scope,
         partial=partial,
@@ -75,7 +75,7 @@ def _make_session(
         app_name=app_name,
         user_id=user_id,
         state=state or {},
-        last_update_time=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc).timestamp(),
+        last_update_time=datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC).timestamp(),
     )
 
 
@@ -419,7 +419,7 @@ def test_record_to_event_roundtrip_preserves_turn_complete() -> None:
 
 def test_record_to_event_roundtrip_preserves_timestamp() -> None:
     """timestamp survives the round-trip within float precision."""
-    fixed_ts = datetime(2024, 6, 1, 10, 30, 0, tzinfo=timezone.utc).timestamp()
+    fixed_ts = datetime(2024, 6, 1, 10, 30, 0, tzinfo=UTC).timestamp()
     event = Event(id="ts-evt", invocation_id="inv-1", author="user", actions=EventActions(), timestamp=fixed_ts)
     record = event_to_record(event, "app", "u1", "s1")
     restored = record_to_event(record)
@@ -503,8 +503,8 @@ def test_record_to_session_with_events_round_trip() -> None:
         app_name="app",
         user_id="u1",
         state={"key": "val"},
-        create_time=datetime.now(timezone.utc),
-        update_time=datetime.now(timezone.utc),
+        create_time=datetime.now(UTC),
+        update_time=datetime.now(UTC),
     )
     event = _make_event(text="hello", author="user")
     event_record = event_to_record(event, "app", "u1", "s1")
@@ -524,12 +524,7 @@ def test_record_to_session_empty_events() -> None:
     from sqlspec.extensions.adk._types import StoredSession
 
     session_record = StoredSession(
-        id="s2",
-        app_name="app",
-        user_id="u2",
-        state={},
-        create_time=datetime.now(timezone.utc),
-        update_time=datetime.now(timezone.utc),
+        id="s2", app_name="app", user_id="u2", state={}, create_time=datetime.now(UTC), update_time=datetime.now(UTC)
     )
     session = record_to_session(session_record, [])
     assert session.events == []

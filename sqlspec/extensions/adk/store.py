@@ -3,7 +3,7 @@
 import inspect
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_session_store_config
@@ -168,7 +168,7 @@ class _ADKStoreCommon(Generic[ConfigT]):
         if expires_in_seconds <= 0:
             return None
 
-        return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+        return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
 
     def _drop_sql_for_table_profile(self, table_profile: "tuple[str, str, str, str, str]") -> "list[str]":
         session_table, events_table, app_state_table, user_state_table, metadata_table = table_profile

@@ -1,11 +1,10 @@
 """Static analyzer contract for lazy optional typing exports."""
 
-from typing import TypeVar
+from typing import TypeVar, assert_type
 
 from litestar.dto.data_structures import DTOData as LitestarDTOData
 from pyarrow import Table as PyArrowTable
 from pydantic import BaseModel as PydanticBaseModel
-from typing_extensions import assert_type
 
 from sqlspec import SQL, Select, SQLSpec, StatementConfig, sql
 from sqlspec.builder import SQLFactory

@@ -4,10 +4,9 @@ Provides a fluent interface for building SQL UPDATE queries with
 parameter binding and validation.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from sqlglot import exp
-from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._dml import (

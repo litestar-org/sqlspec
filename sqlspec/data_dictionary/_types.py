@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
@@ -52,7 +52,7 @@ __all__ = (
 )
 
 
-class MetadataSupport(str, Enum):
+class MetadataSupport(StrEnum):
     """Support status for a metadata domain."""
 
     GATED = "gated"
@@ -62,7 +62,7 @@ class MetadataSupport(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
-class MetadataFidelity(str, Enum):
+class MetadataFidelity(StrEnum):
     """Fidelity of a metadata response."""
 
     GENERATED = "generated"
@@ -74,7 +74,7 @@ class MetadataFidelity(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
-class MetadataRisk(str, Enum):
+class MetadataRisk(StrEnum):
     """Risk or access gate attached to a metadata domain."""
 
     BILLED = "billed"
@@ -87,7 +87,7 @@ class MetadataRisk(str, Enum):
     VERSION_GATED = "version_gated"
 
 
-class MetadataSource(str, Enum):
+class MetadataSource(StrEnum):
     """Source used to produce a metadata response."""
 
     CATALOG = "catalog"

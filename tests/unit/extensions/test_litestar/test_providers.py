@@ -103,8 +103,8 @@ def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
 
 def test_compiled_annotation_pair_providers_build_and_call() -> None:
     """Providers with paired annotation locals instantiate and call under compiled builds."""
-    before = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-    after = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+    before = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    after = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
     deps = _create_statement_filters(
         FilterConfig(
             created_at=True,
