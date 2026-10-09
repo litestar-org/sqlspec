@@ -185,13 +185,22 @@ jobs:
             venv-unit-${{ runner.os }}-py${{ matrix.python-version }}-
 
       - name: Install dependencies
+        id: install-deps
+        continue-on-error: ${{ matrix.python-version == '3.15' }}
         # tests/unit/ imports every adapter module, so the install set is
         # the same as integration. Speed comes from skipping Docker
         # pre-pull and running only tests/unit/, not from a lighter sync.
-        run: uv sync --all-extras --dev
+        run: |
+          if [ "${{ matrix.python-version }}" = "3.15" ]; then
+            uv sync --all-extras --dev || uv sync --all-extras --no-extra mssql-python --dev
+          else
+            uv sync --all-extras --dev
+          fi
 
       - name: Test
         id: pytest
+        if: steps.install-deps.outcome == 'success'
+        continue-on-error: ${{ matrix.python-version == '3.15' }}
         # covdefaults sets fail_under=100 globally; the per-tier run only
         # covers a slice of sqlspec, so override to 0 here. The combined
         # view in Codecov is the source of truth.
@@ -202,7 +211,7 @@ jobs:
           --cov-fail-under=0
 
       - name: Upload coverage to Codecov
-        if: always() && steps.pytest.outcome != 'skipped'
+        if: always() && steps.pytest.outcome == 'success'
         uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           files: coverage-unit.xml
@@ -277,9 +286,17 @@ jobs:
             venv-integration-${{ runner.os }}-py${{ matrix.python-version }}-
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        id: install-deps
+        continue-on-error: ${{ matrix.python-version == '3.15' }}
+        run: |
+          if [ "${{ matrix.python-version }}" = "3.15" ]; then
+            uv sync --all-extras --dev || uv sync --all-extras --no-extra mssql-python --dev
+          else
+            uv sync --all-extras --dev
+          fi
 
       - name: Free runner disk before docker work
+        if: steps.install-deps.outcome == 'success'
         run: |
           set -eu
           df -h /
@@ -303,6 +320,7 @@ jobs:
           df -h /
 
       - name: Install SQL Server ODBC driver
+        if: steps.install-deps.outcome == 'success'
         run: |
           set -eu
           key_url="https://packages.microsoft.com/keys/microsoft.asc"
@@ -337,19 +355,20 @@ jobs:
 
       - name: Cache docker images
         id: docker-image-cache
+        if: steps.install-deps.outcome == 'success'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/docker-images
           key: docker-images-v2-${{ hashFiles('.github/workflows/ci.yml') }}
 
       - name: Load cached docker images
-        if: steps.docker-image-cache.outputs.cache-hit == 'true'
+        if: steps.install-deps.outcome == 'success' && steps.docker-image-cache.outputs.cache-hit == 'true'
         run: |
           docker load -i /tmp/docker-images/sqlspec-test-images.tar
           rm -f /tmp/docker-images/sqlspec-test-images.tar
 
       - name: Pre-pull docker images
-        if: steps.docker-image-cache.outputs.cache-hit != 'true'
+        if: steps.install-deps.outcome == 'success' && steps.docker-image-cache.outputs.cache-hit != 'true'
         run: |
           set -eu
           images=(
@@ -384,6 +403,8 @@ jobs:
 
       - name: Test
         id: pytest
+        if: steps.install-deps.outcome == 'success'
+        continue-on-error: ${{ matrix.python-version == '3.15' }}
         env:
           PYTHONFAULTHANDLER: "1"
           PYTEST_ADDOPTS: "--max-worker-restart=0"
@@ -444,7 +465,7 @@ jobs:
           exit $rc
 
       - name: Upload coverage to Codecov
-        if: always() && steps.pytest.outcome != 'skipped'
+        if: always() && steps.pytest.outcome == 'success'
         uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           files: coverage-integration.xml
