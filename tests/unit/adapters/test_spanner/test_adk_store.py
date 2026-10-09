@@ -1,17 +1,15 @@
-# pyright: reportPrivateUsage=false
 """Unit tests for Spanner ADK store behavior."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any, cast, get_args, get_origin
+from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from google.api_core.exceptions import NotFound
 from google.cloud.spanner_v1 import param_types
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.spanner.adk import (
     SpannerADKConfig,
@@ -33,7 +31,7 @@ def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
 
 
 def _spanner_not_found(message: str) -> NotFound:
-    return NotFound(message)  # type: ignore[no-untyped-call]
+    return cast("NotFound", cast("Any", NotFound)(message))
 
 
 def test_spanner_adk_config_types_adapter_local_optimizations() -> None:
@@ -71,7 +69,7 @@ def test_spanner_adk_config_types_adapter_local_optimizations() -> None:
 def test_insert_event_preserves_event_record_timestamp() -> None:
     """Spanner stores the ADK event timestamp, not the commit timestamp."""
     store = SpannerSyncADKStore(_mock_config())
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     event: StoredEvent = {
         "id": "event-1",
         "app_name": "app",
@@ -83,7 +81,7 @@ def test_insert_event_preserves_event_record_timestamp() -> None:
     }
 
     with patch.object(type(store), "_run_write") as run_write:
-        store._insert_event(event)  # pyright: ignore[reportPrivateUsage]
+        store._insert_event(event)
 
     statements = run_write.call_args.args[0]
     sql, params, _types = statements[0]
@@ -96,7 +94,7 @@ def test_insert_event_preserves_event_record_timestamp() -> None:
 def test_append_event_and_update_state_preserves_event_record_timestamp() -> None:
     """Atomic append uses the ADK event timestamp while session update uses commit time."""
     store = SpannerSyncADKStore(_mock_config())
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     event: StoredEvent = {
         "id": "event-1",
         "app_name": "app",
@@ -214,7 +212,7 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
 
     database.run_in_transaction.side_effect = _run_in_txn
     store = SpannerSyncADKMemoryStore(config)
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     entry_existing: StoredMemory = {
         "id": "memory-0",
         "session_id": "session-1",
@@ -269,7 +267,7 @@ def test_spanner_memory_insert_entries_writes_clean_break_record() -> None:
 
 def test_spanner_memory_rows_to_records_decodes_json_and_embedding_fields() -> None:
     store = SpannerSyncADKMemoryStore(_mock_config())
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
 
     records = store._rows_to_records([
         (
@@ -612,7 +610,7 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
         return await job(txn)
 
     database.run_in_transaction = _run_in_txn
-    now = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
 
     snapshot = MagicMock()
 
@@ -660,7 +658,7 @@ async def test_async_adk_store_create_get_list_delete_session() -> None:
 async def test_async_adk_store_append_event_and_update_state_and_get_events() -> None:
     """Verify SpannerAsyncADKStore atomic append_event_and_update_state and get_events."""
     store = SpannerAsyncADKStore(_mock_config())
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     event: StoredEvent = {
         "id": "event-1",
         "app_name": "app",
@@ -750,7 +748,7 @@ async def test_async_adk_memory_store_create_drop_insert_search_and_delete() -> 
     await store.create_tables()
     database.update_ddl.assert_awaited_once()
 
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     entry: StoredMemory = {
         "id": "memory-1",
         "session_id": "session-1",

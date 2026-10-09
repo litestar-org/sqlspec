@@ -251,8 +251,9 @@ def get_type_adapter(f: "type[T]") -> Any:
     Returns:
         :class:`pydantic.TypeAdapter`[:class:`typing.TypeVar`[T]]
     """
-    type_adapter = _typing.TypeAdapter
+    type_adapter: Any = _typing.TypeAdapter
     if PYDANTIC_USE_FAILFAST:
         fail_fast = _typing.FailFast
-        return type_adapter(Annotated[f, fail_fast()])
+        annotated_type: Any = Annotated
+        return type_adapter(annotated_type[f, fail_fast()])
     return type_adapter(f)
