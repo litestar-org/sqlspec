@@ -2,9 +2,7 @@
 
 import ssl
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.pymysql._typing import PyMysqlCloudSqlConnector as Connector
 from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor, PyMysqlRawCursor, PyMysqlSessionContext

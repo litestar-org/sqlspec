@@ -387,7 +387,7 @@ def test_behavioural_equivalence_battery() -> None:
     """
     serializer = StandardLibSerializer()
     payload = {
-        "ts": datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        "ts": datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
         "d": datetime.date(2026, 1, 1),
         "t": datetime.time(12, 30, 0),
         "td": datetime.timedelta(seconds=90),

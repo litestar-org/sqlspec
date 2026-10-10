@@ -11,7 +11,7 @@ transaction a store session provides.
 """
 
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from typing_extensions import TypedDict
@@ -60,7 +60,7 @@ async def prune_sessions(target: Any, *, idle_days: int = 30, app_name: str | No
     start = time.perf_counter()
     store = _resolve_session_store(target)
     table_name = getattr(store, "session_table", "adk_session")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     deleted = await _call_store_method(store, "delete_idle_sessions", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
@@ -84,7 +84,7 @@ async def prune_events(target: Any, *, older_than_days: int = 90, app_name: str 
     start = time.perf_counter()
     store = _resolve_session_store(target)
     table_name = getattr(store, "events_table", "adk_event")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     deleted = await _call_store_method(store, "delete_expired_events", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
@@ -141,7 +141,7 @@ async def prune_user_state(target: Any, *, idle_days: int = 180, app_name: str |
     start = time.perf_counter()
     store = _resolve_session_store(target)
     table_name = getattr(store, "user_state_table", "adk_user_state")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     deleted = await _call_store_method(store, "delete_idle_user_states", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))
@@ -172,7 +172,7 @@ async def prune_artifacts(target: Any, *, older_than_days: int = 90, app_name: s
     start = time.perf_counter()
     service = _resolve_artifact_service(target)
     table_name = getattr(service.store, "artifact_table", "adk_artifact")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     deleted = await _call_store_method(service, "delete_artifacts_older_than", cutoff, app_name=app_name)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return PruneReport(deleted_count=deleted, elapsed_ms=elapsed_ms, table=str(table_name))

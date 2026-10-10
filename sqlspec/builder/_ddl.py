@@ -4,12 +4,11 @@ Provides builders for DDL operations including CREATE, DROP, ALTER,
 TRUNCATE, and other schema manipulation statements.
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
-from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import _mark_explicit_table_quotes, _normalize_dialect

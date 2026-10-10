@@ -11,15 +11,15 @@ from sqlspec.exceptions import DeadlockError, OperationCancelledError, Permissio
 class _SqliteError(sqlite3.OperationalError):
     def __init__(self, message: str, code: int | None = None, name: str | None = None) -> None:
         super().__init__(message)
-        self.sqlite_errorcode = code
-        self.sqlite_errorname = name
+        setattr(self, "sqlite_errorcode", code)
+        setattr(self, "sqlite_errorname", name)
 
 
 class _SqliteIntegrityError(sqlite3.IntegrityError):
     def __init__(self, message: str, code: int | None = None, name: str | None = None) -> None:
         super().__init__(message)
-        self.sqlite_errorcode = code
-        self.sqlite_errorname = name
+        setattr(self, "sqlite_errorcode", code)
+        setattr(self, "sqlite_errorname", name)
 
 
 def test_busy_error_code_maps_to_deadlock() -> None:

@@ -3,7 +3,7 @@
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.psycopg.events._hub import PsycopgAsyncListenerHub, PsycopgSyncListenerHub
@@ -425,7 +425,7 @@ class PsycopgSyncHybridEventsBackend:
     def _publish_durable(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._config.provide_session() as driver:
             driver.execute(
                 SQL(
@@ -587,7 +587,7 @@ class PsycopgAsyncHybridEventsBackend:
     async def _publish_durable(
         self, channel: str, event_id: str, payload: "dict[str, Any]", metadata: "dict[str, Any] | None"
     ) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._config.provide_session() as driver:
             await driver.execute(
                 SQL(
@@ -699,5 +699,5 @@ def _extract_marker_id(payload: "str | None") -> "str | None":
 def _record_dequeue_result(runtime: Any, event: "EventMessage | None") -> None:
     if event is None:
         return
-    latency_ms = max(0.0, (datetime.now(timezone.utc) - event.created_at).total_seconds() * 1000)
+    latency_ms = max(0.0, (datetime.now(UTC) - event.created_at).total_seconds() * 1000)
     runtime.record_metric("events.dequeue.latency_ms", latency_ms)

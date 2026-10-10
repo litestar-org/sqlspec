@@ -1,9 +1,7 @@
 """pymssql ADK stores for Google Agent Development Kit session storage."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.pymssql._typing import PymssqlCursor, PymssqlError
 from sqlspec.adapters.pymssql.core import extract_error_number, resolve_rowcount

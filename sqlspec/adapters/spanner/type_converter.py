@@ -17,7 +17,7 @@ Input conversion handles:
 """
 
 import base64
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -195,7 +195,7 @@ def coerce_params_for_spanner(
             coerced[key] = bytes_to_spanner(value)
             changed = True
         elif isinstance(value, datetime) and value.tzinfo is None:
-            coerced[key] = value.replace(tzinfo=timezone.utc)
+            coerced[key] = value.replace(tzinfo=UTC)
             changed = True
         elif isinstance(value, timedelta):
             coerced[key] = Interval(days=value.days, nanos=(value.seconds * 1_000_000 + value.microseconds) * 1000)

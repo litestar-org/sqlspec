@@ -1,12 +1,12 @@
 """Spanner ADK store."""
 
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, cast
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Protocol, cast
 
 import sqlglot
 from sqlglot import exp
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 import sqlspec.dialects.spanner  # noqa: F401
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
@@ -808,8 +808,8 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
             "app_name": app_name,
             "user_id": user_id,
             "state": state,
-            "create_time": datetime.now(timezone.utc),
-            "update_time": datetime.now(timezone.utc),
+            "create_time": datetime.now(UTC),
+            "update_time": datetime.now(UTC),
         }
 
     def _get_session(
@@ -1137,8 +1137,8 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
             "app_name": app_name,
             "user_id": user_id,
             "state": state,
-            "create_time": datetime.now(timezone.utc),
-            "update_time": datetime.now(timezone.utc),
+            "create_time": datetime.now(UTC),
+            "update_time": datetime.now(UTC),
         }
 
     async def _get_session(
@@ -1623,7 +1623,7 @@ CREATE TABLE {self._memory_table} (
     def _build_delete_entries_older_than_statement(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
     ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.now(UTC) - timedelta(days=days)
         clauses = ["inserted_at < @cutoff"]
         params: dict[str, Any] = {"cutoff": cutoff}
         types: dict[str, Any] = {"cutoff": SPANNER_PARAM_TYPES.TIMESTAMP}

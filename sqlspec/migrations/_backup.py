@@ -1,14 +1,14 @@
 """Private migration backup helpers."""
 
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 __all__ = ("create_backup", "remove_backup", "restore_backup")
 
 
 def create_backup(migrations_path: Path) -> Path:
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
     backup_dir = migrations_path / f".backup_{timestamp}"
     backup_dir.mkdir(parents=True, exist_ok=False)
 

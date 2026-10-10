@@ -1,13 +1,12 @@
 # pyright: reportPrivateUsage=false
 """Tests for Oracle ADK store behavior."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, cast, get_args, get_origin
+from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.oracledb.adk import (
     JSONStorageType,
@@ -235,7 +234,7 @@ def test_oracle_adk_sync_memory_table_uses_same_lifecycle_clauses() -> None:
 async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields() -> None:
     store = OracleAsyncADKMemoryStore.__new__(OracleAsyncADKMemoryStore)  # type: ignore[call-arg]
     store._config = _config_for_storage(JSONStorageType.BLOB_JSON)
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     row = (
         "memory-1",
         "session-1",
@@ -275,7 +274,7 @@ async def test_oracle_async_adk_memory_rows_to_records_deserializes_json_fields(
 def test_oracle_sync_adk_memory_rows_to_records_deserializes_json_fields() -> None:
     store = OracleSyncADKMemoryStore.__new__(OracleSyncADKMemoryStore)  # type: ignore[call-arg]
     store._config = _config_for_storage(JSONStorageType.BLOB_JSON)
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     row = (
         "memory-2",
         "session-2",

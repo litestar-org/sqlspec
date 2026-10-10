@@ -1,6 +1,6 @@
 from datetime import timedelta
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,7 +17,6 @@ from google.cloud.spanner_v1.pool import (
     PingingPool,
     TransactionPingingPool,
 )
-from typing_extensions import Self
 
 import sqlspec.adapters.spanner.config as spanner_config
 from sqlspec.adapters.spanner.config import (

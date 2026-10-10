@@ -1,7 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Integration tests for DuckDB ADK memory store."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.duckdb, pytest.mark.integration]
 def _build_record(
     *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
 ) -> StoredMemory:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return StoredMemory(
         id=str(uuid4()),
         session_id=session_id,
@@ -60,7 +60,7 @@ def test_duckdb_memory_store_insert_search_dedup(tmp_path: Path) -> None:
     """Insert memory entries, search by text, and skip duplicates."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
     record2 = _build_record(session_id="s1", event_id="evt-2", content_text="latte", inserted_at=now)
 
@@ -79,7 +79,7 @@ def test_duckdb_memory_store_delete_by_session(tmp_path: Path) -> None:
     """Delete memory entries by session id."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
     record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
     store.insert_memory_entries([record1, record2])
@@ -96,7 +96,7 @@ def test_duckdb_memory_store_delete_older_than(tmp_path: Path) -> None:
     """Delete memory entries older than a cutoff."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old = now - timedelta(days=40)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="old", inserted_at=old)
     record2 = _build_record(session_id="s1", event_id="evt-2", content_text="new", inserted_at=now)
@@ -114,7 +114,7 @@ def test_duckdb_memory_store_fts_search_uses_bm25_path(tmp_path: Path) -> None:
     """FTS-enabled DuckDB stores search through the BM25 index after insert refresh."""
     store = _build_fts_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record1 = _build_record(session_id="s1", event_id="evt-fts-1", content_text="espresso roast", inserted_at=now)
     record2 = _build_record(session_id="s1", event_id="evt-fts-2", content_text="latte foam", inserted_at=now)
     store.insert_memory_entries([record1, record2])
@@ -130,7 +130,7 @@ def test_duckdb_memory_store_scoped_search_combined_default(tmp_path: Path) -> N
     """Default search recall returns both user-scoped and app-scoped memories."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record_user = _build_record(
         session_id="s1", event_id="evt-u1", content_text="project architecture guideline", inserted_at=now, scope="user"
     )
@@ -158,7 +158,7 @@ def test_duckdb_memory_store_explicit_scope_filters(tmp_path: Path) -> None:
     """Explicit scope filters restrict results to only user or only app memories."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record_user = _build_record(
         session_id="s1", event_id="evt-u1", content_text="scoped query plan", inserted_at=now, scope="user"
     )
@@ -180,7 +180,7 @@ def test_duckdb_memory_store_scoped_retention(tmp_path: Path) -> None:
     """Scoped retention deletes entries matching app_name and scope filters."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old = now - timedelta(days=40)
     record_user_old = _build_record(
         session_id="s1", event_id="evt-uo", content_text="old user memo", inserted_at=old, scope="user"

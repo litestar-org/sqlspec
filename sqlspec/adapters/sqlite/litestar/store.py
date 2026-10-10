@@ -1,9 +1,7 @@
 """SQLite sync session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, NotRequired
 
 from sqlspec.adapters.sqlite.core import apply_extension_pragmas, end_transaction, extension_pragma_statements
 from sqlspec.config import LitestarConfig
@@ -177,7 +175,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         if dt is None:
             return None
 
-        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        epoch = datetime(1970, 1, 1, tzinfo=UTC)
         delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
         return JULIAN_EPOCH + delta_days
 
@@ -195,7 +193,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
 
         days_since_epoch = julian - JULIAN_EPOCH
         timestamp = days_since_epoch * SECONDS_PER_DAY
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        return datetime.fromtimestamp(timestamp, tz=UTC)
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
@@ -301,7 +299,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
             if expires_at is None:
                 return None
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             if expires_at <= now:
                 return 0

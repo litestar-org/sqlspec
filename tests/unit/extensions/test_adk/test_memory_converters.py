@@ -1,7 +1,7 @@
 """Unit tests for ADK memory converters."""
 
 import importlib.util
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -48,7 +48,7 @@ def _event(event_id: str, text: str | None) -> Event:
         author="user",
         content=content,
         actions=EventActions(),
-        timestamp=datetime.now(timezone.utc).timestamp(),
+        timestamp=datetime.now(UTC).timestamp(),
         partial=False,
         turn_complete=True,
     )

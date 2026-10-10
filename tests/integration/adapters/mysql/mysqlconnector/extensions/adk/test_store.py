@@ -7,7 +7,7 @@ adapter-specific coverage (owner_id_column, storage-type fidelity, timestamp pre
 concurrency, event ordering/JSON details) that is not portable across the contract matrix.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import cast
 
 import pytest
@@ -74,7 +74,7 @@ async def test_timestamp_precision(mysqlconnector_adk_store: MysqlConnectorAsync
 
     assert hasattr(created["create_time"], "microsecond")
 
-    event_time = datetime.now(timezone.utc)
+    event_time = datetime.now(UTC)
     event: StoredEvent = {
         "id": "event-micro",
         "app_name": app_name,

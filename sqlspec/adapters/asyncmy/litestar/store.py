@@ -1,9 +1,7 @@
 """AsyncMy session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, NotRequired, cast
 
 from sqlspec.adapters.asyncmy._typing import AsyncmyProgrammingError
 from sqlspec.adapters.asyncmy.core import resolve_rowcount
@@ -222,8 +220,8 @@ class AsyncmyStore(BaseSQLSpecStore["AsyncmyConfig"]):
                 return None
 
             expires_at_naive = row[0]
-            expires_at_utc = expires_at_naive.replace(tzinfo=timezone.utc)
-            now = datetime.now(timezone.utc)
+            expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+            now = datetime.now(UTC)
 
             if expires_at_utc <= now:
                 return 0

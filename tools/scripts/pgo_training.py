@@ -9,6 +9,7 @@ Run as: python tools/scripts/pgo_training.py
 import sys
 import tempfile
 import time
+from datetime import UTC
 from pathlib import Path
 
 __all__ = ("main",)
@@ -160,7 +161,7 @@ def _train_hashable_keys() -> None:
 
 def _train_serialization() -> None:
     """Exercise JSON encode/decode paths."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlspec.utils.serializers._json import (
         convert_date_to_iso,
@@ -172,8 +173,8 @@ def _train_serialization() -> None:
     small_obj = {"key": "value", "num": 42}
     medium_obj = {f"field_{i}": i * 1.5 for i in range(20)}
     list_obj = [{"id": i, "name": f"item_{i}", "active": i % 2 == 0} for i in range(50)]
-    now = datetime.now(tz=timezone.utc)
-    today = datetime.now(tz=timezone.utc).date()
+    now = datetime.now(tz=UTC)
+    today = datetime.now(tz=UTC).date()
 
     for _ in range(10000):
         s1 = encode_json(small_obj)

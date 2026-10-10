@@ -1,8 +1,6 @@
 """CockroachDB ADK store for Google Agent Development Kit session/event storage (asyncpg)."""
 
-from typing import TYPE_CHECKING, Any, Literal, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, cast
 
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
 from sqlspec.config import ADKConfig

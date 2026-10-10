@@ -1,9 +1,7 @@
 """Unit tests for Oracle Litestar session store behavior."""
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, cast
-
-from typing_extensions import Self
+from datetime import UTC, datetime, timedelta
+from typing import Any, Self, cast
 
 from sqlspec.adapters.oracledb.core import DB_TYPE_BLOB
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache
@@ -105,7 +103,7 @@ def test_oracle_sync_store_set_calculates_expiry_from_database_clock() -> None:
 
 def test_oracle_sync_store_expires_in_uses_database_clock() -> None:
     """expires_in should compare expires_at to Oracle's SYSTIMESTAMP value."""
-    db_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    db_now = datetime(2026, 1, 1, tzinfo=UTC)
     expires_at = db_now + timedelta(seconds=5)
     cursor = _FakeCursor(rows=[(expires_at, db_now)])
     connection = _FakeConnection(cursor)

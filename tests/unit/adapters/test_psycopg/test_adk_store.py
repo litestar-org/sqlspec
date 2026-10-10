@@ -1,12 +1,11 @@
 """Unit tests for psycopg ADK store sync wrappers."""
 
-from datetime import datetime, timezone
-from typing import Any, cast
+from datetime import UTC, datetime
+from typing import Any, Self, cast
 from unittest.mock import MagicMock
 
 import pytest
 from psycopg.types.json import Jsonb
-from typing_extensions import Self
 
 from sqlspec.adapters.psycopg.adk import (
     PsycopgADKConfig,
@@ -205,7 +204,7 @@ def test_sync_append_event_inserts_without_session_update() -> None:
         "user_id": "user",
         "session_id": "session-1",
         "invocation_id": "",
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(UTC),
         "event_data": {"id": "event-1"},
     }
 
@@ -239,12 +238,12 @@ def test_psycopg_sync_memory_insert_binds_embedding_with_portable_cast(
         "scope": "user",
         "event_id": "event-1",
         "author": "user",
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(UTC),
         "embedding": embedding,
         "content_json": {"text": "hello"},
         "content_text": "hello",
         "metadata_json": None,
-        "inserted_at": datetime.now(timezone.utc),
+        "inserted_at": datetime.now(UTC),
     }
 
     assert store.insert_memory_entries([cast("Any", entry)], owner_id="tenant-1") == 1
@@ -270,12 +269,12 @@ async def test_psycopg_async_memory_insert_binds_embedding_with_portable_cast(ow
         "scope": "user",
         "event_id": "event-1",
         "author": "user",
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(UTC),
         "embedding": [0.1, 0.2],
         "content_json": {"text": "hello"},
         "content_text": "hello",
         "metadata_json": None,
-        "inserted_at": datetime.now(timezone.utc),
+        "inserted_at": datetime.now(UTC),
     }
 
     assert await store.insert_memory_entries([cast("Any", entry)], owner_id="tenant-1") == 1
@@ -314,7 +313,7 @@ def test_psycopg_sync_memory_search_casts_vector_operands(enable_bm25: bool, que
 
 def test_sync_get_events_passes_after_timestamp_and_limit() -> None:
     """get_events must forward after_timestamp and limit to the sync query."""
-    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base_time = datetime(2026, 1, 1, tzinfo=UTC)
     rows = [
         {
             "session_id": "session-1",
@@ -348,7 +347,7 @@ def test_sync_get_events_limit_zero_returns_empty_without_query() -> None:
 
 def test_sync_append_event_and_update_state_writes_scoped_state_in_one_unit() -> None:
     """append_event_and_update_state must use event_data and optional scoped state."""
-    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base_time = datetime(2026, 1, 1, tzinfo=UTC)
     rows = [
         {
             "id": "session-1",

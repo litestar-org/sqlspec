@@ -1,10 +1,9 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import NotRequired
 
 import sqlspec.adapters.asyncpg._typing as _asyncpg_typing
 from sqlspec.adapters.asyncpg._typing import (

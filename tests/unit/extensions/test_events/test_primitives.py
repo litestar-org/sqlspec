@@ -2,7 +2,7 @@
 
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlglot
@@ -69,7 +69,7 @@ def test_select_limit_prefix_matrix(dialect: str, n: int, expected: str) -> None
 
 def test_claim_verified_truth_table() -> None:
     """Test claim_verified across row shapes and lease timestamps."""
-    leased_until = datetime(2026, 9, 13, 16, 0, 0, tzinfo=timezone.utc)
+    leased_until = datetime(2026, 9, 13, 16, 0, 0, tzinfo=UTC)
     earlier = leased_until - timedelta(seconds=10)
     later = leased_until + timedelta(seconds=10)
 

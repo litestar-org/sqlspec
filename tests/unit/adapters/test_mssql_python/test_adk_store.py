@@ -1,11 +1,11 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for mssql-python ADK store wiring and T-SQL generation."""
 
-from typing import Any, cast, get_args, get_origin
+from datetime import UTC
+from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.mssql_python.adk import MssqlPythonADKConfig, MssqlPythonADKMemoryStore, MssqlPythonADKStore
 from sqlspec.config import ADKConfig
@@ -270,14 +270,14 @@ def test_sync_store_can_force_fallback_json_from_extension_config() -> None:
 
 def test_mssql_python_adk_memory_store_insert_handles_none_metadata_and_missing_author() -> None:
     """insert_memory_entries binds None for metadata_json=None and missing author."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     config = _mock_config()
     conn = config.provide_connection.return_value.__enter__.return_value
     cursor = conn.cursor.return_value
     cursor.rowcount = 1
     store = MssqlPythonADKMemoryStore(config)
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     entry = cast(
         "Any",
         {

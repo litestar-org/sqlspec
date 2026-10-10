@@ -6,10 +6,9 @@ import builtins
 import contextlib
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import Self
 
 if TYPE_CHECKING:
     from pathlib import Path

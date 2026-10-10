@@ -138,7 +138,7 @@ class PsqlpyListenerHub:
             return None
         try:
             payload = await asyncio.wait_for(queue.get(), timeout=poll_interval)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         else:
             self._record_queue_depth()
@@ -273,7 +273,7 @@ class PsqlpyListenerHub:
                 await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, payload))
                 await driver.commit()
             await asyncio.wait_for(ready.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.debug("psqlpy listener ready probe timed out for channel %s", channel)
         finally:
             payloads = self._ready_events.get(channel)

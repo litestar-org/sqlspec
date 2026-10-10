@@ -1,9 +1,7 @@
 """Spanner session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, NotRequired, cast
 
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.core import (
@@ -73,14 +71,14 @@ class _SpannerLitestarStoreCommonMixin:
         if dt is None:
             return None
         if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
+            return dt.replace(tzinfo=UTC)
         return dt
 
     def _timestamp_to_datetime(self, ts: "datetime | None") -> "datetime | None":
         if ts is None:
             return None
         if ts.tzinfo is None:
-            return ts.replace(tzinfo=timezone.utc)
+            return ts.replace(tzinfo=UTC)
         return ts
 
     def _build_params(
@@ -308,7 +306,7 @@ class SpannerSyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Spann
             expires_at = self._timestamp_to_datetime(row.get("expires_at"))
             if expires_at is None:
                 return None
-            delta = expires_at - datetime.now(timezone.utc)
+            delta = expires_at - datetime.now(UTC)
             return max(int(delta.total_seconds()), 0)
 
     def _delete_expired(self) -> int:
@@ -396,7 +394,7 @@ class SpannerAsyncStore(_SpannerLitestarStoreCommonMixin, BaseSQLSpecStore["Span
             expires_at = self._timestamp_to_datetime(row.get("expires_at"))
             if expires_at is None:
                 return None
-            delta = expires_at - datetime.now(timezone.utc)
+            delta = expires_at - datetime.now(UTC)
             return max(int(delta.total_seconds()), 0)
 
     async def delete_expired(self) -> int:

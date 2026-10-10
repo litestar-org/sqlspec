@@ -1,9 +1,9 @@
 """ADK store configuration helpers."""
 
 import importlib
-from typing import Any, NoReturn, Protocol, cast
+from typing import Any, NoReturn, NotRequired, Protocol, cast
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.utils.module_loader import import_string

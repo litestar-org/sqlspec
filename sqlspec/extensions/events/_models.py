@@ -2,9 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
-
-from typing_extensions import final
+from typing import Any, final
 
 __all__ = ("EventMessage",)
 

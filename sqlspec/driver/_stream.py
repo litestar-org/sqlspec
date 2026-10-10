@@ -11,9 +11,7 @@ interpreted adapter sources can feed compiled stream classes):
 
 import builtins
 import contextlib
-from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast, overload
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar, cast, overload
 
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.schema import to_schema

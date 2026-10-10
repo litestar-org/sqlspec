@@ -30,10 +30,9 @@ Class hierarchy
 
 import asyncio
 import sys
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import Self
 
 from sqlspec.exceptions import SQLSpecError
 

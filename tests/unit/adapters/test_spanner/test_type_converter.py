@@ -1,5 +1,5 @@
 import base64
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
@@ -31,7 +31,7 @@ def test_spanner_json_uses_native_json_object() -> None:
 
 
 def test_coerce_params_unwraps_typed_datetime_parameter() -> None:
-    timestamp = datetime(2026, 7, 4, 22, 9, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 7, 4, 22, 9, 0, tzinfo=UTC)
     params = {"available_at": TypedParameter(timestamp, datetime)}
 
     coerced = coerce_params_for_spanner(params)
@@ -40,7 +40,7 @@ def test_coerce_params_unwraps_typed_datetime_parameter() -> None:
 
 
 def test_coerce_params_preserves_driver_ready_parameters() -> None:
-    timestamp = datetime(2026, 7, 4, 22, 9, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 7, 4, 22, 9, 0, tzinfo=UTC)
     array = ["alpha", "beta"]
     payload = cast("Any", JsonObject)({"key": "value"})
     params = {
@@ -74,7 +74,7 @@ def test_coerce_params_copies_only_when_values_require_conversion() -> None:
     utils_uuid = uuid_utils.UUID(str(stdlib_uuid))
     binary = b"binary"
     naive_timestamp = datetime(2026, 7, 4, 22, 9, 0)
-    typed_timestamp = datetime(2026, 7, 5, 22, 9, 0, tzinfo=timezone.utc)
+    typed_timestamp = datetime(2026, 7, 5, 22, 9, 0, tzinfo=UTC)
     plain_array = ["alpha", "beta"]
     params = {
         "stdlib_uuid": stdlib_uuid,
@@ -95,7 +95,7 @@ def test_coerce_params_copies_only_when_values_require_conversion() -> None:
     assert coerced["stdlib_uuid"] == str(stdlib_uuid)
     assert coerced["utils_uuid"] == str(stdlib_uuid)
     assert coerced["binary"] == base64.b64encode(binary)
-    assert coerced["naive_timestamp"] == naive_timestamp.replace(tzinfo=timezone.utc)
+    assert coerced["naive_timestamp"] == naive_timestamp.replace(tzinfo=UTC)
     assert coerced["typed_timestamp"] is typed_timestamp
     assert isinstance(coerced["payload"], JsonObject)
     assert coerced["payload"] == {"key": "value"}

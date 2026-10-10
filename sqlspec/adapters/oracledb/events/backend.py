@@ -2,7 +2,7 @@
 
 import contextlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.oracledb._typing import DEQ_IMMEDIATE, DEQ_ON_COMMIT
@@ -266,7 +266,7 @@ def _build_envelope(
         "event_id": event_id,
         "payload": payload,
         "metadata": metadata,
-        "published_at": datetime.now(timezone.utc).isoformat(),
+        "published_at": datetime.now(UTC).isoformat(),
     }
 
 

@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
 
@@ -31,7 +31,7 @@ def _event_record(
         user_id=user_id,
         session_id=session_id,
         invocation_id=invocation_id,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         event_data=event_data,
     )
 

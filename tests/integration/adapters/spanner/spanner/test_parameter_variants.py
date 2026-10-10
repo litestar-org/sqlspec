@@ -5,7 +5,7 @@ are optional-gated and its read/write session behavior is not part of the
 shared C5 contract for active default adapters.
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import pytest
@@ -31,7 +31,7 @@ def test_spanner_native_named_at_parameters_allow_reuse_and_identifier_variants(
 
 def test_spanner_native_types_round_trip_through_read_session(spanner_session: SpannerSyncDriver) -> None:
     """Spanner infers native scalar parameter types for read-only SELECT statements."""
-    timestamp = datetime(2024, 6, 15, 14, 30, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2024, 6, 15, 14, 30, 0, tzinfo=UTC)
     row = spanner_session.select_one(
         "SELECT @num AS num, @ratio AS ratio, @flag AS flag, @text AS text, @ts AS ts",
         {"num": 9223372036854775807, "ratio": 3.14159, "flag": True, "text": "", "ts": timestamp},

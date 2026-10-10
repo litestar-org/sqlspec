@@ -1,6 +1,6 @@
 """DuckDB sync session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -166,11 +166,11 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             return None
         if isinstance(ts, datetime):
             if ts.tzinfo is None:
-                return ts.replace(tzinfo=timezone.utc)
+                return ts.replace(tzinfo=UTC)
             return ts
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         return dt
 
     def _create_table(self) -> None:
@@ -281,7 +281,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
             if expires_at is None:
                 return None
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             if expires_at <= now:
                 return 0

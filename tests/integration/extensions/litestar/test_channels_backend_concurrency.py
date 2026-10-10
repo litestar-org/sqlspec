@@ -106,7 +106,7 @@ async def test_sqlspec_channels_backend_multi_channel(postgres_service: Any, bac
     try:
         try:
             await asyncio.wait_for(_exercise(plugin, backend_key), timeout=_EXERCISE_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             failure = AssertionError(
                 f"{backend_key}: test hung — concurrent multi-channel deadlock under broken backend"
             )
@@ -139,7 +139,7 @@ async def _exercise(plugin: ChannelsPlugin, backend_key: str) -> None:
             alpha_payload = await asyncio.wait_for(_next_event(sub_alpha), timeout=_NEXT_EVENT_TIMEOUT)
             decoded_alpha = msgspec.json.decode(alpha_payload)
             assert decoded_alpha["action"] == "alpha"
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise AssertionError(f"{backend_key}: alpha subscriber timed out") from exc
 
         try:
@@ -148,5 +148,5 @@ async def _exercise(plugin: ChannelsPlugin, backend_key: str) -> None:
             assert decoded_beta["action"] == "beta", (
                 f"{backend_key}: beta subscriber received no message (multi-channel race)"
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise AssertionError(f"{backend_key}: beta subscriber timed out (multi-channel race)") from exc

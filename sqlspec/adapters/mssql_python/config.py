@@ -1,8 +1,6 @@
 """mssql-python database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext, TokenProvider
 from sqlspec.adapters.mssql_python.core import apply_driver_features, build_connection_config, default_statement_config

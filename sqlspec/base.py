@@ -3,10 +3,10 @@ import atexit
 import weakref
 from collections.abc import Awaitable, Coroutine
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeGuard, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeGuard, cast, overload
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import Self, TypeVar
+from typing_extensions import TypeVar
 
 from sqlspec.config import (
     AsyncConfigT,

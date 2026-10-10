@@ -7,11 +7,10 @@ parameter binding and validation.
 # pyright: reportPrivateUsage=false, reportPrivateImportUsage=false
 
 import re
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Self, Union, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
-from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._explain import ExplainMixin

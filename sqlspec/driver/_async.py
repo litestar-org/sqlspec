@@ -4,10 +4,9 @@ import logging
 from abc import abstractmethod
 from inspect import isawaitable
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, cast, final, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, Self, TypeVar, cast, final, overload
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import Self
 
 from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult

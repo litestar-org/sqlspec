@@ -2,7 +2,7 @@
 
 import inspect
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -38,9 +38,9 @@ from sqlspec.adapters.pymysql.litestar import PyMysqlStore
         ("get_session", ("app", "user", "session"), None),
         ("list_sessions", ("app", "user"), []),
         ("get_events", ("app", "user", "session"), []),
-        ("delete_expired_events", (datetime(2026, 1, 1, tzinfo=timezone.utc),), 0),
-        ("delete_idle_sessions", (datetime(2026, 1, 1, tzinfo=timezone.utc),), 0),
-        ("delete_idle_user_states", (datetime(2026, 1, 1, tzinfo=timezone.utc),), 0),
+        ("delete_expired_events", (datetime(2026, 1, 1, tzinfo=UTC),), 0),
+        ("delete_idle_sessions", (datetime(2026, 1, 1, tzinfo=UTC),), 0),
+        ("delete_idle_user_states", (datetime(2026, 1, 1, tzinfo=UTC),), 0),
         ("get_app_state", ("app",), None),
         ("get_user_state", ("app", "user"), None),
         ("get_metadata", ("key",), None),

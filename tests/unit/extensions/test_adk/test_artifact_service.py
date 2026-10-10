@@ -1,7 +1,7 @@
 """Unit tests for SQLSpec artifact service content coordination."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -22,7 +22,7 @@ def _record(version: int, filename: str = "report.txt") -> StoredArtifact:
         mime_type="text/plain",
         canonical_uri=f"{STORAGE_URI}/apps/agent_app/users/user-1/artifacts/{filename}/v{version}",
         custom_metadata=None,
-        created_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
 
 
@@ -95,7 +95,7 @@ async def test_delete_artifacts_older_than_forwards_cutoff_and_app_scope() -> No
     store = _RecordingStore([[_record(0), _record(1)]])
     backend = _RecordingBackend()
     service, _registry = _service(store, backend)
-    cutoff = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2024, 6, 1, tzinfo=UTC)
 
     deleted = await service.delete_artifacts_older_than(cutoff, app_name="agent_app")
 
@@ -108,7 +108,7 @@ async def test_delete_artifacts_older_than_deletes_content_for_every_version() -
     backend = _RecordingBackend()
     service, registry = _service(store, backend)
 
-    deleted = await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=timezone.utc))
+    deleted = await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=UTC))
 
     assert deleted == 3
     assert backend.deleted == [
@@ -124,7 +124,7 @@ async def test_delete_artifacts_older_than_without_matches_skips_storage() -> No
     backend = _RecordingBackend()
     service, registry = _service(store, backend)
 
-    deleted = await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=timezone.utc))
+    deleted = await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=UTC))
 
     assert deleted == 0
     assert registry.resolved == []
@@ -138,7 +138,7 @@ async def test_delete_artifacts_older_than_continues_after_content_failure(caplo
     service, _registry = _service(store, backend)
 
     with caplog.at_level(logging.WARNING, logger="sqlspec.extensions.adk.artifact.service"):
-        deleted = await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=timezone.utc))
+        deleted = await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=UTC))
 
     assert deleted == 2
     assert backend.deleted == [failing_path, "apps/agent_app/users/user-1/artifacts/report.txt/v1"]
@@ -153,7 +153,7 @@ async def test_second_prune_does_not_retry_content_for_deleted_metadata() -> Non
     store = _RecordingStore([[_record(0)], []])
     backend = _RecordingBackend(failing_paths={"apps/agent_app/users/user-1/artifacts/report.txt/v0"})
     service, _registry = _service(store, backend)
-    cutoff = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2024, 6, 1, tzinfo=UTC)
 
     first = await service.delete_artifacts_older_than(cutoff)
     second = await service.delete_artifacts_older_than(cutoff)
@@ -168,7 +168,7 @@ async def test_delete_artifacts_older_than_propagates_metadata_failure() -> None
     service, registry = _service(store, backend)
 
     with pytest.raises(RuntimeError, match="metadata delete failed"):
-        await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=timezone.utc))
+        await service.delete_artifacts_older_than(datetime(2024, 6, 1, tzinfo=UTC))
 
     assert registry.resolved == []
     assert backend.deleted == []

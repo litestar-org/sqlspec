@@ -1,12 +1,11 @@
 """Psycopg database configuration with direct field-based configuration."""
 
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 from psycopg.adapt import AdaptersMap
 from psycopg.types.json import set_json_dumps, set_json_loads
-from typing_extensions import NotRequired, Self
 
 import sqlspec.adapters.psycopg._typing as _psycopg_typing
 from sqlspec.adapters.psycopg._typing import (

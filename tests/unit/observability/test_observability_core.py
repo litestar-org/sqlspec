@@ -8,11 +8,10 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Literal, cast
+from typing import Any, Literal, Self, cast
 from unittest.mock import patch
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, SQLSpec, StatementObserver
 from sqlspec.adapters.sqlite import SqliteConfig

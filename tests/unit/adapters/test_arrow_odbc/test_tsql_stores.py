@@ -1,6 +1,6 @@
 """Characterization tests for the SQL Server statements of the arrow-odbc extension stores."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pyarrow as pa
@@ -160,7 +160,7 @@ async def test_tsql_session_exists_and_expires_in() -> None:
             ("exists_flag", pa.table({"exists_flag": [1]})),
             (
                 "SELECT expires_at FROM sess",
-                pa.table({"expires_at": [datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)]}),
+                pa.table({"expires_at": [datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1)]}),
             ),
         ),
     )
@@ -223,7 +223,7 @@ def test_tsql_event_store_create_and_drop_statements() -> None:
     assert store._index_existence_target() is None  # pyright: ignore[reportPrivateUsage]
 
 
-_ADK_TIME = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=timezone.utc)
+_ADK_TIME = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=UTC)
 _ADK_SESSION_ROW = pa.table({
     "id": ["s1"],
     "app_name": ["app"],

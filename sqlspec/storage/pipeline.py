@@ -4,11 +4,11 @@ from collections import deque
 from functools import partial
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypeAlias, cast
 from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityError
 from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload, encode_arrow_payload

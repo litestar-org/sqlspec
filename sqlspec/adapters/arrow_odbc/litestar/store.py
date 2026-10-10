@@ -1,7 +1,7 @@
 """arrow-odbc Litestar Store implementation."""
 
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.arrow_odbc.core import (
@@ -88,7 +88,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
                 return None
 
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
-            if expires_at is not None and expires_at < datetime.now(timezone.utc):
+            if expires_at is not None and expires_at < datetime.now(UTC):
                 self._delete(key)
                 return None
 
@@ -151,7 +151,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
             expires_at = _normalize_utc(_row_value(row, "expires_at", 0))
             if expires_at is None:
                 return None
-            remaining = expires_at - datetime.now(timezone.utc)
+            remaining = expires_at - datetime.now(UTC)
             return max(0, int(remaining.total_seconds()))
 
     def _delete_expired(self) -> int:
@@ -423,7 +423,7 @@ class _Db2SessionSql:
 
 
 def _db2_now() -> "str | None":
-    return db2_timestamp_text(datetime.now(timezone.utc))
+    return db2_timestamp_text(datetime.now(UTC))
 
 
 def _row_value(row: object, key: str, index: int) -> Any:
@@ -446,8 +446,8 @@ def _normalize_utc(value: Any) -> "datetime | None":
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _format_datetime(value: "datetime | None") -> "str | None":

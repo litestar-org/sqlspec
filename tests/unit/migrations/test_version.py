@@ -2,7 +2,7 @@
 
 import copy
 import pickle
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -68,10 +68,10 @@ def test_parse_timestamp_version() -> None:
     assert v.raw == "20251011120000"
     assert v.type == VersionType.TIMESTAMP
     assert v.sequence is None
-    assert v.timestamp == datetime(2025, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
+    assert v.timestamp == datetime(2025, 10, 11, 12, 0, 0, tzinfo=UTC)
     assert v.extension is None
     v = parse_version("20200101000000")
-    assert v.timestamp == datetime(2020, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    assert v.timestamp == datetime(2020, 1, 1, 0, 0, 0, tzinfo=UTC)
 
 
 def test_parse_extension_version_sequential() -> None:
@@ -91,7 +91,7 @@ def test_parse_extension_version_timestamp() -> None:
     v = parse_version("ext_litestar_20251011120000")
     assert v.raw == "ext_litestar_20251011120000"
     assert v.type == VersionType.TIMESTAMP
-    assert v.timestamp == datetime(2025, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
+    assert v.timestamp == datetime(2025, 10, 11, 12, 0, 0, tzinfo=UTC)
     assert v.extension == "litestar"
 
 

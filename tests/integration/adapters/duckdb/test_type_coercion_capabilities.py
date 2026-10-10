@@ -1,6 +1,6 @@
 """Integration test verifying TypeCoercionCapabilities against observed DuckDB behavior."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -19,7 +19,7 @@ def test_duckdb_type_coercion_capabilities_observed() -> None:
     assert caps.json_columns_decoded is False
     assert caps.uuid_binding == "text"
 
-    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    test_dt = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=UTC)
     test_json = {"key": "value", "count": 42}
     test_uuid = uuid4()
 
