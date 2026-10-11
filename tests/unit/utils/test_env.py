@@ -2,10 +2,9 @@
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_type
 
 import pytest
-from typing_extensions import assert_type
 
 from sqlspec.utils.env import get_config_val, get_config_val_with_aliases, get_env, get_env_with_aliases, is_env_set
 

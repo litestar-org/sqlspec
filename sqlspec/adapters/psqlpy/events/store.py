@@ -1,6 +1,6 @@
 """Psqlpy event queue store."""
 
-from typing_extensions import NotRequired
+from typing import NotRequired
 
 from sqlspec.adapters.psqlpy.config import PsqlpyConfig
 from sqlspec.config import EventsConfig

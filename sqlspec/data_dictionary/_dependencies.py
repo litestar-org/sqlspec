@@ -1,7 +1,7 @@
 """Typed dependency graph helpers for data-dictionary DDL ordering."""
 
 from collections import defaultdict
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlspec.data_dictionary._types import (
@@ -32,7 +32,7 @@ __all__ = (
 )
 
 
-class DependencyEdgeKind(str, Enum):
+class DependencyEdgeKind(StrEnum):
     """Kinds of metadata dependency edges used for DDL ordering."""
 
     CHECK_EXPRESSION = "check_expression"
@@ -51,7 +51,7 @@ class DependencyEdgeKind(str, Enum):
     VIEW_REFERENCE = "view_reference"
 
 
-class DependencyStrength(str, Enum):
+class DependencyStrength(StrEnum):
     """Strength of a dependency for ordering and diagnostics."""
 
     HARD = "hard"
@@ -59,7 +59,7 @@ class DependencyStrength(str, Enum):
     SOFT = "soft"
 
 
-class DependencyDirection(str, Enum):
+class DependencyDirection(StrEnum):
     """Relative direction for create and drop ordering."""
 
     FROM_BEFORE_TO = "from_before_to"

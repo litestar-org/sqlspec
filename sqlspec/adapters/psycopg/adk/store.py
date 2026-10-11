@@ -1,8 +1,6 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.psycopg._typing import PsycopgJsonb as Jsonb
 from sqlspec.adapters.psycopg._typing import psycopg_dict_row as dict_row

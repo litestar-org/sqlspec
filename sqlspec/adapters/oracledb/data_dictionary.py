@@ -1,6 +1,6 @@
 """Oracle-specific data dictionary for metadata queries."""
 
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
@@ -151,7 +151,7 @@ class OracleVersionInfo(VersionInfo):
         return version_str
 
 
-class JSONStorageType(str, Enum):
+class JSONStorageType(StrEnum):
     """Oracle JSON storage rung selected from the server version.
 
     The full ladder is a support contract: SQLSpec targets the oldest possible

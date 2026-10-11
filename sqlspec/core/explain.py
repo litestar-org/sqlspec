@@ -4,7 +4,7 @@ Provides types for configuring EXPLAIN statement generation across different
 database dialects.
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Final
 
 from mypy_extensions import mypyc_attr
@@ -30,7 +30,7 @@ ORACLE_MANAGED_EXPLAIN_META_KEY: Final[str] = "sqlspec_managed_oracle_explain"
 ORACLE_EXPLAIN_PREFIX: Final[str] = "EXPLAIN PLAN FOR "
 
 
-class ExplainFormat(str, Enum):
+class ExplainFormat(StrEnum):
     """Output formats for EXPLAIN statements.
 
     Different databases support different output formats:

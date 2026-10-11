@@ -1,6 +1,6 @@
 """pymssql Litestar Store implementation."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.pymssql._typing import PymssqlCursor
@@ -174,7 +174,7 @@ class PymssqlStore(BaseSQLSpecStore["PymssqlConfig"]):
         expires_at = _normalize_utc(_row_value(row, "expires_at", 0))
         if expires_at is None:
             return None
-        remaining = expires_at - datetime.now(timezone.utc)
+        remaining = expires_at - datetime.now(UTC)
         return max(0, int(remaining.total_seconds()))
 
     def _delete_expired(self) -> int:
@@ -212,8 +212,8 @@ def _normalize_utc(value: Any) -> "datetime | None":
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _coerce_bytes(value: Any) -> bytes:

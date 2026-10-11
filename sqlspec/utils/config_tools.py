@@ -7,7 +7,7 @@ This module consolidates configuration-related helpers:
 """
 
 import inspect
-import sys
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
@@ -23,11 +23,6 @@ from sqlspec.utils.type_guards import (
     has_database_url_and_bind_key,
     has_migration_config,
 )
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

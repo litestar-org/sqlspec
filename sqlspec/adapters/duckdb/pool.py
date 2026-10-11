@@ -5,9 +5,7 @@ import re
 import threading
 import time
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING, Any, Final, cast
-
-from typing_extensions import final
+from typing import TYPE_CHECKING, Any, Final, cast, final
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb

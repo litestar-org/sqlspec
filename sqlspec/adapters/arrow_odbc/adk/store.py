@@ -1,9 +1,7 @@
 """arrow-odbc ADK stores for Google Agent Development Kit session storage."""
 
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.arrow_odbc.core import (
     DB2_INDEX_EXISTS_SQL,
@@ -549,8 +547,8 @@ class ArrowOdbcADKMemoryStore(BaseSyncADKMemoryStore["ArrowOdbcConfig"]):
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
-        cutoff = datetime.now(timezone.utc).timestamp() - (days * 86_400)
-        cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
+        cutoff = datetime.now(UTC).timestamp() - (days * 86_400)
+        cutoff_dt = datetime.fromtimestamp(cutoff, tz=UTC)
         clauses = ["inserted_at < ?"]
         params: list[Any] = [self._sql.format_datetime(cutoff_dt)]
         if app_name is not None:
@@ -903,8 +901,8 @@ def _optional_json_dict(value: Any) -> "dict[str, Any] | None":
 def _datetime_value(value: Any) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
     if isinstance(value, bytearray):
         value = bytes(value)
     if isinstance(value, bytes):
@@ -913,15 +911,15 @@ def _datetime_value(value: Any) -> datetime:
         normalized = value.replace("Z", "+00:00")
         parsed = datetime.fromisoformat(normalized)
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    return datetime.now(timezone.utc)
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    return datetime.now(UTC)
 
 
 def _format_datetime(value: "datetime | None") -> "str | None":
     if value is None:
         return None
-    normalized = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
     return normalized.replace(tzinfo=None).isoformat(timespec="microseconds")
 
 
@@ -1113,7 +1111,7 @@ class _Db2AdkSql:
 
     def now_params(self) -> "tuple[Any, ...]":
         """Return the current naive-UTC time bound to ``now_sql``."""
-        return (db2_timestamp_text(datetime.now(timezone.utc)),)
+        return (db2_timestamp_text(datetime.now(UTC)),)
 
     def table_ref(self, table: str) -> str:
         return table

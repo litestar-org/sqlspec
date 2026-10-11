@@ -14,7 +14,7 @@ from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
+    from typing import Self
 
 from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED
 from sqlspec.utils.logging import get_logger
@@ -53,7 +53,7 @@ logger = get_logger(__name__)
 def convert_datetime_to_gmt_iso(value: datetime.datetime) -> str:
     """Normalize datetime values to ISO 8601 strings."""
     if value.tzinfo is None:
-        value = value.replace(tzinfo=datetime.timezone.utc)
+        value = value.replace(tzinfo=datetime.UTC)
     return value.isoformat().replace("+00:00", "Z")
 
 

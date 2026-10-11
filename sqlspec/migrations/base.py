@@ -3,11 +3,11 @@
 import os
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, NotRequired, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import exp
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.builder._column import Column
 from sqlspec.builder._ddl import CreateTable, _parse_ddl_identifier, _parse_ddl_table

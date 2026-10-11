@@ -9,10 +9,10 @@ DuckDB is an OLAP database optimized for analytical queries. This adapter provid
 
 import contextlib
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -479,7 +479,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         """Synchronous implementation of create_session."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         state_json = to_json(state)
 
         params: tuple[Any, ...]
@@ -516,7 +516,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             WHERE app_name = ? AND user_id = ? AND id = ?
             RETURNING id, app_name, user_id, state, create_time, update_time
             """
-            params: list[Any] = [datetime.now(timezone.utc), app_name, user_id, session_id]
+            params: list[Any] = [datetime.now(UTC), app_name, user_id, session_id]
         else:
             sql = f"""
             SELECT id, app_name, user_id, state, create_time, update_time
@@ -552,7 +552,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
 
     def _update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
         """Synchronous implementation of update_session_state."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         state_json = to_json(state)
 
         sql = f"""
@@ -652,7 +652,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         user_state: "dict[str, Any] | None" = None,
     ) -> StoredSession:
         """Synchronous implementation of append_event_and_update_state."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         state_json = to_json(state)
         event_data_str = to_json(event_record["event_data"])
 
@@ -870,7 +870,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             raise
 
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         sql = f"""
         INSERT INTO {self._app_state_table} (app_name, state, update_time)
         VALUES (?, ?, ?)
@@ -883,7 +883,7 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
             conn.commit()
 
     def _upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         sql = f"""
         INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
         VALUES (?, ?, ?, ?)

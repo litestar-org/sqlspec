@@ -1,6 +1,6 @@
 """Unit tests for SpannerSyncADKArtifactStore and SpannerAsyncADKArtifactStore."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -60,7 +60,7 @@ def _sample_record(
         mime_type="application/pdf",
         canonical_uri=f"gs://bucket/app-1/user-1/{filename}/v{version}",
         custom_metadata=custom_metadata if custom_metadata is not None else {"author": "agent"},
-        created_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
     )
 
 
@@ -143,7 +143,7 @@ def test_sync_insert_and_get_artifact_user_and_session_scoped(mocker: Any) -> No
     assert insert_params["session_id"] == ""
     assert insert_params["version"] == 0
 
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     fake_row = (
         "app-1",
         "user-1",
@@ -179,7 +179,7 @@ def test_sync_insert_and_get_artifact_user_and_session_scoped(mocker: Any) -> No
 def test_sync_list_versions_keys_and_next_version(mocker: Any) -> None:
     """list_artifact_versions, list_artifact_keys, and get_next_version build expected Spanner queries."""
     store = SpannerSyncADKArtifactStore(_make_sync_config())
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     rows = [
         ("app-1", "user-1", "sess-1", "report.pdf", 0, "application/pdf", "gs://b/v0", None, now),
         ("app-1", "user-1", "sess-1", "report.pdf", 1, "application/pdf", "gs://b/v1", {"k": 1}, now),
@@ -210,7 +210,7 @@ def test_sync_list_versions_keys_and_next_version(mocker: Any) -> None:
 def test_sync_delete_artifact_and_delete_older_than(mocker: Any) -> None:
     """delete_artifact and delete_artifacts_older_than atomically query and delete inside run_in_transaction."""
     store = SpannerSyncADKArtifactStore(_make_sync_config())
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     row = ("app-1", "user-1", "sess-1", "report.pdf", 0, "application/pdf", "gs://b/v0", None, now)
 
     tx = MagicMock()
@@ -230,7 +230,7 @@ def test_sync_delete_artifact_and_delete_older_than(mocker: Any) -> None:
 
     tx.reset_mock()
     tx.execute_sql.return_value = [row]
-    cutoff = datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 2, 1, 0, 0, tzinfo=UTC)
     swept = store.delete_artifacts_older_than(cutoff, app_name="app-1")
     assert len(swept) == 1
     assert "created_at < @before" in tx.execute_sql.call_args.args[0]
@@ -245,7 +245,7 @@ def test_sync_delete_artifact_and_delete_older_than(mocker: Any) -> None:
 async def test_async_artifact_store_operations(mocker: Any) -> None:
     """SpannerAsyncADKArtifactStore executes async snapshot reads and transactional writes."""
     store = SpannerAsyncADKArtifactStore(_make_async_config())
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     row = ("app-1", "user-1", "", "notes.md", 0, "text/markdown", "gs://b/notes/v0", '{"tag":"x"}', now)
 
     tx = MagicMock()

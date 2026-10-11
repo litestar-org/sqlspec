@@ -3,12 +3,11 @@
 from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 from ssl import TLSVersion
-from typing import Any, cast, get_args, get_origin, get_type_hints
+from typing import Any, NotRequired, cast, get_args, get_origin, get_type_hints
 from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from oracledb import AuthMode, PoolGetMode, Purity
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.oracledb import build_connection_config
 from sqlspec.adapters.oracledb import config as oracle_config_module

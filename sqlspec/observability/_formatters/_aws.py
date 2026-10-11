@@ -1,6 +1,6 @@
 """Amazon Web Services log formatter."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 __all__ = ("AWSLogFormatter",)
@@ -58,7 +58,7 @@ class AWSLogFormatter:
         entry: dict[str, Any] = {
             "level": self.LEVEL_MAP.get(level.upper(), "INFO"),
             "message": message,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         if correlation_id:

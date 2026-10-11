@@ -3,7 +3,7 @@
 import base64
 import json
 import re
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any
@@ -31,7 +31,7 @@ from sqlspec.exceptions import InvalidCursorError
         Decimal("1.10"),
         timedelta(days=1, seconds=2, microseconds=3),
         UUID("12345678-1234-5678-1234-567812345678"),
-        datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc),
+        datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=UTC),
         datetime(2026, 1, 2),
         date(2026, 1, 2),
         time(3, 4, 5, 6),

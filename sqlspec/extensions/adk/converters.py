@@ -10,7 +10,7 @@ Also provides scoped-state helpers that normalise ADK state prefixes
 filter, and merge state before handing it to backend stores.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from google.adk.events.event import Event
@@ -47,8 +47,8 @@ def session_to_record(session: "Session") -> StoredSession:
         user_id=session.user_id,
         state=filter_temp_state(session.state),
         # create_time is not exposed by ADK Session; a re-upsert of a restored session will reset this timestamp.
-        create_time=datetime.now(timezone.utc),
-        update_time=datetime.fromtimestamp(session.last_update_time, tz=timezone.utc),
+        create_time=datetime.now(UTC),
+        update_time=datetime.fromtimestamp(session.last_update_time, tz=UTC),
     )
 
 
@@ -64,10 +64,7 @@ def compute_update_marker(update_time: "datetime") -> str:
     Returns:
         ISO 8601 string with microsecond precision.
     """
-    if update_time.tzinfo is not None:
-        update_time = update_time.astimezone(timezone.utc)
-    else:
-        update_time = update_time.replace(tzinfo=timezone.utc)
+    update_time = update_time.astimezone(UTC) if update_time.tzinfo is not None else update_time.replace(tzinfo=UTC)
     return update_time.isoformat(timespec="microseconds")
 
 
@@ -121,7 +118,7 @@ def event_to_record(event: "Event", app_name: str, user_id: str, session_id: str
         user_id=user_id,
         session_id=session_id,
         invocation_id=event.invocation_id,
-        timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
+        timestamp=datetime.fromtimestamp(event.timestamp, tz=UTC),
         event_data=event_data,
     )
 

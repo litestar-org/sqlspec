@@ -3,11 +3,11 @@ authors = [{ name = "Cody Fincher", email = "cody@litestar.dev" }]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Programming Language :: Python :: 3 :: Only",
   "Typing :: Typed",
 ]
@@ -16,14 +16,13 @@ dependencies = [
   "sqlglot>=30.13.0",
   "mypy-extensions",
   "rich-click>=1.9.0",
-  "tomli>=2.0.0; python_version < '3.11'",
 ]
 description = "SQL Experiments in Python"
 license = "MIT"
 maintainers = [{ name = "Litestar Developers", email = "hello@litestar.dev" }]
 name = "sqlspec"
 readme = "README.md"
-requires-python = ">=3.10, <4.0"
+requires-python = ">=3.11, <4.0"
 version = "0.66.0"
 
 [project.urls]
@@ -131,7 +130,6 @@ lint = [
   "asyncpg-stubs",
   "pyarrow-stubs",
   "pandas-stubs<3",
-  "tomli>=2.0.0",
   "types-PyMySQL",
 ]
 test = [
@@ -500,7 +498,7 @@ allow_redefinition = false
 exclude = ["tmp/", ".tmp/", ".bugs/"]
 local_partial_types = true
 packages = ["sqlspec", "tests"]
-python_version = "3.10"
+python_version = "3.11"
 strict_bytes = true
 
 disallow_any_generics = false
@@ -561,7 +559,7 @@ module = "tests.*"
 disableBytesTypePromotions = true
 exclude = ["**/node_modules", "**/__pycache__", ".venv", "tools", "docs", "tmp", ".tmp", ".bugs", "**/.*"]
 include = ["sqlspec", "tests"]
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 reportMissingTypeStubs = false
 reportPrivateImportUsage = false
 reportPrivateUsage = false
@@ -577,7 +575,7 @@ strict-imports = false
 exclude = [".venv", "node_modules", "tmp", ".tmp", ".bugs"]
 line-length = 120
 src = ["sqlspec", "tests", "docs/examples", "tools"]
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -648,6 +646,7 @@ ignore = [
   "PLW0108", # Replace lambda expression with a def
   "RUF067",  # ruff - init should only have import statements
   "PLW0717", # too many statements in try block
+  "ASYNC109", # async function definition with a `timeout` parameter
 ]
 preview = true
 select = ["ALL"]
@@ -719,4 +718,4 @@ split-on-trailing-comma = false
 ban-relative-imports = "all"
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"__future__.annotations" = { msg = "Use Python 3.10+ PEP 604 annotations instead of from __future__ import annotations" }
+"__future__.annotations" = { msg = "Use Python 3.11+ PEP 604 annotations instead of from __future__ import annotations" }

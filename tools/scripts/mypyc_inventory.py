@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import tomllib
 from collections.abc import Sequence
 from fnmatch import fnmatch
 from pathlib import Path
@@ -20,11 +21,6 @@ __all__ = (
     "main",
     "validate_inventory",
 )
-
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib
 
 
 CANDIDATE_CLASSIFICATIONS = {"candidate", "compile_now", "helper_split_first", "prove_separately"}

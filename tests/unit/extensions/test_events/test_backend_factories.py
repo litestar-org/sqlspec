@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for adapter-specific event backend factories."""
 
+from datetime import UTC
 from types import SimpleNamespace
 from typing import Any
 
@@ -485,11 +486,11 @@ def test_notify_payload_one_byte_over_maximum_is_rejected() -> None:
 def test_serialized_envelope_timestamp_width_is_constant(microsecond: int) -> None:
     """Envelope timestamps keep a constant width regardless of microsecond value."""
     import json
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlspec.extensions.events import _payload
 
-    published_at = datetime(2024, 1, 15, 10, 0, 0, microsecond, tzinfo=timezone.utc)
+    published_at = datetime(2024, 1, 15, 10, 0, 0, microsecond, tzinfo=UTC)
     encoded = _payload._serialize_notify_envelope("evt_ts", {"action": "test"}, None, published_at)
 
     assert json.loads(encoded)["published_at"] == f"2024-01-15T10:00:00.{microsecond:06d}+00:00"
@@ -618,11 +619,11 @@ def test_shared_parse_timestamp_iso_string() -> None:
 
 def test_shared_parse_timestamp_datetime() -> None:
     """Shared parse_event_timestamp passes through datetime objects."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlspec.extensions.events import parse_event_timestamp
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = parse_event_timestamp(now)
 
     assert result is now
@@ -641,14 +642,14 @@ def test_shared_parse_timestamp_invalid() -> None:
 
 def test_shared_parse_timestamp_naive_datetime() -> None:
     """Shared parse_event_timestamp adds UTC timezone to naive datetimes."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlspec.extensions.events import parse_event_timestamp
 
     result = parse_event_timestamp("2024-06-15T12:00:00")
 
     assert isinstance(result, datetime)
-    assert result.tzinfo == timezone.utc
+    assert result.tzinfo == UTC
 
 
 # Backend shutdown tests

@@ -3,7 +3,7 @@
 
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -25,7 +25,7 @@ from tests.conftest import is_compiled
 
 
 def _event_row(event_id: str = "event-1") -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return {
         "event_id": event_id,
         "channel": "alerts",
@@ -252,8 +252,8 @@ def test_table_event_queue_statement_config_property(tmp_path) -> None:
 
 
 def test_fetch_candidate_parameter_fingerprint_stable_across_datetime_values() -> None:
-    first = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    second = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    first = datetime(2026, 1, 1, tzinfo=UTC)
+    second = datetime(2026, 1, 2, tzinfo=UTC)
 
     first_fingerprint = structural_fingerprint({
         "channel": "events",
@@ -274,7 +274,7 @@ def test_fetch_candidate_parameter_fingerprint_stable_across_datetime_values() -
 
 
 def test_ack_parameter_fingerprint_stable_across_event_ids() -> None:
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
 
     first = structural_fingerprint({"acked": "acked", "acked_at": now, "event_id": "event-1"})
     second = structural_fingerprint({"acked": "acked", "acked_at": now, "event_id": "event-2"})
@@ -288,7 +288,7 @@ def test_statement_config_enables_caching_by_default() -> None:
 
 def test_event_message_dataclass_fields() -> None:
     """EventMessage dataclass has expected fields."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     event = EventMessage(
         event_id="abc123",
         channel="notifications",
@@ -308,7 +308,7 @@ def test_event_message_dataclass_fields() -> None:
 
 def test_event_message_metadata_none() -> None:
     """EventMessage allows None metadata."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     event = EventMessage(
         event_id="abc123",
         channel="notifications",
@@ -325,7 +325,7 @@ def test_event_message_metadata_none() -> None:
 
 def test_table_event_queue_hydrate_event_dict_payload(tmp_path) -> None:
     """_hydrate_event handles dict payloads directly."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     row = {
         "event_id": "test123",
         "channel": "notifications",
@@ -347,7 +347,7 @@ def test_table_event_queue_hydrate_event_string_payload(tmp_path) -> None:
     """_hydrate_event deserializes JSON string payloads."""
     import json
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     row = {
         "event_id": "test456",
         "channel": "events",
@@ -370,7 +370,7 @@ def test_table_event_queue_hydrate_event_non_dict_payload(tmp_path) -> None:
     """Non-dict payloads are wrapped in a value key."""
     import json
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     row = {
         "event_id": "test789",
         "channel": "events",
@@ -398,12 +398,12 @@ def test_parse_event_timestamp_from_string() -> None:
 def test_parse_event_timestamp_naive_string() -> None:
     """Naive datetime strings get UTC timezone added."""
     result = parse_event_timestamp("2024-01-15T10:30:00")
-    assert result.tzinfo == timezone.utc
+    assert result.tzinfo == UTC
 
 
 def test_parse_event_timestamp_from_datetime() -> None:
     """Datetime objects are passed through."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = parse_event_timestamp(now)
     assert result is now
 
@@ -412,7 +412,7 @@ def test_parse_event_timestamp_naive_datetime() -> None:
     """Naive datetime objects get UTC timezone added."""
     naive = datetime(2024, 1, 15, 10, 30, 0)
     result = parse_event_timestamp(naive)
-    assert result.tzinfo == timezone.utc
+    assert result.tzinfo == UTC
 
 
 def test_parse_event_timestamp_invalid() -> None:

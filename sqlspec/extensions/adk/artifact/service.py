@@ -13,7 +13,7 @@ starting from 0.
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from google.adk.artifacts.base_artifact_service import BaseArtifactService
@@ -119,7 +119,7 @@ class SQLSpecArtifactService(BaseArtifactService):
             mime_type=mime_type,
             canonical_uri=canonical_uri,
             custom_metadata=custom_metadata,
-            created_at=datetime.now(tz=timezone.utc),
+            created_at=datetime.now(tz=UTC),
         )
         await self._store.insert_artifact(record)
 

@@ -8,7 +8,7 @@ concurrency, event ordering/JSON details) that is not portable across the contra
 """
 
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -58,7 +58,7 @@ def test_event_with_optional_fields(duckdb_adk_store: DuckdbADKStore) -> None:
         "user_id": "user-008",
         "session_id": session_id,
         "invocation_id": "inv-123",
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(UTC),
         "event_data": {
             "id": "event-full",
             "author": "assistant",
@@ -92,9 +92,9 @@ def test_event_ordering_by_timestamp(duckdb_adk_store: DuckdbADKStore) -> None:
     session_id = "session-009"
     duckdb_adk_store.create_session(session_id, "test-app", "user-009", {})
 
-    t1 = datetime.now(timezone.utc)
-    t2 = datetime.now(timezone.utc)
-    t3 = datetime.now(timezone.utc)
+    t1 = datetime.now(UTC)
+    t2 = datetime.now(UTC)
+    t3 = datetime.now(UTC)
 
     ev_middle: StoredEvent = {
         "id": "event-middle",
@@ -169,7 +169,7 @@ def test_event_data_round_trip(duckdb_adk_store: DuckdbADKStore) -> None:
         "user_id": "user-012",
         "session_id": session_id,
         "invocation_id": "",
-        "timestamp": datetime.now(timezone.utc),
+        "timestamp": datetime.now(UTC),
         "event_data": {
             "id": "event-json",
             "author": "system",

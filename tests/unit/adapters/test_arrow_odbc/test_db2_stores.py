@@ -1,6 +1,6 @@
 """Unit tests for the Db2 variants of the arrow-odbc extension stores."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pyarrow as pa
@@ -208,7 +208,7 @@ def test_db2_event_store_index_existence_target(queue_table: str, expected: "tup
     assert _event_store(queue_table)._index_existence_target() == expected  # pyright: ignore[reportPrivateUsage]
 
 
-_EVENT_TIME = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=timezone.utc)
+_EVENT_TIME = datetime(2026, 1, 2, 3, 4, 5, 678901, tzinfo=UTC)
 _DB2_SESSION_ROW = pa.table({
     "ID": ["s1"],
     "APP_NAME": ["app"],
@@ -634,7 +634,7 @@ def test_db2_adk_memory_cutoff_is_utc() -> None:
 
     calls = normalized_calls(connection)
     cutoff = calls[0][1][0] if calls[0][1] else None
-    expected = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+    expected = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=30)
     assert calls[0][0] == "SELECT COUNT(*) AS row_count FROM adk_memory WHERE inserted_at < ? AND app_name = ?"
     assert cutoff == DB2_TIMESTAMP
     assert abs(datetime.fromisoformat(str(cutoff)) - expected) < timedelta(minutes=1)

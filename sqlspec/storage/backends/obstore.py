@@ -10,11 +10,10 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Self, cast, overload
 from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import Self
 
 from sqlspec.exceptions import StorageOperationFailedError
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options

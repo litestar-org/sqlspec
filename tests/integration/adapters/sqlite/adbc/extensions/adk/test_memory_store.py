@@ -1,6 +1,6 @@
 """Integration tests for ADBC ADK memory store."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.i
 def _build_record(
     *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
 ) -> StoredMemory:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return StoredMemory(
         id=str(uuid4()),
         session_id=session_id,
@@ -46,7 +46,7 @@ def test_adbc_memory_store_insert_search_dedup(tmp_path: Path) -> None:
     """Insert memory entries, search by text, and skip duplicates."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
     record2 = _build_record(session_id="s1", event_id="evt-2", content_text="latte", inserted_at=now)
 
@@ -65,7 +65,7 @@ def test_adbc_memory_store_delete_by_session(tmp_path: Path) -> None:
     """Delete memory entries by session id."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
     record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
     store.insert_memory_entries([record1, record2])
@@ -82,7 +82,7 @@ def test_adbc_memory_store_delete_older_than(tmp_path: Path) -> None:
     """Delete memory entries older than a cutoff."""
     store = _build_store(tmp_path)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old = now - timedelta(days=40)
     record1 = _build_record(session_id="s1", event_id="evt-1", content_text="old", inserted_at=old)
     record2 = _build_record(session_id="s1", event_id="evt-2", content_text="new", inserted_at=now)

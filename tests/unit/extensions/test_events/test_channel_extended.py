@@ -4,7 +4,7 @@
 import asyncio
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -426,7 +426,7 @@ def test_sync_listener_delivers_and_acknowledges(tmp_path) -> None:
     config = SqliteConfig(connection_config={"database": str(tmp_path / "test.db")})
     channel = SyncEventChannel(config)
     backend = _ControllableSyncBackend()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     event = EventMessage(
         event_id="evt-101",
         channel="test_channel",

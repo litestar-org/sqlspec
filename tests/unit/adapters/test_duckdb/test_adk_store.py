@@ -2,11 +2,10 @@
 """Unit tests for DuckDB ADK store extension configuration."""
 
 from textwrap import dedent
-from typing import Any, cast, get_args, get_origin
+from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired, Self
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
 from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore, DuckdbADKStore

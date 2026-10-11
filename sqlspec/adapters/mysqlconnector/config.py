@@ -2,10 +2,8 @@
 
 import contextlib
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 from weakref import WeakSet
-
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAio,

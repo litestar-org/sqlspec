@@ -2,10 +2,8 @@
 
 import re
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_sqlite_module as sqlite3
 from sqlspec.adapters.aiosqlite.core import end_transaction, render_pragmas
@@ -110,7 +108,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         Returns:
             Created session record.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_julian = _datetime_to_julian(now)
         state_json = to_json(state)
 
@@ -168,7 +166,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
                     SET update_time = ?
                     WHERE app_name = ? AND user_id = ? AND id = ?
                     """
-                    await conn.execute(update_sql, (_datetime_to_julian(datetime.now(timezone.utc)), *params))
+                    await conn.execute(update_sql, (_datetime_to_julian(datetime.now(UTC)), *params))
                     await end_transaction(conn, commit=True)
                 cursor = await conn.execute(sql, params)
                 row = await cursor.fetchone()
@@ -198,7 +196,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
             session_id: Session identifier.
             state: New state dictionary (replaces existing state).
         """
-        now_julian = _datetime_to_julian(datetime.now(timezone.utc))
+        now_julian = _datetime_to_julian(datetime.now(UTC))
         state_json = to_json(state)
 
         sql = f"""
@@ -340,7 +338,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
         """
         timestamp_julian = _datetime_to_julian(event_record["timestamp"])
         event_data_json = to_json(event_record["event_data"])
-        now_julian = _datetime_to_julian(datetime.now(timezone.utc))
+        now_julian = _datetime_to_julian(datetime.now(UTC))
         state_json = to_json(state)
 
         insert_sql = f"""
@@ -585,7 +583,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
-            await conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(timezone.utc))))
+            await conn.execute(sql, (app_name, to_json(state), _datetime_to_julian(datetime.now(UTC))))
             await end_transaction(conn, commit=True)
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
@@ -600,9 +598,7 @@ class AiosqliteADKStore(BaseAsyncADKStore["AiosqliteConfig"]):
 
         async with self._config.provide_connection() as conn:
             await self._apply_pragmas(conn)
-            await conn.execute(
-                sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(timezone.utc)))
-            )
+            await conn.execute(sql, (app_name, user_id, to_json(state), _datetime_to_julian(datetime.now(UTC))))
             await end_transaction(conn, commit=True)
 
     async def get_metadata(self, key: str) -> "str | None":
@@ -957,7 +953,7 @@ class AiosqliteADKMemoryStore(BaseAsyncADKMemoryStore["AiosqliteConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        cutoff = _datetime_to_julian(datetime.now(timezone.utc)) - days
+        cutoff = _datetime_to_julian(datetime.now(UTC)) - days
         sql = f"DELETE FROM {self._memory_table} WHERE inserted_at < ?"
         params: list[Any] = [cutoff]
         if app_name is not None:
@@ -1112,8 +1108,8 @@ def _datetime_to_julian(dt: datetime) -> float:
         Julian Day number as REAL.
     """
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
     delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
     return JULIAN_EPOCH + delta_days
 
@@ -1129,7 +1125,7 @@ def _julian_to_datetime(julian: float) -> datetime:
     """
     days_since_epoch = julian - JULIAN_EPOCH
     timestamp = days_since_epoch * SECONDS_PER_DAY
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    return datetime.fromtimestamp(timestamp, tz=UTC)
 
 
 def _build_sqlite_scope_clause(

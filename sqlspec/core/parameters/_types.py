@@ -3,7 +3,7 @@
 from collections.abc import Callable, Collection, Generator, Iterable, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeAlias
 
@@ -134,7 +134,7 @@ PARAMETER_PROCESSING_RESULT_SLOTS: Final[tuple[str, ...]] = (
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
-class ParameterStyle(str, Enum):
+class ParameterStyle(StrEnum):
     """Enumeration of supported SQL parameter placeholder styles."""
 
     NONE = "none"

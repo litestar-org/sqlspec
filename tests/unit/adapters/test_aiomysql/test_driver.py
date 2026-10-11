@@ -1,9 +1,8 @@
 """Unit tests for the aiomysql driver transaction-state contract."""
 
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
 

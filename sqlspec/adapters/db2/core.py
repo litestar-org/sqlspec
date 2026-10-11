@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -266,7 +266,7 @@ def utc_now() -> datetime:
     Returns:
         The current UTC time without a time zone.
     """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def to_db_timestamp(value: "datetime | None") -> "datetime | None":
@@ -283,7 +283,7 @@ def to_db_timestamp(value: "datetime | None") -> "datetime | None":
     """
     if value is None or value.tzinfo is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def split_db2_table_name(name: str) -> "tuple[str | None, str]":

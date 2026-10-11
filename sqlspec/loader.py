@@ -13,7 +13,7 @@ import hashlib
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import unquote, urlparse
@@ -177,7 +177,7 @@ class SQLFile:
         self.content = content
         self.path = path
         self.metadata = metadata or {}
-        self.loaded_at = loaded_at or datetime.now(timezone.utc)
+        self.loaded_at = loaded_at or datetime.now(UTC)
         self.checksum = hashlib.md5(self.content.encode(), usedforsecurity=False).hexdigest()
 
 

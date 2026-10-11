@@ -5,7 +5,7 @@
 import asyncio
 import threading
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -387,7 +387,7 @@ class _SequenceMarkerHub:
 
 class _QueueFallback:
     def __init__(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.event = EventMessage(
             event_id="event-1",
             channel="alerts",
@@ -430,7 +430,7 @@ class _RecoveringQueueFallback(_QueueFallback):
 
 class _SyncQueueFallback:
     def __init__(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         self.event = EventMessage(
             event_id="event-1",
             channel="alerts",

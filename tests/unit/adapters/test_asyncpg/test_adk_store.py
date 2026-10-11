@@ -1,11 +1,10 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for asyncpg ADK store extension configuration."""
 
-from typing import Any, cast
+from typing import Any, Self, cast
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec.adapters.asyncpg.adk import AsyncpgADKConfig, AsyncpgADKMemoryStore, AsyncpgADKStore
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig

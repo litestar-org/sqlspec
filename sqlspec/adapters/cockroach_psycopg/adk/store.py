@@ -1,8 +1,6 @@
 """CockroachDB ADK store for Google Agent Development Kit session/event storage (psycopg)."""
 
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgJsonb as Jsonb
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_row as dict_row

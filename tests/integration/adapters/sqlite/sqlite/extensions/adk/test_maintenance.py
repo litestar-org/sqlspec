@@ -1,7 +1,7 @@
 """Integration tests for ADK retention on SQLite."""
 
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 def _build_memory_record(
     *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
 ) -> StoredMemory:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return StoredMemory(
         id=str(uuid4()),
         session_id=session_id,
@@ -46,7 +46,7 @@ def test_sqlite_prune_sessions_and_scoped_memory() -> None:
         session_store.create_tables()
         memory_store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         old_time = now - timedelta(days=60)
 
         with config.provide_connection() as conn:
@@ -100,7 +100,7 @@ def test_sqlite_prune_sessions_scopes_to_app_name() -> None:
         store = SqliteADKStore(config)
         store.create_tables()
 
-        stale = datetime.now(timezone.utc) - timedelta(days=90)
+        stale = datetime.now(UTC) - timedelta(days=90)
         for app in ("app_keep", "app_prune"):
             store.create_session(f"session_{app}", app, "user_1", {})
         with config.provide_connection() as conn:
@@ -126,7 +126,7 @@ def test_sqlite_prune_events_scopes_to_app_name() -> None:
         store = SqliteADKStore(config)
         store.create_tables()
 
-        stale = datetime.now(timezone.utc) - timedelta(days=200)
+        stale = datetime.now(UTC) - timedelta(days=200)
         for app in ("app_keep", "app_prune"):
             store.create_session(f"session_{app}", app, "user_1", {})
             store.append_event(

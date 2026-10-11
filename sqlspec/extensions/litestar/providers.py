@@ -12,14 +12,13 @@ from enum import Enum
 from functools import partial
 from inspect import isclass
 from types import GenericAlias
-from typing import Annotated, Any, Literal, NamedTuple, TypedDict, TypeVar, cast
+from typing import Annotated, Any, Literal, NamedTuple, NotRequired, TypedDict, TypeVar, cast
 from uuid import UUID
 
 from litestar.di import NamedDependency, Provide
 from litestar.exceptions import ValidationException
 from litestar.params import QueryParameter, SkipValidation
 from litestar.utils.signature import ParsedSignature
-from typing_extensions import NotRequired
 
 from sqlspec.core import (
     BeforeAfterFilter,

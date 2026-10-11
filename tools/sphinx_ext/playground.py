@@ -2,13 +2,12 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 from docutils import nodes
 from docutils.parsers.rst import Directive
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from typing_extensions import Self
 
 __all__ = ("WasmPlayground", "setup")
 

@@ -1,11 +1,10 @@
 """AsyncPG configuration tests covering statement config builders."""
 
-from typing import Any, cast, get_args, get_origin
+from typing import Any, NotRequired, cast, get_args, get_origin
 from unittest.mock import AsyncMock
 
 import pytest
 from asyncpg.pool import PoolConnectionProxy, PoolConnectionProxyMeta
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgConnectionConfig, AsyncpgPoolConfig

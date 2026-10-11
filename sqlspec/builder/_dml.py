@@ -1,11 +1,10 @@
 """Reusable mixins for INSERT/UPDATE/DELETE builders."""
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from mypy_extensions import trait
 from sqlglot import exp
-from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import (

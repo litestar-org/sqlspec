@@ -1,6 +1,6 @@
 """IBM Db2 Litestar Store implementation."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.db2.core import INDEX_EXISTS_SQL, TABLE_EXISTS_SQL, split_db2_table_name, to_db_timestamp, utc_now
@@ -229,8 +229,8 @@ def _normalize_utc(dt: Any) -> "datetime | None":
         return None
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
     return None
 
 
@@ -348,7 +348,7 @@ class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
             expires_at = _normalize_utc(driver.select_value_or_none(expires_at_sql(self._table_name), (key,)))
         if expires_at is None:
             return None
-        remaining = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        remaining = int((expires_at - datetime.now(UTC)).total_seconds())
         return max(remaining, 0)
 
     def _delete_expired(self) -> int:
@@ -429,7 +429,7 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
             expires_at = _normalize_utc(await driver.select_value_or_none(expires_at_sql(self._table_name), (key,)))
         if expires_at is None:
             return None
-        remaining = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        remaining = int((expires_at - datetime.now(UTC)).total_seconds())
         return max(remaining, 0)
 
     async def delete_expired(self) -> int:

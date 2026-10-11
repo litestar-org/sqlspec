@@ -4,11 +4,10 @@ Provides a fluent interface for building EXPLAIN statements with
 dialect-aware SQL generation.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from mypy_extensions import trait
 from sqlglot import Dialect, exp
-from typing_extensions import Self
 
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.explain import ORACLE_EXPLAIN_PREFIX, ORACLE_MANAGED_EXPLAIN_META_KEY, ExplainFormat, ExplainOptions

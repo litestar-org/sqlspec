@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for pymssql ADK store session listing."""
 
+from datetime import UTC
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -101,7 +102,7 @@ def test_pymssql_list_sessions_rejects_invalid_options(
 
 def test_pymssql_adk_memory_store_insert_handles_none_metadata_and_missing_author() -> None:
     """PymssqlADKMemoryStore binds None for metadata_json=None and missing author."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     from typing import cast
 
     from sqlspec.adapters.pymssql.adk import PymssqlADKMemoryStore
@@ -111,7 +112,7 @@ def test_pymssql_adk_memory_store_insert_handles_none_metadata_and_missing_autho
     cursor = conn.cursor.return_value
     cursor.rowcount = 1
     store = PymssqlADKMemoryStore(config)
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     entry = cast(
         "Any",
         {

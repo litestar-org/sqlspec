@@ -3,11 +3,10 @@
 
 import inspect
 from contextlib import nullcontext
-from datetime import datetime, timezone
-from typing import Any, cast, get_args, get_origin
+from datetime import UTC, datetime
+from typing import Any, NotRequired, cast, get_args, get_origin
 
 import pytest
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.bigquery import BigQueryConfig
 from sqlspec.adapters.bigquery.adk import BigQueryADKConfig, BigQueryADKRetentionConfig, BigQueryADKStore
@@ -146,8 +145,8 @@ def test_bigquery_adk_explicit_partition_filter_adds_partition_predicates(monkey
     store.update_session_state("app", "user", "session", {"turn": 1})
     store.delete_session("app", "user", "session")
     store.get_events("app", "user", "session")
-    store.delete_expired_events(datetime.now(timezone.utc))
-    store.delete_idle_sessions(datetime.now(timezone.utc))
+    store.delete_expired_events(datetime.now(UTC))
+    store.delete_idle_sessions(datetime.now(UTC))
 
     assert any("FROM test_dataset.adk_session" in sql and "create_time IS NOT NULL" in sql for sql in statements)
     assert any("UPDATE test_dataset.adk_session" in sql and "create_time IS NOT NULL" in sql for sql in statements)
@@ -160,7 +159,7 @@ def test_bigquery_adk_get_events_reads_full_event_blob_without_json_value(monkey
     """Event reads preserve nested event_data instead of JSON_VALUE scalar projections."""
 
     store = _make_store()
-    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    timestamp = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
     statements: list[str] = []
 
     def capture(_store: BigQueryADKStore, sql: str, parameters: Any = None) -> list[dict[str, Any]]:
@@ -302,7 +301,7 @@ def test_bigquery_litestar_store_includes_partition_filter_when_required() -> No
     """BigQueryStore appends the expires_at partition predicate when require_partition_filter is enabled."""
     executed: list[str] = []
     selected: list[str] = []
-    now = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
 
     class _FakeDriver:
         def select_one(self, sql: str, **_kwargs: Any) -> dict[str, Any]:
@@ -338,7 +337,7 @@ def test_bigquery_litestar_store_omits_partition_filter_by_default() -> None:
     """BigQueryStore omits the synthetic partition predicate when require_partition_filter is disabled."""
     executed: list[str] = []
     selected: list[str] = []
-    now = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
 
     class _FakeDriver:
         def select_one(self, sql: str, **_kwargs: Any) -> dict[str, Any]:

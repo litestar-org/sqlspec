@@ -6,7 +6,7 @@ Provides abstract base classes and core functionality for SQL query builders.
 import re
 from abc import abstractmethod
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, Final, NoReturn, cast
+from typing import Any, Final, NoReturn, Self, cast
 
 import sqlglot
 from sqlglot import Dialect, exp
@@ -23,7 +23,6 @@ from sqlglot.optimizer.pushdown_predicates import pushdown_predicates as _pushdo
 from sqlglot.optimizer.pushdown_projections import pushdown_projections as _pushdown_projections_rule
 from sqlglot.optimizer.qualify_columns import quote_identifiers as _quote_identifiers_rule
 from sqlglot.optimizer.simplify import simplify as _simplify_rule
-from typing_extensions import Self
 
 from sqlspec.builder._locking import register_lock_generator
 from sqlspec.builder._parsing_utils import _normalize_dialect, _resolve_dialect

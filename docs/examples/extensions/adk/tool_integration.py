@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import anyio
 import pytest
@@ -30,11 +30,11 @@ def test_adk_tool_integration() -> None:
                 "scope": "user",
                 "event_id": "evt_1",
                 "author": "tool",
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": datetime.now(UTC),
                 "content_json": {"tool": "search", "query": "sqlspec"},
                 "content_text": "tool:search query=sqlspec",
                 "metadata_json": None,
-                "inserted_at": datetime.now(timezone.utc),
+                "inserted_at": datetime.now(UTC),
                 "embedding": None,
             }
             await store.insert_memory_entries([record])

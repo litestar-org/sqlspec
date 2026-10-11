@@ -2,11 +2,11 @@
 """Unit tests for aiomysql ADK store extension configuration."""
 
 import asyncio
-from typing import Any, cast, get_args, get_origin
+from datetime import UTC
+from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.aiomysql.adk import AiomysqlADKConfig, AiomysqlADKMemoryStore, AiomysqlADKStore
 from sqlspec.config import ADKConfig
@@ -216,10 +216,10 @@ async def test_aiomysql_list_sessions_rejects_invalid_options(options: "dict[str
 
 async def test_aiomysql_adk_memory_store_insert_and_search_json_handling() -> None:
     """AiomysqlADKMemoryStore handles missing author, metadata_json=None, and deserializes JSON strings."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     from unittest.mock import AsyncMock
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     cursor = MagicMock()
     cursor.rowcount = 1
     cursor.execute = AsyncMock()

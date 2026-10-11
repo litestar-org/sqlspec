@@ -1,8 +1,6 @@
 """ADBC database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (

@@ -11,7 +11,7 @@ The store is mocked — no database required.
 
 import importlib.util
 import inspect
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -63,8 +63,8 @@ class MockStore:
             "app_name": "app",
             "user_id": "u1",
             "state": {},
-            "create_time": datetime.now(timezone.utc),
-            "update_time": datetime.now(timezone.utc),
+            "create_time": datetime.now(UTC),
+            "update_time": datetime.now(UTC),
         }
 
     async def append_event_and_update_state(
@@ -94,7 +94,7 @@ class MockStore:
         # Return the updated StoredSession — caller no longer needs a follow-up get_session().
         updated = dict(self._session_record)
         updated["state"] = state
-        updated["update_time"] = datetime.now(timezone.utc)
+        updated["update_time"] = datetime.now(UTC)
         self._session_record = updated
         return updated
 
@@ -120,8 +120,8 @@ class MockStore:
             "app_name": app_name,
             "user_id": user_id,
             "state": state,
-            "create_time": datetime.now(timezone.utc),
-            "update_time": datetime.now(timezone.utc),
+            "create_time": datetime.now(UTC),
+            "update_time": datetime.now(UTC),
         }
         return self._session_record
 
@@ -191,8 +191,8 @@ class SyncStore:
             app_name="app",
             user_id="u1",
             state={},
-            create_time=datetime.now(timezone.utc),
-            update_time=datetime.now(timezone.utc),
+            create_time=datetime.now(UTC),
+            update_time=datetime.now(UTC),
         )
 
     def create_session(
@@ -210,8 +210,8 @@ class SyncStore:
             app_name=app_name,
             user_id=user_id,
             state=state,
-            create_time=datetime.now(timezone.utc),
-            update_time=datetime.now(timezone.utc),
+            create_time=datetime.now(UTC),
+            update_time=datetime.now(UTC),
         )
         return self._session_record
 
@@ -261,7 +261,7 @@ class SyncStore:
             user_id=self._session_record["user_id"],
             state=state,
             create_time=self._session_record["create_time"],
-            update_time=datetime.now(timezone.utc),
+            update_time=datetime.now(UTC),
         )
         return self._session_record
 
@@ -310,7 +310,7 @@ def _make_session(
         app_name=app_name,
         user_id=user_id,
         state=state or {},
-        last_update_time=datetime.now(timezone.utc).timestamp(),
+        last_update_time=datetime.now(UTC).timestamp(),
     )
 
 
@@ -322,7 +322,7 @@ def _make_event(
         invocation_id=invocation_id,
         author=author,
         actions=actions,
-        timestamp=datetime.now(timezone.utc).timestamp(),
+        timestamp=datetime.now(UTC).timestamp(),
         partial=partial,
     )
 

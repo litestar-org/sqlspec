@@ -1,11 +1,11 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for PyMySQL ADK store extension configuration."""
 
-from typing import Any, cast, get_args, get_origin
+from datetime import UTC
+from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.pymysql.adk import PyMysqlADKConfig, PyMysqlADKMemoryStore, PyMysqlADKStore
 from sqlspec.config import ADKConfig
@@ -215,11 +215,11 @@ def test_pymysql_list_sessions_rejects_invalid_options(options: "dict[str, Any]"
 
 def test_pymysql_adk_memory_store_insert_and_search_json_handling() -> None:
     """PyMysqlADKMemoryStore handles missing author, metadata_json=None, and deserializes JSON strings."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     cursor = MagicMock()
     cursor.rowcount = 1
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     cursor.description = [
         ("id",),
         ("session_id",),

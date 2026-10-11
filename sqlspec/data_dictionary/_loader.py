@@ -17,13 +17,8 @@ from sqlspec.loader import SQLFileLoader
 from sqlspec.utils.text import slugify
 
 if TYPE_CHECKING:
-    import sys
     from collections.abc import Iterable
-
-    if sys.version_info >= (3, 11):
-        from importlib.resources.abc import Traversable
-    else:
-        from importlib.abc import Traversable
+    from importlib.resources.abc import Traversable
 
     from sqlspec.data_dictionary._types import DialectConfig, VersionInfo
 

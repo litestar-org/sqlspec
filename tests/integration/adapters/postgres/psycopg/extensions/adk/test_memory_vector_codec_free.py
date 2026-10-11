@@ -1,6 +1,6 @@
 """PostgreSQL ADK vector search without pgvector client codecs."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -26,7 +26,7 @@ def _connection_config(service: PostgresService) -> dict[str, Any]:
 
 
 def _entries() -> list[StoredMemory]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return [
         cast(
             "StoredMemory",

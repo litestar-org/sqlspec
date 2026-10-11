@@ -3,11 +3,10 @@
 import ssl
 import threading
 from collections.abc import Mapping
-from typing import get_args, get_origin, get_type_hints
+from typing import NotRequired, get_args, get_origin, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
 from sqlspec.adapters.pymysql.config import PyMysqlConfig, PyMysqlConnectionParams, build_connection_config

@@ -1,9 +1,7 @@
 """Psqlpy session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, NotRequired, cast
 
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -200,7 +198,7 @@ class PsqlpyStore(BaseSQLSpecStore["PsqlpyConfig"]):
             if expires_at is None:
                 return None
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if expires_at <= now:
                 return 0
 

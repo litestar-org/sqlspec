@@ -1,10 +1,9 @@
 """Aiosqlite database configuration."""
 
 from os import PathLike
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
-from typing_extensions import NotRequired
 
 from sqlspec.adapters.aiosqlite._typing import (
     AiosqliteConnection,

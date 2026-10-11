@@ -2,11 +2,11 @@
 """Unit tests for mysql-connector ADK store extension configuration."""
 
 import asyncio
-from typing import Any, cast, get_args, get_origin
+from datetime import UTC
+from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
-from typing_extensions import NotRequired, Self
 
 from sqlspec.adapters.mysqlconnector.adk import (
     MysqlConnectorADKConfig,
@@ -327,9 +327,9 @@ def test_mysqlconnector_sync_list_sessions_rejects_invalid_options(options: "dic
 
 def test_mysqlconnector_sync_adk_memory_store_insert_and_search_json_handling() -> None:
     """MysqlConnectorSyncADKMemoryStore handles missing author, metadata_json=None, and deserializes JSON strings."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     cursor = MagicMock()
     cursor.rowcount = 1
     cursor.description = [
@@ -399,10 +399,10 @@ def test_mysqlconnector_sync_adk_memory_store_insert_and_search_json_handling() 
 
 async def test_mysqlconnector_async_adk_memory_store_insert_and_search_json_handling() -> None:
     """MysqlConnectorAsyncADKMemoryStore handles missing author, metadata_json=None, and deserializes JSON strings."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     from unittest.mock import AsyncMock
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     cursor = MagicMock()
     cursor.rowcount = 1
     cursor.execute = AsyncMock()

@@ -1,10 +1,8 @@
 """Reusable converter builders for parameter configuration."""
 
 import decimal
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, final
 from uuid import UUID
-
-from typing_extensions import final
 
 from sqlspec.utils.dispatch import TypeDispatcher
 from sqlspec.utils.module_loader import import_optional_attr

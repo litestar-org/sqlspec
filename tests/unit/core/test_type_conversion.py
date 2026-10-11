@@ -1,6 +1,6 @@
 """Tests for centralized scalar conversion helpers."""
 
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from uuid import UUID
 
@@ -86,7 +86,7 @@ def test_convert_decimal() -> None:
 
 def test_format_datetime_rfc3339() -> None:
     """Test RFC 3339 datetime formatting."""
-    dt = datetime(2023, 12, 25, 10, 30, 0, tzinfo=timezone.utc)
+    dt = datetime(2023, 12, 25, 10, 30, 0, tzinfo=UTC)
     formatted = format_datetime_rfc3339(dt)
     assert formatted == "2023-12-25T10:30:00+00:00"
 
@@ -119,7 +119,7 @@ def test_parse_datetime_rfc3339_delegates_to_iso_converter(monkeypatch: pytest.M
 
     import sqlspec.core.type_converter as type_converter
 
-    expected = datetime(2023, 12, 25, 10, 30, 0, tzinfo=timezone.utc)
+    expected = datetime(2023, 12, 25, 10, 30, 0, tzinfo=UTC)
 
     def fake_convert(value: str) -> datetime:
         assert value == "2023-12-25T10:30:00+00:00"
@@ -132,7 +132,7 @@ def test_parse_datetime_rfc3339_delegates_to_iso_converter(monkeypatch: pytest.M
 
 def test_datetime_round_trip() -> None:
     """Test datetime formatting and parsing round trip."""
-    original = datetime(2023, 12, 25, 10, 30, 0, tzinfo=timezone.utc)
+    original = datetime(2023, 12, 25, 10, 30, 0, tzinfo=UTC)
     formatted = format_datetime_rfc3339(original)
     parsed = parse_datetime_rfc3339(formatted)
 

@@ -112,7 +112,7 @@ def test_provide_filters_created_at() -> None:
     assert filters == []
 
     # Before date only
-    before_dt = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+    before_dt = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
     filters = provider(created_filter=BeforeAfterFilter(field_name="created_at", before=before_dt, after=None))
     assert len(filters) == 1
     assert isinstance(filters[0], BeforeAfterFilter)
@@ -120,7 +120,7 @@ def test_provide_filters_created_at() -> None:
     assert filters[0].before == before_dt
 
     # After date only
-    after_dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+    after_dt = datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC)
     filters = provider(created_filter=BeforeAfterFilter(field_name="created_at", before=None, after=after_dt))
     assert len(filters) == 1
     assert filters[0].after == after_dt  # type: ignore[union-attr]
@@ -137,7 +137,7 @@ def test_provide_filters_updated_at() -> None:
     config: FilterConfig = {"updated_at": True}
     provider = provide_filters(config)
 
-    before_dt = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+    before_dt = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
     filters = provider(updated_filter=BeforeAfterFilter(field_name="updated_at", before=before_dt, after=None))
     assert len(filters) == 1
     assert isinstance(filters[0], BeforeAfterFilter)
@@ -396,7 +396,7 @@ def test_provide_filters_combined() -> None:
     provider = provide_filters(config)
 
     test_id = uuid4()
-    before_dt = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+    before_dt = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
 
     filters = provider(
         id_filter=InCollectionFilter(field_name="id", values=[test_id]),

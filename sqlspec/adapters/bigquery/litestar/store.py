@@ -1,9 +1,7 @@
 """BigQuery session store for Litestar integration."""
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, NotRequired, cast
 
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -200,7 +198,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         if dt is None:
             return None
         if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
+            return dt.replace(tzinfo=UTC)
         return dt
 
     def _timestamp_to_datetime(self, ts: "datetime | None") -> "datetime | None":
@@ -215,7 +213,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
         if ts is None:
             return None
         if ts.tzinfo is None:
-            return ts.replace(tzinfo=timezone.utc)
+            return ts.replace(tzinfo=UTC)
         return ts
 
     def _create_table(self) -> None:
@@ -324,7 +322,7 @@ class BigQueryStore(BaseSQLSpecStore["BigQueryConfig"]):
             if expires_at_dt is None:
                 return None
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if expires_at_dt <= now:
                 return 0
 

@@ -2,9 +2,9 @@
 """Tests for shared exception handler bases and representative adapter handlers."""
 
 from types import TracebackType
+from typing import Self
 
 import pytest
-from typing_extensions import Self
 
 from sqlspec.driver import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
 from sqlspec.driver._exception_handler import _run_with_async_exception_handler

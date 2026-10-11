@@ -17,9 +17,7 @@ The fakes reproduce the ``ibm_db_dbi`` 3.3 semantics the Db2 adapter depends on:
 import inspect
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any
-
-from typing_extensions import Self
+from typing import Any, Self
 
 import sqlspec.adapters.db2._typing as db2_typing
 import sqlspec.adapters.db2.config as db2_config

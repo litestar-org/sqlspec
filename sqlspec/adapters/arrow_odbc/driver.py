@@ -3,7 +3,7 @@
 import contextlib
 import re
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -593,7 +593,7 @@ def _unwrap_parameter(value: Any, naive_utc_datetimes: bool = False) -> Any:
     if wrapped is None:
         return None
     if naive_utc_datetimes and isinstance(wrapped, datetime) and wrapped.tzinfo is not None:
-        wrapped = wrapped.astimezone(timezone.utc).replace(tzinfo=None)
+        wrapped = wrapped.astimezone(UTC).replace(tzinfo=None)
     return str(wrapped)
 
 

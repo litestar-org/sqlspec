@@ -1,6 +1,6 @@
 """Integration tests for ADK retention on DuckDB."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,7 +24,7 @@ def _config(tmp_path: Path, name: str) -> DuckDBConfig:
 
 
 def _memory_record(*, app_name: str, inserted_at: datetime, scope: str = "user") -> StoredMemory:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return StoredMemory(
         id=str(uuid4()),
         session_id="s1",
@@ -60,7 +60,7 @@ def test_duckdb_prune_sessions_scopes_to_app_name(tmp_path: Path) -> None:
     store = DuckdbADKStore(config)
     store.create_tables()
 
-    stale = datetime.now(timezone.utc) - timedelta(days=120)
+    stale = datetime.now(UTC) - timedelta(days=120)
     for app in ("app_keep", "app_prune"):
         store.create_session(f"session_{app}", app, "user", {})
     with config.provide_connection() as conn:
@@ -80,7 +80,7 @@ def test_duckdb_prune_events_scopes_to_app_name(tmp_path: Path) -> None:
     store = DuckdbADKStore(config)
     store.create_tables()
 
-    stale = datetime.now(timezone.utc) - timedelta(days=200)
+    stale = datetime.now(UTC) - timedelta(days=200)
     for app in ("app_keep", "app_prune"):
         store.create_session(f"session_{app}", app, "user", {})
         store.append_event(_event(app_name=app, session_id=f"session_{app}", timestamp=stale))
@@ -100,7 +100,7 @@ def test_duckdb_prune_user_state_scopes_to_app_name(tmp_path: Path) -> None:
 
     for app in ("app_keep", "app_prune"):
         store.upsert_user_state(app, "user", {"theme": "dark"})
-    stale = datetime.now(timezone.utc) - timedelta(days=400)
+    stale = datetime.now(UTC) - timedelta(days=400)
     with config.provide_connection() as conn:
         conn.execute(f"UPDATE {store.user_state_table} SET update_time = ?", (stale,))
         conn.commit()
@@ -118,7 +118,7 @@ def test_duckdb_prune_memory_respects_scope(tmp_path: Path) -> None:
     store = DuckdbADKMemoryStore(config)
     store.create_tables()
 
-    stale = datetime.now(timezone.utc) - timedelta(days=200)
+    stale = datetime.now(UTC) - timedelta(days=200)
     store.insert_memory_entries([
         _memory_record(app_name="app", inserted_at=stale, scope="user"),
         _memory_record(app_name="app", inserted_at=stale, scope="app"),

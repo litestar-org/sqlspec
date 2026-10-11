@@ -1,9 +1,7 @@
 """arrow-odbc database configuration."""
 
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.arrow_odbc._typing import (
     ArrowOdbcConnection,

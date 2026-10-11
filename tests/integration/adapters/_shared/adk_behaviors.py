@@ -1,7 +1,7 @@
 """Behavior helpers for shared ADK session/event store contract tests."""
 
 from collections.abc import Awaitable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from inspect import isawaitable
 from typing import Any, TypeVar
 
@@ -121,7 +121,7 @@ async def assert_adk_delete_session_cascade_contract(make_store: Any) -> None:
         session_id = "session-delete"
         await _resolve(store.create_session(session_id, "app", "user", {}))
         await _resolve(
-            store.append_event(_event("app", "user", session_id, 0, datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)))
+            store.append_event(_event("app", "user", session_id, 0, datetime(2026, 5, 10, 12, 0, tzinfo=UTC)))
         )
 
         await _resolve(store.delete_session("app", "user", session_id))
@@ -139,7 +139,7 @@ async def assert_adk_append_and_get_events_contract(make_store: Any) -> None:
         session_id = "session-events"
         await _resolve(store.create_session(session_id, "app", "user", {}))
         await _resolve(
-            store.append_event(_event("app", "user", session_id, 1, datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)))
+            store.append_event(_event("app", "user", session_id, 1, datetime(2026, 5, 10, 12, 0, tzinfo=UTC)))
         )
 
         events = await _resolve(store.get_events("app", "user", session_id))
@@ -162,7 +162,7 @@ async def assert_adk_append_event_and_update_state_contract(make_store: Any) -> 
         await _resolve(store.create_session(session_id, "app", "user", {}))
         updated = await _resolve(
             store.append_event_and_update_state(
-                _event("app", "user", session_id, 1, datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)),
+                _event("app", "user", session_id, 1, datetime(2026, 5, 10, 12, 0, tzinfo=UTC)),
                 "app",
                 "user",
                 session_id,
@@ -192,7 +192,7 @@ async def assert_adk_get_events_filtering_contract(make_store: Any) -> None:
         await _resolve(store.create_tables())
         session_id = "session-filter"
         await _resolve(store.create_session(session_id, "app", "user", {}))
-        base = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
         for index in range(3):
             await _resolve(
                 store.append_event(_event("app", "user", session_id, index, base + timedelta(seconds=index)))

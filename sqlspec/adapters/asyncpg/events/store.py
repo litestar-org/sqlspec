@@ -1,6 +1,6 @@
 """AsyncPG event queue store for PostgreSQL JSONB storage."""
 
-from typing_extensions import NotRequired
+from typing import NotRequired
 
 from sqlspec.adapters.asyncpg.config import AsyncpgConfig
 from sqlspec.config import EventsConfig

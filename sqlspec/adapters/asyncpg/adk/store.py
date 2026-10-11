@@ -1,8 +1,6 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
 from sqlspec.config import ADKConfig, AsyncConfigT

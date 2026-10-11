@@ -1,9 +1,7 @@
 """Psqlpy ADK store for Google Agent Development Kit session/event storage."""
 
 import re
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionExecuteError, PsqlpyDatabaseError
 from sqlspec.config import ADKConfig

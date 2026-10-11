@@ -110,7 +110,7 @@ class AsyncpgListenerHub:
             return None
         try:
             payload = await asyncio.wait_for(queue.get(), timeout=poll_interval)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
         else:
             self._record_queue_depth()

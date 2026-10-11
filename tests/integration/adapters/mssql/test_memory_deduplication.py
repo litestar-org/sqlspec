@@ -1,7 +1,7 @@
 """SQL Server key-range locking for concurrent ADK memory deduplication."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from uuid import uuid4
 
@@ -127,7 +127,7 @@ def test_memory_search_scopes_limits_and_retention(mssql_service: MSSQLService) 
         assert [entry["id"] for entry in store.search_entries("searchable", "app", "user", scope_filter="app")] == ["2"]
         assert store.search_entries("missing", "app", "user") == []
         with config.provide_session() as driver:
-            expired_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=60)
+            expired_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=60)
             driver.execute(sql.update(table).set(inserted_at=expired_at))
             driver.commit()
         assert store.delete_entries_older_than(30, app_name="app", scope="app") == 1

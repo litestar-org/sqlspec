@@ -4,11 +4,10 @@
 Provides mixins for JOIN operations in SELECT statements.
 """
 
-from typing import TYPE_CHECKING, Any, Union, cast, final
+from typing import TYPE_CHECKING, Any, Self, Union, cast, final
 
 from mypy_extensions import trait
 from sqlglot import exp
-from typing_extensions import Self
 
 from sqlspec.builder._base import BuiltQuery, QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression, parse_table_expression

@@ -2,7 +2,7 @@
 
 import re
 from abc import abstractmethod
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, Final, Generic, TypeVar, cast
 
 from litestar.stores.base import Store
@@ -228,7 +228,7 @@ class BaseSQLSpecStore(Store, Generic[ConfigT]):
         if expires_in_seconds <= 0:
             return None
 
-        return datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+        return datetime.now(UTC) + timedelta(seconds=expires_in_seconds)
 
     def _value_to_bytes(self, value: "str | bytes") -> bytes:
         """Convert value to bytes if needed.

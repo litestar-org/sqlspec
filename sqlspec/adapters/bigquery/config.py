@@ -1,9 +1,7 @@
 """BigQuery database configuration."""
 
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.bigquery._typing import (
     BigQueryConnection,

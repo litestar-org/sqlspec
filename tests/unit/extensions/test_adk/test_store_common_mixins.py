@@ -1,6 +1,6 @@
 """Regression tests for common ADK store state mixins."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -88,7 +88,7 @@ def _aged_record(version: int) -> StoredArtifact:
         mime_type="text/plain",
         canonical_uri=f"file:///base/apps/agent_app/users/user-1/artifacts/report.txt/v{version}",
         custom_metadata=None,
-        created_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
 
 
@@ -167,19 +167,19 @@ def test_sync_artifact_store_retention_hook_defaults_to_not_implemented() -> Non
     store = _ConcreteArtifactStore(_sqlite_config())
 
     with pytest.raises(NotImplementedError, match="does not support artifact retention"):
-        store.delete_artifacts_older_than(datetime(2024, 1, 1, tzinfo=timezone.utc))
+        store.delete_artifacts_older_than(datetime(2024, 1, 1, tzinfo=UTC))
 
 
 async def test_async_artifact_store_retention_hook_defaults_to_not_implemented() -> None:
     store = _ConcreteAsyncArtifactStore(_sqlite_config())
 
     with pytest.raises(NotImplementedError, match="does not support artifact retention"):
-        await store.delete_artifacts_older_than(datetime(2024, 1, 1, tzinfo=timezone.utc))
+        await store.delete_artifacts_older_than(datetime(2024, 1, 1, tzinfo=UTC))
 
 
 async def test_artifact_store_retention_override_receives_cutoff_and_app_name() -> None:
     store = _RetainingArtifactStore(_sqlite_config())
-    cutoff = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2024, 6, 1, tzinfo=UTC)
 
     records = await store.delete_artifacts_older_than(cutoff, app_name="agent_app")
 

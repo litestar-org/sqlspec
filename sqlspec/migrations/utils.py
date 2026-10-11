@@ -4,7 +4,7 @@ import importlib
 import inspect
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -332,7 +332,7 @@ def _build_template_context(
     project_slug: str,
     safe_message: str,
 ) -> "dict[str, str]":
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = datetime.now(UTC).isoformat()
     display_message = message or "New migration"
     description = display_message.strip() or safe_message or version
     return {

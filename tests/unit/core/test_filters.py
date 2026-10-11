@@ -8,11 +8,10 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, assert_type, cast
 
 import pytest
 from sqlglot import exp
-from typing_extensions import assert_type
 
 import sqlspec.core.filters as filters_module
 from sqlspec import sql as sql_builder

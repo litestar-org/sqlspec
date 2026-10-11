@@ -2,9 +2,7 @@
 
 from collections.abc import Sized
 from contextlib import AsyncExitStack, ExitStack
-from typing import TYPE_CHECKING, Any, cast
-
-from typing_extensions import LiteralString
+from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,

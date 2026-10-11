@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pyarrow as pa
@@ -10,7 +10,6 @@ import pytest
 from google.api_core import exceptions as api_exceptions
 from google.cloud.spanner_v1.data_types import JsonObject
 from google.cloud.spanner_v1.types.type import TypeCode
-from typing_extensions import Self
 
 import sqlspec.adapters.spanner.driver as spanner_driver_module
 from sqlspec.adapters.spanner.core import SpannerAsyncStreamSource, default_statement_config, resolve_row_plan

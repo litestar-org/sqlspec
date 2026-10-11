@@ -10,9 +10,7 @@ import functools
 import os
 import queue
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger

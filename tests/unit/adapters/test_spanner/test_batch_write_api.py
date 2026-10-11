@@ -1,10 +1,9 @@
 """Spanner opt-in Batch Write API transport for load_from_arrow."""
 
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pyarrow as pa
 import pytest
-from typing_extensions import Self
 
 import sqlspec.adapters.spanner.driver as spanner_driver
 from sqlspec.adapters.spanner.driver import SpannerSyncDriver

@@ -1,9 +1,7 @@
 """mssql-python sync and async drivers."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import (
     MssqlPythonConnection,

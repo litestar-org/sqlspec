@@ -3,7 +3,7 @@
 Tracker and schema-hook behaviors run in both driver modes through ``db2_mode``.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -196,7 +196,7 @@ async def test_record_migration_binds_utc_applied_at(db2_mode: DriverMode) -> No
 
     applied_at = statement.parameters["applied_at"]
     assert applied_at.tzinfo is None
-    assert abs(applied_at - datetime.now(timezone.utc).replace(tzinfo=None)) < timedelta(seconds=1)
+    assert abs(applied_at - datetime.now(UTC).replace(tzinfo=None)) < timedelta(seconds=1)
     assert statement.parameters["version_num"] == "0001"
     assert statement.parameters["applied_by"] == "me"
 
@@ -211,7 +211,7 @@ async def test_record_squashed_migration_binds_utc_applied_at(db2_mode: DriverMo
 
     applied_at = statement.parameters["applied_at"]
     assert applied_at.tzinfo is None
-    assert abs(applied_at - datetime.now(timezone.utc).replace(tzinfo=None)) < timedelta(seconds=1)
+    assert abs(applied_at - datetime.now(UTC).replace(tzinfo=None)) < timedelta(seconds=1)
     assert statement.parameters["replaces"] == "0001,0002"
 
 

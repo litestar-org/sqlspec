@@ -1,7 +1,7 @@
 """Shared payload encoding/decoding utilities for event backends."""
 
 import contextlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlspec.exceptions import EventChannelError
@@ -39,7 +39,7 @@ def encode_notify_payload(event_id: str, payload: "dict[str, Any]", metadata: "d
     Raises:
         EventChannelError: If the encoded envelope exceeds the PostgreSQL notification budget.
     """
-    encoded = _serialize_notify_envelope(event_id, payload, metadata, datetime.now(timezone.utc))
+    encoded = _serialize_notify_envelope(event_id, payload, metadata, datetime.now(UTC))
     encoded_bytes = len(encoded)
     if encoded_bytes > MAX_NOTIFY_BYTES:
         msg = (
@@ -60,7 +60,7 @@ def measure_notify_payload(
     mapping. Omitting ``event_id`` measures the canonical backend UUID-hex shape.
     """
     resolved_event_id = uuid4().hex if event_id is None else event_id
-    return len(_serialize_notify_envelope(resolved_event_id, payload, metadata, datetime.now(timezone.utc)))
+    return len(_serialize_notify_envelope(resolved_event_id, payload, metadata, datetime.now(UTC)))
 
 
 def fits_notify_payload(
@@ -96,12 +96,12 @@ def parse_event_timestamp(value: Any) -> "datetime":
     current UTC time for invalid or missing values.
     """
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     if isinstance(value, str):
         with contextlib.suppress(ValueError):
             parsed = datetime.fromisoformat(value)
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return datetime.now(UTC)
 
 
 def _serialize_notify_envelope(
@@ -117,7 +117,7 @@ def _serialize_notify_envelope(
             "event_id": event_id,
             "payload": payload,
             "metadata": metadata,
-            "published_at": published_at.astimezone(timezone.utc).isoformat(timespec="microseconds"),
+            "published_at": published_at.astimezone(UTC).isoformat(timespec="microseconds"),
         },
         as_bytes=True,
     )

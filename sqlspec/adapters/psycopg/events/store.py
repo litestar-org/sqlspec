@@ -1,6 +1,6 @@
 """Psycopg event queue stores for sync and async drivers."""
 
-from typing_extensions import NotRequired
+from typing import NotRequired
 
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.config import EventsConfig

@@ -1,7 +1,7 @@
 """arrow-odbc adapter core helpers."""
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from sqlglot import exp
@@ -543,7 +543,7 @@ def db2_timestamp_text(value: "datetime | None") -> "str | None":
     if value is None:
         return None
     if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        value = value.astimezone(UTC).replace(tzinfo=None)
     return value.isoformat(sep=" ", timespec="microseconds")
 
 

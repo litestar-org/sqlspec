@@ -1,8 +1,6 @@
 """Unit tests for adapter streaming contract deviations."""
 
-from typing import Any, cast
-
-from typing_extensions import Self
+from typing import Any, Self, cast
 
 from tests.integration.adapters._shared._cases import DriverCase
 from tests.integration.adapters._shared._schema import DEFAULT_CONTRACT_TABLE

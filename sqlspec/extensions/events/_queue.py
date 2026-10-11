@@ -3,11 +3,9 @@
 import asyncio
 import time
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, ClassVar, cast
-
-from typing_extensions import final
+from typing import TYPE_CHECKING, Any, ClassVar, cast, final
 
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.extensions.events._hints import EventRuntimeHints, get_runtime_hints, resolve_adapter_name
@@ -175,7 +173,7 @@ class _BaseTableEventQueue:
 
     @staticmethod
     def _utcnow() -> "datetime":
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     @classmethod
     def _batch_insert_parameters(

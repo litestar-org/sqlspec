@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -191,7 +191,7 @@ async def test_async_store_set_delete_delete_all_delete_expired() -> None:
 async def test_async_store_get_exists_expires_in() -> None:
     """Verify SpannerAsyncStore read operations use async provide_session and optional renewal."""
     db = _mock_async_database()
-    future_time = datetime.now(timezone.utc) + timedelta(seconds=120)
+    future_time = datetime.now(UTC) + timedelta(seconds=120)
     driver = MagicMock()
     driver.select_one_or_none = AsyncMock(return_value={"data": bytes_to_spanner(b"abc"), "expires_at": future_time})
 

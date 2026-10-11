@@ -1,14 +1,14 @@
 """Unit tests for EventMessage dataclass."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlspec.extensions.events import EventMessage
 
 
 def test_event_message_all_fields() -> None:
     """EventMessage stores all expected fields."""
-    now = datetime.now(timezone.utc)
-    lease_time = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
+    lease_time = datetime.now(UTC)
 
     message = EventMessage(
         event_id="evt_123",
@@ -33,7 +33,7 @@ def test_event_message_all_fields() -> None:
 
 def test_event_message_none_metadata() -> None:
     """EventMessage allows None metadata."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     message = EventMessage(
         event_id="evt_789",
@@ -52,7 +52,7 @@ def test_event_message_none_metadata() -> None:
 
 def test_event_message_empty_payload() -> None:
     """EventMessage accepts empty payload dict."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     message = EventMessage(
         event_id="evt_empty",
@@ -70,7 +70,7 @@ def test_event_message_empty_payload() -> None:
 
 def test_event_message_complex_payload() -> None:
     """EventMessage handles complex nested payloads."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     complex_payload = {
         "users": [{"id": 1, "name": "Alice", "tags": ["admin", "active"]}, {"id": 2, "name": "Bob", "tags": ["user"]}],
@@ -97,7 +97,7 @@ def test_event_message_complex_payload() -> None:
 
 def test_event_message_attempts_zero() -> None:
     """EventMessage handles zero attempts."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     message = EventMessage(
         event_id="evt_new",
@@ -115,7 +115,7 @@ def test_event_message_attempts_zero() -> None:
 
 def test_event_message_high_attempts() -> None:
     """EventMessage handles high attempt counts."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     message = EventMessage(
         event_id="evt_retry",
@@ -133,9 +133,9 @@ def test_event_message_high_attempts() -> None:
 
 def test_event_message_different_timestamps() -> None:
     """EventMessage can have different available_at and created_at times."""
-    created = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-    available = datetime(2024, 1, 1, 1, 0, 0, tzinfo=timezone.utc)
-    lease = datetime(2024, 1, 1, 1, 0, 30, tzinfo=timezone.utc)
+    created = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+    available = datetime(2024, 1, 1, 1, 0, 0, tzinfo=UTC)
+    lease = datetime(2024, 1, 1, 1, 0, 30, tzinfo=UTC)
 
     message = EventMessage(
         event_id="evt_scheduled",

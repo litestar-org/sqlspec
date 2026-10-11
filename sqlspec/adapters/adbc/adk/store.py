@@ -1,7 +1,7 @@
 """ADBC ADK store for Google Agent Development Kit session/event storage."""
 
 import contextlib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -1010,14 +1010,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         self._execute(
                             cursor,
                             insert_app_state_sql,
-                            (app_name, self._serialize_state(app_state), datetime.now(timezone.utc)),
+                            (app_name, self._serialize_state(app_state), datetime.now(UTC)),
                         )
                     if user_state is not None:
                         self._execute(cursor, delete_user_state_sql, (app_name, user_id))
                         self._execute(
                             cursor,
                             insert_user_state_sql,
-                            (app_name, user_id, self._serialize_state(user_state), datetime.now(timezone.utc)),
+                            (app_name, user_id, self._serialize_state(user_state), datetime.now(UTC)),
                         )
                     conn.commit()
                 else:
@@ -1237,7 +1237,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name,))
-                self._execute(cursor, insert_sql, (app_name, self._serialize_state(state), datetime.now(timezone.utc)))
+                self._execute(cursor, insert_sql, (app_name, self._serialize_state(state), datetime.now(UTC)))
                 conn.commit()
             finally:
                 cursor.close()
@@ -1252,9 +1252,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name, user_id))
-                self._execute(
-                    cursor, insert_sql, (app_name, user_id, self._serialize_state(state), datetime.now(timezone.utc))
-                )
+                self._execute(cursor, insert_sql, (app_name, user_id, self._serialize_state(state), datetime.now(UTC)))
                 conn.commit()
             finally:
                 cursor.close()
@@ -1393,7 +1391,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         if isinstance(value, datetime):
             return value
         if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+            return datetime.fromtimestamp(float(value), tz=UTC)
         if isinstance(value, str):
             return datetime.fromisoformat(value)
         return datetime.fromisoformat(str(value))
@@ -1718,7 +1716,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        cutoff = self._encode_timestamp(datetime.now(timezone.utc) - timedelta(days=days))
+        cutoff = self._encode_timestamp(datetime.now(UTC) - timedelta(days=days))
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         clauses = ["inserted_at < ?"]
         params: list[Any] = [cutoff]

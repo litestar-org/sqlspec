@@ -2,9 +2,7 @@
 
 import re
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, cast
-
-from typing_extensions import NotRequired
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,

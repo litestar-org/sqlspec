@@ -1,7 +1,7 @@
 """Integration tests for SQLite ADK memory store."""
 
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -16,7 +16,7 @@ pytestmark = pytest.mark.xdist_group("sqlite")
 def _build_record(
     *, session_id: str, event_id: str, content_text: str, inserted_at: datetime, scope: str = "user"
 ) -> StoredMemory:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return StoredMemory(
         id=str(uuid4()),
         session_id=session_id,
@@ -41,7 +41,7 @@ def test_sqlite_memory_store_insert_search_dedup() -> None:
         store = SqliteADKMemoryStore(config)
         store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
         record2 = _build_record(session_id="s1", event_id="evt-2", content_text="latte", inserted_at=now)
 
@@ -65,7 +65,7 @@ def test_sqlite_memory_store_fts_search() -> None:
         store = SqliteADKMemoryStore(config)
         store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record1 = _build_record(session_id="s1", event_id="evt-fts-1", content_text="espresso roast", inserted_at=now)
         record2 = _build_record(session_id="s1", event_id="evt-fts-2", content_text="latte foam", inserted_at=now)
         store.insert_memory_entries([record1, record2])
@@ -93,7 +93,7 @@ def test_sqlite_memory_store_disabled_lifecycle() -> None:
 
         assert row is None
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record = _build_record(session_id="s1", event_id="evt-disabled", content_text="espresso", inserted_at=now)
         with pytest.raises(RuntimeError, match="Memory store is disabled"):
             store.insert_memory_entries([record])
@@ -108,7 +108,7 @@ def test_sqlite_memory_store_delete_by_session() -> None:
         store = SqliteADKMemoryStore(config)
         store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record1 = _build_record(session_id="s1", event_id="evt-1", content_text="espresso", inserted_at=now)
         record2 = _build_record(session_id="s2", event_id="evt-2", content_text="latte", inserted_at=now)
         store.insert_memory_entries([record1, record2])
@@ -128,7 +128,7 @@ def test_sqlite_memory_store_delete_older_than() -> None:
         store = SqliteADKMemoryStore(config)
         store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         old = now - timedelta(days=40)
         record1 = _build_record(session_id="s1", event_id="evt-1", content_text="old", inserted_at=old)
         record2 = _build_record(session_id="s1", event_id="evt-2", content_text="new", inserted_at=now)
@@ -149,7 +149,7 @@ def test_sqlite_memory_store_scoped_search_combined_default() -> None:
         store = SqliteADKMemoryStore(config)
         store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record_user = _build_record(
             session_id="s1",
             event_id="evt-u1",
@@ -188,7 +188,7 @@ def test_sqlite_memory_store_explicit_scope_filters() -> None:
         store = SqliteADKMemoryStore(config)
         store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record_user = _build_record(
             session_id="s1", event_id="evt-u1", content_text="scoped query plan", inserted_at=now, scope="user"
         )
@@ -213,7 +213,7 @@ def test_sqlite_memory_store_scoped_retention() -> None:
         store = SqliteADKMemoryStore(config)
         store.create_tables()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         old = now - timedelta(days=40)
         record_user_old = _build_record(
             session_id="s1", event_id="evt-uo", content_text="old user memo", inserted_at=old, scope="user"

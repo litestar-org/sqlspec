@@ -1,6 +1,6 @@
 """Unit tests for the mssql-python Litestar store."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -154,7 +154,7 @@ async def test_mssql_python_store_set_uses_merge_with_positional_parameters() ->
 
 async def test_mssql_python_store_get_renews_unexpired_session() -> None:
     """get should return bytes and renew expiry only when the existing row had an expiry."""
-    future = datetime.now(timezone.utc) + timedelta(minutes=5)
+    future = datetime.now(UTC) + timedelta(minutes=5)
     connection = FakeConnection(rows=[{"data": b"payload", "expires_at": future}])
     store = MssqlPythonStore(cast("Any", FakeConfig(connection=connection)))
 

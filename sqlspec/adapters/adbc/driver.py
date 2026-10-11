@@ -5,9 +5,7 @@ database dialects, parameter style conversion, and transaction management.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any, Literal, cast
-
-from typing_extensions import final
+from typing import TYPE_CHECKING, Any, Literal, cast, final
 
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (

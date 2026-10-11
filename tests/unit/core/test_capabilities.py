@@ -2,6 +2,7 @@
 
 import copy
 import pickle
+from datetime import UTC
 
 import pytest
 
@@ -96,12 +97,12 @@ def test_database_config_default_capabilities() -> None:
 
 def test_arrow_odbc_datetime_binding_preserves_microseconds() -> None:
     """The declared policy matches the final ODBC parameter boundary."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
     from sqlspec.adapters.arrow_odbc.driver import _odbc_parameters
 
-    value = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    value = datetime(2024, 1, 15, 12, 30, 45, 123456, tzinfo=UTC)
     capabilities = ArrowOdbcConfig.type_coercion_capabilities
     assert capabilities.datetime_binding == "iso_text"
     assert capabilities.timestamp_precision == "microsecond"

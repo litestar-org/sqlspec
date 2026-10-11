@@ -439,7 +439,7 @@ class AiosqliteConnectionPool:
                 connection_id=connection.id,
                 reason=reason,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log_with_context(
                 logger,
                 logging.WARNING,
@@ -600,7 +600,7 @@ class AiosqliteConnectionPool:
                 if not is_alive:
                     await self._retire_connection(connection, reason="health_check_failed")
                     return False
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await self._retire_connection(connection, reason="health_check_timeout")
                 return False
 
@@ -629,7 +629,7 @@ class AiosqliteConnectionPool:
 
         try:
             await asyncio.wait_for(connection.close(), timeout=self._operation_timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log_with_context(
                 logger,
                 logging.WARNING,
@@ -788,7 +788,7 @@ class AiosqliteConnectionPool:
             connection = await asyncio.wait_for(self._get_connection(), timeout=self._connect_timeout)
         except AiosqlitePoolClosedError:
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             msg = f"Connection acquisition timed out after {self._connect_timeout}s"
             raise AiosqliteConnectTimeoutError(msg) from e
 

@@ -5,10 +5,9 @@ parameter binding and optional table aliasing.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Self
 
 from sqlglot import exp
-from typing_extensions import Self
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import extract_sql_object_expression

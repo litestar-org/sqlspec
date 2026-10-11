@@ -3,10 +3,8 @@
 Provides both async and sync PostgreSQL session stores using psycopg3.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, cast
-
-from typing_extensions import NotRequired
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, NotRequired, cast
 
 from sqlspec.adapters.psycopg._typing import psycopg_dict_row as dict_row
 from sqlspec.config import LitestarConfig
@@ -210,7 +208,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
                 return None
 
             expires_at = row["expires_at"]
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if expires_at <= now:
                 return 0
 
@@ -507,7 +505,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
                 return None
 
             expires_at = row["expires_at"]
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             if expires_at <= now:
                 return 0

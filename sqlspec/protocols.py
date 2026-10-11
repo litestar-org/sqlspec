@@ -4,9 +4,7 @@ This module provides protocols that can be used for static type checking
 and runtime isinstance() checks.
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, overload, runtime_checkable
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Self, overload, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence

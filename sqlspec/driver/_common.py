@@ -6,12 +6,11 @@ import re
 from collections import OrderedDict
 from collections.abc import Mapping
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
 
 import sqlglot
 from mypy_extensions import mypyc_attr, trait
 from sqlglot import exp
-from typing_extensions import Self
 
 from sqlspec.builder import QueryBuilder
 from sqlspec.core import (

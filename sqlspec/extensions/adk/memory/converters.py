@@ -4,7 +4,7 @@ Provides utilities for extracting searchable text from ADK Content objects
 and converting between ADK models and database records.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from google.adk.memory.memory_entry import MemoryEntry
@@ -94,7 +94,7 @@ def event_to_memory_record(
 
     custom_metadata = dict(event.custom_metadata) if event.custom_metadata else None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     return StoredMemory(
         id=str(uuid4()),
@@ -104,7 +104,7 @@ def event_to_memory_record(
         scope=scope,
         event_id=event.id,
         author=event.author,
-        timestamp=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
+        timestamp=datetime.fromtimestamp(event.timestamp, tz=UTC),
         content_json=content_dict,
         content_text=content_text,
         metadata_json=custom_metadata,
@@ -154,7 +154,7 @@ def memory_entry_to_record(
         if entry.custom_metadata:
             merged_metadata.update(entry.custom_metadata)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     timestamp = now
     if entry.timestamp:
