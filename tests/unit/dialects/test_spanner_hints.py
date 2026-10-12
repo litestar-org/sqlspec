@@ -122,3 +122,22 @@ def test_at_comments_without_equals_on_select_table_and_join_are_not_hints() -> 
     join = parsed.find(exp.Join)
     assert join is not None
     assert join.args.get("spanner_hint") is None
+
+
+def test_schema_qualified_table_hint_and_multiple_table_hints() -> None:
+    """Verify hints attach to schema-qualified tables and render multiple hints without overwriting."""
+    sql = "SELECT * FROM my_schema.Albums @{FORCE_INDEX=AlbumsBySinger} WHERE SingerId = 1"
+    parsed = parse_one(sql, dialect="spanner")
+    table = parsed.find(exp.Table)
+    assert table is not None
+    assert table.args.get("hints") is not None
+    assert parsed.sql(dialect="spanner") == sql
+
+    multi_sql = "SELECT * FROM Albums @{FORCE_INDEX=AlbumsBySinger} @{GROUPBY_SCAN_OPTIMIZATION=TRUE}"
+    multi_parsed = parse_one(multi_sql, dialect="spanner")
+    multi_table = multi_parsed.find(exp.Table)
+    assert multi_table is not None
+    assert len(multi_table.args.get("hints") or []) == 2
+    rendered = multi_parsed.sql(dialect="spanner")
+    assert "FORCE_INDEX=AlbumsBySinger" in rendered
+    assert "GROUPBY_SCAN_OPTIMIZATION=TRUE" in rendered

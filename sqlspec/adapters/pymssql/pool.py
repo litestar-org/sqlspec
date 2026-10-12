@@ -26,8 +26,10 @@ class PymssqlConnectionPool:
     """Thread-local connection manager for pymssql."""
 
     __slots__ = (
+        "_checked_out",
         "_connection_parameters",
         "_connection_registry",
+        "_connection_threads",
         "_generation",
         "_health_check_interval",
         "_on_connection_create",
@@ -55,6 +57,8 @@ class PymssqlConnectionPool:
         self._connection_parameters = connection_parameters
         self._thread_local = threading.local()
         self._connection_registry: set[PymssqlConnection] = set()
+        self._connection_threads: dict[PymssqlConnection, threading.Thread] = {}
+        self._checked_out = 0
         self._generation = 0
         self._registry_lock = threading.Lock()
         self._recycle_seconds = recycle_seconds
@@ -66,14 +70,6 @@ class PymssqlConnectionPool:
     def _database_name(self) -> str:
         """Get sanitized database name for logging."""
         return str(self._connection_parameters.get("database", "unknown"))
-
-    def _create_connection(self) -> PymssqlConnection:
-        connection = self.new_connection()
-
-        with self._registry_lock:
-            self._connection_registry.add(connection)
-
-        return connection
 
     def new_connection(self) -> PymssqlConnection:
         """Open a standalone connection configured like a pooled one.
@@ -90,6 +86,79 @@ class PymssqlConnectionPool:
             self._on_connection_create(connection)
 
         return cast("PymssqlConnection", connection)
+
+    @contextmanager
+    def get_connection(self) -> "Generator[PymssqlConnection, None, None]":
+        """Get a thread-local connection.
+
+        Yields:
+            A thread-local database connection.
+        """
+        connection = self.acquire()
+        try:
+            yield connection
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._close_thread_connection()
+            raise
+        finally:
+            self.release(connection)
+
+    def close(self) -> None:
+        """Close every connection this pool opened, on any thread."""
+        self._close_thread_connection()
+        with self._registry_lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+            self._connection_threads.clear()
+            self._checked_out = 0
+            self._generation += 1
+        for connection in orphaned:
+            with contextlib.suppress(Exception):
+                connection.close()
+
+    def acquire(self) -> PymssqlConnection:
+        connection = self._get_thread_connection()
+        with self._registry_lock:
+            self._checked_out += 1
+        return connection
+
+    def release(self, connection: PymssqlConnection) -> None:
+        _ = connection
+        with self._registry_lock:
+            if self._checked_out > 0:
+                self._checked_out -= 1
+
+    def size(self) -> int:
+        self._prune_dead_thread_connections()
+        with self._registry_lock:
+            return len(self._connection_registry)
+
+    def checked_out(self) -> int:
+        with self._registry_lock:
+            return self._checked_out
+
+    def _prune_dead_thread_connections(self) -> None:
+        dead_connections: list[PymssqlConnection] = []
+        with self._registry_lock:
+            for conn, owner_thread in list(self._connection_threads.items()):
+                if not owner_thread.is_alive():
+                    self._connection_registry.discard(conn)
+                    self._connection_threads.pop(conn, None)
+                    dead_connections.append(conn)
+        for conn in dead_connections:
+            with contextlib.suppress(Exception):
+                conn.close()
+
+    def _create_connection(self) -> PymssqlConnection:
+        self._prune_dead_thread_connections()
+        connection = self.new_connection()
+
+        with self._registry_lock:
+            self._connection_registry.add(connection)
+            self._connection_threads[connection] = threading.current_thread()
+
+        return connection
 
     def _is_connection_alive(self, connection: PymssqlConnection) -> bool:
         try:
@@ -136,7 +205,11 @@ class PymssqlConnectionPool:
             return cast("PymssqlConnection", self._thread_local.connection)
 
         idle_time = time.time() - thread_state.get("last_used", 0)
-        if idle_time > self._health_check_interval and not self._is_connection_alive(self._thread_local.connection):
+        if (
+            self._health_check_interval > 0
+            and idle_time > self._health_check_interval
+            and not self._is_connection_alive(self._thread_local.connection)
+        ):
             log_with_context(
                 logger,
                 logging.DEBUG,
@@ -158,6 +231,7 @@ class PymssqlConnectionPool:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._registry_lock:
             self._connection_registry.discard(connection)
+            self._connection_threads.pop(connection, None)
         with contextlib.suppress(Exception):
             connection.close()
 
@@ -170,42 +244,3 @@ class PymssqlConnectionPool:
                 del self._thread_local.created_at
             if "last_used" in thread_state:
                 del self._thread_local.last_used
-
-    @contextmanager
-    def get_connection(self) -> "Generator[PymssqlConnection, None, None]":
-        """Get a thread-local connection.
-
-        Yields:
-            A thread-local database connection.
-        """
-        connection = self._get_thread_connection()
-        try:
-            yield connection
-        except Exception:
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
-            raise
-
-    def close(self) -> None:
-        """Close every connection this pool opened, on any thread."""
-        self._close_thread_connection()
-        with self._registry_lock:
-            orphaned = list(self._connection_registry)
-            self._connection_registry.clear()
-            self._generation += 1
-        for connection in orphaned:
-            with contextlib.suppress(Exception):
-                connection.close()
-
-    def acquire(self) -> PymssqlConnection:
-        return self._get_thread_connection()
-
-    def release(self, connection: PymssqlConnection) -> None:
-        _ = connection
-
-    def size(self) -> int:
-        with self._registry_lock:
-            return len(self._connection_registry)
-
-    def checked_out(self) -> int:
-        return 0

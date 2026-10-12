@@ -80,6 +80,126 @@ class SQLSpecPlugin:
         if app is not None:
             self.init_app(app)
 
+    def init_app(self, app: "Flask") -> None:
+        """Initialize Flask application with SQLSpec.
+
+        Validates configuration, creates portal if needed, creates pools,
+        and registers hooks.
+
+        Args:
+            app: Flask application to initialize.
+
+        Raises:
+            ImproperConfigurationError: If extension already registered or keys not unique.
+        """
+        if "sqlspec" in app.extensions:
+            msg = "SQLSpec extension already registered on this Flask application"
+            raise ImproperConfigurationError(msg)
+
+        self._ensure_unique_keys()
+
+        if self._has_async_configs:
+            self._portal = PortalProvider()
+            self._portal.start()
+            log_with_context(logger, logging.DEBUG, "extension.init", framework="flask", stage="portal_started")
+
+        pools: dict[str, Any] = {}
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                if config_state.is_async:
+                    pool = self._portal.portal.call(config_state.config.create_pool)  # type: ignore[union-attr,arg-type]
+                else:
+                    pool = config_state.config.create_pool()
+                pools[config_state.session_key] = pool
+                log_with_context(
+                    logger, logging.DEBUG, "session.create", framework="flask", session_key=config_state.session_key
+                )
+
+        app.extensions["sqlspec"] = {"plugin": self, "pools": pools}
+
+        if any(
+            not state.disable_di
+            or state.enable_correlation_middleware
+            or (state.enable_sqlcommenter_middleware and state.config.statement_config.enable_sqlcommenter)
+            for state in self._config_states
+        ):
+            app.before_request(self._before_request_handler)
+            app.after_request(self._after_request_handler)
+            app.teardown_appcontext(self._teardown_appcontext_handler)
+
+        self._register_shutdown_hook()
+
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "extension.init",
+            framework="flask",
+            stage="configured",
+            config_count=len(self._config_states),
+            async_enabled=self._has_async_configs,
+        )
+
+    def get_session(self, key: "str | None" = None) -> Any:
+        """Get or create database session for current request.
+
+        Sessions are cached per request for consistency.
+
+        Args:
+            key: Session key for multi-database configs. Defaults to first config if None.
+
+        Returns:
+            Database session (driver instance).
+        """
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+
+        return get_or_create_session(config_state, self._portal.portal if self._portal else None)
+
+    def get_connection(self, key: "str | None" = None) -> Any:
+        """Get database connection for current request.
+
+        Note:
+            Imports flask components dynamically at runtime to avoid hard dependency.
+
+        Args:
+            key: Session key for multi-database configs. Defaults to first config if None.
+
+        Returns:
+            Raw database connection.
+        """
+        from flask import g
+
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+
+        return get_context_value(g, config_state.connection_key)
+
+    def shutdown(self) -> None:
+        """Dispose connection pools and stop async portal."""
+
+        if self._shutdown_complete:
+            return
+
+        self._shutdown_complete = True
+
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                self._close_pool_state(config_state)
+
+        if self._portal is not None:
+            try:
+                self._portal.stop()
+            except Exception as exc:
+                log_with_context(
+                    logger,
+                    logging.ERROR,
+                    "extension.init",
+                    framework="flask",
+                    stage="shutdown",
+                    status="failed",
+                    error_type=type(exc).__name__,
+                )
+            finally:
+                self._portal = None
+
     def _config_state(self, config: Any) -> FlaskConfigState:
         """Create configuration state from database config.
 
@@ -122,60 +242,6 @@ class SQLSpecPlugin:
             correlation_headers=correlation_headers,
             auto_trace_headers=auto_trace_headers,
             enable_sqlcommenter_middleware=enable_sqlcommenter,
-        )
-
-    def init_app(self, app: "Flask") -> None:
-        """Initialize Flask application with SQLSpec.
-
-        Validates configuration, creates portal if needed, creates pools,
-        and registers hooks.
-
-        Args:
-            app: Flask application to initialize.
-
-        Raises:
-            ImproperConfigurationError: If extension already registered or keys not unique.
-        """
-        if "sqlspec" in app.extensions:
-            msg = "SQLSpec extension already registered on this Flask application"
-            raise ImproperConfigurationError(msg)
-
-        self._ensure_unique_keys()
-
-        if self._has_async_configs:
-            self._portal = PortalProvider()
-            self._portal.start()
-            log_with_context(logger, logging.DEBUG, "extension.init", framework="flask", stage="portal_started")
-
-        pools: dict[str, Any] = {}
-        for config_state in self._config_states:
-            if config_state.config.supports_connection_pooling:
-                if config_state.is_async:
-                    pool = self._portal.portal.call(config_state.config.create_pool)  # type: ignore[union-attr,arg-type]
-                else:
-                    pool = config_state.config.create_pool()
-                pools[config_state.session_key] = pool
-                log_with_context(
-                    logger, logging.DEBUG, "session.create", framework="flask", session_key=config_state.session_key
-                )
-
-        app.extensions["sqlspec"] = {"plugin": self, "pools": pools}
-
-        if any(not state.disable_di for state in self._config_states):
-            app.before_request(self._before_request_handler)
-            app.after_request(self._after_request_handler)
-            app.teardown_appcontext(self._teardown_appcontext_handler)
-
-        self._register_shutdown_hook()
-
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "extension.init",
-            framework="flask",
-            stage="configured",
-            config_count=len(self._config_states),
-            async_enabled=self._has_async_configs,
         )
 
     def _ensure_unique_keys(self) -> None:
@@ -289,7 +355,8 @@ class SQLSpecPlugin:
     def _teardown_appcontext_handler(self, _exc: "BaseException | None" = None) -> None:
         """Clean up connections when request context ends.
 
-        Closes all connections, cleans up g object, and clears correlation context.
+        Rolls back uncommitted transactions when an unhandled exception occurred,
+        closes all connections, cleans up g object, and clears correlation context.
 
         Note:
             Imports flask components dynamically at runtime to avoid hard dependency.
@@ -307,21 +374,32 @@ class SQLSpecPlugin:
         if self._enable_sqlcommenter:
             SQLCommenterContext.set(None)
 
+        exc_info = (type(_exc), _exc, _exc.__traceback__) if _exc is not None else (None, None, None)
+
         for config_state in self._config_states:
             if config_state.disable_di:
                 continue
 
+            cache_key = f"sqlspec_session_cache_{config_state.session_key}"
+            session = get_context_value(g, cache_key, None)
             connection = get_context_value(g, config_state.connection_key, None)
             ctx_key = f"{config_state.connection_key}_ctx"
             conn_ctx = get_context_value(g, ctx_key, None)
+
+            if (
+                _exc is not None
+                and config_state.commit_mode != "manual"
+                and (session is not None or connection is not None)
+            ):
+                self._execute_rollback(session, config_state)
 
             if connection is not None:
                 try:
                     if conn_ctx is not None:
                         if config_state.is_async:
-                            self._portal.portal.call(conn_ctx.__aexit__, None, None, None)  # type: ignore[union-attr]
+                            self._portal.portal.call(conn_ctx.__aexit__, *exc_info)  # type: ignore[union-attr]
                         else:
-                            conn_ctx.__exit__(None, None, None)
+                            conn_ctx.__exit__(*exc_info)
                     elif config_state.is_async:
                         self._portal.portal.call(connection.close)  # type: ignore[union-attr]
                     else:
@@ -343,42 +421,8 @@ class SQLSpecPlugin:
                 if has_context_value(g, ctx_key):
                     pop_context_value(g, ctx_key)
 
-            cache_key = f"sqlspec_session_cache_{config_state.session_key}"
             if has_context_value(g, cache_key):
                 pop_context_value(g, cache_key)
-
-    def get_session(self, key: "str | None" = None) -> Any:
-        """Get or create database session for current request.
-
-        Sessions are cached per request for consistency.
-
-        Args:
-            key: Session key for multi-database configs. Defaults to first config if None.
-
-        Returns:
-            Database session (driver instance).
-        """
-        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-
-        return get_or_create_session(config_state, self._portal.portal if self._portal else None)
-
-    def get_connection(self, key: "str | None" = None) -> Any:
-        """Get database connection for current request.
-
-        Note:
-            Imports flask components dynamically at runtime to avoid hard dependency.
-
-        Args:
-            key: Session key for multi-database configs. Defaults to first config if None.
-
-        Returns:
-            Raw database connection.
-        """
-        from flask import g
-
-        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-
-        return get_context_value(g, config_state.connection_key)
 
     def _config_state_by_key(self, key: str) -> FlaskConfigState:
         """Get config state by session key.
@@ -397,34 +441,6 @@ class SQLSpecPlugin:
                 return state
         msg = f"No configuration found for key: {key}"
         raise ImproperConfigurationError(msg)
-
-    def shutdown(self) -> None:
-        """Dispose connection pools and stop async portal."""
-
-        if self._shutdown_complete:
-            return
-
-        self._shutdown_complete = True
-
-        for config_state in self._config_states:
-            if config_state.config.supports_connection_pooling:
-                self._close_pool_state(config_state)
-
-        if self._portal is not None:
-            try:
-                self._portal.stop()
-            except Exception as exc:
-                log_with_context(
-                    logger,
-                    logging.ERROR,
-                    "extension.init",
-                    framework="flask",
-                    stage="shutdown",
-                    status="failed",
-                    error_type=type(exc).__name__,
-                )
-            finally:
-                self._portal = None
 
     def _close_pool_state(self, config_state: FlaskConfigState) -> None:
         """Close pool associated with configuration state."""
@@ -468,19 +484,22 @@ class SQLSpecPlugin:
             )
 
     def _execute_commit(self, session: Any, config_state: FlaskConfigState) -> None:
-        """Execute commit on session.
+        """Execute commit on session or connection.
 
         Args:
             session: Database session.
             config_state: Configuration state.
         """
         try:
+            target = (
+                session
+                if session is not None and hasattr(session, "commit")
+                else self.get_connection(config_state.session_key)
+            )
             if config_state.is_async:
-                connection = self.get_connection(config_state.session_key)
-                self._portal.portal.call(connection.commit)  # type: ignore[union-attr]
+                self._portal.portal.call(target.commit)  # type: ignore[union-attr]
             else:
-                connection = self.get_connection(config_state.session_key)
-                connection.commit()
+                target.commit()
         except Exception as exc:
             log_with_context(
                 logger,
@@ -492,21 +511,26 @@ class SQLSpecPlugin:
                 status="failed",
                 error_type=type(exc).__name__,
             )
+            self._execute_rollback(session, config_state)
+            raise
 
     def _execute_rollback(self, session: Any, config_state: FlaskConfigState) -> None:
-        """Execute rollback on session.
+        """Execute rollback on session or connection.
 
         Args:
             session: Database session.
             config_state: Configuration state.
         """
         try:
+            target = (
+                session
+                if session is not None and hasattr(session, "rollback")
+                else self.get_connection(config_state.session_key)
+            )
             if config_state.is_async:
-                connection = self.get_connection(config_state.session_key)
-                self._portal.portal.call(connection.rollback)  # type: ignore[union-attr]
+                self._portal.portal.call(target.rollback)  # type: ignore[union-attr]
             else:
-                connection = self.get_connection(config_state.session_key)
-                connection.rollback()
+                target.rollback()
         except Exception as exc:
             log_with_context(
                 logger,

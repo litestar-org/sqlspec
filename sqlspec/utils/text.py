@@ -1,8 +1,7 @@
 """Text processing utilities for SQLSpec.
 
 Provides functions for string manipulation including case conversion,
-slugification, and email validation. Used primarily for identifier
-generation and data validation.
+slugification, and SQL identifier quoting and normalization.
 """
 
 import re
@@ -156,6 +155,8 @@ def normalize_identifier(identifier: str, dialect: str) -> str:
         return value[1:-1].replace('""', '"')
     if value_length >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == value[-1] == "`":
         return value[1:-1].replace("``", "`")
+    if value_length >= _MIN_QUOTED_IDENTIFIER_LENGTH and value[0] == "[" and value[-1] == "]":
+        return value[1:-1].replace("]]", "]")
 
     normalized_dialect = dialect.lower().replace("-", "_")
     if normalized_dialect in {"postgres", "postgresql", "cockroach", "cockroachdb"}:

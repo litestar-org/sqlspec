@@ -17,7 +17,7 @@ __all__ = ("MigrationFixer", "MigrationRename")
 logger = get_logger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class MigrationRename:
     """Represents a planned migration file rename operation.
 
@@ -27,7 +27,7 @@ class MigrationRename:
         old_version: Current version string.
         new_version: Target version string.
         needs_content_update: Whether file content needs updating.
-            True for SQL files that contain query names.
+            True for SQL and Python files that contain version headers.
     """
 
     old_path: Path
@@ -87,7 +87,13 @@ class MigrationFixer:
                     msg = f"Target file already exists: {new_path}"
                     raise ValueError(msg)
 
-                needs_content_update = suffix == ".sql"
+                if suffix == ".sql":
+                    needs_content_update = True
+                elif suffix == ".py" and old_path.is_file():
+                    version_pattern = re.compile(rf"((?:--\s*)?Version:\s+){re.escape(old_version)}\b")
+                    needs_content_update = bool(version_pattern.search(old_path.read_text(encoding="utf-8")))
+                else:
+                    needs_content_update = False
 
                 renames.append(
                     MigrationRename(
@@ -136,6 +142,7 @@ class MigrationFixer:
             -- name: migrate-{old_version}-up → -- name: migrate-{new_version}-up
             -- name: migrate-{old_version}-down → -- name: migrate-{new_version}-down
             -- Version: {old_version} → -- Version: {new_version}
+            Version: {old_version} → Version: {new_version}
 
         Creates version-specific regex patterns to avoid unintended replacements
         of other migrate-* patterns in the file.
@@ -151,9 +158,9 @@ class MigrationFixer:
 
         content = file_path.read_text(encoding="utf-8")
 
-        up_pattern = re.compile(rf"(-- name:\s+migrate-){re.escape(old_version)}(-up)")
-        down_pattern = re.compile(rf"(-- name:\s+migrate-){re.escape(old_version)}(-down)")
-        version_pattern = re.compile(rf"(-- Version:\s+){re.escape(old_version)}")
+        up_pattern = re.compile(rf"(-- name:\s+migrate-){re.escape(old_version)}(-up)\b")
+        down_pattern = re.compile(rf"(-- name:\s+migrate-){re.escape(old_version)}(-down)\b")
+        version_pattern = re.compile(rf"((?:--\s*)?Version:\s+){re.escape(old_version)}\b")
 
         content = up_pattern.sub(rf"\g<1>{new_version}\g<2>", content)
         content = down_pattern.sub(rf"\g<1>{new_version}\g<2>", content)
@@ -171,7 +178,8 @@ class MigrationFixer:
         if not self.backup_path or not self.backup_path.exists():
             return
 
-        restore_backup(self.migrations_path, self.backup_path)
+        restore_backup(self.migrations_path, self.backup_path, delete_backup=True)
+        self.backup_path = None
 
     def cleanup(self) -> None:
         """Remove backup directory after successful conversion.

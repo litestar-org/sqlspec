@@ -3,6 +3,8 @@
 from sqlglot import exp
 from sqlglot.generator import Generator
 
+__all__ = ()
+
 
 def _jsonb_top_key(generator: Generator, expression: exp.Binary) -> str:
     return generator.binary(expression, "??")

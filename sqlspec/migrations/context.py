@@ -49,28 +49,6 @@ class MigrationContext:
         if not self.extension_config:
             self.extension_config = {}
 
-    @classmethod
-    def from_config(cls, config: Any) -> "MigrationContext":
-        """Create context from database configuration.
-
-        Args:
-            config: Database configuration object.
-
-        Returns:
-            Migration context with dialect information.
-        """
-        dialect: Any | None = None
-        try:
-            if isinstance(config, HasStatementConfigProtocol) and config.statement_config:
-                dialect = config.statement_config.dialect
-            elif has_statement_config_factory(config):
-                stmt_config = config._create_statement_config()  # pyright: ignore[reportPrivateUsage]
-                dialect = stmt_config.dialect
-        except Exception:
-            logger.debug("Unable to extract dialect from config")
-
-        return cls(dialect=_normalize_dialect_name(dialect), config=config)
-
     @property
     def is_async_execution(self) -> bool:
         """Check if migrations are running in an async execution context.
@@ -105,6 +83,28 @@ class MigrationContext:
             'async' if in async context, 'sync' otherwise.
         """
         return "async" if self.is_async_execution else "sync"
+
+    @classmethod
+    def from_config(cls, config: Any) -> "MigrationContext":
+        """Create context from database configuration.
+
+        Args:
+            config: Database configuration object.
+
+        Returns:
+            Migration context with dialect information.
+        """
+        dialect: Any | None = None
+        try:
+            if isinstance(config, HasStatementConfigProtocol) and config.statement_config:
+                dialect = config.statement_config.dialect
+            elif has_statement_config_factory(config):
+                stmt_config = config._create_statement_config()  # pyright: ignore[reportPrivateUsage]
+                dialect = stmt_config.dialect
+        except Exception:
+            logger.debug("Unable to extract dialect from config")
+
+        return cls(dialect=_normalize_dialect_name(dialect), config=config)
 
     def set_execution_metadata(self, key: str, value: Any) -> None:
         """Set execution metadata for tracking migration state.

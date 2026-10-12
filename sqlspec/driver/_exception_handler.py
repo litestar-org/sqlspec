@@ -37,14 +37,15 @@ from mypy_extensions import mypyc_attr
 from sqlspec.exceptions import SQLSpecError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
     from types import TracebackType
 
-    from sqlspec.driver._common import AsyncExceptionHandler
+    from sqlspec.driver._common import AsyncExceptionHandler, SyncExceptionHandler
 
 __all__ = ("BaseAsyncExceptionHandler", "BaseSyncExceptionHandler")
 
 _AsyncResultT = TypeVar("_AsyncResultT")
+_SyncResultT = TypeVar("_SyncResultT")
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -66,11 +67,18 @@ class BaseAsyncExceptionHandler:
         if exc_val is None:
             return False
 
-        # Do not re-map if already a SQLSpecError
         if isinstance(exc_val, SQLSpecError):
             return False
 
-        return self._handle_exception(exc_type, exc_val)
+        handled = self._handle_exception(exc_type, exc_val)
+        if (
+            handled
+            and self.pending_exception is not None
+            and self.pending_exception.__cause__ is None
+            and self.pending_exception is not exc_val
+        ):
+            self.pending_exception.__cause__ = exc_val
+        return handled
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         """Handle an adapter exception.
@@ -100,11 +108,18 @@ class BaseSyncExceptionHandler:
         if exc_val is None:
             return False
 
-        # Do not re-map if already a SQLSpecError
         if isinstance(exc_val, SQLSpecError):
             return False
 
-        return self._handle_exception(exc_type, exc_val)
+        handled = self._handle_exception(exc_type, exc_val)
+        if (
+            handled
+            and self.pending_exception is not None
+            and self.pending_exception.__cause__ is None
+            and self.pending_exception is not exc_val
+        ):
+            self.pending_exception.__cause__ = exc_val
+        return handled
 
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         """Handle an adapter exception.
@@ -113,6 +128,68 @@ class BaseSyncExceptionHandler:
         """
         _ = (exc_type, exc_val)
         return False
+
+
+def _iter_sync_exception_handler(
+    exc_handler: "SyncExceptionHandler", operation: "Callable[..., _SyncResultT]", *args: Any, **kwargs: Any
+) -> "Iterator[tuple[_SyncResultT | None, BaseException | None, TracebackType | None]]":
+    """Execute a sync operation and exit handler inside an isolated generator frame.
+
+    Yields:
+        Tuple of (result, error, traceback) after running the operation and handler exit.
+    """
+    result: _SyncResultT | None = None
+
+    error: BaseException | None = None
+    traceback: TracebackType | None = None
+    try:
+        result = operation(*args, **kwargs)
+    except BaseException as caught:
+        error = caught
+        traceback = caught.__traceback__
+
+    if error is None:
+        exc_handler.__exit__(None, None, None)
+        yield (result, None, None)
+        return
+
+    suppressed = exc_handler.__exit__(type(error), error, traceback)
+    if suppressed:
+        yield (None, None, None)
+        return
+    yield (None, error, traceback)
+
+
+def _run_with_sync_exception_handler(
+    exc_handler: "SyncExceptionHandler", operation: "Callable[..., _SyncResultT]", *args: Any, **kwargs: Any
+) -> "_SyncResultT | None":
+    """Run a sync operation without inheriting an active exception state."""
+    exc_handler.__enter__()
+    if sys.exc_info()[1] is not None:
+        isolated_result, isolated_error, isolated_tb = next(
+            _iter_sync_exception_handler(exc_handler, operation, *args, **kwargs)
+        )
+        if isolated_error is not None:
+            raise isolated_error.with_traceback(isolated_tb)
+        return isolated_result
+
+    result: _SyncResultT | None = None
+    error: BaseException | None = None
+    traceback: TracebackType | None = None
+    try:
+        result = operation(*args, **kwargs)
+    except BaseException as caught:
+        error = caught
+        traceback = caught.__traceback__
+
+    if error is None:
+        exc_handler.__exit__(None, None, None)
+        return result
+
+    suppressed = exc_handler.__exit__(type(error), error, traceback)
+    if not suppressed:
+        raise error.with_traceback(traceback)
+    return None
 
 
 async def _run_with_async_exception_handler(

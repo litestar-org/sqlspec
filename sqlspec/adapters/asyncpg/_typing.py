@@ -4,7 +4,7 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg as asyncpg_module
 from asyncpg import Connection as AsyncpgRawConnection
@@ -116,11 +116,10 @@ class AsyncpgSessionContext:
         self._driver: AsyncpgDriver | None = None
 
     async def __aenter__(self) -> "AsyncpgDriver":
-        from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
-
+        driver_cls = _resolve_asyncpg_driver()
         self._connection = await self._acquire_connection()
         statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = AsyncpgDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -139,6 +138,8 @@ _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
     "AsyncpgCloudSqlConnector": ("google.cloud.sql.connector", "Connector"),
 }
 
+_ASYNCPG_DRIVER_CLS: "type[AsyncpgDriver] | None" = None
+
 
 def __getattr__(name: str) -> Any:
     """Resolve optional driver symbols only when a consumer requests them."""
@@ -152,3 +153,16 @@ def __getattr__(name: str) -> Any:
         msg = f"Cannot import {attribute!r} from {module_name!r}"
         raise ImportError(msg)
     return value
+
+
+def _resolve_asyncpg_driver() -> "type[AsyncpgDriver]":
+    global _ASYNCPG_DRIVER_CLS
+    driver_cls = _ASYNCPG_DRIVER_CLS
+    if driver_cls is None:
+        resolved = import_optional_attr("sqlspec.adapters.asyncpg.driver", "AsyncpgDriver")
+        if resolved is None:
+            msg = "Cannot import 'AsyncpgDriver' from 'sqlspec.adapters.asyncpg.driver'"
+            raise ImportError(msg)
+        driver_cls = cast("type[AsyncpgDriver]", resolved)
+        _ASYNCPG_DRIVER_CLS = driver_cls
+    return driver_cls

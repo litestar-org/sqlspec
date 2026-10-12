@@ -165,7 +165,8 @@ async def test_session_context_exit_rolls_back_open_work(
     context = db2_mode.session_context(connection, released, autocommit_baseline=autocommit, begin_transaction=begin)
 
     async with db2_mode.enter(context) as driver:
-        assert driver._connection_in_transaction() is begin
+        assert driver._transaction_active is begin
+        assert driver._connection_in_transaction() is True
         await db2_mode.call(driver.execute, INSERT)
 
     assert connection.rollbacks == 1

@@ -13,7 +13,7 @@ from sqlspec.adapters.oracledb._vector_handlers import (
 )
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.sync_tools import ensure_async_
-from sqlspec.utils.type_guards import is_readable
+from sqlspec.utils.type_guards import is_async_readable, is_readable
 
 try:
     import numpy as np
@@ -40,6 +40,8 @@ class OracleOutputConverter:
         Returns:
             LOB content if value is a LOB, original value otherwise.
         """
+        if is_async_readable(value):
+            return await value.read()
         if not is_readable(value):
             return value
 

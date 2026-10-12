@@ -3,6 +3,7 @@
 import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Final
+from urllib.parse import unquote, urlparse
 
 from sqlspec.exceptions import StoragePathTraversalError
 
@@ -13,6 +14,7 @@ __all__ = (
     "extract_glob_static_prefix",
     "glob_to_regex",
     "is_file_destination",
+    "parse_file_uri_path",
     "reject_parent_traversal",
     "resolve_storage_path",
     "strip_windows_drive_prefix",
@@ -21,6 +23,8 @@ __all__ = (
 
 FILE_PROTOCOL: Final[str] = "file"
 FILE_SCHEME_PREFIX: Final[str] = "file://"
+_WINDOWS_URI_DRIVE_MIN_LEN: Final[int] = 3
+_WINDOWS_DRIVE_PATH_MIN_LEN: Final[int] = 2
 
 
 def reject_parent_traversal(path: "str | Path") -> None:
@@ -136,9 +140,18 @@ def glob_to_regex(pattern: str) -> "re.Pattern[str]":
 
 def strip_windows_drive_prefix(path: str) -> str:
     """Drop a leading slash from a urlparse'd Windows drive path (``/C:/x`` -> ``C:/x``)."""
-    if path and len(path) > 2 and path[2] == ":":  # noqa: PLR2004
+    if len(path) >= _WINDOWS_URI_DRIVE_MIN_LEN and path[0] == "/" and path[1].isalpha() and path[2] == ":":
         return path[1:]
     return path
+
+
+def parse_file_uri_path(uri: str) -> str:
+    """Extract, unquote, and normalize a filesystem path from a ``file://`` URI."""
+    parsed = urlparse(uri)
+    raw_path = f"{parsed.netloc}{parsed.path}" if parsed.netloc else (parsed.path or "/")
+    if parsed.fragment:
+        raw_path = f"{raw_path}#{parsed.fragment}"
+    return strip_windows_drive_prefix(unquote(raw_path))
 
 
 def is_file_destination(path: "str | Path") -> bool:
@@ -172,30 +185,45 @@ def resolve_storage_path(
         Resolved path string suitable for the storage backend.
 
     Raises:
-        StoragePathTraversalError: If the path contains a parent reference.
+        StoragePathTraversalError: If the path contains a parent reference or escapes ``base_path``.
     """
-
     reject_parent_traversal(path)
 
     path_str = str(path)
 
-    if strip_file_scheme and path_str.startswith(FILE_SCHEME_PREFIX):
-        path_str = path_str.removeprefix(FILE_SCHEME_PREFIX)
+    if path_str.startswith(FILE_SCHEME_PREFIX) and (strip_file_scheme or bool(base_path)):
+        path_str = parse_file_uri_path(path_str)
 
     if protocol == FILE_PROTOCOL:
+        if _is_windows_drive_path(path_str):
+            if base_path:
+                if not _is_windows_drive_path(base_path):
+                    raise StoragePathTraversalError(path_str, base_path)
+                try:
+                    win_rel = PureWindowsPath(path_str).relative_to(PureWindowsPath(base_path))
+                except ValueError as exc:
+                    raise StoragePathTraversalError(path_str, base_path) from exc
+                if str(win_rel) == ".":
+                    return base_path
+                trimmed_base = base_path.rstrip("/\\")
+                return f"{trimmed_base}/{win_rel.as_posix()}"
+            return path_str
+
         path_obj = Path(path_str)
 
         if path_obj.is_absolute():
             if base_path:
                 base_obj = Path(base_path)
+                if not base_obj.is_absolute():
+                    raise StoragePathTraversalError(path_str, base_path)
                 try:
                     relative = path_obj.relative_to(base_obj)
-                    if str(relative) == ".":
-                        return base_path
-                    return f"{base_path.rstrip('/')}/{relative}"
-                except ValueError:
-                    return path_str.lstrip("/")
-            return path_str.lstrip("/")
+                except ValueError as exc:
+                    raise StoragePathTraversalError(path_str, base_path) from exc
+                if str(relative) == ".":
+                    return base_path
+                return f"{base_path.rstrip('/')}/{relative.as_posix()}"
+            return path_str.lstrip("/") if strip_file_scheme else path_str
 
         if base_path:
             return f"{base_path.rstrip('/')}/{path_str}"
@@ -208,6 +236,11 @@ def resolve_storage_path(
     clean_base = base_path.rstrip("/")
     clean_path = path_str.lstrip("/")
     return f"{clean_base}/{clean_path}"
+
+
+def _is_windows_drive_path(path_str: str) -> bool:
+    r"""Return True when ``path_str`` starts with a Windows drive prefix such as ``C:/`` or ``C:\\``."""
+    return len(path_str) >= _WINDOWS_DRIVE_PATH_MIN_LEN and path_str[0].isalpha() and path_str[1] == ":"
 
 
 def _glob_segment_regex(segment: str) -> str:

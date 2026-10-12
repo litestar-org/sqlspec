@@ -1,4 +1,3 @@
-# Keep in sync with sqlspec/adapters/sqlite/type_converter.py
 """SQLite custom type handlers for optional JSON and type conversion support.
 
 Provides registration functions for SQLite's adapter/converter system to enable
@@ -78,11 +77,14 @@ def register_type_handlers(
 
 
 def unregister_type_handlers() -> None:
-    """Unregister custom type handlers from sqlite3 module.
-
-    Note: sqlite3 module does not provide an official unregister API, so this
-    function is a no-op placeholder for API consistency with other adapters.
-    """
+    """Unregister custom type handlers from sqlite3 module."""
+    adapters = getattr(sqlite3, "adapters", None)
+    if isinstance(adapters, dict):
+        adapters.pop((dict, sqlite3.PrepareProtocol), None)
+        adapters.pop((list, sqlite3.PrepareProtocol), None)
+    converters = getattr(sqlite3, "converters", None)
+    if isinstance(converters, dict):
+        converters.pop(DEFAULT_JSON_TYPE, None)
 
 
 def _make_json_adapter(serializer: "Callable[[Any], str] | None") -> "Callable[[Any], str]":

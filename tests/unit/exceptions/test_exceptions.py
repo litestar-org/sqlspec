@@ -168,3 +168,25 @@ def test_stack_execution_error_preserves_args() -> None:
     assert len(exc.args) == 1
     assert "operation 2" in exc.args[0]
     assert exc.args[0] == exc.detail
+
+
+def test_root_exports_and_typing_stubs_contracts() -> None:
+    """Test sqlspec.__all__ includes config and observability and _typing/protocols contracts hold."""
+    import sqlspec
+    from sqlspec._typing import _Metric, convert_stub
+    from sqlspec.exceptions import SQLFragmentNotFoundError
+    from sqlspec.protocols import AsyncDataDictionaryProtocol, SyncDataDictionaryProtocol
+
+    assert "config" in sqlspec.__all__
+    assert "observability" in sqlspec.__all__
+    sentinel = object()
+    assert convert_stub(sentinel, dict) is sentinel
+    metric = _Metric("m", "doc", exemplar_fn=lambda: None)
+    assert metric is not None
+    assert getattr(SyncDataDictionaryProtocol, "_is_runtime_protocol", False) is True
+    assert getattr(AsyncDataDictionaryProtocol, "_is_runtime_protocol", False) is True
+    frag_err = SQLFragmentNotFoundError("frag", "frag", 0)
+    assert isinstance(frag_err, SQLStatementNotFoundError)
+    assert isinstance(frag_err, SQLFileNotFoundError)
+    custom_file_err = SQLFileNotFoundError("q.sql", message="custom file error")
+    assert str(custom_file_err) == "custom file error"

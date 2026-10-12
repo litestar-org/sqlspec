@@ -1,7 +1,7 @@
 # pyright: reportArgumentType=false, reportCallIssue=false
 """Unit tests for Litestar filter providers (issue #405)."""
 
-import datetime
+import datetime as dt
 import inspect
 from typing import Any, Literal, NoReturn, cast
 
@@ -103,8 +103,8 @@ def test_not_in_fields_provider_returns_filter_when_values_present() -> None:
 
 def test_compiled_annotation_pair_providers_build_and_call() -> None:
     """Providers with paired annotation locals instantiate and call under compiled builds."""
-    before = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
-    after = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+    before = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+    after = dt.datetime(2025, 1, 1, tzinfo=dt.UTC)
     deps = _create_statement_filters(
         FilterConfig(
             created_at=True,
@@ -607,3 +607,29 @@ def test_cursor_secret_cache_preserves_type(secrets: tuple[str | bytes, str | by
         assert providers[index](cursor=token).limit == 20
         with pytest.raises(ValidationException, match="Invalid pagination cursor"):
             providers[1 - index](cursor=token)
+
+
+def test_single_field_name_type_in_and_not_in_fields_normalized() -> None:
+    config = FilterConfig(
+        in_fields=FieldNameType(name="status", type_hint=str), not_in_fields=FieldNameType(name="role", type_hint=str)
+    )
+    deps = _create_statement_filters(config)
+    assert "status_in_filter" in deps
+    assert "role_not_in_filter" in deps
+    agg_params = set(inspect.signature(deps["filters"].dependency).parameters)
+    assert agg_params == {"status_in_filter", "role_not_in_filter"}
+
+
+def test_aggregate_function_excludes_inactive_before_after_and_id_filters() -> None:
+    config = FilterConfig(id_filter=int, created_at=True, updated_at=True)
+    agg_fn = _configured_filter_aggregator(config)
+    result = agg_fn(
+        id_filter=InCollectionFilter(field_name="id", values=None),
+        created_filter=BeforeAfterFilter(field_name="created_at", before=None, after=None),
+        updated_filter=BeforeAfterFilter(
+            field_name="updated_at", before=dt.datetime(2026, 1, 1, tzinfo=dt.UTC), after=None
+        ),
+    )
+    assert len(result) == 1
+    assert isinstance(result[0], BeforeAfterFilter)
+    assert result[0].field_name == "updated_at"

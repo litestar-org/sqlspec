@@ -231,7 +231,16 @@ class SQLSpecSessionService(BaseSessionService):
             offset=page_offset,
         )
 
-        sessions = [record_to_session(record, events=[]) for record in records]
+        sessions: list[Session] = []
+        if records:
+            app_state = await self._call_store("get_app_state", app_name)
+            user_states: dict[str, dict[str, Any]] = {}
+            for record in records:
+                uid = record["user_id"]
+                if uid not in user_states:
+                    user_states[uid] = await self._call_store("get_user_state", app_name, uid)
+                record["state"] = merge_scoped_state(record["state"], app_state, user_states[uid])
+                sessions.append(record_to_session(record, events=[]))
         log_with_context(
             logger,
             logging.DEBUG,
@@ -299,13 +308,6 @@ class SQLSpecSessionService(BaseSessionService):
         if event.partial:
             return event
 
-        self._apply_temp_state(session, event)
-        event = self._trim_temp_delta_state(event)
-
-        event_record = event_to_record(
-            event=event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
-        )
-
         current_record = await self._call_store("get_session", session.app_name, session.user_id, session.id)
         if current_record is None:
             msg = f"Session {session.id} not found."
@@ -326,7 +328,14 @@ class SQLSpecSessionService(BaseSessionService):
             )
             raise StaleSessionError(msg)
 
-        state_delta = (event.actions.state_delta if event.actions else None) or {}
+        original_event = event
+        trimmed_event = self._trim_temp_delta_state(event)
+
+        event_record = event_to_record(
+            event=trimmed_event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
+        )
+
+        state_delta = (trimmed_event.actions.state_delta if trimmed_event.actions else None) or {}
         app_state_delta, user_state_delta, session_state_delta = split_scoped_state(filter_temp_state(state_delta))
 
         _, _, session_state = split_scoped_state(filter_temp_state(session.state))
@@ -354,17 +363,18 @@ class SQLSpecSessionService(BaseSessionService):
         )
         updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
+        self._apply_temp_state(session, original_event)
         session.last_update_time = updated_record["update_time"].timestamp()
         session._storage_update_marker = compute_update_marker(updated_record["update_time"])  # pyright: ignore[reportPrivateUsage]
 
-        self._update_session_state(session, event)
-        session.events.append(event)
+        self._update_session_state(session, trimmed_event)
+        session.events.append(trimmed_event)
 
         log_with_context(
             logger, logging.DEBUG, "adk.session.event.append", app_name=session.app_name, session_id=session.id
         )
 
-        return event
+        return trimmed_event
 
     async def _call_store(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Call an async store method or offload a sync store method."""

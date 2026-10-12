@@ -5,7 +5,7 @@ compilation to avoid ABI boundary issues.
 """
 
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.typing import import_optional_attr
 
@@ -17,9 +17,13 @@ class _UnavailableSpannerGoogleAPICallError(Exception):
 class _UnavailableSpannerTransaction:
     """Fallback Spanner transaction class when google-cloud-spanner is unavailable."""
 
+    __slots__ = ()
+
 
 class _UnavailableSpannerAsyncTransaction:
     """Fallback Spanner async transaction class when google-cloud-spanner is unavailable."""
+
+    __slots__ = ()
 
 
 if TYPE_CHECKING:
@@ -56,6 +60,8 @@ if TYPE_CHECKING:
     from google.cloud.spanner_v1._async.snapshot import Snapshot as SpannerAsyncSnapshot
     from google.cloud.spanner_v1._async.streamed import StreamedResultSet as SpannerAsyncStreamedResultSet
     from google.cloud.spanner_v1._async.transaction import Transaction as _SpannerAsyncTransaction
+    from google.cloud.spanner_v1.batch import Batch as SpannerBatch
+    from google.cloud.spanner_v1.batch import MutationGroups as SpannerMutationGroups
     from google.cloud.spanner_v1.data_types import Interval as SpannerInterval
     from google.cloud.spanner_v1.data_types import JsonObject as SpannerJsonObject
     from google.cloud.spanner_v1.database import Database as SpannerDatabase
@@ -74,7 +80,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.spanner.driver import SpannerAsyncDriver, SpannerSyncDriver
     from sqlspec.core import StatementConfig
 
-    SpannerSyncConnection: TypeAlias = Snapshot | SnapshotCheckout | _SpannerTransaction
+    SpannerSyncConnection: TypeAlias = Snapshot | SnapshotCheckout | _SpannerTransaction | SpannerBatch
     SpannerAsyncConnection: TypeAlias = (
         SpannerAsyncSnapshot | SpannerAsyncSnapshotCheckout | _SpannerAsyncTransaction | SpannerAsyncBatch
     )
@@ -118,6 +124,7 @@ __all__ = (
     "SpannerAsyncTransaction",
     "SpannerAsyncTransactionPingingPool",
     "SpannerAsyncTransactionType",
+    "SpannerBatch",
     "SpannerBurstyPool",
     "SpannerClient",
     "SpannerClientInfo",
@@ -133,6 +140,7 @@ __all__ = (
     "SpannerGoogleAPICallError",
     "SpannerInterval",
     "SpannerJsonObject",
+    "SpannerMutationGroups",
     "SpannerNotFound",
     "SpannerPingingPool",
     "SpannerRequestOptions",
@@ -217,10 +225,9 @@ class SpannerSyncSessionContext:
         self._driver: SpannerSyncDriver | None = None
 
     def __enter__(self) -> "SpannerSyncDriver":
-        from sqlspec.adapters.spanner.driver import SpannerSyncDriver
-
+        driver_cls = _get_sync_driver_type()
         self._connection = self._acquire_connection()
-        self._driver = SpannerSyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -272,10 +279,9 @@ class SpannerAsyncSessionContext:
         self._driver: SpannerAsyncDriver | None = None
 
     async def __aenter__(self) -> "SpannerAsyncDriver":
-        from sqlspec.adapters.spanner.driver import SpannerAsyncDriver
-
+        driver_cls = _get_async_driver_type()
         self._connection = await self._acquire_connection()
-        self._driver = SpannerAsyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -306,8 +312,10 @@ _LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
     "SpannerAsyncSnapshot": ("google.cloud.spanner_v1._async.snapshot", "Snapshot"),
     "SpannerAsyncStreamedResultSet": ("google.cloud.spanner_v1._async.streamed", "StreamedResultSet"),
     "SpannerAsyncTransactionPingingPool": ("google.cloud.spanner_v1._async.pool", "TransactionPingingPool"),
+    "SpannerBatch": ("google.cloud.spanner_v1.batch", "Batch"),
     "SpannerBurstyPool": ("google.cloud.spanner_v1.pool", "BurstyPool"),
     "SpannerFixedSizePool": ("google.cloud.spanner_v1.pool", "FixedSizePool"),
+    "SpannerMutationGroups": ("google.cloud.spanner_v1.batch", "MutationGroups"),
     "SpannerPingingPool": ("google.cloud.spanner_v1.pool", "PingingPool"),
     "SpannerTransactionPingingPool": ("google.cloud.spanner_v1.pool", "TransactionPingingPool"),
     "spanner_exceptions": ("google.api_core", "exceptions"),
@@ -344,3 +352,13 @@ def __getattr__(name: str) -> Any:
         msg = f"Cannot import {attribute!r} from {module_name!r}"
         raise ImportError(msg)
     return value
+
+
+def _get_sync_driver_type() -> "type[SpannerSyncDriver]":
+    driver_module = import_module("sqlspec.adapters.spanner.driver")
+    return cast("type[SpannerSyncDriver]", driver_module.SpannerSyncDriver)
+
+
+def _get_async_driver_type() -> "type[SpannerAsyncDriver]":
+    driver_module = import_module("sqlspec.adapters.spanner.driver")
+    return cast("type[SpannerAsyncDriver]", driver_module.SpannerAsyncDriver)

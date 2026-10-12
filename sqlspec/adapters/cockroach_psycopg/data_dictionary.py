@@ -80,15 +80,6 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
         requested_domains = ("system",) if domains is None else tuple(domains)
         return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
 
-    def _select_domain(
-        self, driver: "CockroachPsycopgSyncDriver", domain: str, query_name: str, **parameters: Any
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
-        rows = driver.select(query.sql, **parameters)
-        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
-
     def get_schemas(self, driver: "CockroachPsycopgSyncDriver") -> MetadataResult:
         """Get schema metadata."""
         return self._select_domain(driver, "schemas", "list")
@@ -182,7 +173,7 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
 
     def get_version(self, driver: "CockroachPsycopgSyncDriver") -> "VersionInfo | None":
         """Get CockroachDB version information."""
-        driver_id = id(driver)
+        driver_id = id(getattr(driver, "connection", None) or driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -292,6 +283,15 @@ class CockroachPsycopgSyncDataDictionary(SyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
+    def _select_domain(
+        self, driver: "CockroachPsycopgSyncDriver", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
+
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
@@ -315,15 +315,6 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         _ = driver
         requested_domains = ("system",) if domains is None else tuple(domains)
         return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
-
-    async def _select_domain(
-        self, driver: "CockroachPsycopgAsyncDriver", domain: str, query_name: str, **parameters: Any
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
-        rows = await driver.select(query.sql, **parameters)
-        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
 
     async def get_schemas(self, driver: "CockroachPsycopgAsyncDriver") -> MetadataResult:
         """Get schema metadata."""
@@ -418,7 +409,7 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
 
     async def get_version(self, driver: "CockroachPsycopgAsyncDriver") -> "VersionInfo | None":
         """Get CockroachDB version information."""
-        driver_id = id(driver)
+        driver_id = id(getattr(driver, "connection", None) or driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -529,6 +520,15 @@ class CockroachPsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
         )
+
+    async def _select_domain(
+        self, driver: "CockroachPsycopgAsyncDriver", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = await driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
 
 
 def _cockroach_metadata_capability(domain: str) -> MetadataCapability:

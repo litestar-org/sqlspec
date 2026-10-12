@@ -54,6 +54,15 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
             return _DB2_EVENT_TABLE_DDL.format(table=self.table_name)
         return super()._table_ddl()
 
+    def _index_name(self) -> str:
+        if self._db2:
+            return super()._index_name()
+        parts = [
+            _strip_identifier_quotes(part) for part in split_qualified_identifier(self.table_name, quote_chars='"')
+        ]
+        flat = "_".join(part for part in parts if part)
+        return f"idx_{flat}_channel_status"
+
     def _index_existence_target(self) -> "tuple[str | None, str] | None":
         """Return the upper-folded catalog schema and table checked for the Db2 queue index.
 
@@ -78,8 +87,17 @@ class ArrowOdbcEventQueueStore(BaseEventQueueStore[ArrowOdbcConfig]):
         return f"IF OBJECT_ID(N'{_object_name(self.table_name)}', N'U') IS NOT NULL {statement};"
 
 
+def _strip_identifier_quotes(part: str) -> str:
+    stripped = part.strip()
+    if len(stripped) >= _QUALIFIED_IDENTIFIER_MIN_PARTS and stripped.startswith("[") and stripped.endswith("]"):
+        return stripped[1:-1].replace("]]", "]")
+    if len(stripped) >= _QUALIFIED_IDENTIFIER_MIN_PARTS and stripped.startswith('"') and stripped.endswith('"'):
+        return stripped[1:-1].replace('""', '"')
+    return stripped
+
+
 def _split_table_name(table_name: str) -> tuple[str, str]:
-    parts = split_qualified_identifier(table_name, quote_chars='"')
+    parts = [_strip_identifier_quotes(part) for part in split_qualified_identifier(table_name, quote_chars='"')]
     if len(parts) < _QUALIFIED_IDENTIFIER_MIN_PARTS:
         return "dbo", parts[0] if parts else table_name
     schema_name = ".".join(parts[:-1])

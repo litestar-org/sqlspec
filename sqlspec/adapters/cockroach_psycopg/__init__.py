@@ -1,3 +1,5 @@
+"""CockroachDB psycopg adapter for SQLSpec."""
+
 from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachAsyncConnection,
     CockroachPsycopgAsyncSessionContext,

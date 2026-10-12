@@ -1,6 +1,7 @@
 """mssql-python database configuration."""
 
-from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, TypedDict, cast
+import contextlib
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonConnection, MssqlPythonSessionContext, TokenProvider
 from sqlspec.adapters.mssql_python.core import apply_driver_features, build_connection_config, default_statement_config
@@ -10,8 +11,8 @@ from sqlspec.adapters.mssql_python.pool import MssqlPythonConnectionPool
 from sqlspec.config import ExtensionConfigs, SyncDatabaseConfig
 from sqlspec.core import TypeCoercionCapabilities
 from sqlspec.driver import SyncPoolConnectionContext, SyncPoolSessionFactory
+from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
-from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -20,13 +21,7 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
 
-__all__ = (
-    "MssqlPythonConfig",
-    "MssqlPythonConnectionParams",
-    "MssqlPythonConnectionPool",
-    "MssqlPythonDriverFeatures",
-    "MssqlPythonPoolParams",
-)
+__all__ = ("MssqlPythonConfig", "MssqlPythonConnectionParams", "MssqlPythonDriverFeatures", "MssqlPythonPoolParams")
 
 
 class MssqlPythonConnectionParams(TypedDict):
@@ -98,6 +93,7 @@ class MssqlPythonDriverFeatures(TypedDict):
     json_deserializer: "NotRequired[Callable[[str], Any]]"
     on_connection_create: "NotRequired[Callable[[MssqlPythonConnection], None]]"
     enable_events: NotRequired[bool]
+    events_backend: NotRequired[Literal["poll_queue"]]
 
 
 class MssqlPythonConnectionContext(SyncPoolConnectionContext):
@@ -119,6 +115,9 @@ class MssqlPythonConnectionContext(SyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
         if self._conn is not None:
+            if exc_type is not None:
+                with contextlib.suppress(Exception):
+                    self._conn.rollback()
             self._config.provide_pool().release(self._conn)
             self._conn = None
         return None
@@ -187,7 +186,7 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
             connection_config, driver_features
         )
         self._user_connection_hook = user_connection_hook
-        statement_config = _apply_json_serializer_override(statement_config or default_statement_config, features_dict)
+        statement_config, _ = apply_driver_features(statement_config or default_statement_config, features_dict)
         super().__init__(
             bind_key=bind_key,
             connection_config=normalized,
@@ -219,6 +218,10 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         })
         return namespace
 
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for SQL Server queue fallback."""
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
+
     def _create_pool(self) -> "MssqlPythonConnectionPool":
         return _create_mssql_python_pool(dict(self.connection_config), self.driver_features, self._user_connection_hook)
 
@@ -226,20 +229,6 @@ class MssqlPythonConfig(SyncDatabaseConfig[MssqlPythonConnection, MssqlPythonCon
         if self.connection_instance is not None:
             self.connection_instance.close()
             self.connection_instance = None
-
-
-def _apply_json_serializer_override(statement_config: Any, features_dict: dict[str, Any]) -> Any:
-    serializer = cast("Callable[[Any], str] | None", features_dict.get("json_serializer"))
-    deserializer = cast("Callable[[str], Any] | None", features_dict.get("json_deserializer"))
-    if statement_config is not default_statement_config:
-        return statement_config
-    if serializer is to_json and deserializer is from_json:
-        return statement_config
-    return statement_config.replace(
-        parameter_config=statement_config.parameter_config.with_json_serializers(
-            serializer or to_json, deserializer=deserializer
-        )
-    )
 
 
 def _create_mssql_python_pool(

@@ -4,6 +4,7 @@ This module provides utilities to consolidate multiple sequential migrations
 into a single "release" migration file, following the Django-style squash workflow.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,7 +17,7 @@ from sqlspec.migrations.validation import (
     validate_squash_idempotency,
     validate_squash_range,
 )
-from sqlspec.migrations.version import _format_sequential_version
+from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem, parse_version
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.text import slugify
 
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
 __all__ = ("MigrationSquasher", "SquashPlan", "group_migrations_by_type", "parse_version_range")
 
 logger = get_logger("sqlspec.migrations.squash")
+
+_TRANSACTIONAL_DIRECTIVE_RE = re.compile(r"^--\s*transactional:\s*(true|false)\s*$", re.MULTILINE | re.IGNORECASE)
+_SCHEMA_DIRECTIVE_RE = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
 
 
 def parse_version_range(range_str: str) -> tuple[str, str]:
@@ -46,8 +50,8 @@ def parse_version_range(range_str: str) -> tuple[str, str]:
     for sep in (":", "..", "-"):
         if sep in range_str:
             parts = range_str.split(sep, 1)
-            start = _format_sequential_version(parts[0].strip())
-            end = _format_sequential_version(parts[1].strip())
+            start = _normalize_range_endpoint(parts[0].strip())
+            end = _normalize_range_endpoint(parts[1].strip())
             return start, end
     msg = f"Invalid VERSION_RANGE format: '{range_str}'. Use START:END, START..END, or START-END"
     raise ValueError(msg)
@@ -101,6 +105,8 @@ class SquashPlan:
         target_path: Output file path for the squashed migration.
         description: Combined description for the squashed migration.
         source_versions: List of version strings being replaced (for tracking table updates).
+        transactional: Optional transactional directive preserved from source SQL migrations.
+        schema: Optional schema directive preserved from source SQL migrations.
     """
 
     source_migrations: list[tuple[str, Path]]
@@ -108,6 +114,8 @@ class SquashPlan:
     target_path: Path
     description: str
     source_versions: list[str]
+    transactional: bool | None = None
+    schema: str | None = None
 
 
 class MigrationSquasher:
@@ -149,8 +157,8 @@ class MigrationSquasher:
         """Plan a squash operation for a range of migrations.
 
         For homogeneous migrations (all SQL or all Python), returns a single plan.
-        For mixed SQL/Python migrations, returns multiple plans - one per
-        consecutive group of same-type migrations.
+        For mixed SQL/Python migrations or differing execution directives, returns
+        multiple plans - one per consecutive compatible group of migrations.
 
         Args:
             start_version: First version in the range to squash (inclusive).
@@ -165,17 +173,24 @@ class MigrationSquasher:
         all_migrations = self.runner.get_migration_files()
         source_migrations = validate_squash_range(all_migrations, start_version, end_version, allow_gaps=allow_gaps)
 
-        # Slugify description for safe filenames
         safe_description = slugify(description, separator="_")[:50] or "migration"
 
-        groups = [("py", source_migrations)] if output_format == "py" else group_migrations_by_type(source_migrations)
+        if output_format == "py":
+            directive_groups: list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]] = [
+                ("py", None, None, source_migrations)
+            ]
+        else:
+            directive_groups = _group_migrations_with_directives(source_migrations)
+
+        parsed_start = parse_version(start_version)
+        version_counter = parsed_start.sequence or 1
+        ext_prefix = f"ext_{parsed_start.extension}_" if parsed_start.extension else ""
 
         plans: list[SquashPlan] = []
-        version_counter = int(start_version)
 
-        for file_type, group_migrations in groups:
+        for file_type, transactional, schema, group_migrations in directive_groups:
             group_versions = [v for v, _ in group_migrations]
-            target_version = _format_sequential_version(version_counter)
+            target_version = f"{ext_prefix}{_format_sequential_version(version_counter)}"
             extension = ".py" if file_type == "py" else ".sql"
             target_path = self.migrations_path / f"{target_version}_{safe_description}{extension}"
 
@@ -186,6 +201,8 @@ class MigrationSquasher:
                     target_path=target_path,
                     description=description,
                     source_versions=group_versions,
+                    transactional=transactional,
+                    schema=schema,
                 )
             )
             version_counter += 1
@@ -207,14 +224,12 @@ class MigrationSquasher:
         up_statements: list[str] = []
         down_statements: list[str] = []
 
-        # Load and collect SQL from each migration (UP in order)
         migration_down_sql: list[list[str]] = []
 
         for version, path in migrations:
             migration_data = self.runner.load_migration(path, version)
             loader = migration_data["loader"]
 
-            # Get UP SQL (handle async loaders via await_ bridge)
             up_sql = _load_migration_sql(loader, path, "up")
             if up_sql:
                 if isinstance(up_sql, list):
@@ -222,7 +237,6 @@ class MigrationSquasher:
                 else:
                     up_statements.append(up_sql)
 
-            # Get DOWN SQL (handle async loaders via await_ bridge)
             down_sql = _load_migration_sql(loader, path, "down")
             if down_sql:
                 if isinstance(down_sql, list):
@@ -232,7 +246,6 @@ class MigrationSquasher:
             else:
                 migration_down_sql.append([])
 
-        # DOWN statements in REVERSE order
         for down_sql in migration_down_sql[::-1]:
             down_statements.extend(down_sql)
 
@@ -260,9 +273,12 @@ class MigrationSquasher:
             f"-- Version: {plan.target_version}",
             f"-- Description: {plan.description}",
             f"-- Squashed from: {', '.join(plan.source_versions)}",
-            "",
-            f"-- name: migrate-{plan.target_version}-up",
         ))
+        if plan.transactional is not None:
+            lines.append(f"-- transactional: {'true' if plan.transactional else 'false'}")
+        if plan.schema is not None:
+            lines.append(f"-- schema: {plan.schema}")
+        lines.extend(("", f"-- name: migrate-{plan.target_version}-up"))
         lines.extend(statement.rstrip() for statement in up_sql)
         lines.append("")
 
@@ -317,7 +333,7 @@ class MigrationSquasher:
 
         return "\n".join(lines)
 
-    def apply_squash(self, plans: list[SquashPlan], *, dry_run: bool = False) -> None:
+    def apply_squash(self, plans: list[SquashPlan], *, dry_run: bool = False, cleanup_backup: bool = True) -> None:
         """Apply the squash operation for one or more plans.
 
         Creates backup, writes squashed files, deletes source migrations,
@@ -326,6 +342,8 @@ class MigrationSquasher:
         Args:
             plans: List of SquashPlan objects to execute.
             dry_run: If True, no files are modified (preview only).
+            cleanup_backup: If True (default), remove the backup directory before returning.
+                Set False when callers need to keep the backup until database tracking is updated.
         """
         if dry_run:
             logger.debug("Dry run mode - no changes will be made")
@@ -347,10 +365,10 @@ class MigrationSquasher:
         if not ready_plans:
             return
 
-        # Create backup before making changes
         self._create_backup()
 
         try:
+            planned_contents: list[tuple[SquashPlan, str]] = []
             for plan in ready_plans:
                 up_sql, down_sql = self.extract_sql(plan.source_migrations)
 
@@ -358,23 +376,29 @@ class MigrationSquasher:
                     content = self.generate_python_squash(plan, up_sql, down_sql)
                 else:
                     content = self.generate_squashed_content(plan, up_sql, down_sql)
+                planned_contents.append((plan, content))
 
+            for plan, content in planned_contents:
                 plan.target_path.write_text(content, encoding="utf-8")
                 logger.debug("Wrote squashed migration to %s", plan.target_path)
 
-            # Collect all source paths to delete (avoid duplicates across plans)
-            all_source_paths = {source_path for plan in ready_plans for _, source_path in plan.source_migrations}
+            target_paths = {plan.target_path for plan in ready_plans}
+            all_source_paths = {
+                source_path
+                for plan in ready_plans
+                for _, source_path in plan.source_migrations
+                if source_path not in target_paths
+            }
 
             for source_path in all_source_paths:
                 if source_path.exists():
                     source_path.unlink()
                     logger.debug("Deleted source migration %s", source_path)
 
-            # Clean up backup on success
-            self._cleanup_backup()
+            if cleanup_backup:
+                self._cleanup_backup()
 
         except Exception:
-            # Rollback on error
             self._rollback_backup()
             raise
 
@@ -407,3 +431,57 @@ class MigrationSquasher:
         self.backup_path = None
 
         logger.debug("Rolled back from backup at %s", backup_dir)
+
+
+def _normalize_range_endpoint(endpoint: str) -> str:
+    """Normalize a squash range endpoint, preserving any extension prefix."""
+    if endpoint.startswith("ext_"):
+        parsed = parse_extension_stem(endpoint)
+        if parsed is not None:
+            ext_name, ext_version = parsed
+            return f"ext_{ext_name}_{_format_sequential_version(ext_version)}"
+    return _format_sequential_version(endpoint)
+
+
+def _extract_sql_directives(path: Path) -> tuple[bool | None, str | None]:
+    """Extract transactional and schema directives from a SQL migration file if it exists."""
+    if path.suffix != ".sql" or not path.exists():
+        return None, None
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    tx_match = _TRANSACTIONAL_DIRECTIVE_RE.search(content)
+    transactional = tx_match.group(1).lower() == "true" if tx_match else None
+    schema_match = _SCHEMA_DIRECTIVE_RE.search(content)
+    schema = schema_match.group(1) if schema_match else None
+    return transactional, schema
+
+
+def _group_migrations_with_directives(
+    migrations: list[tuple[str, Path]],
+) -> list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]]:
+    """Group consecutive migrations by file type and SQL execution directives."""
+    if not migrations:
+        return []
+
+    groups: list[tuple[str, bool | None, str | None, list[tuple[str, Path]]]] = []
+    current_key: tuple[str, bool | None, str | None] | None = None
+    current_group: list[tuple[str, Path]] = []
+
+    for version, path in migrations:
+        file_type = "py" if path.suffix == ".py" else "sql"
+        transactional, schema = _extract_sql_directives(path) if file_type == "sql" else (None, None)
+        key = (file_type, transactional, schema)
+        if key != current_key:
+            if current_group and current_key is not None:
+                groups.append((current_key[0], current_key[1], current_key[2], current_group))
+            current_key = key
+            current_group = [(version, path)]
+        else:
+            current_group.append((version, path))
+
+    if current_group and current_key is not None:
+        groups.append((current_key[0], current_key[1], current_key[2], current_group))
+
+    return groups

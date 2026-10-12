@@ -1,3 +1,5 @@
+"""PyMySQL adapter for SQLSpec."""
+
 from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor
 from sqlspec.adapters.pymysql.config import (
     PyMysqlConfig,

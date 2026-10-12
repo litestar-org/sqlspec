@@ -59,3 +59,21 @@ def test_spangres_aliased_table_hint_and_parse_into() -> None:
     assert table.args.get("hints") is not None
     rendered = parsed.sql(dialect="spangres")
     assert "/*@ FORCE_INDEX=albums_idx */" in rendered
+
+
+def test_spangres_schema_qualified_table_and_join_hints() -> None:
+    """Verify Spangres attaches hints to schema-qualified tables and JOIN nodes."""
+    sql = (
+        "SELECT * FROM my_schema.albums /*@ FORCE_INDEX=albums_idx */ "
+        "JOIN /*@ JOIN_METHOD=HASH_JOIN */ my_schema.singers ON albums.singer_id = singers.id"
+    )
+    parsed = parse_one(sql, dialect="spangres")
+    table = parsed.find(exp.Table)
+    assert table is not None
+    assert table.args.get("hints") is not None
+    join = parsed.find(exp.Join)
+    assert join is not None
+    assert join.args.get("spanner_hint") is not None
+    rendered = parsed.sql(dialect="spangres")
+    assert "my_schema.albums /*@ FORCE_INDEX=albums_idx */" in rendered
+    assert "JOIN /*@ JOIN_METHOD=HASH_JOIN */ my_schema.singers" in rendered

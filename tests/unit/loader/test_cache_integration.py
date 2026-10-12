@@ -294,11 +294,14 @@ def test_cache_clear_integration() -> None:
         mock_cache = Mock()
         mock_cache_factory.return_value = mock_cache
         loader.add_named_sql("test_query", "SELECT 1")
+        loader._files["/tmp/tracked.sql"] = SQLFile("SELECT 1", "/tmp/tracked.sql")
+        expected_key = loader._file_cache_key("/tmp/tracked.sql")
         loader.clear_cache()
         assert len(loader._queries) == 0
         assert len(loader._files) == 0
         assert len(loader._query_to_file) == 0
-        mock_cache.clear.assert_called_once()
+        mock_cache.delete_file.assert_called_once_with(expected_key)
+        mock_cache.clear.assert_not_called()
 
 
 def test_file_cache_only_clear() -> None:
@@ -314,11 +317,14 @@ def test_file_cache_only_clear() -> None:
         mock_cache = Mock()
         mock_cache_factory.return_value = mock_cache
         loader.add_named_sql("test_query", "SELECT 1")
+        loader._files["/tmp/tracked.sql"] = SQLFile("SELECT 1", "/tmp/tracked.sql")
+        expected_key = loader._file_cache_key("/tmp/tracked.sql")
         loader.clear_file_cache()
         assert len(loader._queries) == 1
         assert len(loader._files) == 0
         assert len(loader._query_to_file) == 1
-        mock_cache.clear.assert_called_once()
+        mock_cache.delete_file.assert_called_once_with(expected_key)
+        mock_cache.clear.assert_not_called()
 
 
 def test_cache_disabled_clear_behavior() -> None:

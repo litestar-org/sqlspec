@@ -1,3 +1,5 @@
+"""Psycopg synchronous and asynchronous PostgreSQL database adapter."""
+
 from sqlspec.adapters.psycopg._typing import (
     PsycopgAsyncConnection,
     PsycopgAsyncCursor,

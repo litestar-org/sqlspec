@@ -40,6 +40,6 @@ def delete_sqlspec_scope_state(scope: "Scope", key: str) -> None:
 
     Args:
         scope: The connection scope.
-        key: Key to set under internal namespace in scope state.
+        key: Key to remove under internal namespace in scope state.
     """
-    del scope.setdefault(_SCOPE_NAMESPACE, {})[key]  # type: ignore[misc]
+    scope.setdefault(_SCOPE_NAMESPACE, {}).pop(key, None)  # type: ignore[misc]

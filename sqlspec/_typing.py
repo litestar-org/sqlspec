@@ -140,8 +140,6 @@ class DataclassProtocol(Protocol):
 
 T = TypeVar("T")
 
-# Always define stub types for type checking
-
 
 class BaseModelStub:
     """Placeholder implementation."""
@@ -193,6 +191,8 @@ class BaseModelStub:
 class TypeAdapterStub:
     """Placeholder implementation."""
 
+    __slots__ = ("_type",)
+
     def __init__(
         self,
         type: Any,  # noqa: A002
@@ -225,9 +225,6 @@ class FailFastStub:
     fail_fast: bool = True
 
 
-# Always define stub types for msgspec
-
-
 @dataclass_transform()
 class StructStub:
     """Placeholder implementation."""
@@ -241,7 +238,7 @@ class StructStub:
 
 
 def convert_stub(  # noqa: PLR0913
-    obj: Any,  # noqa: ARG001
+    obj: Any,
     type: Any,  # noqa: A002,ARG001
     *,
     strict: bool = True,  # noqa: ARG001
@@ -251,7 +248,7 @@ def convert_stub(  # noqa: PLR0913
     str_keys: bool = False,  # noqa: ARG001
 ) -> Any:
     """Placeholder implementation."""
-    return {}
+    return obj
 
 
 def msgspec_fields_stub(type_: Any, /) -> "tuple[Any, ...]":  # noqa: ARG001
@@ -265,7 +262,6 @@ class UnsetTypeStub(enum.Enum):
 
 UNSET_STUB = UnsetTypeStub.UNSET
 
-# Try to import real implementations at runtime
 try:
     from msgspec import UNSET as _REAL_UNSET
     from msgspec import Struct as _RealStruct
@@ -289,7 +285,6 @@ except ImportError:
     msgspec_fields = msgspec_fields_stub  # type: ignore[assignment]
 
 
-# Always define stub type for DTOData
 @runtime_checkable
 class DTODataStub(Protocol[T]):
     """Placeholder implementation."""
@@ -311,7 +306,6 @@ class DTODataStub(Protocol[T]):
         return {}
 
 
-# Always define stub types for attrs
 @dataclass_transform()
 class AttrsInstanceStub:
     """Placeholder Implementation for attrs classes"""
@@ -376,9 +370,6 @@ Empty: Final = EmptyEnum.EMPTY
 class ArrowTableResult(Protocol):
     """This is a typed shim for pyarrow.Table."""
 
-    def to_batches(self, batch_size: int) -> Any:
-        return None
-
     @property
     def num_rows(self) -> int:
         return 0
@@ -386,6 +377,9 @@ class ArrowTableResult(Protocol):
     @property
     def num_columns(self) -> int:
         return 0
+
+    def to_batches(self, batch_size: int) -> Any:
+        return None
 
     def to_pydict(self) -> dict[str, Any]:
         return {}
@@ -441,23 +435,27 @@ class ArrowRecordBatchResult(Protocol):
 class ArrowSchemaProtocol(Protocol):
     """Typed shim for pyarrow.Schema."""
 
-    def field(self, i: int) -> Any:
-        """Get field by index."""
-        ...
+    def __len__(self) -> int:
+        """Get number of fields."""
+        return 0
 
     @property
     def names(self) -> "list[str]":
         """Get list of field names."""
         ...
 
-    def __len__(self) -> int:
-        """Get number of fields."""
-        return 0
+    def field(self, i: int) -> Any:
+        """Get field by index."""
+        ...
 
 
 @runtime_checkable
 class ArrowRecordBatchReaderProtocol(Protocol):
     """Typed shim for pyarrow.RecordBatchReader."""
+
+    def __iter__(self) -> "Iterable[Any]":
+        """Iterate over batches."""
+        ...
 
     def read_all(self) -> Any:
         """Read all batches into a table."""
@@ -465,10 +463,6 @@ class ArrowRecordBatchReaderProtocol(Protocol):
 
     def read_next_batch(self) -> Any:
         """Read next batch."""
-        ...
-
-    def __iter__(self) -> "Iterable[Any]":
-        """Iterate over batches."""
         ...
 
 
@@ -526,6 +520,14 @@ _NUMPY_ARRAY_SHIM = NumpyArrayStub
 
 
 class _SpanShim:
+    __slots__ = ()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        return None
+
     def set_attribute(self, key: str, value: Any) -> None:
         return None
 
@@ -544,12 +546,6 @@ class _SpanShim:
     def end(self, end_time: "int | None" = None) -> None:
         return None
 
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
-        return None
-
 
 _SPAN_SHIM = _SpanShim
 _SPAN_SHIM.__name__ = "Span"
@@ -557,6 +553,8 @@ _SPAN_SHIM.__qualname__ = "Span"
 
 
 class _TracerShim:
+    __slots__ = ()
+
     def start_span(
         self,
         name: str,
@@ -577,6 +575,8 @@ _TRACER_SHIM.__qualname__ = "Tracer"
 
 
 class _TraceModule:
+    __slots__ = ()
+
     def get_tracer(
         self,
         instrumenting_module_name: str,
@@ -589,9 +589,9 @@ class _TraceModule:
     def get_tracer_provider(self) -> Any:  # pragma: no cover
         return None
 
-    TracerProvider = type(None)  # Shim for TracerProvider if needed elsewhere
-    StatusCode = type(None)  # Shim for StatusCode
-    Status = type(None)  # Shim for Status
+    TracerProvider = type(None)
+    StatusCode = type(None)
+    Status = type(None)
 
 
 _TRACE_SHIM = _TraceModule()
@@ -599,7 +599,9 @@ _STATUS_CODE_SHIM = type(None)
 _STATUS_SHIM = type(None)
 
 
-class _Metric:  # Base shim for metrics
+class _Metric:
+    __slots__ = ()
+
     def __init__(
         self,
         name: str,
@@ -609,7 +611,7 @@ class _Metric:  # Base shim for metrics
         subsystem: str = "",
         unit: str = "",
         registry: Any = None,
-        ejemplar_fn: Any = None,
+        exemplar_fn: Any = None,
         buckets: Any = None,
         **_: Any,
     ) -> None:
@@ -620,6 +622,8 @@ class _Metric:  # Base shim for metrics
 
 
 class _MetricInstance:
+    __slots__ = ()
+
     def inc(self, amount: float = 1) -> None:
         return None
 
@@ -634,6 +638,8 @@ class _MetricInstance:
 
 
 class _CounterShim(_Metric):
+    __slots__ = ()
+
     def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
         return _MetricInstance()  # pragma: no cover
 
@@ -644,6 +650,8 @@ _COUNTER_SHIM.__qualname__ = "Counter"
 
 
 class _GaugeShim(_Metric):
+    __slots__ = ()
+
     def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
         return _MetricInstance()  # pragma: no cover
 
@@ -654,6 +662,8 @@ _GAUGE_SHIM.__qualname__ = "Gauge"
 
 
 class _HistogramShim(_Metric):
+    __slots__ = ()
+
     def labels(self, *labelvalues: str, **labelkwargs: str) -> "_MetricInstance":
         return _MetricInstance()  # pragma: no cover
 

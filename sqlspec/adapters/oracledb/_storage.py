@@ -97,6 +97,13 @@ def oracle_table_feature_report(
     return {"applied": tuple(applied), "clause": clause}
 
 
+def validate_oracle_identifier(value: str, field_name: str) -> str:
+    if not value or not value.replace("_", "").isalnum() or value[0].isdigit():
+        msg = f"Oracle {field_name} must be a simple SQL identifier"
+        raise ValueError(msg)
+    return value
+
+
 def _oracle_partition_clause(
     partitioning: Mapping[str, Any], table_kind: str, hash_partition_key: str, range_partition_key: str
 ) -> str:
@@ -126,10 +133,3 @@ def _oracle_partition_clause(
         return f"PARTITION BY RANGE ({partition_key}) INTERVAL ({interval_sql}) (PARTITION p_initial VALUES LESS THAN ({initial_less_than}))"
     msg = f"Unsupported Oracle partitioning strategy {strategy!r}. Supported values: hash, range"
     raise ValueError(msg)
-
-
-def validate_oracle_identifier(value: str, field_name: str) -> str:
-    if not value or not value.replace("_", "").isalnum() or value[0].isdigit():
-        msg = f"Oracle {field_name} must be a simple SQL identifier"
-        raise ValueError(msg)
-    return value

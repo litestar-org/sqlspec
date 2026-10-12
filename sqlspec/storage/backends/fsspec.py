@@ -1,5 +1,5 @@
-# pyright: reportPrivateUsage=false
-import asyncio
+"""Storage backend using fsspec."""
+
 from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
@@ -9,11 +9,10 @@ from urllib.parse import urlparse
 from mypy_extensions import mypyc_attr
 
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
-from sqlspec.storage._paths import resolve_storage_path
-from sqlspec.storage._utils import _log_storage_event, import_pyarrow_parquet
+from sqlspec.storage._paths import is_file_destination, parse_file_uri_path, resolve_storage_path
+from sqlspec.storage._utils import import_fsspec, import_pyarrow_parquet, log_storage_event
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
-from sqlspec.storage.errors import execute_sync_storage_operation
-from sqlspec.utils.module_loader import ensure_fsspec
+from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -49,8 +48,7 @@ class FSSpecBackend:
                 URI path when no explicit base_path is provided. When both URI and base_path are provided,
                 they are combined (base_path is appended to URI-derived path).
         """
-        ensure_fsspec()
-        import fsspec
+        fsspec = import_fsspec()
 
         explicit_base_path = kwargs.pop("base_path", "")
 
@@ -64,16 +62,16 @@ class FSSpecBackend:
                     uri_base_path = parsed.netloc
                     if parsed.path and parsed.path != "/":
                         uri_base_path = f"{uri_base_path}{parsed.path}"
-                    # Combine URI path with explicit base_path if both provided
                     if explicit_base_path:
                         uri_base_path = f"{uri_base_path.rstrip('/')}/{explicit_base_path.lstrip('/')}"
                     explicit_base_path = uri_base_path
             elif self.protocol == "file":
-                parsed = urlparse(uri)
-                if parsed.path and parsed.path != "/":
-                    # For file protocol, keep the path as-is (preserve leading slash for absolute paths)
-                    uri_base_path = parsed.path
-                    # Combine URI path with explicit base_path if both provided
+                parsed_path = parse_file_uri_path(uri)
+                if parsed_path and parsed_path != "/":
+                    path_obj = Path(parsed_path)
+                    if not explicit_base_path and is_file_destination(path_obj):
+                        parsed_path = str(path_obj.parent)
+                    uri_base_path = parsed_path
                     if explicit_base_path:
                         uri_base_path = f"{uri_base_path.rstrip('/')}/{explicit_base_path.lstrip('/')}"
                     explicit_base_path = uri_base_path
@@ -84,7 +82,7 @@ class FSSpecBackend:
         self.base_path = explicit_base_path.rstrip("/") if explicit_base_path else ""
 
         self.fs = fsspec.filesystem(self.protocol, **kwargs)
-        _log_storage_event(
+        log_storage_event(
             "storage.backend.ready",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -92,7 +90,21 @@ class FSSpecBackend:
             path=self._fs_uri,
         )
 
-        super().__init__()
+    @property
+    def base_uri(self) -> str:
+        return self._fs_uri
+
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        FSSpec backends do not support URL signing. Use ObStoreBackend
+        for S3, GCS, or Azure if you need signed URLs.
+
+        Returns:
+            Always False for fsspec backends.
+        """
+        return False
 
     @classmethod
     def from_config(cls, config: "dict[str, Any]") -> "FSSpecBackend":
@@ -106,10 +118,6 @@ class FSSpecBackend:
             kwargs["base_path"] = base_path
 
         return cls(uri=uri, **kwargs)
-
-    @property
-    def base_uri(self) -> str:
-        return self._fs_uri
 
     def resolve_uri(self, path: str | Path) -> str:
         """Resolve a backend-relative path to an unsigned address.
@@ -126,9 +134,6 @@ class FSSpecBackend:
             return str(Path(resolved_path).resolve())
         return str(self.fs.unstrip_protocol(resolved_path))
 
-    def _resolve_path(self, path: str | Path) -> str:
-        return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
-
     def read_bytes_sync(self, path: str | Path, **kwargs: Any) -> bytes:
         """Read bytes from an object synchronously."""
         resolved_path = self._resolve_path(path)
@@ -141,7 +146,7 @@ class FSSpecBackend:
                 path=resolved_path,
             ),
         )
-        _log_storage_event(
+        log_storage_event(
             "storage.read",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -165,7 +170,7 @@ class FSSpecBackend:
             operation="write_bytes",
             path=resolved_path,
         )
-        _log_storage_event(
+        log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -186,7 +191,7 @@ class FSSpecBackend:
         """Check if an object exists synchronously."""
         resolved_path = self._resolve_path(path)
         exists = bool(self.fs.exists(resolved_path, **kwargs))
-        _log_storage_event(
+        log_storage_event(
             "storage.read",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -205,7 +210,7 @@ class FSSpecBackend:
             operation="delete",
             path=resolved_path,
         )
-        _log_storage_event(
+        log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -223,7 +228,7 @@ class FSSpecBackend:
             operation="copy",
             path=f"{source_path}->{dest_path}",
         )
-        _log_storage_event(
+        log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -242,7 +247,7 @@ class FSSpecBackend:
             operation="move",
             path=f"{source_path}->{dest_path}",
         )
-        _log_storage_event(
+        log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -265,7 +270,7 @@ class FSSpecBackend:
                 path=resolved_path,
             ),
         )
-        _log_storage_event(
+        log_storage_event(
             "storage.read",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -286,7 +291,7 @@ class FSSpecBackend:
             operation="write_arrow",
             path=resolved_path,
         )
-        _log_storage_event(
+        log_storage_event(
             "storage.write",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -294,18 +299,26 @@ class FSSpecBackend:
             path=resolved_path,
         )
 
-    def _read_parquet_table(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
-        with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
-            return pq.read_table(file_obj)
-
     def list_objects_sync(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
         """List objects with optional prefix synchronously."""
         resolved_prefix = resolve_storage_path(prefix, self.base_path, self.protocol, strip_file_scheme=False)
         if recursive:
-            results = sorted(self.fs.find(resolved_prefix, **kwargs))
+            raw_results = execute_sync_storage_operation(
+                partial(self.fs.find, resolved_prefix, **kwargs),
+                backend=self.backend_type,
+                operation="list_objects",
+                path=resolved_prefix,
+            )
+            results = sorted(raw_results)
         else:
-            results = sorted(self.fs.ls(resolved_prefix, detail=False, **kwargs))
-        _log_storage_event(
+            raw_results = execute_sync_storage_operation(
+                partial(self.fs.ls, resolved_prefix, detail=False, **kwargs),
+                backend=self.backend_type,
+                operation="list_objects",
+                path=resolved_prefix,
+            )
+            results = sorted(raw_results)
+        log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -318,8 +331,14 @@ class FSSpecBackend:
     def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find objects matching a glob pattern synchronously."""
         resolved_pattern = resolve_storage_path(pattern, self.base_path, self.protocol, strip_file_scheme=False)
-        results = cast("list[str]", sorted(self.fs.glob(resolved_pattern, **kwargs)))
-        _log_storage_event(
+        raw_results = execute_sync_storage_operation(
+            partial(self.fs.glob, resolved_pattern, **kwargs),
+            backend=self.backend_type,
+            operation="glob",
+            path=resolved_pattern,
+        )
+        results = cast("list[str]", sorted(raw_results))
+        log_storage_event(
             "storage.list",
             backend_type=self.backend_type,
             protocol=self.protocol,
@@ -363,24 +382,10 @@ class FSSpecBackend:
                 "type": info.type,
             }
 
-    @property
-    def supports_signing(self) -> bool:
-        """Whether this backend supports URL signing.
-
-        FSSpec backends do not support URL signing. Use ObStoreBackend
-        for S3, GCS, or Azure if you need signed URLs.
-
-        Returns:
-            Always False for fsspec backends.
-        """
-        return False
-
     @overload
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
-
     @overload
     def sign_sync(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
-
     def sign_sync(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
@@ -405,7 +410,13 @@ class FSSpecBackend:
         resolved_path = self._resolve_path(path)
         chunk_size = chunk_size or 65536
 
-        with self.fs.open(resolved_path, mode="rb", **kwargs) as f:
+        file_handle = execute_sync_storage_operation(
+            partial(self.fs.open, resolved_path, mode="rb", **kwargs),
+            backend=self.backend_type,
+            operation="stream_read",
+            path=resolved_path,
+        )
+        with file_handle as f:
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
@@ -472,7 +483,12 @@ class FSSpecBackend:
         resolved_path = self._resolve_path(path)
         chunk_size = chunk_size or 65536
 
-        file_obj = await asyncio.to_thread(self.fs.open, resolved_path, mode="rb", **kwargs)
+        file_obj = await execute_async_storage_operation(
+            partial(async_(self.fs.open), resolved_path, mode="rb", **kwargs),
+            backend=self.backend_type,
+            operation="stream_read",
+            path=resolved_path,
+        )
 
         return AsyncThreadedBytesIterator(file_obj, chunk_size)
 
@@ -528,10 +544,8 @@ class FSSpecBackend:
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
-
     @overload
     async def sign_async(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
-
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
@@ -551,6 +565,13 @@ class FSSpecBackend:
         Uses async_() with storage limiter to offload blocking PyArrow I/O to thread pool.
         """
         await async_(self.write_arrow_sync)(path, table, **kwargs)
+
+    def _resolve_path(self, path: str | Path) -> str:
+        return resolve_storage_path(path, self.base_path, self.protocol, strip_file_scheme=False)
+
+    def _read_parquet_table(self, resolved_path: str, pq: Any, options: "dict[str, Any]") -> Any:
+        with self.fs.open(resolved_path, mode="rb", **options) as file_obj:
+            return pq.read_table(file_obj)
 
 
 def _write_fsspec_bytes(fs: Any, resolved_path: str, data: bytes, options: "dict[str, Any]") -> None:

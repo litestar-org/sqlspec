@@ -32,7 +32,7 @@ class TypeDispatcher(Generic[T]):
             value: The value associated with the type.
         """
         self._registry[type_] = value
-        self._cache.clear()  # Invalidate cache on new registration
+        self._cache.clear()
 
     def register_all(self, registrations: "tuple[tuple[type, T], ...]") -> None:
         """Register multiple values while invalidating the cache once."""
@@ -63,6 +63,10 @@ class TypeDispatcher(Generic[T]):
 
         return self._resolve(obj_type)
 
+    def clear_cache(self) -> None:
+        """Clear the resolution cache."""
+        self._cache.clear()
+
     def _resolve(self, obj_type: type) -> T | None:
         """Resolve the value by walking the MRO.
 
@@ -72,20 +76,17 @@ class TypeDispatcher(Generic[T]):
         Returns:
             The resolved value or None.
         """
-        # Fast path: check registry directly
         direct_value = self._registry.get(obj_type, _CACHE_MISS)
         if direct_value is not _CACHE_MISS:
             self._cache[obj_type] = direct_value
             return cast("T", direct_value)
 
-        # Slow path: walk MRO
         for base in obj_type.__mro__[1:]:
             value = self._registry.get(base, _CACHE_MISS)
             if value is not _CACHE_MISS:
                 self._cache[obj_type] = value
                 return cast("T", value)
 
-        # ABC/protocol fallback: issubclass() resolves virtual hierarchies not present in __mro__.
         for registered_type, value in self._registry.items():
             if registered_type is obj_type:
                 continue
@@ -99,7 +100,3 @@ class TypeDispatcher(Generic[T]):
 
         self._cache[obj_type] = _NO_MATCH
         return None
-
-    def clear_cache(self) -> None:
-        """Clear the resolution cache."""
-        self._cache.clear()

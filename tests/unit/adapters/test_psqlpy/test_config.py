@@ -259,3 +259,24 @@ def test_psqlpy_config_normalizes_aliases() -> None:
     assert "conninfo" not in config.connection_config
     assert "dbname" not in config.connection_config
     assert "user" not in config.connection_config
+
+
+@pytest.mark.anyio
+async def test_psqlpy_session_context_rolls_back_open_transaction_on_exit() -> None:
+    """PsqlpySessionContext.__aexit__ should roll back an active driver transaction before releasing the connection."""
+    conn = AsyncMock()
+    conn.in_transaction = False
+    context = PsqlpySessionContext(
+        acquire_connection=AsyncMock(return_value=conn),
+        release_connection=AsyncMock(),
+        statement_config=StatementConfig(dialect="postgres"),
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    async with context as driver:
+        await driver.begin()
+        assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
+
+    conn.execute.assert_any_await("ROLLBACK")
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]

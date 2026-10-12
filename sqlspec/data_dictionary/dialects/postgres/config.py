@@ -1,8 +1,17 @@
+"""PostgreSQL dialect static configuration and reflection helpers."""
+
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
 
-__all__ = ("resolve_postgres_json_type",)
+__all__ = (
+    "POSTGRES_CONFIG",
+    "POSTGRES_FEATURE_FLAGS",
+    "POSTGRES_FEATURE_VERSIONS",
+    "POSTGRES_TYPE_MAPPINGS",
+    "POSTGRES_VERSION_PATTERN",
+    "resolve_postgres_json_type",
+)
 
 
 POSTGRES_VERSION_PATTERN = re.compile(r"PostgreSQL (\d+)\.(\d+)(?:\.(\d+))?")

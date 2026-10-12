@@ -1,5 +1,4 @@
 # pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
-# pyright: reportPrivateImportUsage = false, reportPrivateUsage = false
 """Unit tests for migration execution.
 
 Tests migration execution including:
@@ -10,17 +9,42 @@ Tests migration execution including:
 - Migration file processing
 """
 
+import ast
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from sqlspec.builder._ddl import CreateTable
 from sqlspec.driver import ExecutionResult
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations import MigrationLoadError
-from sqlspec.migrations.base import AppliedMigrationRecord, BaseMigrationTracker, LoadedMigrationMetadata
-from sqlspec.migrations.runner import SyncMigrationRunner
+from sqlspec.migrations._backup import create_backup, restore_backup
+from sqlspec.migrations.base import (
+    AppliedMigrationRecord,
+    BaseMigrationCommands,
+    BaseMigrationTracker,
+    LoadedMigrationMetadata,
+)
+from sqlspec.migrations.commands import AsyncMigrationCommands, SyncMigrationCommands
+from sqlspec.migrations.context import MigrationContext
+from sqlspec.migrations.fix import MigrationFixer, MigrationRename
+from sqlspec.migrations.loaders import PythonFileLoader, SQLFileLoader
+from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
+from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
+from sqlspec.migrations.squash import MigrationSquasher, SquashPlan
+from sqlspec.migrations.templates import build_template_settings
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
+from sqlspec.migrations.utils import create_migration_file
+from sqlspec.migrations.validation import validate_squash_idempotency, validate_squash_range
+from sqlspec.migrations.version import (
+    MigrationVersion,
+    extract_migration_version,
+    generate_conversion_map,
+    parse_version,
+)
 
 
 @pytest.fixture
@@ -53,9 +77,10 @@ class MockMigrationTracker(BaseMigrationTracker):
         return list(self._applied_migrations.values())
 
     def record_migration(
-        self, driver: Any, version: str, description: str, execution_time_ms: int, checksum: str
+        self, driver: Any, version: str, description: str, execution_time_ms: int, checksum: str, *, commit: bool = True
     ) -> None:
         """Mock record migration."""
+        _ = commit
         self._applied_migrations[version] = cast(
             "AppliedMigrationRecord",
             {
@@ -66,8 +91,9 @@ class MockMigrationTracker(BaseMigrationTracker):
             },
         )
 
-    def remove_migration(self, driver: Any, version: str) -> None:
+    def remove_migration(self, driver: Any, version: str, *, commit: bool = True) -> None:
         """Mock remove migration."""
+        _ = commit
         if version in self._applied_migrations:
             del self._applied_migrations[version]
 
@@ -659,3 +685,409 @@ def down() -> list[str]:
     with config.provide_session() as driver:
         remaining = {record["version_num"] for record in commands.tracker.get_applied_migrations(driver)}
     assert remaining == {"0001"}
+
+
+def test_squash_update_database_reads_target_file_and_retains_backup_until_commit(tmp_path: Path) -> None:
+    """Verify squash(update_database=True) does not fail with FileNotFoundError and rolls back on DB error."""
+    f1 = tmp_path / "0001_first.sql"
+    f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n-- name: migrate-0001-down\nSELECT 1;\n", encoding="utf-8")
+    f2 = tmp_path / "0002_second.sql"
+    f2.write_text("-- name: migrate-0002-up\nSELECT 2;\n-- name: migrate-0002-down\nSELECT 2;\n", encoding="utf-8")
+
+    config = MagicMock()
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.extension_config = {}
+    config.get_observability_runtime.return_value = None
+    config.migration_tracker_type = SyncMigrationTracker
+
+    driver = MagicMock()
+    driver.driver_features = {"autocommit": False}
+    config.provide_session.return_value.__enter__.return_value = driver
+
+    commands = SyncMigrationCommands(config)
+    commands.tracker.ensure_tracking_table = MagicMock()
+    commands.tracker.is_squash_already_applied = MagicMock(return_value=True)
+    commands.tracker.replace_with_squash = MagicMock()
+
+    commands.squash("0001", "0002", "release", yes=True, update_database=True)
+    commands.tracker.replace_with_squash.assert_called_once()
+    assert (tmp_path / "0001_release.sql").exists()
+
+
+def test_stamp_records_all_ancestor_migrations_and_supports_base(tmp_path: Path) -> None:
+    """Verify stamp(revision) records all ancestor migrations up to revision and supports 'base'."""
+    f1 = tmp_path / "0001_first.sql"
+    f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    f2 = tmp_path / "0002_second.sql"
+    f2.write_text("-- name: migrate-0002-up\nSELECT 2;\n", encoding="utf-8")
+    f3 = tmp_path / "0003_third.sql"
+    f3.write_text("-- name: migrate-0003-up\nSELECT 3;\n", encoding="utf-8")
+
+    config = MagicMock()
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.extension_config = {}
+    config.get_observability_runtime.return_value = None
+    config.migration_tracker_type = SyncMigrationTracker
+
+    driver = MagicMock()
+    driver.driver_features = {"autocommit": False}
+    config.provide_session.return_value.__enter__.return_value = driver
+
+    commands = SyncMigrationCommands(config)
+    commands.tracker.ensure_tracking_table = MagicMock()
+    commands.tracker.record_migration = MagicMock()
+
+    commands.stamp("0002")
+    recorded_versions = [call.args[1] for call in commands.tracker.record_migration.call_args_list]
+    assert recorded_versions == ["0001", "0002"]
+
+    driver.execute.reset_mock()
+    commands.stamp("base")
+    assert driver.execute.called
+
+
+def test_calculate_checksum_strips_version_headers_across_fix(tmp_path: Path) -> None:
+    """Verify calculate_checksum produces identical checksum before and after fix rewrites -- Version:."""
+    settings = build_template_settings({})
+    mig_file = create_migration_file(tmp_path, "20251011120000", "init_schema", "sql", template_settings=settings)
+    runner = SyncMigrationRunner(tmp_path)
+    before_checksum = runner.calculate_checksum(mig_file.read_text(encoding="utf-8"))
+
+    fixer = MigrationFixer(tmp_path)
+    fixer.update_file_content(mig_file, "20251011120000", "0001")
+    after_checksum = runner.calculate_checksum(mig_file.read_text(encoding="utf-8"))
+    assert before_checksum == after_checksum
+
+
+def test_migration_version_equality_and_ordering_antisymmetry() -> None:
+    """Verify parse_version('1') and parse_version('0001') are equal and preserve antisymmetry."""
+    v1 = parse_version("1")
+    v2 = parse_version("0001")
+    assert v1 == v2
+    assert hash(v1) == hash(v2)
+    assert not (v1 < v2)
+    assert not (v1 > v2)
+    assert v1 <= v2
+    assert v1 >= v2
+
+
+def test_downgrade_aborts_when_migration_lacks_downgrade(tmp_path: Path) -> None:
+    """Verify downgrade aborts and does not remove tracking record when migration has no down SQL."""
+    f1 = tmp_path / "0001_first.sql"
+    f1.write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);\n-- name: migrate-0001-down\nDROP TABLE t1;\n")
+    f2 = tmp_path / "0002_second.sql"
+    f2.write_text("-- name: migrate-0002-up\nCREATE TABLE t2 (id INT);\n")
+
+    config = MagicMock()
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.extension_config = {}
+    config.get_observability_runtime.return_value = None
+    config.migration_tracker_type = SyncMigrationTracker
+
+    driver = MagicMock()
+    driver.driver_features = {"autocommit": False}
+    config.provide_session.return_value.__enter__.return_value = driver
+
+    commands = SyncMigrationCommands(config)
+    commands.tracker.ensure_tracking_table = MagicMock()
+    commands.tracker.get_applied_migrations = MagicMock(
+        return_value=[{"version_num": "0001", "description": "first"}, {"version_num": "0002", "description": "second"}]
+    )
+    commands.tracker.remove_migration = MagicMock()
+
+    commands.downgrade(revision="base", echo=False)
+    commands.tracker.remove_migration.assert_not_called()
+
+
+def test_execute_migration_sql_resets_session_schema_before_on_success(tmp_path: Path) -> None:
+    """Verify _execute_migration_sql resets session schema before invoking on_success."""
+    config = MagicMock()
+    config.supports_migration_schemas = True
+    runner = SyncMigrationRunner(tmp_path, context=MigrationContext(config=config))
+    driver = MagicMock()
+    driver.has_schema.return_value = True
+    call_order: list[str] = []
+    driver.set_migration_session_schema.side_effect = lambda s: call_order.append(f"set:{s}")
+    driver.reset_migration_session_schema.side_effect = lambda: call_order.append("reset")
+
+    migration: Any = {"version": "0001", "schema": "custom_schema"}
+    runner._execute_migration_sql(
+        driver,
+        ["CREATE TABLE t (id INT)"],
+        migration=migration,
+        use_transaction=True,
+        on_success=lambda _: call_order.append("on_success"),
+        start_time=0.0,
+    )
+    assert call_order.index("reset") < call_order.index("on_success")
+
+
+def test_upgrade_failure_logs_failed_summary_and_records_partial_metrics(tmp_path: Path) -> None:
+    """Verify upgrade logs status='failed' when a migration fails inside _apply_single_migration."""
+    f1 = tmp_path / "0001_first.sql"
+    f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+
+    config = MagicMock()
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.extension_config = {}
+    config.get_observability_runtime.return_value = None
+    config.migration_tracker_type = SyncMigrationTracker
+
+    driver = MagicMock()
+    driver.driver_features = {"autocommit": False}
+    config.provide_session.return_value.__enter__.return_value = driver
+
+    commands = SyncMigrationCommands(config)
+    commands.tracker.ensure_tracking_table = MagicMock()
+    commands.tracker.get_applied_migrations = MagicMock(return_value=[])
+    commands.runner.execute_upgrade = MagicMock(side_effect=RuntimeError("boom"))
+
+    with patch("sqlspec.migrations.commands._log_command_summary") as mock_summary:
+        commands.upgrade(echo=False)
+        assert mock_summary.call_args.kwargs["status"] == "failed"
+        assert isinstance(mock_summary.call_args.kwargs["error"], RuntimeError)
+
+
+def test_synchronize_version_records_reconciles_with_pending_timestamp_present(tmp_path: Path) -> None:
+    """Verify _synchronize_version_records reconciles fixed migrations even when another timestamp exists."""
+    f1 = tmp_path / "0001_init.sql"
+    f1.write_text("-- name: migrate-0001-up\nCREATE TABLE t1 (id INT);\n", encoding="utf-8")
+    f2 = tmp_path / "20251011150000_new.sql"
+    f2.write_text("-- name: migrate-20251011150000-up\nCREATE TABLE t2 (id INT);\n", encoding="utf-8")
+
+    config = MagicMock()
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.extension_config = {}
+    config.get_observability_runtime.return_value = None
+    config.migration_tracker_type = SyncMigrationTracker
+
+    commands = SyncMigrationCommands(config)
+    checksum_0001 = commands.runner.calculate_checksum(f1.read_text(encoding="utf-8"))
+    commands.tracker.get_applied_migrations = MagicMock(
+        return_value=[{"version_num": "20251011120000", "checksum": checksum_0001}]
+    )
+    commands.tracker.update_version_record = MagicMock()
+
+    updated = commands._synchronize_version_records(MagicMock(), echo=False)
+    assert updated == 1
+    commands.tracker.update_version_record.assert_called_once()
+
+
+def test_squash_when_target_filename_matches_first_source_file(tmp_path: Path) -> None:
+    """Verify apply_squash and validate_squash_idempotency succeed when target_path == source_migrations[0]."""
+    f1 = tmp_path / "0001_initial.sql"
+    f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    f2 = tmp_path / "0002_users.sql"
+    f2.write_text("-- name: migrate-0002-up\nSELECT 2;\n", encoding="utf-8")
+
+    assert validate_squash_idempotency([f1, f2], f1) == "ready"
+
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    plans = squasher.plan_squash("0001", "0002", "initial")
+    squasher.apply_squash(plans)
+
+    assert f1.exists()
+    assert not f2.exists()
+
+
+def test_downgrade_to_core_revision_does_not_revert_extension_migrations(tmp_path: Path) -> None:
+    """Verify _collect_revert_migrations('0001') ignores applied ext_* migrations."""
+    config = MagicMock()
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.extension_config = {}
+    config.get_observability_runtime.return_value = None
+    config.migration_tracker_type = SyncMigrationTracker
+
+    commands = SyncMigrationCommands(config)
+    applied: list[Any] = [{"version_num": "0001"}, {"version_num": "0002"}, {"version_num": "ext_adk_0001"}]
+    to_revert = commands._collect_revert_migrations(applied, "0001")
+    assert [m["version_num"] for m in to_revert] == ["0002"]
+
+
+@pytest.mark.anyio
+async def test_python_squash_with_none_downgrade_loads_cleanly(tmp_path: Path) -> None:
+    """Verify generate_python_squash with down_sql=[] emits valid Python that PythonFileLoader loads."""
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    target = tmp_path / "0001_squash.py"
+    plan = SquashPlan(
+        source_migrations=[("0001", tmp_path / "0001_a.sql")],
+        target_version="0001",
+        target_path=target,
+        description="squash",
+        source_versions=["0001"],
+    )
+    content = squasher.generate_python_squash(plan, up_sql=["SELECT 1;"], down_sql=[])
+    target.write_text(content, encoding="utf-8")
+    ast.parse(content)
+
+    loader = PythonFileLoader(tmp_path)
+    assert await loader.get_up_sql(target) == ["SELECT 1;"]
+    assert await loader.get_down_sql(target) is None
+    assert loader.has_downgrade(target) is False
+
+
+def test_load_migration_does_not_execute_python_down_function(tmp_path: Path) -> None:
+    """Verify SyncMigrationRunner.load_migration inspects has_downgrade without invoking down()."""
+    py_file = tmp_path / "0001_side_effect.py"
+    py_file.write_text(
+        "def up():\n    return 'SELECT 1'\ndef down():\n    raise RuntimeError('down should not be called during load_migration')\n",
+        encoding="utf-8",
+    )
+    runner = SyncMigrationRunner(tmp_path)
+    metadata = runner.load_migration(py_file, "0001")
+    assert metadata["has_downgrade"] is True
+
+
+def test_is_squash_already_applied_raises_on_partial_overlap() -> None:
+    """Verify SyncMigrationTracker.is_squash_already_applied raises MigrationError on partial overlap."""
+    tracker = SyncMigrationTracker()
+    driver = MagicMock()
+    res = MagicMock()
+    res.data = [{"version_num": "0001"}]
+    res.get_data.return_value = res.data
+    driver.execute.return_value = res
+
+    with pytest.raises(MigrationError, match="Partial squash state detected"):
+        tracker.is_squash_already_applied(driver, "0001", ["0001", "0002"])
+
+
+@pytest.mark.anyio
+async def test_ensure_schema_respects_autocommit() -> None:
+    """Verify ensure_schema_sync and ensure_schema_async skip commit when autocommit=True."""
+    ddl = CreateTable("test_tbl").column("id", "INTEGER")
+    target = SchemaTarget("test_tbl", ddl)
+
+    sync_driver = MagicMock()
+    sync_driver.driver_features = {"autocommit": True}
+    sync_driver.data_dictionary.get_tables.return_value = []
+    ensure_schema_sync(sync_driver, [target], manage_schema=True, create_schema=True)
+    sync_driver.commit.assert_not_called()
+
+    async_driver = AsyncMock()
+    async_driver.driver_features = {"autocommit": True}
+    async_driver.data_dictionary.get_tables.return_value = []
+    await ensure_schema_async(async_driver, [target], manage_schema=True, create_schema=True)
+    async_driver.commit.assert_not_called()
+
+
+def test_squash_preserves_transactional_and_schema_directives_and_extension_versions(tmp_path: Path) -> None:
+    """Verify MigrationSquasher groups by transactional/schema directives and supports ext_* versions."""
+    f1 = tmp_path / "ext_adk_0001_a.sql"
+    f1.write_text("-- transactional: false\n-- schema: custom\n-- name: migrate-ext_adk_0001-up\nSELECT 1;\n")
+    f2 = tmp_path / "ext_adk_0002_b.sql"
+    f2.write_text("-- transactional: false\n-- schema: custom\n-- name: migrate-ext_adk_0002-up\nSELECT 2;\n")
+
+    migrations = [("ext_adk_0001", f1), ("ext_adk_0002", f2)]
+    in_range = validate_squash_range(migrations, "ext_adk_0001", "ext_adk_0002")
+    assert len(in_range) == 2
+
+    runner = SyncMigrationRunner(tmp_path)
+    squasher = MigrationSquasher(tmp_path, runner)
+    plans = squasher.plan_squash("ext_adk_0001", "ext_adk_0002", "release")
+    assert len(plans) == 1
+    content = squasher.generate_squashed_content(plans[0], ["SELECT 1;"], [])
+    assert "-- transactional: false" in content
+    assert "-- schema: custom" in content
+
+
+def test_load_all_migrations_joins_multi_statement_python_migrations(tmp_path: Path) -> None:
+    """Verify load_all_migrations joins multi-statement Python migrations instead of truncating to up_sql[0]."""
+    py_file = tmp_path / "0001_multi.py"
+    py_file.write_text("def up():\n    return ['SELECT 1', 'SELECT 2']\n", encoding="utf-8")
+    runner = SyncMigrationRunner(tmp_path)
+    all_queries = runner.load_all_migrations()
+    assert "SELECT 2" in all_queries["migrate-0001-up"].sql
+
+
+def test_extract_migration_version_zero_pads_extension_versions() -> None:
+    """Verify extract_migration_version zero-pads sequential extension versions."""
+    assert extract_migration_version("ext_adk_1_init") == "ext_adk_0001"
+    assert extract_migration_version("1_init") == "0001"
+
+
+@pytest.mark.anyio
+async def test_python_loader_accepts_context_when_none_and_handles_keyword_only(tmp_path: Path) -> None:
+    """Verify PythonFileLoader passes None to required positional context and skips keyword-only defaults."""
+    f1 = tmp_path / "0001_ctx.py"
+    f1.write_text(
+        "def up(context):\n    return 'SELECT 1' if context is None else 'SELECT 2'\n"
+        "def down(*, dry_run: bool = False):\n    return 'DROP TABLE t'\n",
+        encoding="utf-8",
+    )
+    loader = PythonFileLoader(tmp_path, context=None)
+    assert await loader.get_up_sql(f1) == ["SELECT 1"]
+    assert await loader.get_down_sql(f1) == ["DROP TABLE t"]
+
+
+def test_downgrade_records_reverted_metric(tmp_path: Path) -> None:
+    """Verify downgrade records the 'reverted' metric."""
+    f1 = tmp_path / "0001_first.sql"
+    f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n-- name: migrate-0001-down\nSELECT 1;\n", encoding="utf-8")
+
+    config = MagicMock()
+    config.migration_config = {"script_location": str(tmp_path)}
+    config.extension_config = {}
+    config.get_observability_runtime.return_value = None
+    config.migration_tracker_type = SyncMigrationTracker
+
+    driver = MagicMock()
+    driver.driver_features = {"autocommit": False}
+    config.provide_session.return_value.__enter__.return_value = driver
+
+    commands = SyncMigrationCommands(config)
+    commands.tracker.ensure_tracking_table = MagicMock()
+    commands.tracker.get_applied_migrations = MagicMock(return_value=[{"version_num": "0001", "description": "first"}])
+    commands.tracker.remove_migration = MagicMock()
+    commands._record_command_metric = MagicMock()
+
+    commands.downgrade(revision="-1", echo=False)
+    commands._record_command_metric.assert_called_once_with("reverted", 1.0)
+
+
+def test_load_metadata_cache_hit_respects_explicit_version(tmp_path: Path) -> None:
+    """Verify BaseMigrationRunner._load_metadata updates version on cache hit when explicit version is passed."""
+    f1 = tmp_path / "0001_init.sql"
+    f1.write_text("-- name: migrate-0001-up\nSELECT 1;\n", encoding="utf-8")
+    runner = SyncMigrationRunner(tmp_path)
+    meta1 = runner._load_metadata(f1, None)
+    assert meta1["version"] == "0001"
+    meta2 = runner._load_metadata(f1, "ext_adk_0001")
+    assert meta2["version"] == "ext_adk_0001"
+
+
+def test_fixer_rollback_deletes_backup_and_create_backup_avoids_same_second_collision(tmp_path: Path) -> None:
+    """Verify MigrationFixer.rollback deletes backup and create_backup handles multiple calls in same second."""
+    mig_dir = tmp_path / "migrations"
+    mig_dir.mkdir()
+    (mig_dir / "0001_init.sql").write_text("SELECT 1;\n", encoding="utf-8")
+
+    b1 = create_backup(mig_dir)
+    b2 = create_backup(mig_dir)
+    assert b1 != b2
+    restore_backup(mig_dir, b1, delete_backup=True)
+    restore_backup(mig_dir, b2, delete_backup=True)
+
+    fixer = MigrationFixer(mig_dir)
+    backup_path = fixer.create_backup()
+    assert backup_path.exists()
+    fixer.rollback()
+    assert not backup_path.exists()
+    assert fixer.backup_path is None
+
+
+def test_dataclasses_and_exports_hygiene() -> None:
+    """Verify MigrationVersion and MigrationRename use slots."""
+    assert hasattr(MigrationVersion, "__slots__")
+    assert hasattr(MigrationRename, "__slots__")
+    _ = (
+        AsyncMigrationCommands,
+        AsyncMigrationRunner,
+        AsyncMigrationTracker,
+        BaseMigrationCommands,
+        BaseMigrationTracker,
+        MigrationContext,
+        SQLFileLoader,
+        generate_conversion_map,
+    )

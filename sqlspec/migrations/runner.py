@@ -13,10 +13,10 @@ from sqlspec.core import SQL
 from sqlspec.exceptions import MigrationError
 from sqlspec.loader import SQLFileLoader
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.loaders import _load_migration_sql, get_migration_loader
+from sqlspec.migrations.loaders import PythonFileLoader, _load_migration_sql, get_migration_loader
 from sqlspec.migrations.templates import TemplateDescriptionHints
 from sqlspec.migrations.utils import resolve_default_schema as _resolve_default_schema
-from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem, parse_version
+from sqlspec.migrations.version import extract_migration_version, parse_extension_stem, parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
@@ -35,30 +35,6 @@ logger = get_logger("sqlspec.migrations.runner")
 
 _SCHEMA_DIRECTIVE_PATTERN = re.compile(r"^--\s*schema:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
 _SCHEMA_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
-
-
-class _CachedMigrationMetadata:
-    """Cached migration metadata keyed by file path."""
-
-    __slots__ = ("metadata", "mtime_ns", "size")
-
-    def __init__(self, metadata: "dict[str, Any]", mtime_ns: int, size: int) -> None:
-        self.metadata = metadata
-        self.mtime_ns = mtime_ns
-        self.size = size
-
-    def clone(self) -> "dict[str, Any]":
-        return dict(self.metadata)
-
-
-class _MigrationFileEntry:
-    """Represents a migration file discovered during directory scanning."""
-
-    __slots__ = ("extension_name", "path")
-
-    def __init__(self, path: Path, extension_name: "str | None") -> None:
-        self.path = path
-        self.extension_name = extension_name
 
 
 class BaseMigrationRunner:
@@ -120,6 +96,69 @@ class BaseMigrationRunner:
         if self.context is not None:
             self.context.driver = driver
 
+    def calculate_checksum(self, content: str) -> str:
+        """Calculate MD5 checksum of migration content.
+
+        Canonicalizes content by excluding query name headers and version comment
+        lines that change during the fix command. This ensures checksums remain
+        stable when converting timestamp versions to sequential format.
+
+        Args:
+            content: The migration file content.
+
+        Returns:
+            MD5 checksum hex string.
+        """
+        canonical_content = re.sub(
+            r"^(?:--\s*name:\s*migrate-[^-]+-(?:up|down)|--\s*Version:\s*.*|Version:\s*.*)\s*$",
+            "",
+            content,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+
+        return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
+
+    @abstractmethod
+    def load_migration(self, file_path: Path) -> "LoadedMigrationMetadata | Awaitable[LoadedMigrationMetadata]":
+        """Load a migration file and extract its components.
+
+        Args:
+            file_path: Path to the migration file.
+
+        Returns:
+            Dictionary containing migration metadata and queries.
+            For async implementations, returns a coroutine.
+        """
+
+    @abstractmethod
+    def get_migration_files(self) -> "list[tuple[str, Path]] | Awaitable[list[tuple[str, Path]]]":
+        """Get all migration files sorted by version."""
+
+    def should_use_transaction(
+        self, migration: "LoadedMigrationMetadata", config: "DatabaseConfigProtocol[Any, Any, Any]"
+    ) -> bool:
+        """Determine if migration should run in a transaction.
+
+        An explicit per-migration directive takes precedence over the config's
+        transactional-DDL capability, so a data migration can still run
+        atomically on a backend that restricts DDL in transactions.
+
+        Args:
+            migration: Migration metadata dictionary.
+            config: The database configuration instance.
+
+        Returns:
+            True if migration should be wrapped in a transaction.
+        """
+        if migration.get("transactional") is not None:
+            return bool(migration["transactional"])
+
+        if not config.supports_transactional_ddl:
+            return False
+
+        migration_config = cast("dict[str, Any]", config.migration_config) or {}
+        return bool(migration_config.get("transactional", True))
+
     def _log_migration_event(self, level: int, event: str, **extra_fields: Any) -> None:
         """Log migration events, respecting use_logger and summary_only settings."""
         if not self.use_logger:
@@ -165,7 +204,7 @@ class BaseMigrationRunner:
 
     def _record_entry(
         self,
-        entry: _MigrationFileEntry,
+        entry: "_MigrationFileEntry",
         entries: "list[_MigrationFileEntry]",
         signatures: "dict[str, tuple[int, int]]",
         digest_source: Any,
@@ -193,7 +232,7 @@ class BaseMigrationRunner:
             version = self._extract_version(entry.path.name)
             if not version:
                 continue
-            if entry.extension_name:
+            if entry.extension_name and not version.startswith(f"ext_{entry.extension_name}_"):
                 version = f"ext_{entry.extension_name}_{version}"
             migrations.append((version, entry.path))
 
@@ -243,51 +282,7 @@ class BaseMigrationRunner:
         Returns:
             The extracted version string or None.
         """
-        timestamp_min_length = 4
-
-        name_without_ext = filename.rsplit(".", 1)[0]
-
-        if name_without_ext.startswith("ext_"):
-            extension = parse_extension_stem(name_without_ext)
-            if extension is None:
-                return None
-            ext_name, ext_version = extension
-            return f"ext_{ext_name}_{ext_version}"
-
-        parts = name_without_ext.split("_", 1)
-        if parts and parts[0].isdigit():
-            return parts[0] if len(parts[0]) > timestamp_min_length else _format_sequential_version(parts[0])
-
-        return None
-
-    def calculate_checksum(self, content: str) -> str:
-        """Calculate MD5 checksum of migration content.
-
-        Canonicalizes content by excluding query name headers that change during
-        fix command (migrate-{version}-up/down). This ensures checksums remain
-        stable when converting timestamp versions to sequential format.
-
-        Args:
-            content: The migration file content.
-
-        Returns:
-            MD5 checksum hex string.
-        """
-        canonical_content = re.sub(r"^--\s*name:\s*migrate-[^-]+-(?:up|down)\s*$", "", content, flags=re.MULTILINE)
-
-        return hashlib.md5(canonical_content.encode()).hexdigest()  # noqa: S324
-
-    @abstractmethod
-    def load_migration(self, file_path: Path) -> "LoadedMigrationMetadata | Awaitable[LoadedMigrationMetadata]":
-        """Load a migration file and extract its components.
-
-        Args:
-            file_path: Path to the migration file.
-
-        Returns:
-            Dictionary containing migration metadata and queries.
-            For async implementations, returns a coroutine.
-        """
+        return extract_migration_version(filename)
 
     def _load_migration_listing(self) -> "list[tuple[str, Path]]":
         """Build the cached migration listing shared by sync/async runners."""
@@ -318,10 +313,6 @@ class BaseMigrationRunner:
 
         return files
 
-    @abstractmethod
-    def get_migration_files(self) -> "list[tuple[str, Path]] | Awaitable[list[tuple[str, Path]]]":
-        """Get all migration files sorted by version."""
-
     def _load_metadata(self, file_path: Path, version: "str | None" = None) -> "LoadedMigrationMetadata":
         """Load common migration metadata that doesn't require async operations.
 
@@ -344,6 +335,8 @@ class BaseMigrationRunner:
             self._log_migration_event(logging.DEBUG, "migration.metadata.cache_hit", file_path=cache_key)
             metadata = cast("LoadedMigrationMetadata", cached_metadata.clone())
             metadata["file_path"] = file_path
+            if version is not None:
+                metadata["version"] = version
             return metadata
 
         self._metric("migrations.metadata.cache_miss")
@@ -475,31 +468,6 @@ class BaseMigrationRunner:
                 break
 
         return context_to_use
-
-    def should_use_transaction(
-        self, migration: "LoadedMigrationMetadata", config: "DatabaseConfigProtocol[Any, Any, Any]"
-    ) -> bool:
-        """Determine if migration should run in a transaction.
-
-        An explicit per-migration directive takes precedence over the config's
-        transactional-DDL capability, so a data migration can still run
-        atomically on a backend that restricts DDL in transactions.
-
-        Args:
-            migration: Migration metadata dictionary.
-            config: The database configuration instance.
-
-        Returns:
-            True if migration should be wrapped in a transaction.
-        """
-        if migration.get("transactional") is not None:
-            return bool(migration["transactional"])
-
-        if not config.supports_transactional_ddl:
-            return False
-
-        migration_config = cast("dict[str, Any]", config.migration_config) or {}
-        return bool(migration_config.get("transactional", True))
 
     def _resolve_migration_schema(self, migration: "LoadedMigrationMetadata") -> str | None:
         """Return the migration's schema directive when present, otherwise the configured default."""
@@ -698,6 +666,8 @@ class SyncMigrationRunner(BaseMigrationRunner):
             partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
             has_upgrade = self._migration_sql(partial, "up") is not None
             has_downgrade = self._migration_sql(partial, "down") is not None
+        elif isinstance(loader, PythonFileLoader):
+            has_downgrade = loader.has_downgrade(file_path)
         else:
             try:
                 partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
@@ -707,50 +677,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
 
         metadata.update({"has_upgrade": has_upgrade, "has_downgrade": has_downgrade, "loader": loader})
         return metadata
-
-    def _execute_migration_sql(
-        self,
-        driver: "SyncDriverAdapterBase",
-        sql_list: list[str],
-        *,
-        migration: "LoadedMigrationMetadata",
-        use_transaction: bool,
-        on_success: "Callable[[int], None] | None",
-        start_time: float,
-    ) -> int:
-        default_schema = self._resolve_migration_schema(migration)
-        directive_schema = migration.get("schema")
-        if directive_schema is not None and not driver.has_schema(directive_schema):
-            msg = f"Migration schema '{directive_schema}' does not exist"
-            raise MigrationError(msg)
-        if use_transaction:
-            driver.begin()
-            if default_schema:
-                driver.set_migration_session_schema(default_schema)
-            for sql_statement in sql_list:
-                if sql_statement.strip():
-                    driver.execute_script(sql_statement)
-            execution_time = int((time.perf_counter() - start_time) * 1000)
-            if on_success:
-                on_success(execution_time)
-            driver.commit()
-            if default_schema:
-                driver.reset_migration_session_schema()
-            return execution_time
-
-        try:
-            if default_schema:
-                driver.set_migration_non_transactional_schema(default_schema)
-            for sql_statement in sql_list:
-                if sql_statement.strip():
-                    driver.execute_script(sql_statement)
-            execution_time = int((time.perf_counter() - start_time) * 1000)
-            if on_success:
-                on_success(execution_time)
-            return execution_time
-        finally:
-            if default_schema:
-                driver.reset_migration_session_schema()
 
     def execute_upgrade(
         self,
@@ -852,6 +778,110 @@ class SyncMigrationRunner(BaseMigrationRunner):
         self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
+    def load_all_migrations(self) -> "dict[str, SQL]":
+        """Load all migrations into a single namespace for bulk operations.
+
+        Returns:
+            Dictionary mapping query names to SQL objects.
+        """
+        all_queries: dict[str, SQL] = {}
+        migrations = self.get_migration_files()
+        loaded_core_sql = False
+
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                if self._migration_sql_loader(file_path, version) is not self.loader:
+                    migration = self.load_migration(file_path, version)
+                    up_sql = self._migration_sql(migration, "up")
+                    down_sql = self._migration_sql(migration, "down")
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+                    continue
+                if not self.loader.has_query(f"migrate-{version}-up"):
+                    self.loader.load_sql(file_path)
+                loaded_core_sql = True
+            else:
+                context_to_use = self._migration_context(file_path)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, context_to_use, self.loader
+                )
+
+                try:
+                    up_sql = _load_migration_sql(loader, file_path, "up")
+                    down_sql = _load_migration_sql(loader, file_path, "down")
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+
+                except Exception as e:
+                    self._log_migration_event(
+                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
+                    )
+
+        if loaded_core_sql:
+            for query_name in self.loader.list_queries():
+                all_queries[query_name] = self.loader.get_sql(query_name)
+
+        return all_queries
+
+    def _execute_migration_sql(
+        self,
+        driver: "SyncDriverAdapterBase",
+        sql_list: list[str],
+        *,
+        migration: "LoadedMigrationMetadata",
+        use_transaction: bool,
+        on_success: "Callable[[int], None] | None",
+        start_time: float,
+    ) -> int:
+        default_schema = self._resolve_migration_schema(migration)
+        directive_schema = migration.get("schema")
+        if directive_schema is not None and not driver.has_schema(directive_schema):
+            msg = f"Migration schema '{directive_schema}' does not exist"
+            raise MigrationError(msg)
+        if use_transaction:
+            driver.begin()
+            schema_reset = False
+            try:
+                if default_schema:
+                    driver.set_migration_session_schema(default_schema)
+                for sql_statement in sql_list:
+                    if sql_statement.strip():
+                        driver.execute_script(sql_statement)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if on_success:
+                    if default_schema:
+                        driver.reset_migration_session_schema()
+                        schema_reset = True
+                    on_success(execution_time)
+                driver.commit()
+                return execution_time
+            finally:
+                if default_schema and not schema_reset:
+                    driver.reset_migration_session_schema()
+
+        schema_reset = False
+        try:
+            if default_schema:
+                driver.set_migration_non_transactional_schema(default_schema)
+            for sql_statement in sql_list:
+                if sql_statement.strip():
+                    driver.execute_script(sql_statement)
+            execution_time = int((time.perf_counter() - start_time) * 1000)
+            if on_success:
+                if default_schema:
+                    driver.reset_migration_session_schema()
+                    schema_reset = True
+                on_success(execution_time)
+            return execution_time
+        finally:
+            if default_schema and not schema_reset:
+                driver.reset_migration_session_schema()
+
     def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (sync version).
 
@@ -874,51 +904,6 @@ class SyncMigrationRunner(BaseMigrationRunner):
             return None
         else:
             return self._finalize_migration_sql(sql_statements)
-
-    def load_all_migrations(self) -> "dict[str, SQL]":
-        """Load all migrations into a single namespace for bulk operations.
-
-        Returns:
-            Dictionary mapping query names to SQL objects.
-        """
-        all_queries = {}
-        migrations = self.get_migration_files()
-
-        for version, file_path in migrations:
-            if file_path.suffix == ".sql":
-                if self._migration_sql_loader(file_path, version) is not self.loader:
-                    migration = self.load_migration(file_path, version)
-                    up_sql = self._migration_sql(migration, "up")
-                    down_sql = self._migration_sql(migration, "down")
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
-                    continue
-                if not self.loader.has_query(f"migrate-{version}-up"):
-                    self.loader.load_sql(file_path)
-                for query_name in self.loader.list_queries():
-                    all_queries[query_name] = self.loader.get_sql(query_name)
-            else:
-                loader = get_migration_loader(
-                    file_path, self.migrations_path, self.project_root, self.context, self.loader
-                )
-
-                try:
-                    up_sql = _load_migration_sql(loader, file_path, "up")
-                    down_sql = _load_migration_sql(loader, file_path, "down")
-
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
-
-                except Exception as e:
-                    self._log_migration_event(
-                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
-                    )
-
-        return all_queries
 
 
 class AsyncMigrationRunner(BaseMigrationRunner):
@@ -955,6 +940,8 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
             has_upgrade = (await self._migration_sql(partial, "up")) is not None
             has_downgrade = (await self._migration_sql(partial, "down")) is not None
+        elif isinstance(loader, PythonFileLoader):
+            has_downgrade = loader.has_downgrade(file_path)
         else:
             try:
                 partial = cast("LoadedMigrationMetadata", {"loader": loader, "file_path": file_path})
@@ -964,50 +951,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
 
         metadata.update({"has_upgrade": has_upgrade, "has_downgrade": has_downgrade, "loader": loader})
         return metadata
-
-    async def _execute_migration_sql(
-        self,
-        driver: "AsyncDriverAdapterBase",
-        sql_list: list[str],
-        *,
-        migration: "LoadedMigrationMetadata",
-        use_transaction: bool,
-        on_success: "Callable[[int], Awaitable[None]] | None",
-        start_time: float,
-    ) -> int:
-        default_schema = self._resolve_migration_schema(migration)
-        directive_schema = migration.get("schema")
-        if directive_schema is not None and not await driver.has_schema(directive_schema):
-            msg = f"Migration schema '{directive_schema}' does not exist"
-            raise MigrationError(msg)
-        if use_transaction:
-            await driver.begin()
-            if default_schema:
-                await driver.set_migration_session_schema(default_schema)
-            for sql_statement in sql_list:
-                if sql_statement.strip():
-                    await driver.execute_script(sql_statement)
-            execution_time = int((time.perf_counter() - start_time) * 1000)
-            if on_success:
-                await on_success(execution_time)
-            await driver.commit()
-            if default_schema:
-                await driver.reset_migration_session_schema()
-            return execution_time
-
-        try:
-            if default_schema:
-                await driver.set_migration_non_transactional_schema(default_schema)
-            for sql_statement in sql_list:
-                if sql_statement.strip():
-                    await driver.execute_script(sql_statement)
-            execution_time = int((time.perf_counter() - start_time) * 1000)
-            if on_success:
-                await on_success(execution_time)
-            return execution_time
-        finally:
-            if default_schema:
-                await driver.reset_migration_session_schema()
 
     async def execute_upgrade(
         self,
@@ -1109,6 +1052,110 @@ class AsyncMigrationRunner(BaseMigrationRunner):
         self._finish_migration_span_success(span, driver, migration, "downgrade", "migration.rollback", execution_time)
         return None, execution_time
 
+    async def load_all_migrations(self) -> "dict[str, SQL]":
+        """Load all migrations into a single namespace for bulk operations.
+
+        Returns:
+            Dictionary mapping query names to SQL objects.
+        """
+        all_queries: dict[str, SQL] = {}
+        migrations = await self.get_migration_files()
+        loaded_core_sql = False
+
+        for version, file_path in migrations:
+            if file_path.suffix == ".sql":
+                if self._migration_sql_loader(file_path, version) is not self.loader:
+                    migration = await self.load_migration(file_path, version)
+                    up_sql = await self._migration_sql(migration, "up")
+                    down_sql = await self._migration_sql(migration, "down")
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+                    continue
+                if not self.loader.has_query(f"migrate-{version}-up"):
+                    await async_(self.loader.load_sql)(file_path)
+                loaded_core_sql = True
+            else:
+                context_to_use = self._migration_context(file_path)
+                loader = get_migration_loader(
+                    file_path, self.migrations_path, self.project_root, context_to_use, self.loader
+                )
+
+                try:
+                    up_sql = await loader.get_up_sql(file_path)
+                    down_sql = await loader.get_down_sql(file_path)
+
+                    if up_sql:
+                        all_queries[f"migrate-{version}-up"] = SQL(";\n".join(up_sql))
+                    if down_sql:
+                        all_queries[f"migrate-{version}-down"] = SQL(";\n".join(down_sql))
+
+                except Exception as e:
+                    self._log_migration_event(
+                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
+                    )
+
+        if loaded_core_sql:
+            for query_name in self.loader.list_queries():
+                all_queries[query_name] = self.loader.get_sql(query_name)
+
+        return all_queries
+
+    async def _execute_migration_sql(
+        self,
+        driver: "AsyncDriverAdapterBase",
+        sql_list: list[str],
+        *,
+        migration: "LoadedMigrationMetadata",
+        use_transaction: bool,
+        on_success: "Callable[[int], Awaitable[None]] | None",
+        start_time: float,
+    ) -> int:
+        default_schema = self._resolve_migration_schema(migration)
+        directive_schema = migration.get("schema")
+        if directive_schema is not None and not await driver.has_schema(directive_schema):
+            msg = f"Migration schema '{directive_schema}' does not exist"
+            raise MigrationError(msg)
+        if use_transaction:
+            await driver.begin()
+            schema_reset = False
+            try:
+                if default_schema:
+                    await driver.set_migration_session_schema(default_schema)
+                for sql_statement in sql_list:
+                    if sql_statement.strip():
+                        await driver.execute_script(sql_statement)
+                execution_time = int((time.perf_counter() - start_time) * 1000)
+                if on_success:
+                    if default_schema:
+                        await driver.reset_migration_session_schema()
+                        schema_reset = True
+                    await on_success(execution_time)
+                await driver.commit()
+                return execution_time
+            finally:
+                if default_schema and not schema_reset:
+                    await driver.reset_migration_session_schema()
+
+        schema_reset = False
+        try:
+            if default_schema:
+                await driver.set_migration_non_transactional_schema(default_schema)
+            for sql_statement in sql_list:
+                if sql_statement.strip():
+                    await driver.execute_script(sql_statement)
+            execution_time = int((time.perf_counter() - start_time) * 1000)
+            if on_success:
+                if default_schema:
+                    await driver.reset_migration_session_schema()
+                    schema_reset = True
+                await on_success(execution_time)
+            return execution_time
+        finally:
+            if default_schema and not schema_reset:
+                await driver.reset_migration_session_schema()
+
     async def _migration_sql(self, migration: "LoadedMigrationMetadata", direction: str) -> "list[str] | None":
         """Get migration SQL for given direction (async version).
 
@@ -1132,51 +1179,6 @@ class AsyncMigrationRunner(BaseMigrationRunner):
             return None
         else:
             return self._finalize_migration_sql(sql_statements)
-
-    async def load_all_migrations(self) -> "dict[str, SQL]":
-        """Load all migrations into a single namespace for bulk operations.
-
-        Returns:
-            Dictionary mapping query names to SQL objects.
-        """
-        all_queries = {}
-        migrations = await self.get_migration_files()
-
-        for version, file_path in migrations:
-            if file_path.suffix == ".sql":
-                if self._migration_sql_loader(file_path, version) is not self.loader:
-                    migration = await self.load_migration(file_path, version)
-                    up_sql = await self._migration_sql(migration, "up")
-                    down_sql = await self._migration_sql(migration, "down")
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
-                    continue
-                if not self.loader.has_query(f"migrate-{version}-up"):
-                    await async_(self.loader.load_sql)(file_path)
-                for query_name in self.loader.list_queries():
-                    all_queries[query_name] = self.loader.get_sql(query_name)
-            else:
-                loader = get_migration_loader(
-                    file_path, self.migrations_path, self.project_root, self.context, self.loader
-                )
-
-                try:
-                    up_sql = await loader.get_up_sql(file_path)
-                    down_sql = await loader.get_down_sql(file_path)
-
-                    if up_sql:
-                        all_queries[f"migrate-{version}-up"] = SQL(up_sql[0])
-                    if down_sql:
-                        all_queries[f"migrate-{version}-down"] = SQL(down_sql[0])
-
-                except Exception as e:
-                    self._log_migration_event(
-                        logging.DEBUG, "migration.python.load_failed", file_path=str(file_path), error=str(e)
-                    )
-
-        return all_queries
 
 
 @overload
@@ -1243,3 +1245,27 @@ def create_migration_runner(
         runtime=runtime,
         description_hints=description_hints,
     )
+
+
+class _CachedMigrationMetadata:
+    """Cached migration metadata keyed by file path."""
+
+    __slots__ = ("metadata", "mtime_ns", "size")
+
+    def __init__(self, metadata: "dict[str, Any]", mtime_ns: int, size: int) -> None:
+        self.metadata = metadata
+        self.mtime_ns = mtime_ns
+        self.size = size
+
+    def clone(self) -> "dict[str, Any]":
+        return dict(self.metadata)
+
+
+class _MigrationFileEntry:
+    """Represents a migration file discovered during directory scanning."""
+
+    __slots__ = ("extension_name", "path")
+
+    def __init__(self, path: Path, extension_name: "str | None") -> None:
+        self.path = path
+        self.extension_name = extension_name

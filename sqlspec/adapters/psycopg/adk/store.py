@@ -233,6 +233,7 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """).format(
                 table=pg_sql.Identifier(self._session_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
             )
@@ -241,12 +242,26 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """).format(table=pg_sql.Identifier(self._session_table))
             params = (session_id, app_name, user_id, Jsonb(state))
 
+        row: dict[str, Any] | None = None
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, params)
+            if hasattr(cur, "fetchone"):
+                row = await cur.fetchone()
             await conn.commit()
+
+        if row is not None:
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=row["state"],
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
 
         result = await self.get_session(app_name, user_id, session_id)
         if result is None:
@@ -420,32 +435,58 @@ class PsycopgAsyncADKStore(BaseAsyncADKStore["PsycopgAsyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            try:
-                await cur.execute(
-                    insert_query,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        jsonb_value,
-                    ),
-                )
-                await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                row = await cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
-                if app_state is not None:
-                    await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                if user_state is not None:
-                    await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
-            except Exception:
-                await conn.rollback()
-                raise
-            await conn.commit()
+        async with self._config.provide_connection() as conn:
+            tx_factory = getattr(conn, "transaction", None)
+            if callable(tx_factory) and getattr(conn, "autocommit", False):
+                tx_ctx: Any = tx_factory()
+                async with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(
+                        insert_query,
+                        (
+                            event_record["id"],
+                            event_record["app_name"],
+                            event_record["user_id"],
+                            event_record["session_id"],
+                            event_record["invocation_id"],
+                            event_record["timestamp"],
+                            jsonb_value,
+                        ),
+                    )
+                    await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+                    row = await cur.fetchone()
+                    if row is None:
+                        _raise_missing_session(session_id)
+                    if app_state is not None:
+                        await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+                    if user_state is not None:
+                        await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
+            else:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    try:
+                        await cur.execute(
+                            insert_query,
+                            (
+                                event_record["id"],
+                                event_record["app_name"],
+                                event_record["user_id"],
+                                event_record["session_id"],
+                                event_record["invocation_id"],
+                                event_record["timestamp"],
+                                jsonb_value,
+                            ),
+                        )
+                        await cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+                        row = await cur.fetchone()
+                        if row is None:
+                            _raise_missing_session(session_id)
+                        if app_state is not None:
+                            await cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+                        if user_state is not None:
+                            await cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
+                    except Exception:
+                        await conn.rollback()
+                        raise
+                    await conn.commit()
 
         return StoredSession(
             id=row["id"],
@@ -748,6 +789,7 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, {owner_id_col}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """).format(
                 table=pg_sql.Identifier(self._session_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
             )
@@ -756,12 +798,26 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
             query = pg_sql.SQL("""
             INSERT INTO {table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """).format(table=pg_sql.Identifier(self._session_table))
             params = (session_id, app_name, user_id, Jsonb(state))
 
+        row: dict[str, Any] | None = None
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(query, params)
+            if hasattr(cur, "fetchone"):
+                row = cur.fetchone()
             conn.commit()
+
+        if row is not None:
+            return StoredSession(
+                id=row["id"],
+                app_name=row["app_name"],
+                user_id=row["user_id"],
+                state=row["state"],
+                create_time=row["create_time"],
+                update_time=row["update_time"],
+            )
 
         result = self.get_session(app_name, user_id, session_id)
         if result is None:
@@ -919,32 +975,58 @@ class PsycopgSyncADKStore(BaseSyncADKStore["PsycopgSyncConfig"]):
         event_data_value = event_record["event_data"]
         jsonb_value = Jsonb(event_data_value) if isinstance(event_data_value, dict) else event_data_value
 
-        with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            try:
-                cur.execute(
-                    insert_query,
-                    (
-                        event_record["id"],
-                        event_record["app_name"],
-                        event_record["user_id"],
-                        event_record["session_id"],
-                        event_record["invocation_id"],
-                        event_record["timestamp"],
-                        jsonb_value,
-                    ),
-                )
-                cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
-                row = cur.fetchone()
-                if row is None:
-                    _raise_missing_session(session_id)
-                if app_state is not None:
-                    cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
-                if user_state is not None:
-                    cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
-            except Exception:
-                conn.rollback()
-                raise
-            conn.commit()
+        with self._config.provide_connection() as conn:
+            tx_factory = getattr(conn, "transaction", None)
+            if callable(tx_factory) and getattr(conn, "autocommit", False):
+                tx_ctx: Any = tx_factory()
+                with tx_ctx, conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        insert_query,
+                        (
+                            event_record["id"],
+                            event_record["app_name"],
+                            event_record["user_id"],
+                            event_record["session_id"],
+                            event_record["invocation_id"],
+                            event_record["timestamp"],
+                            jsonb_value,
+                        ),
+                    )
+                    cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+                    row = cur.fetchone()
+                    if row is None:
+                        _raise_missing_session(session_id)
+                    if app_state is not None:
+                        cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+                    if user_state is not None:
+                        cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
+            else:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    try:
+                        cur.execute(
+                            insert_query,
+                            (
+                                event_record["id"],
+                                event_record["app_name"],
+                                event_record["user_id"],
+                                event_record["session_id"],
+                                event_record["invocation_id"],
+                                event_record["timestamp"],
+                                jsonb_value,
+                            ),
+                        )
+                        cur.execute(update_query, (Jsonb(state), app_name, user_id, session_id))
+                        row = cur.fetchone()
+                        if row is None:
+                            _raise_missing_session(session_id)
+                        if app_state is not None:
+                            cur.execute(app_upsert_query, (app_name, Jsonb(app_state)))
+                        if user_state is not None:
+                            cur.execute(user_upsert_query, (app_name, user_id, Jsonb(user_state)))
+                    except Exception:
+                        conn.rollback()
+                        raise
+                    conn.commit()
 
         return StoredSession(
             id=row["id"],
@@ -1351,6 +1433,8 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                except errors.UndefinedTable:
+                    raise
                 except Exception as exc:  # pragma: no cover
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
@@ -1629,6 +1713,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             if self._use_fts:
                 try:
                     return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
+                except errors.UndefinedTable:
+                    raise
                 except Exception as exc:  # pragma: no cover
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
@@ -1935,6 +2021,12 @@ def _postgres_memory_indexes(
         )
 
     if vector_index_type == "scann":
+        if not isinstance(scann_num_leaves, int) or isinstance(scann_num_leaves, bool) or scann_num_leaves <= 0:
+            msg = "extension_config['adk']['scann_num_leaves'] must be a positive integer"
+            raise ValueError(msg)
+        if scann_quantizer not in {"SQ8", "FP32"}:
+            msg = "extension_config['adk']['scann_quantizer'] must be 'SQ8' or 'FP32'"
+            raise ValueError(msg)
         indexes.append(
             f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scann ON {memory_table} USING scann (embedding) WITH (num_leaves = {scann_num_leaves}, quantizer = '{scann_quantizer}');"
         )

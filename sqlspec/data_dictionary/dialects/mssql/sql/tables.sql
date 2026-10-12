@@ -31,6 +31,7 @@ WITH dependency_tree AS (
           SELECT 1
           FROM sys.foreign_keys AS fk
           WHERE fk.parent_object_id = t.object_id
+            AND fk.referenced_object_id <> t.object_id
       )
 
     UNION ALL
@@ -45,7 +46,8 @@ WITH dependency_tree AS (
     INNER JOIN sys.tables AS child_table ON fk.parent_object_id = child_table.object_id
     INNER JOIN sys.schemas AS child_schema ON child_table.schema_id = child_schema.schema_id
     INNER JOIN dependency_tree ON fk.referenced_object_id = dependency_tree.object_id
-    WHERE (:schema_name IS NULL OR child_schema.name = :schema_name)
+    WHERE fk.referenced_object_id <> fk.parent_object_id
+      AND (:schema_name IS NULL OR child_schema.name = :schema_name)
       AND CHARINDEX(CONCAT('|', child_table.object_id, '|'), dependency_tree.path) = 0
 )
 SELECT

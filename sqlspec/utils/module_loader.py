@@ -284,7 +284,7 @@ def import_string(dotted_path: str) -> "Any":
         _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
     except SQLSpecError:
         raise
-    except Exception as e:  # pylint: disable=broad-exception-caught
+    except Exception as e:
         _raise_import_error(f"Could not import '{dotted_path}': {e}", e)
     return obj
 

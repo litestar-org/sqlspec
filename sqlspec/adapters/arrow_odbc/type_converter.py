@@ -2,13 +2,18 @@
 
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from sqlspec.typing import import_optional
 from sqlspec.utils.module_loader import ensure_pyarrow
 
 if TYPE_CHECKING:
     import pyarrow as pa
+else:
+    pa = import_optional("pyarrow")
 
 __all__ = ("odbc_type_to_arrow",)
 
+_MAX_DECIMAL128_PRECISION: Final[int] = 38
+_MAX_DECIMAL256_PRECISION: Final[int] = 76
 _ODBC_ARROW_TYPE_SPECS: Final[dict[str, tuple[str, tuple[Any, ...], dict[str, Any]]]] = {
     "bit": ("bool_", (), {}),
     "boolean": ("bool_", (), {}),
@@ -65,7 +70,11 @@ def odbc_type_to_arrow(sql_type: str, *, precision: int | None = None, scale: in
     """Resolve an ODBC SQL type name to an Arrow data type."""
     normalized_type = sql_type.lower().split("(", 1)[0].strip()
     if normalized_type in {"decimal", "numeric"} and precision is not None and scale is not None:
-        return _arrow_type("decimal128", (precision, scale))
+        if 1 <= precision <= _MAX_DECIMAL128_PRECISION and 0 <= scale <= precision:
+            return _arrow_type("decimal128", (precision, scale))
+        if _MAX_DECIMAL128_PRECISION < precision <= _MAX_DECIMAL256_PRECISION and 0 <= scale <= precision:
+            return _arrow_type("decimal256", (precision, scale))
+        return _arrow_type("string")
     spec = _ODBC_ARROW_TYPE_SPECS.get(normalized_type)
     if spec is None:
         return _arrow_type("string")
@@ -81,8 +90,6 @@ def _arrow_type(name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | 
         return cast("pa.DataType", cached)
 
     ensure_pyarrow()
-    import pyarrow as pa
-
     resolved = getattr(pa, name)(*args, **(kwargs or {}))
     _ARROW_TYPE_CACHE[cache_key] = resolved
     return cast("pa.DataType", resolved)

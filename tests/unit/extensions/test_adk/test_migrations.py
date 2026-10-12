@@ -193,8 +193,8 @@ async def test_disabled_memory_emits_no_vector_extension() -> None:
     assert not any("embedding VECTOR(" in sql for sql in statements)
 
 
-async def test_psqlpy_postgres_memory_migration_emits_no_vector_extension() -> None:
-    """A PostgreSQL store whose memory DDL has no vector column installs nothing."""
+async def test_psqlpy_postgres_memory_migration_installs_vector_extension() -> None:
+    """Psqlpy memory DDL with vector column also gets the vector extension prerequisite."""
     config = PsqlpyConfig(
         connection_config=PsqlpyPoolParams(dsn="postgresql://adk@localhost/adk"), extension_config={"adk": {}}
     )
@@ -202,7 +202,10 @@ async def test_psqlpy_postgres_memory_migration_emits_no_vector_extension() -> N
 
     statements = await migration.up(context)
 
-    assert CREATE_VECTOR_EXTENSION not in statements
+    assert statements.count(CREATE_VECTOR_EXTENSION) == 1
+    assert statements.index(CREATE_VECTOR_EXTENSION) < next(
+        index for index, sql in enumerate(statements) if "embedding VECTOR(" in sql
+    )
     assert any("CREATE TABLE IF NOT EXISTS adk_memory " in sql for sql in statements)
 
 

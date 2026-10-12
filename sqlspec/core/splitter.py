@@ -210,14 +210,6 @@ class DialectConfig:
 
         return patterns
 
-    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
-        """Get dialect-specific token patterns.
-
-        Returns:
-            List of dialect-specific token patterns
-        """
-        return []
-
     @staticmethod
     def is_real_block_ender(tokens: "list[Token]", current_pos: int) -> bool:  # noqa: ARG004
         """Check if END keyword represents an actual block terminator.
@@ -242,6 +234,14 @@ class DialectConfig:
             True if termination should be delayed, False otherwise
         """
         return False
+
+    def _get_dialect_specific_patterns(self) -> "list[tuple[TokenType, TokenPattern]]":
+        """Get dialect-specific token patterns.
+
+        Returns:
+            List of dialect-specific token patterns
+        """
+        return []
 
 
 class _EagerDialectConfig(DialectConfig):
@@ -313,10 +313,6 @@ class OracleDialectConfig(_EagerDialectConfig):
     _DIALECT_NAME = "oracle"
     _BLOCK_STARTERS = frozenset({"BEGIN", "DECLARE", "CASE"})
 
-    def _create_special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
-        """Create Oracle special terminator handlers."""
-        return {"/": self._handle_slash_terminator}
-
     def should_delay_semicolon_termination(self, tokens: "list[Token]", current_pos: int) -> bool:
         """Check if semicolon termination should be delayed for Oracle slash terminators.
 
@@ -335,35 +331,6 @@ class OracleDialectConfig(_EagerDialectConfig):
                 continue
             if token.type == TokenType.KEYWORD and token.value.upper() == "END":
                 return self._has_upcoming_slash(tokens, current_pos)
-            break
-
-        return False
-
-    def _has_upcoming_slash(self, tokens: "list[Token]", current_pos: int) -> bool:
-        """Check if there's a slash terminator on its own line ahead.
-
-        Args:
-            tokens: List of all tokens
-            current_pos: Current position in token list
-
-        Returns:
-            True if slash terminator found on its own line, False otherwise
-        """
-        pos = current_pos + 1
-        found_newline = False
-
-        while pos < len(tokens):
-            token = tokens[pos]
-            if token.type == TokenType.WHITESPACE:
-                if "\n" in token.value:
-                    found_newline = True
-                pos += 1
-                continue
-            if token.type == TokenType.TERMINATOR and token.value == "/":
-                return found_newline and self._handle_slash_terminator(tokens, pos)
-            if token.type in _COMMENT_TOKEN_TYPES:
-                pos += 1
-                continue
             break
 
         return False
@@ -398,6 +365,39 @@ class OracleDialectConfig(_EagerDialectConfig):
                     return False
             break
         return True
+
+    def _create_special_terminators(self) -> "dict[str, SpecialTerminatorHandler]":
+        """Create Oracle special terminator handlers."""
+        return {"/": self._handle_slash_terminator}
+
+    def _has_upcoming_slash(self, tokens: "list[Token]", current_pos: int) -> bool:
+        """Check if there's a slash terminator on its own line ahead.
+
+        Args:
+            tokens: List of all tokens
+            current_pos: Current position in token list
+
+        Returns:
+            True if slash terminator found on its own line, False otherwise
+        """
+        pos = current_pos + 1
+        found_newline = False
+
+        while pos < len(tokens):
+            token = tokens[pos]
+            if token.type == TokenType.WHITESPACE:
+                if "\n" in token.value:
+                    found_newline = True
+                pos += 1
+                continue
+            if token.type == TokenType.TERMINATOR and token.value == "/":
+                return found_newline and self._handle_slash_terminator(tokens, pos)
+            if token.type in _COMMENT_TOKEN_TYPES:
+                pos += 1
+                continue
+            break
+
+        return False
 
     @staticmethod
     def _handle_slash_terminator(tokens: "list[Token]", current_pos: int) -> bool:
@@ -590,6 +590,26 @@ class StatementSplitter:
 
         self._compiled_patterns = self._get_or_compile_patterns()
 
+    def split(self, sql: str) -> "list[str]":
+        """Split SQL script into individual statements.
+
+        Args:
+            sql: The SQL script to split
+
+        Returns:
+            List of individual SQL statements
+        """
+        cache_key = CacheKey(("split", self._dialect.name, sql, self._strip_trailing_semicolon))
+
+        cached_result = self._result_cache.get(cache_key)
+        if cached_result is not None:
+            return cast("list[str]", cached_result)
+
+        statements = self._do_split(sql)
+
+        self._result_cache.put(cache_key, statements)
+        return statements
+
     def _get_or_compile_patterns(self) -> "list[tuple[TokenType, CompiledTokenPattern]]":
         """Get compiled regex patterns from cache or compile and cache them.
 
@@ -684,26 +704,6 @@ class StatementSplitter:
             )
         return tokens
 
-    def split(self, sql: str) -> "list[str]":
-        """Split SQL script into individual statements.
-
-        Args:
-            sql: The SQL script to split
-
-        Returns:
-            List of individual SQL statements
-        """
-        cache_key = CacheKey(("split", self._dialect.name, sql, self._strip_trailing_semicolon))
-
-        cached_result = self._result_cache.get(cache_key)
-        if cached_result is not None:
-            return cast("list[str]", cached_result)
-
-        statements = self._do_split(sql)
-
-        self._result_cache.put(cache_key, statements)
-        return statements
-
     def _do_split(self, sql: str) -> "list[str]":
         """Perform the actual SQL script splitting logic.
 
@@ -739,7 +739,6 @@ class StatementSplitter:
             else:
                 current_statement_writer.write(token.value)
 
-            # Keep token-list mutation centralized for whitespace/comment and executable paths.
             current_statement_tokens.append(token)
             if token.type in _IGNORABLE_TOKEN_TYPES:
                 continue
@@ -786,7 +785,7 @@ class StatementSplitter:
                     self._strip_trailing_semicolon
                     and token.type == TokenType.TERMINATOR
                     and statement.endswith(token.value)
-                    and not is_plsql_block
+                    and (not is_plsql_block or token.value in special_terminators)
                 ):
                     statement = statement[: -len(token.value)].rstrip()
 
@@ -818,9 +817,16 @@ class StatementSplitter:
         Returns:
             True if tokens represent a PL/SQL block, False otherwise
         """
-        for token in tokens:
-            if token.type == TokenType.KEYWORD:
-                return token.value.upper() in {"BEGIN", "DECLARE"}
+        keywords = [token.value.upper() for token in tokens if token.type == TokenType.KEYWORD]
+        if not keywords:
+            return False
+        first = keywords[0]
+        if first in {"BEGIN", "DECLARE"}:
+            return True
+        if first == "CREATE":
+            plsql_objects = {"PROCEDURE", "FUNCTION", "TRIGGER", "PACKAGE", "TYPE"}
+            if any(kw in plsql_objects for kw in keywords[1:6]) and ("BEGIN" in keywords or "END" in keywords):
+                return True
         return False
 
     def _contains_executable_content(self, tokens: "list[Token]") -> bool:

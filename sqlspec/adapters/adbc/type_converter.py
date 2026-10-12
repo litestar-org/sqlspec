@@ -5,72 +5,101 @@ type conversion for different database backends (PostgreSQL, SQLite, DuckDB,
 MySQL, BigQuery, Snowflake).
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 from sqlspec.utils.serializers import to_json
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 __all__ = ("ADBCOutputConverter", "get_adbc_type_converter")
+
+_JSON_DICT_DIALECTS: Final[frozenset[str]] = frozenset({
+    "postgres",
+    "postgresql",
+    "pgvector",
+    "paradedb",
+    "pg_textsearch",
+    "pgtextsearch",
+    "bigquery",
+})
 
 
 class ADBCOutputConverter:
     """ADBC-specific parameter conversion with dialect awareness."""
 
-    __slots__ = ("dialect",)
+    __slots__ = ("_json_serializer", "dialect")
 
-    def __init__(self, dialect: str) -> None:
+    def __init__(self, dialect: str, *, json_serializer: "Callable[[Any], str]" = to_json) -> None:
         """Initialize with dialect-specific configuration.
 
         Args:
             dialect: Target database dialect (postgres, sqlite, duckdb, etc.)
+            json_serializer: JSON serializer callable for dictionary parameters.
         """
         self.dialect = dialect.lower()
+        self._json_serializer = json_serializer
 
-    def convert_dict(self, value: "dict[str, Any]") -> Any:
+    def convert_dict(self, value: "dict[str, Any]", *, json_serializer: "Callable[[Any], str] | None" = None) -> Any:
         """Convert dictionary values with dialect-specific handling.
 
         Args:
             value: Dictionary to convert.
+            json_serializer: Optional per-call JSON serializer override.
 
         Returns:
             Converted value appropriate for the dialect.
         """
-        if self.dialect in {
-            "postgres",
-            "postgresql",
-            "pgvector",
-            "paradedb",
-            "pg_textsearch",
-            "pgtextsearch",
-            "bigquery",
-        }:
-            return to_json(value)
-        return value
+        if self.dialect in _JSON_DICT_DIALECTS:
+            serializer = json_serializer or self._json_serializer
+            return serializer(value)
+        return {
+            key: self.convert_dict(val, json_serializer=json_serializer)
+            if isinstance(val, dict)
+            else self.convert_sequence(val, json_serializer=json_serializer)
+            if isinstance(val, (list, tuple))
+            else val
+            for key, val in value.items()
+        }
 
-    def convert_sequence(self, value: "list[Any] | tuple[Any, ...]") -> "list[Any]":
+    def convert_sequence(
+        self, value: "list[Any] | tuple[Any, ...]", *, json_serializer: "Callable[[Any], str] | None" = None
+    ) -> "list[Any]":
         """Convert sequence/array parameter values with dialect awareness.
 
-        Preserves None elements within sequence parameters instead of converting
-        them to empty strings for PostgreSQL-family dialects.
+        Recursively converts nested sequences and dictionary items while
+        preserving ``None`` elements.
 
         Args:
             value: Sequence to convert.
+            json_serializer: Optional per-call JSON serializer override.
 
         Returns:
             Converted list parameter appropriate for the dialect.
         """
-        items = list(value)
-        if self.dialect in {"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch", "pgtextsearch"}:
-            return [item if item is not None else None for item in items]
-        return items
+        converted: list[Any] = []
+        for item in value:
+            if isinstance(item, dict):
+                converted.append(self.convert_dict(item, json_serializer=json_serializer))
+            elif isinstance(item, (list, tuple)):
+                converted.append(self.convert_sequence(item, json_serializer=json_serializer))
+            else:
+                converted.append(item)
+        return converted
 
 
-def get_adbc_type_converter(dialect: str) -> ADBCOutputConverter:
+def get_adbc_type_converter(
+    dialect: str, cache_size: int = 5000, *, json_serializer: "Callable[[Any], str] | None" = None
+) -> ADBCOutputConverter:
     """Factory function to create dialect-specific ADBC type converter.
 
     Args:
         dialect: Database dialect name.
+        cache_size: Optional converter cache size accepted for compatibility.
+        json_serializer: Optional custom JSON serializer callable.
 
     Returns:
         Configured ADBCOutputConverter instance.
     """
-    return ADBCOutputConverter(dialect)
+    _ = cache_size
+    return ADBCOutputConverter(dialect, json_serializer=json_serializer or to_json)

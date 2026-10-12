@@ -5,7 +5,9 @@ from typing import Any, cast
 
 import pytest
 
+from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
 from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
+from sqlspec.exceptions import DeadlockError
 
 
 class _InvalidBoolean:
@@ -29,3 +31,13 @@ def test_connection_in_transaction_does_not_infer_from_autocommit(driver_cls: ty
     driver = driver_cls(cast(Any, connection))
 
     assert driver._connection_in_transaction() is False
+
+
+def test_sync_commit_maps_mysqlconnector_deadlock_error() -> None:
+    def _fail_commit() -> None:
+        raise MysqlConnectorError(errno=1213, msg="Deadlock found when trying to get lock")
+
+    connection = SimpleNamespace(commit=_fail_commit, in_transaction=True)
+    driver = MysqlConnectorSyncDriver(cast(Any, connection))
+    with pytest.raises(DeadlockError):
+        driver.commit()

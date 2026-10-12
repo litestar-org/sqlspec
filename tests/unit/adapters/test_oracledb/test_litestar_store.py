@@ -151,3 +151,15 @@ def test_oracle_sync_store_set_large_blob_single_statement() -> None:
     assert parameters["data"] == (DB_TYPE_BLOB, large_payload)
     assert parameters["expires_in_seconds"] == 60
     assert connection.commits == 1
+
+
+def test_oracle_litestar_store_table_ddl_sanitizes_and_truncates_index_name() -> None:
+    """_table_ddl replaces dots with underscores and truncates index identifier to <=30 chars."""
+    config = _storage_config({})
+    store = OracleSyncStore(config)
+    store._table_name = "my_very_long_schema.oracle_sessions_table"
+
+    ddl = store._table_ddl()
+
+    assert "CREATE INDEX idx_my_very_long_schema_oracle" in ddl
+    assert "idx_my_very_long_schema.oracle" not in ddl

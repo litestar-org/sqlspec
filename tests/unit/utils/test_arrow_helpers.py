@@ -299,3 +299,30 @@ def test_arrow_reader_to_return_format_rejects_non_reader() -> None:
 
     with pytest.raises(TypeError):
         arrow_reader_to_return_format(object(), return_format="reader")
+
+
+def test_convert_empty_data_to_batches_returns_empty_list() -> None:
+    """convert_dict_to_arrow([], return_format='batches') returns an empty list rather than a single RecordBatch."""
+    result = convert_dict_to_arrow([], return_format="batches")
+    assert result == []
+
+
+def test_deferred_close_batch_iterator_closes_on_explicit_close_or_gc() -> None:
+    """_DeferredCloseBatchIterator invokes close_callback when closed early before full iteration."""
+    import pyarrow as pa
+
+    from sqlspec.utils.arrow_helpers import _DeferredCloseBatchIterator
+
+    batches = [pa.record_batch({"id": pa.array([1, 2])}), pa.record_batch({"id": pa.array([3, 4])})]
+    reader = pa.RecordBatchReader.from_batches(batches[0].schema, batches)
+    closed: list[bool] = []
+
+    iterator = _DeferredCloseBatchIterator(reader, lambda: closed.append(True))
+    first = next(iterator)
+    assert first.num_rows == 2
+    assert closed == []
+
+    iterator.close()
+    assert closed == [True]
+    iterator.close()
+    assert closed == [True]

@@ -4,17 +4,57 @@ import logging
 from typing import Any
 
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.module_loader import ensure_fsspec, ensure_obstore, ensure_pyarrow
 
 __all__ = (
     "_log_storage_event",
+    "import_fsspec",
+    "import_obstore",
+    "import_obstore_store",
     "import_pyarrow",
     "import_pyarrow_csv",
     "import_pyarrow_json",
     "import_pyarrow_parquet",
+    "log_storage_event",
 )
 
 logger = get_logger(__name__)
+
+
+def import_fsspec() -> "Any":
+    """Import fsspec with optional dependency guard.
+
+    Returns:
+        fsspec module.
+    """
+    ensure_fsspec()
+    import fsspec
+
+    return fsspec
+
+
+def import_obstore() -> "Any":
+    """Import obstore with optional dependency guard.
+
+    Returns:
+        obstore module.
+    """
+    ensure_obstore()
+    import obstore
+
+    return obstore
+
+
+def import_obstore_store() -> "Any":
+    """Import obstore.store with optional dependency guard.
+
+    Returns:
+        obstore.store module.
+    """
+    ensure_obstore()
+    import obstore.store as obstore_store
+
+    return obstore_store
 
 
 def import_pyarrow() -> "Any":
@@ -69,7 +109,7 @@ def import_pyarrow_json() -> "Any":
     return pa_json
 
 
-def _log_storage_event(
+def log_storage_event(
     event: str,
     *,
     backend_type: str,
@@ -82,6 +122,7 @@ def _log_storage_event(
     count: int | None = None,
     exists: bool | None = None,
 ) -> None:
+    """Emit a structured debug log event for a storage backend operation."""
     fields: dict[str, Any] = {"backend_type": backend_type, "protocol": protocol}
     if operation is not None:
         fields["operation"] = operation
@@ -98,3 +139,6 @@ def _log_storage_event(
     if exists is not None:
         fields["exists"] = exists
     log_with_context(logger, logging.DEBUG, event, **fields)
+
+
+_log_storage_event = log_storage_event

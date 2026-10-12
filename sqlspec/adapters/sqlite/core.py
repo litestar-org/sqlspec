@@ -4,7 +4,7 @@ import contextlib
 import re
 import sys
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
@@ -41,6 +41,8 @@ if TYPE_CHECKING:
     from sqlspec.core.compiler import OperationType
 
 __all__ = (
+    "JULIAN_EPOCH",
+    "SECONDS_PER_DAY",
     "SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT",
     "SqliteStreamSource",
     "apply_driver_features",
@@ -51,11 +53,13 @@ __all__ = (
     "build_statement_config",
     "collect_rows",
     "create_mapped_exception",
+    "datetime_to_julian",
     "default_statement_config",
     "driver_profile",
     "end_transaction",
     "extension_pragma_statements",
     "format_identifier",
+    "julian_to_datetime",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
     "normalize_lastrowid",
@@ -65,14 +69,19 @@ __all__ = (
     "resolve_rowcount",
 )
 
+JULIAN_EPOCH = 2440587.5
+SECONDS_PER_DAY = 86400.0
 SQLITE_CONSTRAINT_UNIQUE_CODE = 2067
 SQLITE_CONSTRAINT_PRIMARYKEY_CODE = 1555
+SQLITE_CONSTRAINT_ROWID_CODE = 2579
 SQLITE_CONSTRAINT_FOREIGNKEY_CODE = 787
 SQLITE_CONSTRAINT_NOTNULL_CODE = 1811
 SQLITE_CONSTRAINT_CHECK_CODE = 531
+SQLITE_CONSTRAINT_DATATYPE_CODE = 3091
 SQLITE_CONSTRAINT_CODE = 19
 SQLITE_CANTOPEN_CODE = 14
 SQLITE_IOERR_CODE = 10
+SQLITE_CORRUPT_CODE = 11
 SQLITE_MISMATCH_CODE = 20
 SQLITE_BUSY_CODE = 5
 SQLITE_LOCKED_CODE = 6
@@ -94,6 +103,26 @@ _EXTENSION_PRAGMA_PROFILE = (
 )
 
 
+def datetime_to_julian(dt: "datetime | None") -> "float | None":
+    """Convert datetime to Julian Day number for SQLite storage."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
+    return JULIAN_EPOCH + delta_days
+
+
+def julian_to_datetime(julian: "float | None") -> "datetime | None":
+    """Convert Julian Day number from SQLite to UTC-aware datetime."""
+    if julian is None:
+        return None
+    delta_days = julian - JULIAN_EPOCH
+    timestamp = delta_days * SECONDS_PER_DAY
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=timestamp)
+
+
 def end_transaction(
     connection: "SqliteConnection | Any",
     *,
@@ -110,10 +139,16 @@ def end_transaction(
         commit: Whether to commit rather than roll back.
         supports_autocommit: Whether this runtime's sqlite3 exposes autocommit.
     """
-    if not getattr(connection, "in_transaction", True):
+    try:
+        in_transaction = getattr(connection, "in_transaction", True)
+    except sqlite3.ProgrammingError:
+        return
+    if not in_transaction:
         return
     if supports_autocommit and getattr(connection, "autocommit", None) is True:
-        connection.execute("COMMIT" if commit else "ROLLBACK")
+        cursor = connection.execute("COMMIT" if commit else "ROLLBACK")
+        with contextlib.suppress(Exception):
+            cursor.close()
         return
     if commit:
         connection.commit()
@@ -147,7 +182,9 @@ def extension_pragma_statements(config: Any, extension_name: str) -> "tuple[str,
 
 def apply_extension_pragmas(connection: Any, statements: "tuple[str, ...]") -> None:
     for statement in statements:
-        connection.execute(statement)
+        cursor = connection.execute(statement)
+        with contextlib.suppress(Exception):
+            cursor.close()
 
 
 def render_pragmas(pragmas: "Mapping[str, Any]") -> "list[tuple[str, str]]":
@@ -338,6 +375,8 @@ class SqliteStreamSource:
         self._driver._check_pending_exception(handler)
         if not rows:
             return []
+        if isinstance(rows[0], dict):
+            return [dict(row) for row in rows]
         if self._column_names is None:
             self._column_names = [description[0] for description in self._cursor.description]
         return rows_to_dicts(rows, self._column_names)
@@ -441,64 +480,52 @@ def create_mapped_exception(error: BaseException, *, logger: Any | None = None) 
         error_code = None
         error_name = None
     error_msg = str(error).lower()
+    primary_code = (error_code & 0xFF) if isinstance(error_code, int) else None
 
-    if error_code in (SQLITE_CONSTRAINT_UNIQUE_CODE, SQLITE_CONSTRAINT_PRIMARYKEY_CODE) or error_name in (
-        "SQLITE_CONSTRAINT_UNIQUE",
-        "SQLITE_CONSTRAINT_PRIMARYKEY",
-    ):
-        return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
+    constraint_error = _map_constraint_exception(error, error_code, error_name, primary_code, error_msg)
+    if constraint_error is not None:
+        return constraint_error
 
-    if error_code == SQLITE_BUSY_CODE or error_name == "SQLITE_BUSY":
+    if primary_code == SQLITE_BUSY_CODE or (isinstance(error_name, str) and error_name.startswith("SQLITE_BUSY")):
         return _create_sqlite_error(error, error_code, DeadlockError, "database busy")
-    if error_code == SQLITE_LOCKED_CODE or error_name == "SQLITE_LOCKED":
+    if primary_code == SQLITE_LOCKED_CODE or (isinstance(error_name, str) and error_name.startswith("SQLITE_LOCKED")):
         return _create_sqlite_error(error, error_code, DeadlockError, "database locked")
     if "locked" in error_msg or "busy" in error_msg:
         return _create_sqlite_error(error, error_code or 0, DeadlockError, "database locked")
 
-    if error_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
+    if primary_code == SQLITE_INTERRUPT_CODE or error_name == "SQLITE_INTERRUPT":
         return _create_sqlite_error(error, error_code, OperationCancelledError, "query interrupted")
     if "interrupt" in error_msg:
         return _create_sqlite_error(error, error_code or 0, OperationCancelledError, "query interrupted")
 
-    if error_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
+    if primary_code == SQLITE_PERM_CODE or error_name == "SQLITE_PERM":
         return _create_sqlite_error(error, error_code, PermissionDeniedError, "permission denied")
-    if error_code == SQLITE_READONLY_CODE or error_name == "SQLITE_READONLY":
+    if primary_code == SQLITE_READONLY_CODE or (
+        isinstance(error_name, str) and error_name.startswith("SQLITE_READONLY")
+    ):
         return _create_sqlite_error(error, error_code, PermissionDeniedError, "database is read-only")
     if "permission denied" in error_msg or "readonly" in error_msg:
         return _create_sqlite_error(error, error_code or 0, PermissionDeniedError, "permission denied")
 
-    if not error_code:
-        if "unique constraint" in error_msg:
-            return _create_sqlite_error(error, 0, UniqueViolationError, "unique constraint violation")
-        if "foreign key constraint" in error_msg:
-            return _create_sqlite_error(error, 0, ForeignKeyViolationError, "foreign key constraint violation")
-        if "not null constraint" in error_msg:
-            return _create_sqlite_error(error, 0, NotNullViolationError, "not-null constraint violation")
-        if "check constraint" in error_msg:
-            return _create_sqlite_error(error, 0, CheckViolationError, "check constraint violation")
-        if "syntax" in error_msg:
-            return _create_sqlite_error(error, None, SQLParsingError, "SQL syntax error")
-        return _create_sqlite_error(error, None, SQLSpecError, "database error")
-
-    if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
-        return _create_sqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
-    if error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
-        return _create_sqlite_error(error, error_code, NotNullViolationError, "not-null constraint violation")
-    if error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
-        return _create_sqlite_error(error, error_code, CheckViolationError, "check constraint violation")
-    if error_code == SQLITE_CONSTRAINT_CODE or error_name == "SQLITE_CONSTRAINT":
-        return _create_sqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
-
-    if error_code == SQLITE_CANTOPEN_CODE or error_name == "SQLITE_CANTOPEN":
+    if primary_code == SQLITE_CANTOPEN_CODE or (
+        isinstance(error_name, str) and error_name.startswith("SQLITE_CANTOPEN")
+    ):
         return _create_sqlite_error(error, error_code, DatabaseConnectionError, "connection error")
-    if error_code == SQLITE_IOERR_CODE or error_name == "SQLITE_IOERR":
+    if primary_code in (SQLITE_IOERR_CODE, SQLITE_CORRUPT_CODE) or (
+        isinstance(error_name, str) and error_name.startswith(("SQLITE_IOERR", "SQLITE_CORRUPT"))
+    ):
         return _create_sqlite_error(error, error_code, OperationalError, "operational error")
 
-    if error_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
+    if primary_code == SQLITE_MISMATCH_CODE or error_name == "SQLITE_MISMATCH":
         return _create_sqlite_error(error, error_code, DataError, "data error")
 
-    if error_code == 1 or "syntax" in error_msg:
+    if "syntax" in error_msg:
         return _create_sqlite_error(error, error_code, SQLParsingError, "SQL syntax error")
+
+    if primary_code == 1 or isinstance(error, sqlite3.OperationalError):
+        return _create_sqlite_error(error, error_code, OperationalError, "operational error")
+    if isinstance(error, sqlite3.DataError):
+        return _create_sqlite_error(error, error_code, DataError, "data error")
 
     return _create_sqlite_error(error, error_code, SQLSpecError, "database error")
 
@@ -549,17 +576,25 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply SQLite driver feature defaults to statement config."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    has_custom_serializer = "json_serializer" in features
+    has_custom_deserializer = "json_deserializer" in features
     features.setdefault("enable_custom_adapters", False)
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
 
-    if json_serializer is not None:
+    if json_serializer is not None and (has_custom_serializer or has_custom_deserializer):
         parameter_config = statement_config.parameter_config.with_json_serializers(
             json_serializer, deserializer=json_deserializer
         )
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
+
+
+def _normalize_metadata_row(row: Any) -> Any:
+    if isinstance(row, dict):
+        return tuple(row.values())
+    return row
 
 
 def _resolve_insert_target(expression: Any) -> "tuple[str | None, str] | None":
@@ -581,7 +616,7 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
     try:
         table_cursor = connection.execute("PRAGMA table_list")
         try:
-            table_rows = table_cursor.fetchall()
+            table_rows = [_normalize_metadata_row(row) for row in table_cursor.fetchall()]
         finally:
             with contextlib.suppress(Exception):
                 table_cursor.close()
@@ -610,9 +645,10 @@ def _target_supports_rowid(connection: Any, target: "tuple[str | None, str]") ->
         try:
             database_cursor = connection.execute("PRAGMA database_list")
             try:
+                db_rows = [_normalize_metadata_row(row) for row in database_cursor.fetchall()]
                 schema_order.extend(
                     row[1]
-                    for row in database_cursor.fetchall()
+                    for row in db_rows
                     if len(row) >= SQLITE_DATABASE_LIST_MIN_COLUMNS and isinstance(row[1], str)
                 )
             finally:
@@ -635,9 +671,10 @@ def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, st
         try:
             database_cursor = connection.execute("PRAGMA database_list")
             try:
+                db_rows = [_normalize_metadata_row(row) for row in database_cursor.fetchall()]
                 schema_order.extend(
                     row[1]
-                    for row in database_cursor.fetchall()
+                    for row in db_rows
                     if len(row) >= SQLITE_DATABASE_LIST_MIN_COLUMNS
                     and isinstance(row[1], str)
                     and row[1] not in {"main", "temp"}
@@ -658,7 +695,8 @@ def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, st
             schema_cursor = connection.execute(
                 f"SELECT type FROM {quoted_schema}.sqlite_master WHERE name = ? COLLATE NOCASE", (target_table,)
             )
-            schema_row = schema_cursor.fetchone()
+            fetched_schema_row = schema_cursor.fetchone()
+            schema_row = _normalize_metadata_row(fetched_schema_row) if fetched_schema_row is not None else None
         except sqlite3.Error:
             pass
         finally:
@@ -675,9 +713,10 @@ def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, st
             table_info_cursor = connection.execute(
                 f"PRAGMA {quoted_schema}.table_info({quote_identifier(target_table)})"
             )
+            info_rows = [_normalize_metadata_row(row) for row in table_info_cursor.fetchall()]
             column_names = {
                 row[1].casefold()
-                for row in table_info_cursor.fetchall()
+                for row in info_rows
                 if len(row) >= SQLITE_TABLE_INFO_MIN_COLUMNS and isinstance(row[1], str)
             }
         except sqlite3.Error:
@@ -700,6 +739,52 @@ def _target_supports_rowid_legacy(connection: Any, target: "tuple[str | None, st
                     probe_cursor.close()
         return True
     return False
+
+
+def _map_constraint_exception(
+    error: Any, error_code: "int | None", error_name: "str | None", primary_code: "int | None", error_msg: str
+) -> "SQLSpecError | None":
+    if error_code in (
+        SQLITE_CONSTRAINT_UNIQUE_CODE,
+        SQLITE_CONSTRAINT_PRIMARYKEY_CODE,
+        SQLITE_CONSTRAINT_ROWID_CODE,
+    ) or error_name in ("SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY", "SQLITE_CONSTRAINT_ROWID"):
+        return _create_sqlite_error(error, error_code, UniqueViolationError, "unique constraint violation")
+    if error_code == SQLITE_CONSTRAINT_FOREIGNKEY_CODE or error_name == "SQLITE_CONSTRAINT_FOREIGNKEY":
+        return _create_sqlite_error(error, error_code, ForeignKeyViolationError, "foreign key constraint violation")
+    if error_code == SQLITE_CONSTRAINT_NOTNULL_CODE or error_name == "SQLITE_CONSTRAINT_NOTNULL":
+        return _create_sqlite_error(error, error_code, NotNullViolationError, "not-null constraint violation")
+    if error_code == SQLITE_CONSTRAINT_CHECK_CODE or error_name == "SQLITE_CONSTRAINT_CHECK":
+        return _create_sqlite_error(error, error_code, CheckViolationError, "check constraint violation")
+    if error_code == SQLITE_CONSTRAINT_DATATYPE_CODE or error_name == "SQLITE_CONSTRAINT_DATATYPE":
+        return _create_sqlite_error(error, error_code, DataError, "datatype constraint violation")
+
+    if (
+        not error_code
+        or primary_code == SQLITE_CONSTRAINT_CODE
+        or error_name == "SQLITE_CONSTRAINT"
+        or isinstance(error, sqlite3.IntegrityError)
+    ):
+        code_for_msg = error_code or 0
+        if "unique constraint" in error_msg or "primary key" in error_msg:
+            return _create_sqlite_error(error, code_for_msg, UniqueViolationError, "unique constraint violation")
+        if "foreign key constraint" in error_msg:
+            return _create_sqlite_error(
+                error, code_for_msg, ForeignKeyViolationError, "foreign key constraint violation"
+            )
+        if "not null constraint" in error_msg:
+            return _create_sqlite_error(error, code_for_msg, NotNullViolationError, "not-null constraint violation")
+        if "check constraint" in error_msg:
+            return _create_sqlite_error(error, code_for_msg, CheckViolationError, "check constraint violation")
+        if "cannot store" in error_msg:
+            return _create_sqlite_error(error, code_for_msg, DataError, "datatype constraint violation")
+        if (
+            primary_code == SQLITE_CONSTRAINT_CODE
+            or error_name == "SQLITE_CONSTRAINT"
+            or isinstance(error, sqlite3.IntegrityError)
+        ):
+            return _create_sqlite_error(error, error_code, IntegrityError, "integrity constraint violation")
+    return None
 
 
 def _create_sqlite_error(

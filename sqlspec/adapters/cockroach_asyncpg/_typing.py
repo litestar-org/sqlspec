@@ -1,6 +1,6 @@
 """CockroachDB AsyncPG adapter type definitions."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg as cockroach_asyncpg_module
 from asyncpg import Pool
@@ -9,6 +9,8 @@ from asyncpg import Record as CockroachAsyncpgRecord
 from asyncpg import connect as cockroach_asyncpg_connect
 from asyncpg import create_pool as cockroach_asyncpg_create_pool
 from asyncpg.pool import PoolConnectionProxy
+
+from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -36,6 +38,8 @@ __all__ = (
     "cockroach_asyncpg_create_pool",
     "cockroach_asyncpg_module",
 )
+
+_COCKROACH_ASYNCPG_DRIVER_CLS: "type[CockroachAsyncpgDriver] | None" = None
 
 
 class CockroachAsyncpgSessionContext:
@@ -68,11 +72,10 @@ class CockroachAsyncpgSessionContext:
         self._driver: CockroachAsyncpgDriver | None = None
 
     async def __aenter__(self) -> "CockroachAsyncpgDriver":
-        from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver
-
+        driver_cls = _resolve_cockroach_asyncpg_driver()
         self._connection = await self._acquire_connection()
         statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = CockroachAsyncpgDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -84,3 +87,16 @@ class CockroachAsyncpgSessionContext:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def _resolve_cockroach_asyncpg_driver() -> "type[CockroachAsyncpgDriver]":
+    global _COCKROACH_ASYNCPG_DRIVER_CLS
+    driver_cls = _COCKROACH_ASYNCPG_DRIVER_CLS
+    if driver_cls is None:
+        resolved = import_optional_attr("sqlspec.adapters.cockroach_asyncpg.driver", "CockroachAsyncpgDriver")
+        if resolved is None:
+            msg = "Cannot import 'CockroachAsyncpgDriver' from 'sqlspec.adapters.cockroach_asyncpg.driver'"
+            raise ImportError(msg)
+        driver_cls = cast("type[CockroachAsyncpgDriver]", resolved)
+        _COCKROACH_ASYNCPG_DRIVER_CLS = driver_cls
+    return driver_cls

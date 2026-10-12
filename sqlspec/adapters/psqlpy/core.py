@@ -1,7 +1,7 @@
 """psqlpy adapter compiled helpers."""
 
 import contextlib
-import datetime
+import datetime as dt
 import decimal
 import re
 import uuid
@@ -12,6 +12,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_TYPE
 from sqlspec.adapters.psqlpy._typing import PsqlpyDataError, PsqlpyIntegrityError, PsqlpyOperationalError
 from sqlspec.adapters.psqlpy.type_converter import coerce_pgvector
 from sqlspec.core import (
@@ -93,20 +94,13 @@ _TIMESTAMP_CASTS: Final[frozenset[str]] = frozenset({
 })
 _UUID_CASTS: Final[frozenset[str]] = frozenset({"UUID"})
 _DECIMAL_NORMALIZER = build_nested_decimal_normalizer(mode="float")
-_JSONB_TYPE: type[Any] | None = None
-try:
-    from sqlspec.adapters.psqlpy._typing import PSQLPY_JSONB as _JSONB_IMPORTED
-except ImportError:
-    pass
-else:
-    _JSONB_TYPE = _JSONB_IMPORTED
 PSQLPY_STATUS_REGEX: "re.Pattern[str]" = re.compile(r"^([A-Z]+)(?:\s+(\d+))?\s+(\d+)$", re.IGNORECASE)
 _DML_COUNT_CTE_ALIAS: Final = "_sqlspec_affected"
 _DML_COUNT_COLUMN: Final = "_sqlspec_rows_affected"
 _DML_COUNT_QUERY_CACHE_SIZE: Final = 1024
 
 logger = get_logger("sqlspec.adapters.psqlpy.core")
-_NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple, dict)
+_NUMERIC_COERCE_TYPES: "tuple[type[Any], ...]" = (float, decimal.Decimal, list, tuple)
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -210,7 +204,15 @@ def collect_rows(query_result: Any | None) -> "tuple[list[dict[str, Any]], list[
     if not query_result:
         return [], []
 
-    dict_rows = cast("list[dict[str, Any]]", query_result if isinstance(query_result, list) else query_result.result())
+    if isinstance(query_result, list):
+        dict_rows = cast("list[dict[str, Any]]", query_result)
+    else:
+        try:
+            dict_rows = cast("list[dict[str, Any]]", query_result.result())
+        except Exception as exc:
+            if "type: void" in str(exc):
+                return [], []
+            raise
     if not dict_rows:
         return [], []
     return dict_rows, list(dict_rows[0])
@@ -240,25 +242,6 @@ class PsqlpyStreamSource:
         await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    async def _start(self) -> None:
-        if self._driver._connection_in_transaction():
-            cursor = self._driver.connection.cursor(self._sql, self._parameters, array_size=self._chunk_size)
-            await cursor.start()
-            self._cursor = cursor
-            return
-        transaction = self._driver.connection.transaction()
-        await transaction.begin()
-        self._transaction = transaction
-        try:
-            cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
-            await cursor.start()
-            self._cursor = cursor
-        except BaseException:
-            self._transaction = None
-            with contextlib.suppress(Exception):
-                await transaction.rollback()
-            raise
-
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         query_result = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
@@ -284,6 +267,25 @@ class PsqlpyStreamSource:
             except Exception:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()
+
+    async def _start(self) -> None:
+        if self._driver._connection_in_transaction():
+            cursor = self._driver.connection.cursor(self._sql, self._parameters, array_size=self._chunk_size)
+            await cursor.start()
+            self._cursor = cursor
+            return
+        transaction = self._driver.connection.transaction()
+        await transaction.begin()
+        self._transaction = transaction
+        try:
+            cursor = transaction.cursor(self._sql, self._parameters, array_size=self._chunk_size)
+            await cursor.start()
+            self._cursor = cursor
+        except BaseException:
+            self._transaction = None
+            with contextlib.suppress(Exception):
+                await transaction.rollback()
+            raise
 
 
 def coerce_numeric_for_write(value: Any) -> Any:
@@ -311,21 +313,15 @@ def coerce_numeric_for_write(value: Any) -> Any:
                 coerced_tuple = list(value[:index])
             coerced_tuple.append(coerced_item)
         return value if coerced_tuple is None else tuple(coerced_tuple)
-    if isinstance(value, dict):
-        coerced_dict: dict[Any, Any] | None = None
-        for key, item in value.items():
-            coerced_item = coerce_numeric_for_write(item)
-            if coerced_dict is None:
-                if coerced_item is item:
-                    continue
-                coerced_dict = dict(value)
-            coerced_dict[key] = coerced_item
-        return value if coerced_dict is None else coerced_dict
     return value
 
 
 def coerce_json_columns(
-    records: "list[tuple[Any, ...]]", columns: "list[str]", json_columns: "set[str]"
+    records: "list[tuple[Any, ...]]",
+    columns: "list[str]",
+    json_columns: "set[str]",
+    *,
+    deserializer: "Callable[[str], Any]" = from_json,
 ) -> "list[tuple[Any, ...]]":
     """Parse JSON text into objects for destination columns typed json or jsonb.
 
@@ -338,6 +334,7 @@ def coerce_json_columns(
         records: Row tuples in column order.
         columns: Destination column names, positionally aligned with the rows.
         json_columns: Names of destination columns typed json or jsonb.
+        deserializer: JSON decoder callable.
 
     Returns:
         The rows, with JSON column values decoded.
@@ -351,7 +348,7 @@ def coerce_json_columns(
     for record in records:
         row = list(record)
         for index in indexes:
-            row[index] = _coerce_json_text_for_execute_many(row[index])
+            row[index] = _coerce_json_text_for_execute_many(row[index], deserializer=deserializer)
         coerced.append(tuple(row))
     return coerced
 
@@ -438,9 +435,10 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     Mapped Exceptions:
         * Integrity constraint violations (UniqueViolationError, ForeignKeyViolationError, etc.)
         * Transaction/serialization errors (DeadlockError, SerializationConflictError)
+        * ConnectionTimeoutError / DatabaseConnectionError: connection errors
         * QueryTimeoutError and OperationCancelledError
         * PermissionDeniedError: permission denied, authentication failed
-        * ConnectionTimeoutError / DatabaseConnectionError: connection errors
+        * DataError: data conversion and formatting errors
         * SQLParsingError: syntax/parse errors
 
     Args:
@@ -469,24 +467,36 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if "serialization failure" in error_msg or "could not serialize" in error_msg:
         return _create_postgres_error(error, SerializationConflictError, "serialization failure")
 
+    if (
+        "connection" in error_msg
+        or "could not connect" in error_msg
+        or "connection refused" in error_msg
+        or "connection reset" in error_msg
+        or "broken pipe" in error_msg
+        or "server closed the connection" in error_msg
+    ):
+        if "timeout" in error_msg or "timed out" in error_msg:
+            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
+        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
+
     if error_class := _classify_timeout_or_cancellation(error_msg):
         return _create_postgres_error(error, error_class, "query terminated")
 
     if "permission denied" in error_msg or "insufficient privilege" in error_msg:
         return _create_postgres_error(error, PermissionDeniedError, "permission denied")
-    if "authentication failed" in error_msg or "password" in error_msg:
+    if (
+        "authentication failed" in error_msg
+        or "password authentication failed" in error_msg
+        or "no password supplied" in error_msg
+    ):
         return _create_postgres_error(error, PermissionDeniedError, "authentication error")
 
-    if "connection" in error_msg or "could not connect" in error_msg:
-        if "timeout" in error_msg:
-            return _create_postgres_error(error, ConnectionTimeoutError, "connection timeout")
-        return _create_postgres_error(error, DatabaseConnectionError, "connection error")
+    if isinstance(error, PsqlpyDataError):
+        return _create_postgres_error(error, DataError, "data error")
 
     if "syntax error" in error_msg or "parse" in error_msg:
         return _create_postgres_error(error, SQLParsingError, "SQL syntax error")
 
-    if isinstance(error, PsqlpyDataError):
-        return _create_postgres_error(error, DataError, "data error")
     if isinstance(error, PsqlpyOperationalError):
         return _create_postgres_error(error, OperationalError, "operational error")
     if isinstance(error, PsqlpyIntegrityError):
@@ -546,6 +556,15 @@ def _coerce_json_parameter(value: Any, cast_type: str, serializer: "Callable[[An
                 return jsonb_type(value)
             if isinstance(value, (list, tuple)):
                 return jsonb_type(list(value))
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith(("{", "[")):
+                    with contextlib.suppress(Exception):
+                        parsed = from_json(value)
+                        if isinstance(parsed, dict):
+                            return jsonb_type(parsed)
+                        if isinstance(parsed, (list, tuple)):
+                            return jsonb_type(list(parsed))
     if isinstance(value, tuple):
         return list(value)
     if jsonb_type is not None and isinstance(value, jsonb_type):
@@ -575,14 +594,14 @@ def _coerce_uuid_parameter(value: Any) -> Any:
 
 
 def _coerce_timestamp_parameter(value: Any) -> Any:
-    """Convert ISO-formatted timestamp strings to ``datetime.datetime``."""
+    """Convert ISO-formatted timestamp strings to ``dt.datetime``."""
 
-    if isinstance(value, datetime.datetime):
+    if isinstance(value, dt.datetime):
         return value
     if isinstance(value, str):
         normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
         try:
-            return datetime.datetime.fromisoformat(normalized_value)
+            return dt.datetime.fromisoformat(normalized_value)
         except ValueError as error:
             msg = "Invalid ISO timestamp parameter for psqlpy."
             raise SQLSpecError(msg) from error
@@ -610,11 +629,15 @@ def _prepare_dict_parameter(value: "dict[str, Any]") -> "dict[str, Any]":
 
 
 def _prepare_list_parameter(value: "list[Any]") -> "list[Any]":
-    return [_DECIMAL_NORMALIZER(item) for item in value]
+    normalized = _DECIMAL_NORMALIZER(value)
+    return normalized if isinstance(normalized, list) else value
 
 
 def _prepare_tuple_parameter(value: "tuple[Any, ...]") -> "tuple[Any, ...]":
-    return tuple(_DECIMAL_NORMALIZER(item) for item in value)
+    normalized = _DECIMAL_NORMALIZER(value)
+    if isinstance(normalized, list):
+        return tuple(normalized)
+    return normalized if isinstance(normalized, tuple) else value
 
 
 def _parameter_config(base_config: "ParameterStyleConfig") -> "ParameterStyleConfig":
@@ -665,11 +688,11 @@ def _dml_count_query(sql: str) -> str | None:
     except ParseError:
         return None
 
-    if (
-        not isinstance(expression, (exp.Insert, exp.Update, exp.Delete))
-        or expression.args.get("returning")
-        or expression.args.get("with_")
-    ):
+    if not isinstance(expression, (exp.Insert, exp.Update, exp.Delete)) or expression.args.get("returning"):
+        return None
+
+    existing_with = expression.args.get("with_")
+    if existing_with is not None and existing_with.args.get("recursive"):
         return None
 
     used_aliases = {cte.alias_or_name for cte in expression.find_all(exp.CTE)}
@@ -679,9 +702,14 @@ def _dml_count_query(sql: str) -> str | None:
         cte_alias = f"{_DML_COUNT_CTE_ALIAS}_{suffix}"
         suffix += 1
 
+    if existing_with is not None:
+        expression.set("with_", None)
+
     expression = expression.returning("1", dialect="postgres", copy=False)
     count_expression = exp.alias_(exp.Count(this=exp.Star()), _DML_COUNT_COLUMN)
     count_query = exp.select(count_expression).from_(cte_alias, copy=False)
+    if existing_with is not None:
+        count_query.set("with_", existing_with)
     count_query.with_(cte_alias, as_=expression, copy=False)
     return count_query.sql(dialect="postgres", copy=False)
 
@@ -741,14 +769,14 @@ def _format_execute_many_param_set(param_set: Any, *, coerce_numeric: bool) -> "
     return [param_set]
 
 
-def _coerce_json_text_for_execute_many(value: Any) -> Any:
+def _coerce_json_text_for_execute_many(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> Any:
     if not isinstance(value, str):
         return value
     stripped = value.lstrip()
     if not stripped or stripped[0] not in "{[":
         return value
     try:
-        decoded = from_json(value)
+        decoded = deserializer(value)
     except Exception:
         return value
     return decoded if isinstance(decoded, (dict, list, tuple)) else value

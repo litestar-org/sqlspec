@@ -1,8 +1,10 @@
 """AsyncPG ADK store for Google Agent Development Kit session/event storage."""
 
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
+from sqlspec.adapters.asyncpg.core import parse_status
 from sqlspec.config import ADKConfig, AsyncConfigT
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
@@ -377,7 +379,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         try:
             async with self._config.provide_connection() as conn:
                 result = await conn.execute(sql, *params)
-                return int(result.split()[-1]) if result else 0
+                return parse_status(result)
         except asyncpg.exceptions.UndefinedTableError:
             return 0
 
@@ -391,7 +393,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         try:
             async with self._config.provide_connection() as conn:
                 result = await conn.execute(sql, *params)
-                return int(result.split()[-1]) if result else 0
+                return parse_status(result)
         except asyncpg.exceptions.UndefinedTableError:
             return 0
 
@@ -405,7 +407,7 @@ class AsyncpgADKStore(BaseAsyncADKStore[AsyncConfigT]):
         try:
             async with self._config.provide_connection() as conn:
                 result = await conn.execute(sql, *params)
-                return int(result.split()[-1]) if result else 0
+                return parse_status(result)
         except asyncpg.exceptions.UndefinedTableError:
             return 0
 
@@ -633,7 +635,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
             return 0
 
         inserted_count = 0
-        async with self._config.provide_connection() as conn:
+        async with self._config.provide_connection() as conn, _optional_transaction(conn):
             for entry in entries:
                 if self._owner_id_column_name:
                     sql = f"""
@@ -685,10 +687,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
                         entry["metadata_json"],
                         entry["inserted_at"],
                     )
-                try:
-                    inserted_count += int(result.rsplit(" ", 1)[-1])
-                except (IndexError, ValueError):
-                    continue
+                inserted_count += parse_status(result)
 
         return inserted_count
 
@@ -795,10 +794,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = $1"
         async with self._config.provide_connection() as conn:
             result = await conn.execute(sql, session_id)
-        try:
-            return int(result.split(" ")[1])
-        except (IndexError, ValueError):
-            return 0
+        return parse_status(result)
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
@@ -823,10 +819,7 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn:
             result = await conn.execute(sql, *params)
-        try:
-            return int(result.split(" ")[1])
-        except (IndexError, ValueError):
-            return 0
+        return parse_status(result)
 
     async def _memory_table_ddl(self) -> str:
         owner_id_line = ""
@@ -886,6 +879,15 @@ class AsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["AsyncpgConfig"]):
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+
+def _optional_transaction(conn: Any) -> Any:
+    transaction_fn = getattr(conn, "transaction", None)
+    if callable(transaction_fn):
+        tx = transaction_fn()
+        if hasattr(tx, "__aenter__"):
+            return tx
+    return nullcontext()
 
 
 def _adk_config(config: Any) -> AsyncpgADKConfig:

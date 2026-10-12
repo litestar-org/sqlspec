@@ -95,10 +95,10 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
     migration_tracker_type: "ClassVar[type[PymssqlSyncMigrationTracker]]" = PymssqlSyncMigrationTracker
     supports_transactional_ddl: "ClassVar[bool]" = True
     supports_migration_schemas: "ClassVar[bool]" = True
-    supports_native_arrow_export: "ClassVar[bool]" = False
-    supports_native_arrow_import: "ClassVar[bool]" = False
-    supports_native_parquet_export: "ClassVar[bool]" = False
-    supports_native_parquet_import: "ClassVar[bool]" = False
+    supports_native_arrow_export: "ClassVar[bool]" = True
+    supports_native_arrow_import: "ClassVar[bool]" = True
+    supports_native_parquet_export: "ClassVar[bool]" = True
+    supports_native_parquet_import: "ClassVar[bool]" = True
     supports_native_row_streaming: "ClassVar[bool]" = True
     type_coercion_capabilities: "ClassVar[TypeCoercionCapabilities]" = TypeCoercionCapabilities(
         datetime_binding="native", timestamp_precision="microsecond", json_columns_decoded=False, uuid_binding="text"
@@ -143,22 +143,6 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
             **kwargs,
         )
 
-    def _create_pool(self) -> "PymssqlConnectionPool":
-        config = dict(self.connection_config)
-        pool_recycle = config.pop("pool_recycle_seconds", 86400)
-        health_check = config.pop("health_check_interval", 30.0)
-        return PymssqlConnectionPool(
-            config,
-            recycle_seconds=pool_recycle,
-            health_check_interval=health_check,
-            on_connection_create=self._user_connection_hook,
-        )
-
-    def _close_pool(self) -> None:
-        if self.connection_instance:
-            self.connection_instance.close()
-            self.connection_instance = None
-
     def create_connection(self) -> "PymssqlConnection":
         """Open a standalone connection owned by the caller.
 
@@ -192,3 +176,19 @@ class PymssqlConfig(SyncDatabaseConfig[PymssqlConnection, PymssqlConnectionPool,
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return runtime hints for pymssql event channels."""
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
+
+    def _create_pool(self) -> "PymssqlConnectionPool":
+        config = dict(self.connection_config)
+        pool_recycle = config.pop("pool_recycle_seconds", 86400)
+        health_check = config.pop("health_check_interval", 30.0)
+        return PymssqlConnectionPool(
+            config,
+            recycle_seconds=pool_recycle,
+            health_check_interval=health_check,
+            on_connection_create=self._user_connection_hook,
+        )
+
+    def _close_pool(self) -> None:
+        if self.connection_instance:
+            self.connection_instance.close()
+            self.connection_instance = None

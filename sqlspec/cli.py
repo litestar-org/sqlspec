@@ -11,10 +11,11 @@ from rich.markup import escape
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from sqlspec.config import AsyncDatabaseConfig, SyncDatabaseConfig
+from sqlspec.config import AsyncDatabaseConfig, NoPoolAsyncConfig, NoPoolSyncConfig, SyncDatabaseConfig
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.migrations.squash import parse_version_range
 from sqlspec.utils.config_tools import discover_config_from_pyproject, resolve_config_sync
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.sync_tools import run_
 
@@ -26,7 +27,13 @@ if TYPE_CHECKING:
 
 __all__ = ("add_migration_commands", "get_sqlspec_group")
 
-AnyDatabaseConfig: TypeAlias = AsyncDatabaseConfig[Any, Any, Any] | SyncDatabaseConfig[Any, Any, Any]
+AnyDatabaseConfig: TypeAlias = (
+    AsyncDatabaseConfig[Any, Any, Any]
+    | SyncDatabaseConfig[Any, Any, Any]
+    | NoPoolAsyncConfig[Any, Any]
+    | NoPoolSyncConfig[Any, Any]
+)
+logger = get_logger("cli")
 
 
 def get_sqlspec_group() -> "Group":
@@ -91,11 +98,17 @@ def get_sqlspec_group() -> "Group":
                 else:
                     all_configs.append(config_result)  # pyright: ignore
 
-            configs_by_key: dict[str | None, AnyDatabaseConfig] = {}
+            configs_list: list[AnyDatabaseConfig] = []
+            seen_bind_keys: dict[str, int] = {}
             for cfg in all_configs:
-                configs_by_key[cfg.bind_key] = cfg
+                if cfg.bind_key is not None and cfg.bind_key in seen_bind_keys:
+                    configs_list[seen_bind_keys[cfg.bind_key]] = cfg
+                else:
+                    if cfg.bind_key is not None:
+                        seen_bind_keys[cfg.bind_key] = len(configs_list)
+                    configs_list.append(cfg)
 
-            ctx.obj["configs"] = list(configs_by_key.values())
+            ctx.obj["configs"] = configs_list
 
             if not ctx.obj["configs"]:
                 console.print("[red]Error: No valid configs found after resolution.[/]")
@@ -241,7 +254,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
     async def _cleanup_memory_entries_async(store: "BaseAsyncADKMemoryStore[Any]", days: int) -> int:
         return await store.delete_entries_older_than(days)
 
-    async def _verify_memory_table_async(config: "AsyncDatabaseConfig[Any, Any, Any]", sql: str) -> None:
+    async def _verify_memory_table_async(
+        config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]", sql: str
+    ) -> None:
         async with config.provide_session() as driver:
             await driver.execute(sql)
 
@@ -394,6 +409,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             failure_message: Builds the per-config failure line.
         """
         sync_configs, async_configs = _partition_configs_by_async(configs_to_process)
+        errors: list[tuple[str, Exception]] = []
 
         for config_name, config in sync_configs:
             if progress_message is not None and should_echo(config):
@@ -403,6 +419,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 if success_message is not None and should_echo(config):
                     console.print(success_message(config_name))
             except Exception as e:
+                errors.append((config_name, e))
                 if should_echo(config):
                     console.print(failure_message(config_name, e))
 
@@ -417,10 +434,16 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         if success_message is not None and should_echo(config):
                             console.print(success_message(config_name))
                     except Exception as e:
+                        errors.append((config_name, e))
                         if should_echo(config):
                             console.print(failure_message(config_name, e))
 
             run_(_run_async_configs)()
+
+        if errors:
+            failed = ", ".join(name for name, _ in errors)
+            msg = f"Operation failed for config(s): {failed}"
+            raise click.ClickException(msg)
 
     def process_multiple_configs(
         ctx: "click.Context",
@@ -775,7 +798,9 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
             target_directory = (
                 str(migration_config_dict.get("script_location", "migrations")) if directory is None else directory
             )
-            migration_commands = create_migration_commands(config=config)
+            migration_commands: SyncMigrationCommands[Any] = cast(
+                "SyncMigrationCommands[Any]", create_migration_commands(config=cast("Any", config))
+            )
             migration_commands.init(directory=target_directory, package=package)
 
         if async_configs:
@@ -789,7 +814,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                         else directory
                     )
                     migration_commands: AsyncMigrationCommands[Any] = cast(
-                        "AsyncMigrationCommands[Any]", create_migration_commands(config=config)
+                        "AsyncMigrationCommands[Any]", create_migration_commands(config=cast("Any", config))
                     )
                     await migration_commands.init(directory=target_directory, package=package)
 
@@ -961,7 +986,7 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 console.print(f"[yellow]No memory store found for {config_name}; skipping.[/]")
                 continue
 
-            if isinstance(cfg, AsyncDatabaseConfig):
+            if isinstance(cfg, (AsyncDatabaseConfig, NoPoolAsyncConfig)):
                 async_store = cast("BaseAsyncADKMemoryStore[Any]", store_class(cfg))
                 deleted = run_(_cleanup_memory_entries_async)(async_store, days)
                 console.print(f"[green]✓[/] {config_name}: deleted {deleted} memory entries older than {days} days")
@@ -993,8 +1018,8 @@ def add_migration_commands(database_group: "Group | None" = None) -> "Group":
                 continue
 
             try:
-                if isinstance(cfg, AsyncDatabaseConfig):
-                    async_cfg: AsyncDatabaseConfig[Any, Any, Any] = cfg
+                if isinstance(cfg, (AsyncDatabaseConfig, NoPoolAsyncConfig)):
+                    async_cfg: AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] = cfg
                     async_store = cast("BaseAsyncADKMemoryStore[Any]", store_class(async_cfg))
                     sql = f"SELECT 1 FROM {async_store.memory_table} WHERE 1 = 0"
                     run_(_verify_memory_table_async)(async_cfg, sql)

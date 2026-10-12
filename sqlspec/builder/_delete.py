@@ -43,14 +43,6 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
         if table:
             self.from_(table)
 
-    def _create_base_expression(self) -> "exp.Delete":
-        """Create a new sqlglot Delete expression.
-
-        Returns:
-            A new sqlglot Delete expression.
-        """
-        return exp.Delete()
-
     def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
         """Build the DELETE query with validation.
 
@@ -63,13 +55,19 @@ class Delete(QueryBuilder, WhereClauseMixin, ReturningClauseMixin, DeleteFromCla
         Raises:
             SQLBuilderError: If the table is not specified.
         """
-
-        if self._expression is None or not isinstance(self._expression, exp.Delete):
-            msg = "DELETE requires a table to be specified. Use from() to set the table."
-            raise SQLBuilderError(msg)
-
-        if self._expression.this is None:
-            msg = "DELETE requires a table to be specified. Use from() to set the table."
-            raise SQLBuilderError(msg)
-
         return super().build(dialect=dialect)
+
+    def _prepare_expression_for_build(self, dialect: "DialectType" = None, *, copy: bool = True) -> exp.Expr:
+        """Validate that the DELETE target table is set before building."""
+        if self._expression is None or not isinstance(self._expression, exp.Delete) or self._expression.this is None:
+            msg = "DELETE requires a table to be specified. Use from() to set the table."
+            raise SQLBuilderError(msg)
+        return super()._prepare_expression_for_build(dialect=dialect, copy=copy)
+
+    def _create_base_expression(self) -> "exp.Delete":
+        """Create a new sqlglot Delete expression.
+
+        Returns:
+            A new sqlglot Delete expression.
+        """
+        return exp.Delete()

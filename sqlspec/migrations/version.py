@@ -19,6 +19,7 @@ __all__ = (
     "MigrationVersion",
     "VersionType",
     "convert_to_sequential_version",
+    "extract_migration_version",
     "generate_conversion_map",
     "generate_timestamp_version",
     "get_next_sequential_number",
@@ -44,7 +45,7 @@ class VersionType(Enum):
 
 
 @final
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MigrationVersion:
     """Parsed migration version with structured comparison support.
 
@@ -144,15 +145,20 @@ class MigrationVersion:
         """
         if not isinstance(other, MigrationVersion):
             return NotImplemented
-        return self.raw == other.raw
+        return (self.extension, self.type, self.sequence, self.timestamp) == (
+            other.extension,
+            other.type,
+            other.sequence,
+            other.timestamp,
+        )
 
     def __hash__(self) -> int:
         """Hash version for use in sets and dicts.
 
         Returns:
-            Hash value based on raw version string.
+            Hash value based on parsed version components.
         """
-        return hash(self.raw)
+        return hash((self.extension, self.type, self.sequence, self.timestamp))
 
     def __repr__(self) -> str:
         """Get string representation for debugging.
@@ -273,6 +279,38 @@ def parse_extension_stem(stem: str) -> "tuple[str, str] | None":
     if match is None:
         return None
     return match.group("name"), match.group("version")
+
+
+def extract_migration_version(filename: str) -> "str | None":
+    """Extract canonical version string from a migration filename.
+
+    Supports sequential (0001), timestamp (20251011120000), and extension-prefixed
+    (ext_litestar_0001) version formats.
+
+    Args:
+        filename: Migration filename to parse.
+
+    Returns:
+        Canonical version string or None when the filename is not a valid migration.
+    """
+    timestamp_min_length = 4
+    name_without_ext = filename.rsplit(".", 1)[0]
+
+    if name_without_ext.startswith("ext_"):
+        extension = parse_extension_stem(name_without_ext)
+        if extension is None:
+            return None
+        ext_name, ext_version = extension
+        padded_ext_version = (
+            ext_version if len(ext_version) > timestamp_min_length else _format_sequential_version(ext_version)
+        )
+        return f"ext_{ext_name}_{padded_ext_version}"
+
+    parts = name_without_ext.split("_", 1)
+    if parts and parts[0].isdigit():
+        return parts[0] if len(parts[0]) > timestamp_min_length else _format_sequential_version(parts[0])
+
+    return None
 
 
 def generate_timestamp_version() -> str:

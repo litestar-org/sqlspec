@@ -73,11 +73,9 @@ def find_pyproject_toml() -> "Path | None":
         if pyproject.exists():
             return pyproject
 
-        # Stop at .git boundary (repository root)
         if (current / ".git").exists():
             return None
 
-        # Stop at filesystem root
         if current == current.parent:
             return None
 
@@ -316,22 +314,26 @@ def parse_mysql_dsn(dsn: str) -> dict[str, Any]:
             query = parse_qs(parsed.query)
             for k, v in query.items():
                 if v:
-                    val = v[-1]
-                    if val.lower() == "true":
-                        params[k] = True
-                    elif val.lower() == "false":
-                        params[k] = False
-                    elif val.isdigit():
-                        params[k] = int(val)
-                    else:
-                        params[k] = val
+                    params[k] = _coerce_dsn_value(v[-1])
         return params
     key_value_params: dict[str, Any] = {}
     for item in dsn.split(";"):
         if "=" in item:
             param_key, param_val = item.split("=", 1)
-            key_value_params[param_key.strip()] = param_val.strip()
+            key_value_params[param_key.strip()] = _coerce_dsn_value(param_val.strip())
     return key_value_params
+
+
+def _coerce_dsn_value(val: str) -> Any:
+    """Coerce a raw DSN string value to bool, int, or str."""
+    lower = val.lower()
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    if val.isdecimal() and val.isascii():
+        return int(val)
+    return val
 
 
 def _normalize_config_path(config_path: str) -> str:
@@ -480,7 +482,6 @@ def _is_valid_config(config: Any) -> bool:
     Returns:
         True if object is a valid config instance (not a class).
     """
-    # Reject config classes - must be instances
     if isinstance(config, type):
         return False
 

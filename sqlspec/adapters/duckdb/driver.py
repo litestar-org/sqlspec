@@ -36,6 +36,7 @@ from sqlspec.core.result import DMLResult
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import import_optional
+from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier
@@ -58,24 +59,6 @@ else:
 __all__ = ("DuckDBCursor", "DuckDBDriver", "DuckDBExceptionHandler", "DuckDBSessionContext")
 
 logger = get_logger("sqlspec.adapters.duckdb")
-
-
-def _is_plain_values_insert(expression: exp.Insert, column_count: int) -> bool:
-    if any(expression.args.get(key) for key in ("conflict", "alternative", "with_")):
-        return False
-    values = expression.expression
-    if not isinstance(values, exp.Values) or len(values.expressions) != 1:
-        return False
-    row = values.expressions[0]
-    if not isinstance(row, exp.Tuple) or not column_count or len(row.expressions) != column_count:
-        return False
-    for index, item in enumerate(row.expressions, 1):
-        if isinstance(item, exp.Placeholder):
-            if item.name not in ("", "?", str(index)):
-                return False
-        elif not isinstance(item, exp.Parameter) or item.name != str(index):
-            return False
-    return True
 
 
 class DuckDBExceptionHandler(BaseSyncExceptionHandler):
@@ -130,6 +113,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self._data_dictionary: DuckDBDataDictionary | None = None
         self._transaction_active = False
 
+    @property
+    def data_dictionary(self) -> "DuckDBDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = DuckDBDataDictionary()
+        return self._data_dictionary
+
     def dispatch_execute(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement with data handling.
 
@@ -170,8 +164,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def dispatch_execute_many(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL with multiple parameter sets using batch processing.
 
-        Uses DuckDB's executemany method for batch operations and calculates
-        row counts for both data modification and query operations.
+        Uses DuckDB's Arrow bulk insert fast path for simple INSERT batches,
+        falling back to executemany and calculating row counts for both data
+        modification and query operations.
 
         Args:
             cursor: DuckDB cursor object
@@ -180,9 +175,20 @@ class DuckDBDriver(SyncDriverAdapterBase):
         Returns:
             ExecutionResult with batch execution metadata
         """
-        sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        cached_statement, prepared_parameters = self._compiled_statement(statement, self.statement_config)
+        sql = cached_statement.compiled_sql
 
         if prepared_parameters:
+            parsed_expression = cached_statement.expression or statement.expression
+            if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
+                bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
+                if bulk_result is not None:
+                    return self.create_execution_result(
+                        cursor,
+                        rowcount_override=bulk_result.rows_affected,
+                        special_data={"dml_result": bulk_result},
+                        is_many_result=True,
+                    )
             parameter_sets = cast("list[Any]", prepared_parameters)
             cursor.executemany(sql, parameter_sets)
 
@@ -192,26 +198,12 @@ class DuckDBDriver(SyncDriverAdapterBase):
 
         return self.create_execution_result(cursor, rowcount_override=row_count, is_many_result=True)
 
-    def execute_many(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        /,
-        parameters: "Sequence[StatementParameters]",
-        *filters: "StatementParameters | StatementFilter",
-        statement_config: "StatementConfig | None" = None,
-        **kwargs: Any,
-    ) -> "SQLResult":
-        """Execute many with a DuckDB bulk insert fast path for simple INSERT batches."""
-        config = statement_config or self.statement_config
-        if isinstance(statement, str) and not filters and not kwargs and config is self.statement_config:
-            prepared_statement = SQL(statement, tuple(parameters), statement_config=config, is_many=True)
-            cached_statement, prepared_parameters = self._compiled_statement(prepared_statement, config)
-            parsed_expression = cached_statement.expression
-            if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
-                bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
-                if bulk_result is not None:
-                    return bulk_result
-        return super().execute_many(statement, parameters, *filters, statement_config=statement_config, **kwargs)
+    def build_statement_result(self, statement: SQL, execution_result: "ExecutionResult") -> "SQLResult":
+        """Build statement result, returning DMLResult when produced by bulk insert."""
+        if execution_result.special_data and isinstance(execution_result.special_data.get("dml_result"), DMLResult):
+            statement._pooled = False
+            return cast("DMLResult", execution_result.special_data["dml_result"])
+        return super().build_statement_result(statement, execution_result)
 
     def dispatch_execute_script(self, cursor: "DuckDBConnection", statement: SQL) -> "ExecutionResult":
         """Execute SQL script with statement splitting and parameter handling.
@@ -252,8 +244,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         try:
             self.connection.execute("BEGIN TRANSACTION")
         except duckdb.Error as e:
-            msg = f"Failed to begin DuckDB transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         self._transaction_active = True
 
     def commit(self) -> None:
@@ -261,17 +252,16 @@ class DuckDBDriver(SyncDriverAdapterBase):
         try:
             self.connection.commit()
         except duckdb.Error as e:
-            msg = f"Failed to commit DuckDB transaction: {e}"
-            raise SQLSpecError(msg) from e
-        self._transaction_active = False
+            raise create_mapped_exception(e) from e
+        finally:
+            self._transaction_active = False
 
     def rollback(self) -> None:
         """Rollback the current transaction."""
         try:
             self.connection.rollback()
         except duckdb.Error as e:
-            msg = f"Failed to rollback DuckDB transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
 
@@ -371,25 +361,37 @@ class DuckDBDriver(SyncDriverAdapterBase):
         exc_handler = self.handle_database_exceptions()
         arrow_result: ArrowResult | None = None
 
-        with self.with_cursor(self.connection) as cursor, exc_handler:
-            sql, driver_params = self._compiled_sql(prepared_statement, config)
-
-            cursor.execute(sql, driver_params or ())
-
-            if return_format in {"reader", "batches"}:
-                arrow_reader = (
-                    cursor.to_arrow_reader(batch_size) if batch_size is not None else cursor.to_arrow_reader()
-                )
-                arrow_result = build_arrow_result_from_reader(
-                    prepared_statement,
-                    arrow_reader,
-                    return_format=return_format,
-                    batch_size=batch_size,
-                    arrow_schema=arrow_schema,
-                )
-            else:
+        if return_format in {"reader", "batches"}:
+            stream_cursor, close_cursor = self._acquire_stream_cursor()
+            try:
+                with exc_handler:
+                    sql, driver_params = self._compiled_sql(prepared_statement, config)
+                    stream_cursor.execute(sql, driver_params or ())
+                    arrow_reader = (
+                        stream_cursor.to_arrow_reader(batch_size)
+                        if batch_size is not None
+                        else stream_cursor.to_arrow_reader()
+                    )
+                    if close_cursor:
+                        arrow_reader = arrow_reader_with_deferred_close(arrow_reader, stream_cursor.close)
+                    arrow_result = build_arrow_result_from_reader(
+                        prepared_statement,
+                        arrow_reader,
+                        return_format=return_format,
+                        batch_size=batch_size,
+                        arrow_schema=arrow_schema,
+                    )
+                self._check_pending_exception(exc_handler)
+            except BaseException:
+                if close_cursor:
+                    with contextlib.suppress(Exception):
+                        stream_cursor.close()
+                raise
+        else:
+            with self.with_cursor(self.connection) as cursor, exc_handler:
+                sql, driver_params = self._compiled_sql(prepared_statement, config)
+                cursor.execute(sql, driver_params or ())
                 arrow_table = cursor.to_arrow_table()
-
                 arrow_result = build_arrow_result_from_table(
                     prepared_statement,
                     arrow_table,
@@ -397,8 +399,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     batch_size=batch_size,
                     arrow_schema=arrow_schema,
                 )
-
-        self._check_pending_exception(exc_handler)
+            self._check_pending_exception(exc_handler)
 
         if arrow_result is None:
             msg = "Unreachable"
@@ -480,16 +481,30 @@ class DuckDBDriver(SyncDriverAdapterBase):
             arrow_source = arrow_table
         table_name = format_identifier(table)
         temp_view = f"_sqlspec_arrow_{uuid4().hex}"
-        if overwrite:
-            self.connection.execute(f"TRUNCATE TABLE {table_name}")
-        self.connection.register(temp_view, arrow_source)
         inserted_rows = 0
-        try:
-            insert_result = self.connection.execute(f"INSERT INTO {table_name} SELECT * FROM {temp_view}")
-            inserted_rows = _resolve_duckdb_inserted_rows(insert_result)
-        finally:
-            with contextlib.suppress(Exception):
-                self.connection.unregister(temp_view)
+        manage_transaction = overwrite and not self._connection_in_transaction()
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
+            if manage_transaction:
+                self.connection.execute("BEGIN TRANSACTION")
+            try:
+                if overwrite:
+                    self.connection.execute(f"TRUNCATE TABLE {table_name}")
+                self.connection.register(temp_view, arrow_source)
+                try:
+                    insert_result = self.connection.execute(f"INSERT INTO {table_name} SELECT * FROM {temp_view}")
+                    inserted_rows = _resolve_duckdb_inserted_rows(insert_result)
+                finally:
+                    with contextlib.suppress(Exception):
+                        self.connection.unregister(temp_view)
+                if manage_transaction:
+                    self.connection.commit()
+            except BaseException:
+                if manage_transaction:
+                    with contextlib.suppress(Exception):
+                        self.connection.rollback()
+                raise
+        self._check_pending_exception(exc_handler)
 
         if isinstance(source_data, pa.RecordBatchReader):
             telemetry_payload: StorageTelemetry = {
@@ -535,16 +550,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    @property
-    def data_dictionary(self) -> "DuckDBDataDictionary":
-        """Get the data dictionary for this driver.
+    def collect_rows(self, cursor: "DuckDBConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
+        """Collect DuckDB rows for the direct execution path."""
+        data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
+        return data, column_names, len(data)
 
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = DuckDBDataDictionary()
-        return self._data_dictionary
+    def resolve_rowcount(self, cursor: "DuckDBConnection") -> int:
+        """Resolve rowcount from DuckDB cursor for the direct execution path."""
+        return resolve_rowcount(cursor)
 
     def _native_storage_job(
         self,
@@ -594,15 +607,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg)
         return int(result[0])
 
-    def collect_rows(self, cursor: "DuckDBConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        """Collect DuckDB rows for the direct execution path."""
-        data, column_names = collect_rows(cast("list[Any] | None", fetched), cursor.description)
-        return data, column_names, len(data)
-
-    def resolve_rowcount(self, cursor: "DuckDBConnection") -> int:
-        """Resolve rowcount from DuckDB cursor for the direct execution path."""
-        return resolve_rowcount(cursor)
-
     def _execute_bulk_insert_many(self, expression: exp.Insert, prepared_parameters: Any) -> "DMLResult | None":
         """Execute a batch INSERT via Arrow registration when the payload is simple."""
         if not isinstance(prepared_parameters, list) or not prepared_parameters:
@@ -650,15 +654,6 @@ class DuckDBDriver(SyncDriverAdapterBase):
             return None
         first_row = rows[0]
 
-        if isinstance(first_row, dict):
-            keys = column_names or list(first_row.keys())
-            if any(not isinstance(row, dict) for row in rows):
-                return None
-            try:
-                return pa.table({key: [row.get(key) for row in rows] for key in keys})
-            except Exception:
-                return None
-
         if isinstance(first_row, (list, tuple)):
             values = list(first_row)
             if not column_names:
@@ -683,21 +678,66 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """
         return self._transaction_active
 
+    def _acquire_stream_cursor(self) -> "tuple[Any, bool]":
+        """Acquire a dedicated cursor for Arrow streaming when not in an active transaction."""
+        if not self._connection_in_transaction():
+            cursor_factory = getattr(self.connection, "cursor", None)
+            if callable(cursor_factory):
+                stream_cursor = cursor_factory()
+                if stream_cursor is not None and stream_cursor is not self.connection:
+                    return stream_cursor, True
+        return self.connection, False
+
     def _open_stream_reader(self, sql: str, parameters: Any, chunk_size: int) -> "tuple[Any, list[Any] | None]":
         """Open a native Arrow reader through DuckDB's exception boundary."""
         ensure_pyarrow()
         handler = self.handle_database_exceptions()
         description: list[Any] | None = None
         reader: Any | None = None
-        with handler:
-            result = self.connection.execute(sql, normalize_execute_parameters(parameters))
-            description = result.description
-            reader = result.to_arrow_reader(chunk_size)
-        self._check_pending_exception(handler)
-        if reader is None:
-            msg = "DuckDB did not return an Arrow record batch reader."
-            raise SQLSpecError(msg)
+        stream_cursor, close_cursor = self._acquire_stream_cursor()
+        try:
+            with handler:
+                result = stream_cursor.execute(sql, normalize_execute_parameters(parameters))
+                description = result.description
+                reader = result.to_arrow_reader(chunk_size)
+            self._check_pending_exception(handler)
+            reader = _ensure_arrow_reader(reader)
+            if close_cursor:
+                reader = arrow_reader_with_deferred_close(reader, stream_cursor.close)
+        except BaseException:
+            if close_cursor:
+                with contextlib.suppress(Exception):
+                    stream_cursor.close()
+            raise
         return reader, description
+
+
+register_driver_profile("duckdb", driver_profile)
+
+
+def _ensure_arrow_reader(reader: Any) -> Any:
+    if reader is None:
+        msg = "DuckDB did not return an Arrow record batch reader."
+        raise SQLSpecError(msg)
+    return reader
+
+
+def _is_plain_values_insert(expression: exp.Insert, column_count: int) -> bool:
+    if any(expression.args.get(key) for key in ("conflict", "alternative", "with_")):
+        return False
+    values = expression.expression
+    if not isinstance(values, exp.Values) or len(values.expressions) != 1:
+        return False
+    row = values.expressions[0]
+    if not isinstance(row, exp.Tuple) or not column_count or len(row.expressions) != column_count:
+        return False
+    for index, item in enumerate(row.expressions, 1):
+        if isinstance(item, exp.Placeholder):
+            if item.name not in ("", "?", str(index)):
+                return False
+        elif not isinstance(item, exp.Parameter) or item.name != str(index):
+            return False
+    return True
 
 
 def _resolve_duckdb_inserted_rows(result: object) -> int:
@@ -716,6 +756,3 @@ def _resolve_duckdb_inserted_rows(result: object) -> int:
     if isinstance(first_row, int):
         return max(first_row, 0)
     return 0
-
-
-register_driver_profile("duckdb", driver_profile)

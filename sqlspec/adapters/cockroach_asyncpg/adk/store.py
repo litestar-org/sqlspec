@@ -1,9 +1,11 @@
 """CockroachDB ADK store for Google Agent Development Kit session/event storage (asyncpg)."""
 
+import re
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, cast
 
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_module as asyncpg
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -19,6 +21,10 @@ if TYPE_CHECKING:
 __all__ = ("CockroachAsyncpgADKConfig", "CockroachAsyncpgADKMemoryStore", "CockroachAsyncpgADKStore")
 
 logger = get_logger("sqlspec.adapters.cockroach_asyncpg.adk.store")
+_LOCALITY_CLAUSE_PATTERN = re.compile(
+    r"^LOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)$",
+    re.IGNORECASE,
+)
 
 
 class CockroachAsyncpgADKConfig(ADKConfig):
@@ -89,23 +95,32 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """
             params = (session_id, app_name, user_id, owner_id, state)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, app_name, user_id, state, create_time, update_time
             """
             params = (session_id, app_name, user_id, state)
 
         async with self._config.provide_connection() as conn:
-            await conn.execute(sql, *params)
+            row = await conn.fetchrow(sql, *params)
 
-        result = await self.get_session(app_name, user_id, session_id)
-        if result is None:
+        if row is None:
             msg = "Session creation failed"
             raise RuntimeError(msg)
-        return result
+
+        return StoredSession(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=row["state"],
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
 
     async def get_session(
         self, app_name: str, user_id: str, session_id: str, *, renew_for: "int | timedelta | None" = None
@@ -459,6 +474,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
+        session_idx_name = self._session_table.replace(".", "_")
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._session_table} (
@@ -470,13 +486,13 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         ){session_locality};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user
+        CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_app_user
             ON {self._session_table}(app_name, user_id){session_storing_clause};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time
+        CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_update_time
             ON {self._session_table}(update_time DESC){hash_shard_clause};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_state
+        CREATE INDEX IF NOT EXISTS idx_{session_idx_name}_state
             ON {self._session_table} USING GIN (state)
             WHERE state != '{{}}'::jsonb;
         """
@@ -486,6 +502,7 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
+        events_idx_name = self._events_table.replace(".", "_")
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._events_table} (
@@ -499,13 +516,13 @@ class CockroachAsyncpgADKStore(BaseAsyncADKStore["CockroachAsyncpgConfig"]):
             FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
         ){events_locality};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session
+        CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_session
             ON {self._events_table}(session_id, timestamp ASC){hash_shard_clause}{events_storing_clause};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_event_data
+        CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_event_data
             ON {self._events_table} USING GIN (event_data);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp
+        CREATE INDEX IF NOT EXISTS idx_{events_idx_name}_app_timestamp
             ON {self._events_table}(app_name, timestamp ASC);
         """
 
@@ -592,18 +609,28 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
         if not entries:
             return 0
 
+        if self._owner_id_column_name:
+            sql = f"""
+            INSERT INTO {self._memory_table}
+            (id, session_id, app_name, user_id, scope, event_id, author,
+             {self._owner_id_column_name}, timestamp, content_json,
+             content_text, metadata_json, inserted_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (event_id) DO NOTHING
+            """
+        else:
+            sql = f"""
+            INSERT INTO {self._memory_table}
+            (id, session_id, app_name, user_id, scope, event_id, author,
+             timestamp, content_json, content_text, metadata_json, inserted_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (event_id) DO NOTHING
+            """
+
         inserted_count = 0
-        async with self._config.provide_connection() as conn:
+        async with self._config.provide_connection() as conn, conn.transaction():
             for entry in entries:
                 if self._owner_id_column_name:
-                    sql = f"""
-                    INSERT INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, scope, event_id, author,
-                     {self._owner_id_column_name}, timestamp, content_json,
-                     content_text, metadata_json, inserted_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                    ON CONFLICT (event_id) DO NOTHING
-                    """
                     result = await conn.execute(
                         sql,
                         entry["id"],
@@ -621,13 +648,6 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
                         entry["inserted_at"],
                     )
                 else:
-                    sql = f"""
-                    INSERT INTO {self._memory_table}
-                    (id, session_id, app_name, user_id, scope, event_id, author,
-                     timestamp, content_json, content_text, metadata_json, inserted_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                    ON CONFLICT (event_id) DO NOTHING
-                    """
                     result = await conn.execute(
                         sql,
                         entry["id"],
@@ -644,7 +664,8 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
                         entry["inserted_at"],
                     )
 
-                if result and result.split()[-1].isdigit() and int(result.split()[-1]) > 0:
+                parts = result.split() if result else []
+                if parts and parts[-1].isdigit() and int(parts[-1]) > 0:
                     inserted_count += 1
 
         return inserted_count
@@ -703,8 +724,11 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
 
         params = (*scope_params, search_param, effective_limit)
 
-        async with self._config.provide_connection() as conn:
-            rows = await conn.fetch(sql, *params)
+        try:
+            async with self._config.provide_connection() as conn:
+                rows = await conn.fetch(sql, *params)
+        except asyncpg.exceptions.UndefinedTableError:
+            return []
 
         records: list[StoredMemory] = []
         for row in rows:
@@ -730,9 +754,9 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = [f"inserted_at < (CURRENT_TIMESTAMP - INTERVAL '{days} days')"]
-        params: list[Any] = []
-        idx = 1
+        clauses = ["inserted_at < (CURRENT_TIMESTAMP - ($1 * INTERVAL '1 day'))"]
+        params: list[Any] = [int(days)]
+        idx = 2
         if app_name is not None:
             clauses.append(f"app_name = ${idx}")
             params.append(app_name)
@@ -755,17 +779,18 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
         memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        memory_idx_name = self._memory_table.replace(".", "_")
 
         fts_index = ""
         if self._use_fts:
             fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
+        CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_fts
             ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
             """
         trigram_index = ""
         if adk_config.get("enable_memory_trigram_index", False):
             trigram_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_content_trgm
+        CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_content_trgm
             ON {self._memory_table} USING GIN (content_text gin_trgm_ops);
             """
 
@@ -785,13 +810,13 @@ class CockroachAsyncpgADKMemoryStore(BaseAsyncADKMemoryStore["CockroachAsyncpgCo
             inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         ){memory_locality};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time
+        CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_app_scope_user_time
             ON {self._memory_table}(app_name, scope, user_id, timestamp DESC){hash_shard_clause};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope
+        CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_scope
             ON {self._memory_table}(app_name, scope);
 
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
+        CREATE INDEX IF NOT EXISTS idx_{memory_idx_name}_session
             ON {self._memory_table}(session_id);
         {fts_index}
         {trigram_index}
@@ -822,6 +847,9 @@ def _cockroach_table_locality_clause(adk_config: CockroachAsyncpgADKConfig, tabl
         return ""
     if not clause.upper().startswith("LOCALITY "):
         clause = f"LOCALITY {clause}"
+    if not _LOCALITY_CLAUSE_PATTERN.fullmatch(clause):
+        msg = f"Invalid CockroachDB LOCALITY clause: {locality!r}"
+        raise ImproperConfigurationError(msg)
     return f"\n        {clause}"
 
 

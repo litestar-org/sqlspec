@@ -18,6 +18,7 @@ from sqlspec.adapters.duckdb.core import (
     build_connection_config,
     build_statement_config,
     default_statement_config,
+    resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.driver import DuckDBDriver
 
@@ -194,3 +195,35 @@ def test_driver_init_apply_driver_features_not_called_per_session_via_config() -
         with config.provide_session():
             pass
     assert mock_apply.call_count == 1
+
+
+def test_bool_type_coercion_preserves_native_bool() -> None:
+    """Boolean parameters must remain native Python bools rather than coercing to int."""
+    coercion_map = default_statement_config.parameter_config.type_coercion_map
+    assert coercion_map[bool](True) is True
+    assert coercion_map[bool](False) is False
+
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    with config.provide_session() as driver:
+        row = driver.select_one("SELECT typeof(?) AS t, ? AS v", True, True)
+        assert row["t"] == "BOOLEAN"
+        assert row["v"] is True
+
+
+def test_apply_driver_features_sets_events_defaults() -> None:
+    """apply_driver_features should default enable_events=True and events_backend='poll_queue'."""
+    _, features = apply_driver_features(default_statement_config, None)
+    assert features["enable_events"] is True
+    assert features["events_backend"] == "poll_queue"
+
+
+def test_resolve_rowcount_falls_back_to_cursor_rowcount_when_fetchone_returns_none() -> None:
+    """resolve_rowcount must consult cursor.rowcount when cursor.fetchone() returns None without raising."""
+
+    class _NoneFetchCursor:
+        rowcount = 4
+
+        def fetchone(self) -> None:
+            return None
+
+    assert resolve_rowcount(_NoneFetchCursor()) == 4

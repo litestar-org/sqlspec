@@ -1,5 +1,6 @@
 """CockroachDB ADK store for Google Agent Development Kit session/event storage (psycopg)."""
 
+import re
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgJsonb as Jsonb
@@ -7,6 +8,7 @@ from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_dict_ro
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_errors as errors
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_sql as pg_sql
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -34,6 +36,10 @@ __all__ = (
 )
 
 logger = get_logger("sqlspec.adapters.cockroach_psycopg.adk.store")
+_LOCALITY_CLAUSE_PATTERN = re.compile(
+    r"^LOCALITY\s+(?:GLOBAL|REGIONAL(?:\s+BY\s+(?:TABLE(?:\s+IN\s+(?:PRIMARY\s+REGION|[A-Za-z0-9_-]+|\"[A-Za-z0-9_-]+\"))?|ROW(?:\s+AS\s+(?:[A-Za-z_][A-Za-z0-9_]*|\"[A-Za-z_][A-Za-z0-9_]*\"))?))?)$",
+    re.IGNORECASE,
+)
 
 
 _ADK_SESSIONS_TABLE_DDL_TEMPLATE = ",\n            {0}"
@@ -218,6 +224,7 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
+            await driver.commit()
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -614,18 +621,19 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
+        session_idx_name = self._session_table.replace(".", "_")
 
         return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
             self._session_table,
             owner_id_line,
             session_locality,
-            self._session_table,
+            session_idx_name,
             self._session_table,
             session_storing_clause,
-            self._session_table,
+            session_idx_name,
             self._session_table,
             hash_shard_clause,
-            self._session_table,
+            session_idx_name,
             self._session_table,
         )
 
@@ -634,18 +642,19 @@ class CockroachPsycopgAsyncADKStore(BaseAsyncADKStore["CockroachPsycopgAsyncConf
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
+        events_idx_name = self._events_table.replace(".", "_")
 
         return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
             self._events_table,
             self._session_table,
             events_locality,
-            self._events_table,
+            events_idx_name,
             self._events_table,
             hash_shard_clause,
             events_storing_clause,
+            events_idx_name,
             self._events_table,
-            self._events_table,
-            self._events_table,
+            events_idx_name,
             self._events_table,
         )
 
@@ -706,6 +715,7 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
+            driver.commit()
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1098,18 +1108,19 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         session_locality = _cockroach_table_locality_clause(adk_config, "session_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         session_storing_clause = _cockroach_storing_clause(adk_config, ("state", "create_time", "update_time"))
+        session_idx_name = self._session_table.replace(".", "_")
 
         return _ADK_SESSIONS_TABLE_DDL_TEMPLATE_2.format(
             self._session_table,
             owner_id_line,
             session_locality,
-            self._session_table,
+            session_idx_name,
             self._session_table,
             session_storing_clause,
-            self._session_table,
+            session_idx_name,
             self._session_table,
             hash_shard_clause,
-            self._session_table,
+            session_idx_name,
             self._session_table,
         )
 
@@ -1118,18 +1129,19 @@ class CockroachPsycopgSyncADKStore(BaseSyncADKStore["CockroachPsycopgSyncConfig"
         events_locality = _cockroach_table_locality_clause(adk_config, "events_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
         events_storing_clause = _cockroach_storing_clause(adk_config, ("invocation_id", "event_data"))
+        events_idx_name = self._events_table.replace(".", "_")
 
         return _ADK_EVENTS_TABLE_DDL_TEMPLATE.format(
             self._events_table,
             self._session_table,
             events_locality,
-            self._events_table,
+            events_idx_name,
             self._events_table,
             hash_shard_clause,
             events_storing_clause,
+            events_idx_name,
             self._events_table,
-            self._events_table,
-            self._events_table,
+            events_idx_name,
             self._events_table,
         )
 
@@ -1212,6 +1224,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._memory_table_ddl())
+            await driver.commit()
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -1222,6 +1235,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             return 0
 
         inserted_count = 0
+        table_ident = pg_sql.Identifier(*self._memory_table.split("."))
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
@@ -1232,9 +1246,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
-            """).format(
-                table=pg_sql.Identifier(self._memory_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
-            )
+            """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
         else:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
@@ -1244,7 +1256,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
-            """).format(table=pg_sql.Identifier(self._memory_table))
+            """).format(table=table_ident)
 
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
             for entry in entries:
@@ -1330,8 +1342,8 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = [f"inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'"]
-        params: list[Any] = []
+        clauses = ["inserted_at < (CURRENT_TIMESTAMP - (%s * INTERVAL '1 day'))"]
+        params: list[Any] = [int(days)]
         if app_name is not None:
             clauses.append("app_name = %s")
             params.append(app_name)
@@ -1341,7 +1353,7 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         async with self._config.provide_connection() as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode(), tuple(params) if params else None)
+            await cur.execute(sql.encode(), tuple(params))
             await conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1352,22 +1364,23 @@ class CockroachPsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["CockroachPsyc
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        memory_idx_name = self._memory_table.replace(".", "_")
 
         fts_index = ""
         if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(memory_idx_name, self._memory_table)
         trigram_index = ""
         if adk_config.get("enable_memory_trigram_index", False):
-            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table, self._memory_table)
+            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(memory_idx_name, self._memory_table)
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
             self._memory_table,
             owner_id_line,
             memory_locality,
-            self._memory_table,
+            memory_idx_name,
             self._memory_table,
             hash_shard_clause,
-            self._memory_table,
+            memory_idx_name,
             self._memory_table,
             fts_index,
             trigram_index,
@@ -1396,6 +1409,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
 
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
+            driver.commit()
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -1407,6 +1421,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             return 0
 
         inserted_count = 0
+        table_ident = pg_sql.Identifier(*self._memory_table.split("."))
         if self._owner_id_column_name:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
@@ -1417,9 +1432,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
-            """).format(
-                table=pg_sql.Identifier(self._memory_table), owner_id_col=pg_sql.Identifier(self._owner_id_column_name)
-            )
+            """).format(table=table_ident, owner_id_col=pg_sql.Identifier(self._owner_id_column_name))
         else:
             query = pg_sql.SQL("""
             INSERT INTO {table} (
@@ -1429,7 +1442,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (event_id) DO NOTHING
-            """).format(table=pg_sql.Identifier(self._memory_table))
+            """).format(table=table_ident)
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
             for entry in entries:
@@ -1515,8 +1528,8 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        clauses = [f"inserted_at < CURRENT_TIMESTAMP - INTERVAL '{days} days'"]
-        params: list[Any] = []
+        clauses = ["inserted_at < (CURRENT_TIMESTAMP - (%s * INTERVAL '1 day'))"]
+        params: list[Any] = [int(days)]
         if app_name is not None:
             clauses.append("app_name = %s")
             params.append(app_name)
@@ -1526,7 +1539,7 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode(), tuple(params) if params else None)
+            cur.execute(sql.encode(), tuple(params))
             conn.commit()
             return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
@@ -1537,22 +1550,23 @@ class CockroachPsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["CockroachPsycop
             owner_id_line = _ADK_SESSIONS_TABLE_DDL_TEMPLATE.format(self._owner_id_column_ddl)
         memory_locality = _cockroach_table_locality_clause(adk_config, "memory_table_locality")
         hash_shard_clause = _cockroach_hash_shard_clause(adk_config)
+        memory_idx_name = self._memory_table.replace(".", "_")
 
         fts_index = ""
         if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(self._memory_table, self._memory_table)
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(memory_idx_name, self._memory_table)
         trigram_index = ""
         if adk_config.get("enable_memory_trigram_index", False):
-            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table, self._memory_table)
+            trigram_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(memory_idx_name, self._memory_table)
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
             self._memory_table,
             owner_id_line,
             memory_locality,
-            self._memory_table,
+            memory_idx_name,
             self._memory_table,
             hash_shard_clause,
-            self._memory_table,
+            memory_idx_name,
             self._memory_table,
             fts_index,
             trigram_index,
@@ -1623,6 +1637,9 @@ def _cockroach_table_locality_clause(adk_config: CockroachPsycopgADKConfig, tabl
         return ""
     if not clause.upper().startswith("LOCALITY "):
         clause = f"LOCALITY {clause}"
+    if not _LOCALITY_CLAUSE_PATTERN.fullmatch(clause):
+        msg = f"Invalid CockroachDB LOCALITY clause: {locality!r}"
+        raise ImproperConfigurationError(msg)
     return f"\n        {clause}"
 
 

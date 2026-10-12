@@ -4,7 +4,7 @@ This module contains functions to create dependency providers for services and f
 """
 
 import copy
-import datetime
+import datetime as dt
 import inspect
 import typing
 from collections.abc import Callable, Mapping
@@ -61,7 +61,7 @@ __all__ = (
     "normalize_choice_field_types",
 )
 
-DTorNone = datetime.datetime | None
+DTorNone = dt.datetime | None
 StringOrNone = str | None
 UuidOrNone = UUID | None
 IntOrNone = int | None
@@ -114,7 +114,6 @@ def normalize_choice_field_types(choices: list[Any] | tuple[Any, ...] | type[Enu
     return cast("Any", typing.Literal).__getitem__(tuple(choices))
 
 
-# Keep FilterConfig field unions and provider signatures in sync with sqlspec.extensions.fastapi.providers.
 class FilterConfig(TypedDict):
     """Configuration for generated Litestar filter dependencies.
 
@@ -398,6 +397,7 @@ def _configured_filter_aggregator(config: FilterConfig) -> Callable[..., list[Fi
         annotations["order_by_filter"] = annotation
 
     if not_in_fields := config.get("not_in_fields"):
+        not_in_fields = {not_in_fields} if isinstance(not_in_fields, (str, FieldNameType)) else not_in_fields
         for field_def in not_in_fields:
             field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
             annotation = NamedDependency[SkipValidation[NotInCollectionFilter[Any]]]
@@ -409,6 +409,7 @@ def _configured_filter_aggregator(config: FilterConfig) -> Callable[..., list[Fi
             annotations[f"{field_def.name}_not_in_filter"] = annotation
 
     if in_fields := config.get("in_fields"):
+        in_fields = {in_fields} if isinstance(in_fields, (str, FieldNameType)) else in_fields
         for field_def in in_fields:
             field_def = FieldNameType(name=field_def, type_hint=str) if isinstance(field_def, str) else field_def
             annotation = NamedDependency[SkipValidation[InCollectionFilter[Any]]]
@@ -521,8 +522,15 @@ def _aggregate_filter_provider(**kwargs: Any) -> list[FilterTypes]:
             continue
         if isinstance(filter_value, list):
             filters.extend(filter_value)
-        elif (isinstance(filter_value, SearchFilter) and filter_value.value is None) or (
-            isinstance(filter_value, OrderByFilter) and filter_value.field_name is None
+        elif (
+            (isinstance(filter_value, SearchFilter) and filter_value.value is None)
+            or (isinstance(filter_value, OrderByFilter) and filter_value.field_name is None)
+            or (
+                isinstance(filter_value, BeforeAfterFilter)
+                and filter_value.before is None
+                and filter_value.after is None
+            )
+            or (isinstance(filter_value, (InCollectionFilter, NotInCollectionFilter)) and filter_value.values is None)
         ):
             continue
         else:

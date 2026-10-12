@@ -7,13 +7,19 @@ interpreted adapter sources can feed compiled stream classes):
   list[dict[str, Any]]`` returns the next chunk (empty list signals exhaustion),
   ``close() -> None`` is idempotent and safe at any state including pre-start.
 - async source: same names, all coroutines.
+
+``_StopAsync`` dynamically subclasses ``StopAsyncIteration`` via ``builtins`` to
+bypass mypyc's coroutine transformation of literal ``raise StopAsyncIteration``
+statements inside compiled ``__anext__`` methods.
 """
 
 import builtins
-import contextlib
 from typing import TYPE_CHECKING, Any, Generic, Protocol, Self, TypeVar, cast, overload
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.schema import to_schema
 
 if TYPE_CHECKING:
@@ -30,6 +36,8 @@ __all__ = (
     "SyncRowStream",
     "rows_to_dicts",
 )
+
+logger = get_logger("sqlspec.driver")
 
 _StopAsyncBase = getattr(builtins, "Stop" + "Async" + "Iteration")
 _StopAsync = type("_StopAsync", (_StopAsyncBase,), {})
@@ -81,6 +89,7 @@ def rows_to_dicts(rows: "list[Any]", column_names: "list[str]") -> "list[dict[st
     return [dict(zip(column_names, row, strict=False)) for row in rows]
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class SyncRowStream(Generic[RowT]):
     """Bounded-memory iterator backed by a chunk source."""
 
@@ -93,20 +102,6 @@ class SyncRowStream(Generic[RowT]):
         self._buffer_index = 0
         self._closed = False
         self._started = False
-
-    @overload
-    def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "SyncRowStream[SchemaRowT]": ...
-
-    @overload
-    def _with_schema_type(self, schema_type: None = None) -> "SyncRowStream[dict[str, Any]]": ...
-
-    def _with_schema_type(
-        self, schema_type: "type[SchemaRowT] | None" = None
-    ) -> "SyncRowStream[SchemaRowT] | SyncRowStream[dict[str, Any]]":
-        self._schema_type = schema_type
-        if schema_type is None:
-            return cast("SyncRowStream[dict[str, Any]]", self)
-        return cast("SyncRowStream[SchemaRowT]", self)
 
     def __enter__(self) -> Self:
         return self
@@ -144,14 +139,26 @@ class SyncRowStream(Generic[RowT]):
         self._buffer_index += 1
         return row
 
+    def close(self) -> None:
+        self._close(error=False)
+
+    @overload
+    def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "SyncRowStream[SchemaRowT]": ...
+    @overload
+    def _with_schema_type(self, schema_type: None = None) -> "SyncRowStream[dict[str, Any]]": ...
+    def _with_schema_type(
+        self, schema_type: "type[SchemaRowT] | None" = None
+    ) -> "SyncRowStream[SchemaRowT] | SyncRowStream[dict[str, Any]]":
+        self._schema_type = schema_type
+        if schema_type is None:
+            return cast("SyncRowStream[dict[str, Any]]", self)
+        return cast("SyncRowStream[SchemaRowT]", self)
+
     def _coerce_chunk(self, chunk: "list[dict[str, Any]]") -> "list[RowT]":
         schema_type = self._schema_type
         if schema_type is None:
             return cast("list[RowT]", chunk)
         return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
-
-    def close(self) -> None:
-        self._close(error=False)
 
     def _close(self, error: bool = False) -> None:
         if self._closed:
@@ -159,10 +166,13 @@ class SyncRowStream(Generic[RowT]):
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
-        with contextlib.suppress(Exception):
+        try:
             self._source.close(error=error)
+        except Exception as exc:
+            logger.debug("SyncRowStream source close failed: %s", exc)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class AsyncRowStream(Generic[RowT]):
     """Async bounded-memory iterator backed by an async chunk source."""
 
@@ -175,20 +185,6 @@ class AsyncRowStream(Generic[RowT]):
         self._buffer_index = 0
         self._closed = False
         self._started = False
-
-    @overload
-    def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "AsyncRowStream[SchemaRowT]": ...
-
-    @overload
-    def _with_schema_type(self, schema_type: None = None) -> "AsyncRowStream[dict[str, Any]]": ...
-
-    def _with_schema_type(
-        self, schema_type: "type[SchemaRowT] | None" = None
-    ) -> "AsyncRowStream[SchemaRowT] | AsyncRowStream[dict[str, Any]]":
-        self._schema_type = schema_type
-        if schema_type is None:
-            return cast("AsyncRowStream[dict[str, Any]]", self)
-        return cast("AsyncRowStream[SchemaRowT]", self)
 
     def __aiter__(self) -> "AsyncRowStream[RowT]":
         return self
@@ -226,14 +222,26 @@ class AsyncRowStream(Generic[RowT]):
         self._buffer_index += 1
         return row
 
+    async def aclose(self) -> None:
+        await self._aclose(error=False)
+
+    @overload
+    def _with_schema_type(self, schema_type: "type[SchemaRowT]") -> "AsyncRowStream[SchemaRowT]": ...
+    @overload
+    def _with_schema_type(self, schema_type: None = None) -> "AsyncRowStream[dict[str, Any]]": ...
+    def _with_schema_type(
+        self, schema_type: "type[SchemaRowT] | None" = None
+    ) -> "AsyncRowStream[SchemaRowT] | AsyncRowStream[dict[str, Any]]":
+        self._schema_type = schema_type
+        if schema_type is None:
+            return cast("AsyncRowStream[dict[str, Any]]", self)
+        return cast("AsyncRowStream[SchemaRowT]", self)
+
     def _coerce_chunk(self, chunk: "list[dict[str, Any]]") -> "list[RowT]":
         schema_type = self._schema_type
         if schema_type is None:
             return cast("list[RowT]", chunk)
         return cast("list[RowT]", to_schema(chunk, schema_type=schema_type))
-
-    async def aclose(self) -> None:
-        await self._aclose(error=False)
 
     async def _aclose(self, error: bool = False) -> None:
         if self._closed:
@@ -241,10 +249,13 @@ class AsyncRowStream(Generic[RowT]):
         self._closed = True
         self._buffer = []
         self._buffer_index = 0
-        with contextlib.suppress(Exception):
+        try:
             await self._source.close(error=error)
+        except Exception as exc:
+            logger.debug("AsyncRowStream source close failed: %s", exc)
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class EagerSyncRowSource:
     """Chunk source over pre-materialized rows (eager fallback; not bounded-memory)."""
 
@@ -267,6 +278,7 @@ class EagerSyncRowSource:
         self._rows = []
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class EagerAsyncRowSource:
     """Async chunk source over pre-materialized rows (eager fallback; not bounded-memory)."""
 
@@ -289,6 +301,33 @@ class EagerAsyncRowSource:
         self._rows = []
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
+class _LazyEagerSyncRowSource:
+    """Sync eager fallback source that materializes via the driver on first fetch."""
+
+    __slots__ = ("_chunk_size", "_driver", "_position", "_rows", "_statement")
+
+    def __init__(self, driver: Any, statement: "SQL", chunk_size: int) -> None:
+        self._driver = driver
+        self._statement = statement
+        self._chunk_size = chunk_size
+        self._rows: list[dict[str, Any]] = []
+        self._position = 0
+
+    def start(self) -> None:
+        result = self._driver.execute(self._statement)
+        self._rows = result.get_data()
+
+    def fetch_chunk(self) -> "list[dict[str, Any]]":
+        chunk = self._rows[self._position : self._position + self._chunk_size]
+        self._position += len(chunk)
+        return chunk
+
+    def close(self, error: bool = False) -> None:
+        self._rows = []
+
+
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _LazyEagerAsyncRowSource:
     """Async eager fallback source that materializes via the driver on first fetch."""
 

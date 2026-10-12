@@ -9,16 +9,15 @@ from collections.abc import AsyncIterator, Iterator
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
-from urllib.parse import unquote, urlparse
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.exceptions import FileNotFoundInStorageError
+from sqlspec.exceptions import FileNotFoundInStorageError, StoragePathTraversalError
 from sqlspec.storage._arrow_stream import iter_parquet_row_groups, validate_parquet_stream_options
-from sqlspec.storage._paths import ensure_path_within_root, strip_windows_drive_prefix
+from sqlspec.storage._paths import ensure_path_within_root, parse_file_uri_path, reject_parent_traversal
 from sqlspec.storage._utils import import_pyarrow_parquet
 from sqlspec.storage.backends.base import AsyncArrowBatchIterator, AsyncThreadedBytesIterator
-from sqlspec.storage.errors import execute_sync_storage_operation
+from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
@@ -56,8 +55,7 @@ class LocalStore:
                 - file:///home/user/storage + base_path="/other" -> /other (absolute takes precedence)
         """
         if uri.startswith("file://"):
-            parsed = urlparse(uri)
-            path = strip_windows_drive_prefix(unquote(parsed.path))
+            path = parse_file_uri_path(uri)
             self.base_path = Path(path).resolve()
         elif uri:
             self.base_path = Path(uri).resolve()
@@ -65,8 +63,6 @@ class LocalStore:
             self.base_path = Path.cwd()
 
         if "base_path" in kwargs:
-            # Combine URI path with base_path (Path division handles absolute paths correctly)
-            # If base_path is absolute, it takes precedence (backward compatible)
             self.base_path = (self.base_path / kwargs["base_path"]).resolve()
 
         if not self.base_path.exists():
@@ -75,6 +71,18 @@ class LocalStore:
             self.base_path = self.base_path.parent
 
         self.protocol = "file"
+
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        Local file storage does not support URL signing.
+        Local files are accessed directly via file:// URIs.
+
+        Returns:
+            Always False for local storage.
+        """
+        return False
 
     def resolve_uri(self, path: "str | Path") -> str:
         """Resolve a backend-relative path to an absolute filesystem path.
@@ -86,21 +94,6 @@ class LocalStore:
             The absolute filesystem path. The target does not need to exist.
         """
         return str(self._resolve_path(path).resolve())
-
-    def _resolve_path(self, path: "str | Path") -> Path:
-        """Resolve path relative to base_path, refusing anything outside it.
-
-        Args:
-            path: Path to resolve (absolute or relative).
-
-        Returns:
-            Resolved Path object inside ``base_path``.
-
-        Raises:
-            StoragePathTraversalError: If the path resolves outside ``base_path``.
-        """
-        relative = ensure_path_within_root(path, self.base_path)
-        return self.base_path if not relative else self.base_path / relative
 
     def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from file synchronously."""
@@ -160,14 +153,17 @@ class LocalStore:
             **kwargs: Additional backend-specific options (currently unused).
 
             When the prefix resembles a directory (contains a slash or ends with '/'), we treat it as a path; otherwise we filter filenames within the base path.
-            Paths outside base_path are returned with their absolute names.
         """
-        if prefix and (prefix.endswith("/") or "/" in prefix):
-            search_path = self._resolve_path(prefix)
-            if not search_path.exists():
-                return []
-            if search_path.is_file():
-                return [str(search_path.relative_to(self.base_path))]
+        if prefix:
+            reject_parent_traversal(prefix)
+            if prefix.endswith("/") or "/" in prefix:
+                search_path = self._resolve_path(prefix)
+                if not search_path.exists():
+                    return []
+                if search_path.is_file():
+                    return [str(search_path.relative_to(self.base_path))]
+            else:
+                search_path = self.base_path
         else:
             search_path = self.base_path
 
@@ -176,14 +172,14 @@ class LocalStore:
         for path in search_path.glob(pattern):
             if path.is_file():
                 try:
+                    resolved_file = path.resolve()
+                    resolved_file.relative_to(self.base_path)
                     relative = path.relative_to(self.base_path)
-                    relative_str = str(relative)
-                    if not prefix or relative_str.startswith(prefix):
-                        files.append(relative_str)
                 except ValueError:
-                    path_str = str(path)
-                    if not prefix or path_str.startswith(prefix):
-                        files.append(path_str)
+                    continue
+                relative_str = str(relative)
+                if not prefix or relative_str.startswith(prefix):
+                    files.append(relative_str)
 
         return sorted(files)
 
@@ -221,23 +217,37 @@ class LocalStore:
     def glob_sync(self, pattern: str, **kwargs: Any) -> "list[str]":
         """Find files matching pattern synchronously.
 
-        Supports both relative and absolute patterns by adjusting where the glob search begins.
+        Supports both relative and absolute patterns inside ``base_path``.
         """
-        if Path(pattern).is_absolute():
-            base_path = Path(pattern).parent
-            pattern_name = Path(pattern).name
-            matches = base_path.rglob(pattern_name) if "**" in pattern else base_path.glob(pattern_name)
+        if not pattern:
+            return []
+        reject_parent_traversal(pattern)
+        pattern_path = Path(pattern)
+        if pattern_path.is_absolute():
+            try:
+                rel_pattern_path = pattern_path.relative_to(self.base_path)
+            except ValueError as exc:
+                msg = f"Glob pattern resolves outside base_path '{self.base_path}': {pattern!r}"
+                raise StoragePathTraversalError(msg) from exc
+            rel_pattern = str(rel_pattern_path)
         else:
-            matches = self.base_path.rglob(pattern) if "**" in pattern else self.base_path.glob(pattern)
+            rel_pattern = pattern
+
+        matches = (
+            self.base_path.rglob(rel_pattern)
+            if "**" in rel_pattern and not rel_pattern.startswith("**/")
+            else self.base_path.glob(rel_pattern)
+        )
 
         results = []
         for match in matches:
             if match.is_file():
                 try:
+                    match.resolve().relative_to(self.base_path)
                     relative = match.relative_to(self.base_path)
-                    results.append(str(relative))
                 except ValueError:
-                    results.append(str(match))
+                    continue
+                results.append(str(relative))
 
         return sorted(results)
 
@@ -250,20 +260,6 @@ class LocalStore:
             operation="get_metadata",
             path=str(resolved),
         )
-
-    def _collect_metadata(self, resolved: "Path") -> "dict[str, object]":
-        if not resolved.exists():
-            return {}
-
-        stat = resolved.stat()
-        return {
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-            "created": stat.st_ctime,
-            "is_file": resolved.is_file(),
-            "is_dir": resolved.is_dir(),
-            "path": str(resolved),
-        }
 
     def is_object_sync(self, path: "str | Path") -> bool:
         """Check if path points to a file synchronously."""
@@ -321,24 +317,10 @@ class LocalStore:
             )
             yield from iter_parquet_row_groups(parquet_file, batch_size=batch_size, **kwargs)
 
-    @property
-    def supports_signing(self) -> bool:
-        """Whether this backend supports URL signing.
-
-        Local file storage does not support URL signing.
-        Local files are accessed directly via file:// URIs.
-
-        Returns:
-            Always False for local storage.
-        """
-        return False
-
     @overload
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
-
     @overload
     def sign_sync(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
-
     def sign_sync(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
@@ -385,8 +367,12 @@ class LocalStore:
         """
         resolved = self._resolve_path(path)
         chunk_size = chunk_size or 65536
-        # Open file in thread pool to avoid blocking, then use threaded iterator
-        file_obj = await async_(_open_file_for_read)(resolved)
+        file_obj = await execute_async_storage_operation(
+            partial(async_(_open_file_for_read), resolved),
+            backend=self.backend_type,
+            operation="stream_read",
+            path=str(resolved),
+        )
         return AsyncThreadedBytesIterator(file_obj, chunk_size)
 
     async def list_objects_async(self, prefix: str = "", recursive: bool = True, **kwargs: Any) -> "list[str]":
@@ -447,15 +433,42 @@ class LocalStore:
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
-
     @overload
     async def sign_async(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
-
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
         """Generate signed URL(s) asynchronously."""
         return await async_(self.sign_sync)(paths, expires_in, for_upload)  # type: ignore[arg-type]
+
+    def _resolve_path(self, path: "str | Path") -> Path:
+        """Resolve path relative to base_path, refusing anything outside it.
+
+        Args:
+            path: Path to resolve (absolute or relative).
+
+        Returns:
+            Resolved Path object inside ``base_path``.
+
+        Raises:
+            StoragePathTraversalError: If the path resolves outside ``base_path``.
+        """
+        relative = ensure_path_within_root(path, self.base_path)
+        return self.base_path if not relative else self.base_path / relative
+
+    def _collect_metadata(self, resolved: "Path") -> "dict[str, object]":
+        if not resolved.exists():
+            return {}
+
+        stat = resolved.stat()
+        return {
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "created": stat.st_ctime,
+            "is_file": resolved.is_file(),
+            "is_dir": resolved.is_dir(),
+            "path": str(resolved),
+        }
 
 
 def _write_local_bytes(resolved: "Path", data: bytes) -> None:

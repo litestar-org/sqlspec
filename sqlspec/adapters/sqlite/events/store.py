@@ -1,11 +1,14 @@
 """SQLite event queue store."""
 
-from typing import Any, NotRequired
+from typing import TYPE_CHECKING, Any, NotRequired
 
 from sqlspec.adapters.sqlite.config import SqliteConfig
 from sqlspec.adapters.sqlite.core import apply_extension_pragmas, extension_pragma_statements
 from sqlspec.config import EventsConfig
 from sqlspec.extensions.events import BaseEventQueueStore
+
+if TYPE_CHECKING:
+    from sqlspec.migrations.schema import SchemaEnsureResult
 
 __all__ = ("SqliteEventQueueStore", "SqliteEventsConfig")
 
@@ -40,6 +43,11 @@ class SqliteEventQueueStore(BaseEventQueueStore[SqliteConfig]):
     def prepare_schema_sync(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before queue DDL."""
         apply_extension_pragmas(driver.connection, self._pragma_statements)
+
+    def reconcile_schema_sync(self, driver: Any) -> "SchemaEnsureResult":
+        """Apply configured SQLite PRAGMAs and reconcile queue schema."""
+        self.prepare_schema_sync(driver)
+        return super().reconcile_schema_sync(driver)
 
     def _column_types(self) -> "tuple[str, str, str]":
         """Return SQLite-compatible column types for the event queue."""

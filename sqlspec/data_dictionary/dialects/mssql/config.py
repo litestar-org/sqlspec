@@ -1,3 +1,5 @@
+"""SQL Server dialect static configuration and reflection helpers."""
+
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -27,6 +29,29 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary import TableMetadata
 
 __all__ = (
+    "MSSQL_CONFIG",
+    "MSSQL_DDL_WARNING",
+    "MSSQL_DYNAMIC_FEATURES",
+    "MSSQL_ENGINE_EDITION_AZURE_SET",
+    "MSSQL_FEATURE_FLAGS",
+    "MSSQL_FEATURE_VERSIONS",
+    "MSSQL_MIN_GREATEST_LEAST_VERSION",
+    "MSSQL_MIN_JSON_FUNCTIONS_VERSION",
+    "MSSQL_MIN_NATIVE_JSON_VERSION",
+    "MSSQL_MIN_STRING_AGG_VERSION",
+    "MSSQL_PERMISSIONS_WARNING",
+    "MSSQL_PRODUCT_VERSION_PATTERN",
+    "MSSQL_QUERY_STORE_PERMISSION_WARNING",
+    "MSSQL_REDACTED_VALUE",
+    "MSSQL_REPLACEMENT_DOMAINS",
+    "MSSQL_SENSITIVE_SYSTEM_KEYS",
+    "MSSQL_SYSTEM_METADATA_DOMAINS",
+    "MSSQL_SYSTEM_OPT_IN_WARNING",
+    "MSSQL_SYSTEM_PERMISSION_WARNING",
+    "MSSQL_SYSTEM_WARNING",
+    "MSSQL_TYPE_MAPPINGS",
+    "MSSQL_VERSION_PARTS_COUNT",
+    "MSSQL_VERSION_PATTERN",
     "MssqlVersionInfo",
     "build_mssql_metadata_capability_profile",
     "build_mssql_system_metadata_capability",
@@ -161,6 +186,8 @@ register_dialect(MSSQL_CONFIG)
 class MssqlVersionInfo(VersionInfo):
     """MSSQL database version info with build, revision, and Azure SQL detection."""
 
+    __slots__ = ("build", "edition", "engine_edition", "is_azure_sql", "revision")
+
     def __init__(
         self,
         major: int,
@@ -177,15 +204,6 @@ class MssqlVersionInfo(VersionInfo):
         self.engine_edition = engine_edition
         self.is_azure_sql = is_mssql_azure_sql(engine_edition)
 
-    def supports_native_json(self) -> bool:
-        """Return whether this server supports the native JSON type."""
-        return mssql_supports_native_json(self.major, is_azure_sql=self.is_azure_sql)
-
-    @property
-    def version_tuple(self) -> "tuple[int, int, int]":
-        """Get version tuple using the MSSQL build number as the third component."""
-        return (self.major, self.minor, self.build)
-
     def __str__(self) -> str:
         """String representation of version info."""
         version_str = f"{self.major}.{self.minor}.{self.build}.{self.revision}"
@@ -194,6 +212,15 @@ class MssqlVersionInfo(VersionInfo):
         if self.is_azure_sql:
             version_str += " [Azure]"
         return version_str
+
+    @property
+    def version_tuple(self) -> "tuple[int, int, int]":
+        """Get version tuple using the MSSQL build number as the third component."""
+        return (self.major, self.minor, self.build)
+
+    def supports_native_json(self) -> bool:
+        """Return whether this server supports the native JSON type."""
+        return mssql_supports_native_json(self.major, is_azure_sql=self.is_azure_sql)
 
 
 def extract_mssql_version_value(row: object) -> "str | None":

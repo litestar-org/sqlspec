@@ -182,17 +182,17 @@ def test_create_connection_name_only_extension_is_load_only(monkeypatch: pytest.
 
 
 def test_create_connection_creates_persistent_scoped_secret(tmp_path) -> None:
-    secret_name = f"s3_secret_{uuid4().hex}"
+    secret_name = f"http_secret_{uuid4().hex}"
     pool = DuckDBConnectionPool(
         {"database": ":memory:", "secret_directory": str(tmp_path)},
         secrets=[
             {
                 "name": secret_name,
-                "secret_type": "s3",
+                "secret_type": "http",
                 "provider": "config",
                 "persistent": True,
-                "scope": "s3://sqlspec-test-bucket/",
-                "value": {"key_id": "abc", "secret": "xyz", "region": "us-east-1"},
+                "scope": "https://sqlspec-test-bucket/",
+                "value": {"bearer_token": "abc"},
             }
         ],
     )
@@ -205,7 +205,7 @@ def test_create_connection_creates_persistent_scoped_secret(tmp_path) -> None:
     finally:
         connection.close()
 
-    assert row == (secret_name, "s3", ["s3://sqlspec-test-bucket/"], True)
+    assert row == (secret_name, "http", ["https://sqlspec-test-bucket/"], True)
 
 
 def test_create_connection_raises_when_secret_verification_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -572,3 +572,34 @@ def test_create_connection_leaves_thread_storage_state_intact() -> None:
             assert db.driver_features["_duckdb_storage_extensions"] == recorded
     finally:
         standalone.close()
+
+
+def test_on_connection_create_replacement_connection_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    """new_connection must use a replacement connection returned by on_connection_create."""
+    raw_conn = _FakeDuckDBConnection()
+    wrapped_conn = _FakeDuckDBConnection()
+    monkeypatch.setattr("sqlspec.adapters.duckdb.pool.duckdb.connect", lambda **_: raw_conn)
+
+    pool = DuckDBConnectionPool(
+        connection_config={"database": ":memory:"},
+        on_connection_create=lambda _conn: wrapped_conn,  # type: ignore[arg-type,return-value]
+    )
+    created: object = pool._create_connection()
+    assert created is wrapped_conn
+
+
+def test_reentrant_get_connection_preserves_outer_checkout() -> None:
+    """Nested get_connection checkouts on the same thread must not commit or close the outer checkout early."""
+    pool = DuckDBConnectionPool(connection_config={"database": ":memory:"})
+    try:
+        with pool.get_connection() as outer_conn:
+            outer_conn.execute("CREATE TABLE nested_test (id INTEGER)")
+            outer_conn.execute("BEGIN TRANSACTION")
+            outer_conn.execute("INSERT INTO nested_test VALUES (1)")
+            with pool.get_connection() as inner_conn:
+                assert inner_conn is outer_conn
+                inner_conn.execute("INSERT INTO nested_test VALUES (2)")
+            outer_conn.rollback()
+            assert outer_conn.execute("SELECT COUNT(*) FROM nested_test").fetchone() == (0,)
+    finally:
+        pool.close()

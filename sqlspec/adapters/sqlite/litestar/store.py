@@ -1,9 +1,18 @@
 """SQLite sync session store for Litestar integration."""
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired
 
-from sqlspec.adapters.sqlite.core import apply_extension_pragmas, end_transaction, extension_pragma_statements
+from sqlspec.adapters.sqlite.core import (
+    JULIAN_EPOCH,
+    SECONDS_PER_DAY,
+    apply_extension_pragmas,
+    datetime_to_julian,
+    end_transaction,
+    extension_pragma_statements,
+    julian_to_datetime,
+)
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
@@ -11,11 +20,7 @@ from sqlspec.utils.sync_tools import async_
 if TYPE_CHECKING:
     from sqlspec.adapters.sqlite.config import SqliteConfig
 
-__all__ = ("SQLiteStore", "SqliteLitestarConfig")
-
-
-SECONDS_PER_DAY = 86400.0
-JULIAN_EPOCH = 2440587.5
+__all__ = ("JULIAN_EPOCH", "SECONDS_PER_DAY", "SQLiteStore", "SqliteLitestarConfig")
 
 
 class SqliteLitestarConfig(LitestarConfig):
@@ -48,7 +53,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         config: SqliteConfig instance.
     """
 
-    __slots__ = ("_pragma_statements",)
+    __slots__ = ("_configured_connection_ids", "_pragma_statements")
     extension_config_options = BaseSQLSpecStore.extension_config_options | frozenset({
         "pragma_overrides",
         "pragma_profile",
@@ -62,6 +67,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
         super().__init__(config)
         self._pragma_statements = extension_pragma_statements(config, "litestar")
+        self._configured_connection_ids: set[int] = set()
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -74,6 +80,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
     def prepare_schema_sync(self, driver: Any) -> None:
         """Apply configured SQLite PRAGMAs before migration DDL generation."""
         apply_extension_pragmas(driver.connection, self._pragma_statements)
+        self._configured_connection_ids.add(id(driver.connection))
 
     async def get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
         """Get a session value by key.
@@ -139,6 +146,11 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
         return await async_(self._delete_expired)()
 
+    def _ensure_pragmas(self, connection: Any) -> None:
+        if self._pragma_statements and id(connection) not in self._configured_connection_ids:
+            apply_extension_pragmas(connection, self._pragma_statements)
+            self._configured_connection_ids.add(id(connection))
+
     def _table_ddl(self) -> str:
         """Get SQLite CREATE TABLE SQL.
 
@@ -164,43 +176,21 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
 
     def _datetime_to_julian(self, dt: "datetime | None") -> "float | None":
-        """Convert datetime to Julian Day number for SQLite storage.
-
-        Args:
-            dt: Datetime to convert (must be UTC-aware).
-
-        Returns:
-            Julian Day number as REAL, or None if dt is None.
-        """
-        if dt is None:
-            return None
-
-        epoch = datetime(1970, 1, 1, tzinfo=UTC)
-        delta_days = (dt - epoch).total_seconds() / SECONDS_PER_DAY
-        return JULIAN_EPOCH + delta_days
+        """Convert datetime to Julian Day number for SQLite storage."""
+        return datetime_to_julian(dt)
 
     def _julian_to_datetime(self, julian: "float | None") -> "datetime | None":
-        """Convert Julian Day number back to datetime.
-
-        Args:
-            julian: Julian Day number.
-
-        Returns:
-            UTC-aware datetime, or None if julian is None.
-        """
-        if julian is None:
-            return None
-
-        days_since_epoch = julian - JULIAN_EPOCH
-        timestamp = days_since_epoch * SECONDS_PER_DAY
-        return datetime.fromtimestamp(timestamp, tz=UTC)
+        """Convert Julian Day number back to datetime."""
+        return julian_to_datetime(julian)
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""
         sql = self._table_ddl()
         with self._config.provide_session() as driver:
             apply_extension_pragmas(driver.connection, self._pragma_statements)
+            self._configured_connection_ids.add(id(driver.connection))
             driver.execute_script(sql)
+            end_transaction(driver.connection, commit=True)
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
@@ -212,13 +202,17 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
-            row = cursor.fetchone()
+            try:
+                raw_row = cursor.fetchone()
+            finally:
+                _close_cursor(cursor)
 
-            if row is None:
+            if raw_row is None:
                 return None
 
-            data, expires_at_julian = row
+            data, expires_at_julian = _row_values(raw_row)
 
             if renew_for is not None and expires_at_julian is not None:
                 new_expires_at = self._calculate_expires_at(renew_for)
@@ -229,7 +223,7 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
                     SET expires_at = ?
                     WHERE session_id = ?
                     """
-                    conn.execute(update_sql, (new_expires_at_julian, key))
+                    _close_cursor(conn.execute(update_sql, (new_expires_at_julian, key)))
                     end_transaction(conn, commit=True)
 
             return bytes(data)
@@ -246,7 +240,8 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql, (key, data, expires_at_julian))
+            self._ensure_pragmas(conn)
+            _close_cursor(conn.execute(sql, (key, data, expires_at_julian)))
             end_transaction(conn, commit=True)
 
     def _delete(self, key: str) -> None:
@@ -254,7 +249,8 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE session_id = ?"
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql, (key,))
+            self._ensure_pragmas(conn)
+            _close_cursor(conn.execute(sql, (key,)))
             end_transaction(conn, commit=True)
 
     def _delete_all(self) -> None:
@@ -262,7 +258,8 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql)
+            self._ensure_pragmas(conn)
+            _close_cursor(conn.execute(sql))
             end_transaction(conn, commit=True)
         self._log_delete_all()
 
@@ -275,8 +272,12 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
-            result = cursor.fetchone()
+            try:
+                result = cursor.fetchone()
+            finally:
+                _close_cursor(cursor)
             return result is not None
 
     def _expires_in(self, key: str) -> "int | None":
@@ -287,10 +288,17 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         """
 
         with self._config.provide_connection() as conn:
+            self._ensure_pragmas(conn)
             cursor = conn.execute(sql, (key,))
-            row = cursor.fetchone()
+            try:
+                raw_row = cursor.fetchone()
+            finally:
+                _close_cursor(cursor)
 
-            if row is None or row[0] is None:
+            if raw_row is None:
+                return None
+            row = _row_values(raw_row)
+            if row[0] is None:
                 return None
 
             expires_at_julian = row[0]
@@ -312,9 +320,25 @@ class SQLiteStore(BaseSQLSpecStore["SqliteConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at <= julianday('now')"
 
         with self._config.provide_connection() as conn:
+            self._ensure_pragmas(conn)
             cursor = conn.execute(sql)
-            end_transaction(conn, commit=True)
-            count = cursor.rowcount
+            try:
+                end_transaction(conn, commit=True)
+                count = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            finally:
+                _close_cursor(cursor)
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+
+def _close_cursor(cursor: Any) -> None:
+    if cursor is not None:
+        with contextlib.suppress(Exception):
+            cursor.close()
+
+
+def _row_values(row: Any) -> Any:
+    if isinstance(row, dict):
+        return tuple(row.values())
+    return row

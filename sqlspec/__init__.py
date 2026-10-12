@@ -1,8 +1,6 @@
 """SQLSpec: Type-safe SQL query mapper for Python."""
 
 # ruff: noqa: E402
-# Suppress noisy Google library deprecation warnings about Python version support.
-# These are informational and clutter CLI output unnecessarily.
 import warnings as _warnings
 
 _warnings.filterwarnings(
@@ -166,6 +164,7 @@ __all__ = (
     "adapters",
     "base",
     "builder",
+    "config",
     "core",
     "create_event",
     "create_statement_observer",
@@ -180,6 +179,7 @@ __all__ = (
     "matches_param_type",
     "migrations",
     "nanoid",
+    "observability",
     "register_param_type",
     "resolve_param_type",
     "sql",
@@ -295,8 +295,6 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | _EXPORTS.keys())
 
 
-# Native cross-module initialization is not protected by Python import locks.
-# Retain eager exports in compiled wheels until mypyc supports lazy concurrency.
 if _COMPILED:
     for _name in __all__:
         if _name not in globals():

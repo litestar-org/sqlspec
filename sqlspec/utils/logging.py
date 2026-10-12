@@ -59,6 +59,7 @@ from other SQLSpec logs::
 """
 
 _BASE_RECORD_KEYS: "set[str] | None" = None
+_TO_JSON_FN: "Any | None" = None
 
 
 correlation_id_var: "ContextVar[str | None]" = _correlation_id_var
@@ -95,8 +96,6 @@ class StructuredFormatter(logging.Formatter):
         Returns:
             JSON formatted log entry
         """
-        from sqlspec.utils.serializers import to_json
-
         record_dict = record.__dict__
         log_entry = {
             "timestamp": self.formatTime(record, self.datefmt),
@@ -134,7 +133,7 @@ class StructuredFormatter(logging.Formatter):
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
 
-        return to_json(log_entry)
+        return _to_json_str(log_entry)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -243,6 +242,16 @@ def _get_base_record_keys() -> "set[str]":
         )
         _BASE_RECORD_KEYS.update({"message", "asctime"})
     return _BASE_RECORD_KEYS
+
+
+def _to_json_str(data: Any) -> str:
+    """Serialize log record dict to JSON string using cached serializer lookup."""
+    global _TO_JSON_FN
+    if _TO_JSON_FN is None:
+        from sqlspec.utils.serializers import to_json
+
+        _TO_JSON_FN = to_json
+    return cast("str", _TO_JSON_FN(data))
 
 
 def _get_trace_context() -> "tuple[str | None, str | None]":

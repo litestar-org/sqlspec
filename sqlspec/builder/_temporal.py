@@ -132,7 +132,8 @@ def _snowflake_version_sql(self: "SnowflakeGenerator", expression: exp.Version) 
 def _duckdb_version_sql(self: "DuckDBGenerator", expression: exp.Version) -> str:
     """DuckDB: AT (TIMESTAMP => timestamp)."""
     expr = self.sql(expression, "expression")
-    return f"AT (TIMESTAMP => {expr})"
+    this = expression.name or "TIMESTAMP"
+    return f"AT ({this} => {expr})"
 
 
 def _cockroachdb_version_sql(self: "PostgresGenerator", expression: exp.Version) -> str:

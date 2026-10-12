@@ -4,18 +4,23 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg as cockroach_psycopg_module
 from psycopg import AsyncCursor, Cursor
 from psycopg import crdb as cockroach_psycopg_crdb
 from psycopg import errors as cockroach_psycopg_errors
 from psycopg import sql as cockroach_psycopg_sql
+from psycopg.adapt import AdaptersMap as CockroachPsycopgAdaptersMap
 from psycopg.rows import DictRow as PsycopgDictRow
 from psycopg.rows import dict_row as cockroach_psycopg_dict_row
 from psycopg.types.json import Jsonb as CockroachPsycopgJsonb
+from psycopg.types.json import set_json_dumps as cockroach_psycopg_set_json_dumps
+from psycopg.types.json import set_json_loads as cockroach_psycopg_set_json_loads
 from psycopg_pool import AsyncConnectionPool as CockroachPsycopgAsyncConnectionPool
 from psycopg_pool import ConnectionPool as CockroachPsycopgConnectionPool
+
+from sqlspec.typing import import_optional_attr
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,6 +45,7 @@ else:
 __all__ = (
     "CockroachAsyncConnection",
     "CockroachAsyncCursor",
+    "CockroachPsycopgAdaptersMap",
     "CockroachPsycopgAsyncConnectionPool",
     "CockroachPsycopgAsyncSessionContext",
     "CockroachPsycopgConnectionPool",
@@ -52,8 +58,13 @@ __all__ = (
     "cockroach_psycopg_dict_row",
     "cockroach_psycopg_errors",
     "cockroach_psycopg_module",
+    "cockroach_psycopg_set_json_dumps",
+    "cockroach_psycopg_set_json_loads",
     "cockroach_psycopg_sql",
 )
+
+_COCKROACH_PSYCOPG_SYNC_DRIVER_CLS: "type[CockroachPsycopgSyncDriver] | None" = None
+_COCKROACH_PSYCOPG_ASYNC_DRIVER_CLS: "type[CockroachPsycopgAsyncDriver] | None" = None
 
 
 class CockroachPsycopgSyncSessionContext:
@@ -86,11 +97,10 @@ class CockroachPsycopgSyncSessionContext:
         self._driver: CockroachPsycopgSyncDriver | None = None
 
     def __enter__(self) -> "CockroachPsycopgSyncDriver":
-        from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgSyncDriver
-
+        driver_cls = _resolve_cockroach_psycopg_sync_driver()
         self._connection = self._acquire_connection()
         statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = CockroachPsycopgSyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -134,11 +144,10 @@ class CockroachPsycopgAsyncSessionContext:
         self._driver: CockroachPsycopgAsyncDriver | None = None
 
     async def __aenter__(self) -> "CockroachPsycopgAsyncDriver":
-        from sqlspec.adapters.cockroach_psycopg.driver import CockroachPsycopgAsyncDriver
-
+        driver_cls = _resolve_cockroach_psycopg_async_driver()
         self._connection = await self._acquire_connection()
         statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = CockroachPsycopgAsyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -150,3 +159,29 @@ class CockroachPsycopgAsyncSessionContext:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def _resolve_cockroach_psycopg_sync_driver() -> "type[CockroachPsycopgSyncDriver]":
+    global _COCKROACH_PSYCOPG_SYNC_DRIVER_CLS
+    driver_cls = _COCKROACH_PSYCOPG_SYNC_DRIVER_CLS
+    if driver_cls is None:
+        resolved = import_optional_attr("sqlspec.adapters.cockroach_psycopg.driver", "CockroachPsycopgSyncDriver")
+        if resolved is None:
+            msg = "Cannot import 'CockroachPsycopgSyncDriver' from 'sqlspec.adapters.cockroach_psycopg.driver'"
+            raise ImportError(msg)
+        driver_cls = cast("type[CockroachPsycopgSyncDriver]", resolved)
+        _COCKROACH_PSYCOPG_SYNC_DRIVER_CLS = driver_cls
+    return driver_cls
+
+
+def _resolve_cockroach_psycopg_async_driver() -> "type[CockroachPsycopgAsyncDriver]":
+    global _COCKROACH_PSYCOPG_ASYNC_DRIVER_CLS
+    driver_cls = _COCKROACH_PSYCOPG_ASYNC_DRIVER_CLS
+    if driver_cls is None:
+        resolved = import_optional_attr("sqlspec.adapters.cockroach_psycopg.driver", "CockroachPsycopgAsyncDriver")
+        if resolved is None:
+            msg = "Cannot import 'CockroachPsycopgAsyncDriver' from 'sqlspec.adapters.cockroach_psycopg.driver'"
+            raise ImportError(msg)
+        driver_cls = cast("type[CockroachPsycopgAsyncDriver]", resolved)
+        _COCKROACH_PSYCOPG_ASYNC_DRIVER_CLS = driver_cls
+    return driver_cls

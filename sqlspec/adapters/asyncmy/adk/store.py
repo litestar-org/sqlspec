@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
-from sqlspec.adapters.asyncmy._typing import AsyncmyProgrammingError
+from sqlspec.adapters.asyncmy._typing import AsyncmyCursor, AsyncmyProgrammingError, AsyncmyRawCursor
 from sqlspec.adapters.asyncmy.core import resolve_rowcount
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseAsyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -12,7 +12,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.asyncmy.config import AsyncmyConfig
@@ -55,11 +55,12 @@ class AsyncmyADKConfig(ADKConfig):
 class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     """MySQL/MariaDB ADK store using AsyncMy driver."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy ADK store."""
         super().__init__(config)
+        self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
         """Create all ADK session tables if they don't exist."""
@@ -78,21 +79,25 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         """Create a new session."""
+        state_json = self._json_serializer(state)
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
-            params = (session_id, app_name, user_id, owner_id, to_json(state))
+            params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
-            params = (session_id, app_name, user_id, to_json(state))
+            params = (session_id, app_name, user_id, state_json)
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
             await cursor.execute(sql, params)
             await conn.commit()
 
@@ -107,7 +112,10 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
     ) -> "StoredSession | None":
         """Get session by scoped identifiers."""
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
                     await cursor.execute(
                         f"""
@@ -128,8 +136,8 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                     (app_name, user_id, session_id),
                 )
                 row = await cursor.fetchone()
-                return _session_record_from_row(row) if row is not None else None
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+                return _session_record_from_row(row, self._json_deserializer) if row is not None else None
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -142,8 +150,11 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, (to_json(state), app_name, user_id, session_id))
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
+            await cursor.execute(sql, (self._json_serializer(state), app_name, user_id, session_id))
             await conn.commit()
 
     async def list_sessions(
@@ -166,11 +177,14 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         )
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
-                return [_session_record_from_row(row) for row in rows]
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+                return [_session_record_from_row(row, self._json_deserializer) for row in rows]
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -179,7 +193,10 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """Delete session and all associated events."""
         sql = f"DELETE FROM {self._session_table} WHERE app_name = %s AND user_id = %s AND id = %s"
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
             await cursor.execute(sql, (app_name, user_id, session_id))
             await conn.commit()
 
@@ -191,8 +208,11 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, _event_insert_params(event_record))
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
+            await cursor.execute(sql, _event_insert_params(event_record, self._json_serializer))
             await conn.commit()
 
     async def append_event_and_update_state(
@@ -223,9 +243,12 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
             try:
-                await cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+                await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
                 await cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
                 if row is None:
@@ -239,23 +262,24 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
                         session_id,
                         event_record["invocation_id"],
                         event_record["timestamp"],
-                        _json_for_storage(event_record["event_data"]),
+                        _json_for_storage(event_record["event_data"], self._json_serializer),
                     ),
                 )
                 if app_state is not None:
                     await cursor.execute(
-                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(app_state))
+                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(app_state))
                     )
                 if user_state is not None:
                     await cursor.execute(
-                        _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(user_state))
+                        _mysql_upsert_user_state_sql(self._user_state_table),
+                        (app_name, user_id, self._json_serializer(user_state)),
                     )
                 await conn.commit()
             except Exception:
                 await conn.rollback()
                 raise
 
-        return _session_record_from_row(row)
+        return _session_record_from_row(row, self._json_deserializer)
 
     async def get_events(
         self,
@@ -287,11 +311,14 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         """
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, params)
                 rows = await cursor.fetchall()
-                return [_event_record_from_row(row) for row in rows]
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+                return [_event_record_from_row(row, self._json_deserializer) for row in rows]
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return []
             raise
@@ -305,11 +332,14 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             params.append(app_name)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return resolve_rowcount(cursor)
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -323,11 +353,14 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             params.append(app_name)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return resolve_rowcount(cursor)
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -341,11 +374,14 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
             params.append(app_name)
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, tuple(params))
                 await conn.commit()
                 return resolve_rowcount(cursor)
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return 0
             raise
@@ -355,11 +391,14 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         sql = f"SELECT state FROM {self._app_state_table} WHERE app_name = %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, (app_name,))
                 row = await cursor.fetchone()
-                return _json_dict(row[0]) if row is not None else None
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+                return _json_dict(_row_first_value(row, "state"), self._json_deserializer) if row is not None else None
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
@@ -369,26 +408,37 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         sql = f"SELECT state FROM {self._user_state_table} WHERE app_name = %s AND user_id = %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, (app_name, user_id))
                 row = await cursor.fetchone()
-                return _json_dict(row[0]) if row is not None else None
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+                return _json_dict(_row_first_value(row, "state"), self._json_deserializer) if row is not None else None
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(_mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(state)))
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
+            await cursor.execute(
+                _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(state))
+            )
             await conn.commit()
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
             await cursor.execute(
-                _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(state))
+                _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, self._json_serializer(state))
             )
             await conn.commit()
 
@@ -397,18 +447,24 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
         sql = f"SELECT value FROM {self._metadata_table} WHERE `key` = %s"
 
         try:
-            async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
                 await cursor.execute(sql, (key,))
                 row = await cursor.fetchone()
-                return str(row[0]) if row is not None else None
-        except AsyncmyProgrammingError as exc:  # pyright: ignore[reportAttributeAccessIssue]
+                return str(_row_first_value(row, "value")) if row is not None else None
+        except AsyncmyProgrammingError as exc:
             if _is_mysql_table_missing(exc):
                 return None
             raise
 
     async def set_metadata(self, key: str, value: str) -> None:
         """Set a value in the ADK internal metadata table."""
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
+        async with (
+            self._config.provide_connection() as conn,
+            AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+        ):
             await cursor.execute(_mysql_upsert_metadata_sql(self._metadata_table), (key, value))
             await conn.commit()
 
@@ -464,11 +520,12 @@ class AsyncmyADKStore(BaseAsyncADKStore["AsyncmyConfig"]):
 class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
     """MySQL/MariaDB ADK memory store using AsyncMy driver."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "AsyncmyConfig") -> None:
         """Initialize AsyncMy memory store."""
         super().__init__(config)
+        self._json_serializer, self._json_deserializer = _resolve_json_codecs(config)
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
@@ -509,8 +566,11 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             """
 
         async with self._config.provide_connection() as conn:
-            async with conn.cursor() as cursor:
+            async with AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor:
                 for entry in entries:
+                    content_json = self._json_serializer(entry["content_json"])
+                    meta = entry.get("metadata_json")
+                    metadata_json = self._json_serializer(meta) if meta is not None else None
                     params: tuple[Any, ...]
                     if self._owner_id_column_name:
                         params = (
@@ -523,9 +583,9 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
                             entry.get("author"),
                             owner_id,
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            content_json,
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            metadata_json,
                             entry["inserted_at"],
                         )
                     else:
@@ -538,9 +598,9 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
                             entry["event_id"],
                             entry.get("author"),
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            content_json,
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            metadata_json,
                             entry["inserted_at"],
                         )
                     await cursor.execute(sql, params)
@@ -585,17 +645,28 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             """
             params = (*scope_params, f"%{query}%", limit_value)
 
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, params)
-            rows = await cursor.fetchall()
-            columns = [col[0] for col in cursor.description or []]
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, params)
+                rows = await cursor.fetchall()
+                columns = [col[0] for col in cursor.description or []]
+        except AsyncmyProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return []
+            raise
 
         records: list[StoredMemory] = []
         for row in rows:
-            rec = cast("StoredMemory", dict(zip(columns, row, strict=False)))
-            rec["content_json"] = _json_dict(rec.get("content_json"))
+            row_dict = dict(row) if isinstance(row, Mapping) else dict(zip(columns, row, strict=False))
+            rec = cast("StoredMemory", row_dict)
+            rec["content_json"] = _json_dict(rec.get("content_json"), self._json_deserializer)
             metadata_val = rec.get("metadata_json")
-            rec["metadata_json"] = _json_dict(metadata_val) if metadata_val is not None else None
+            rec["metadata_json"] = (
+                _json_dict(metadata_val, self._json_deserializer) if metadata_val is not None else None
+            )
             rec["embedding"] = None
             records.append(rec)
         return records
@@ -607,10 +678,18 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
             raise RuntimeError(msg)
 
         sql = f"DELETE FROM {self._memory_table} WHERE session_id = %s"
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, (session_id,))
-            await conn.commit()
-            return resolve_rowcount(cursor)
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (session_id,))
+                await conn.commit()
+                return resolve_rowcount(cursor)
+        except AsyncmyProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
@@ -631,10 +710,18 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
 
         where_sql = " AND ".join(clauses)
         sql = f"DELETE FROM {self._memory_table} WHERE {where_sql}"
-        async with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(sql, tuple(params))
-            await conn.commit()
-            return resolve_rowcount(cursor)
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AsyncmyCursor(conn, cursor_class=AsyncmyRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, tuple(params))
+                await conn.commit()
+                return resolve_rowcount(cursor)
+        except AsyncmyProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     async def _memory_table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL for memory entries."""
@@ -675,6 +762,24 @@ class AsyncmyADKMemoryStore(BaseAsyncADKMemoryStore["AsyncmyConfig"]):
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get MySQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+
+def _resolve_json_codecs(config: Any) -> "tuple[Callable[[Any], str], Callable[[Any], Any]]":
+    driver_features = getattr(config, "driver_features", None)
+    if isinstance(driver_features, Mapping):
+        serializer = driver_features.get("json_serializer", to_json)
+        deserializer = driver_features.get("json_deserializer", from_json)
+        return cast(
+            "tuple[Callable[[Any], str], Callable[[Any], Any]]",
+            (serializer if callable(serializer) else to_json, deserializer if callable(deserializer) else from_json),
+        )
+    return to_json, from_json
+
+
+def _row_first_value(row: Any, key: str) -> Any:
+    if isinstance(row, Mapping):
+        return row[key]
+    return row[0]
 
 
 def _mysql_owner_id_column_parts(column_ddl: str) -> "tuple[str, str]":
@@ -727,25 +832,49 @@ def _is_mysql_table_missing(exc: BaseException) -> bool:
     )
 
 
-def _json_for_storage(value: Any) -> str:
-    return value if isinstance(value, str) else to_json(value)
+def _json_for_storage(value: Any, serializer: "Callable[[Any], str]" = to_json) -> str:
+    return value if isinstance(value, str) else serializer(value)
 
 
-def _json_dict(value: Any) -> "dict[str, Any]":
-    if isinstance(value, bytearray):
+def _json_dict(value: Any, deserializer: "Callable[[Any], Any]" = from_json) -> "dict[str, Any]":
+    if isinstance(value, (bytearray, memoryview)):
         value = bytes(value)
     if isinstance(value, (bytes, str)):
-        return cast("dict[str, Any]", from_json(value))
+        return cast("dict[str, Any]", deserializer(value))
     return cast("dict[str, Any]", value)
 
 
-def _session_record_from_row(row: Any) -> StoredSession:
+def _session_record_from_row(row: Any, deserializer: "Callable[[Any], Any]" = from_json) -> StoredSession:
+    if isinstance(row, Mapping):
+        return StoredSession(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            state=_json_dict(row["state"], deserializer),
+            create_time=row["create_time"],
+            update_time=row["update_time"],
+        )
     return StoredSession(
-        id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
+        id=row[0],
+        app_name=row[1],
+        user_id=row[2],
+        state=_json_dict(row[3], deserializer),
+        create_time=row[4],
+        update_time=row[5],
     )
 
 
-def _event_record_from_row(row: Any) -> StoredEvent:
+def _event_record_from_row(row: Any, deserializer: "Callable[[Any], Any]" = from_json) -> StoredEvent:
+    if isinstance(row, Mapping):
+        return StoredEvent(
+            id=row["id"],
+            app_name=row["app_name"],
+            user_id=row["user_id"],
+            session_id=row["session_id"],
+            invocation_id=row["invocation_id"],
+            timestamp=row["timestamp"],
+            event_data=_json_dict(row["event_data"], deserializer),
+        )
     return StoredEvent(
         id=row[0],
         app_name=row[1],
@@ -753,11 +882,11 @@ def _event_record_from_row(row: Any) -> StoredEvent:
         session_id=row[3],
         invocation_id=row[4],
         timestamp=row[5],
-        event_data=_json_dict(row[6]),
+        event_data=_json_dict(row[6], deserializer),
     )
 
 
-def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent, serializer: "Callable[[Any], str]" = to_json) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -765,7 +894,7 @@ def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
         event_record["session_id"],
         event_record["invocation_id"],
         event_record["timestamp"],
-        _json_for_storage(event_record["event_data"]),
+        _json_for_storage(event_record["event_data"], serializer),
     )
 
 

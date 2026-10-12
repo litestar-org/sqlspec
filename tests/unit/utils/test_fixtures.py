@@ -1387,8 +1387,8 @@ async def test_export_decodes_json_and_jsonb_string_cells_with_fallback_async(tm
     await export_table_fixtures_async(driver, tmp_path, ["events"], compress=False)
 
     query = driver.select.call_args.args[0].build().sql
-    assert 'CAST("events"."payload" AS TEXT) AS "payload"' in query
-    assert 'CAST("events"."raw_json" AS TEXT) AS "raw_json"' in query
+    assert 'CAST("payload" AS TEXT) AS "payload"' in query
+    assert 'CAST("raw_json" AS TEXT) AS "raw_json"' in query
     exported = json.loads((tmp_path / "events.json").read_text())
     assert exported == [
         {"id": 1, "payload": {"a": 1}, "raw_json": "scalar"},
@@ -1627,3 +1627,72 @@ def test_ignore_unknown_fixture_columns_uses_exact_quoted_names(tmp_path: Path) 
 
     assert load_table_fixtures_sync(driver, tmp_path, ignore_unknown_columns=True) == {"users": 1}
     assert driver.execute_many.call_args.args[1] == [{"id": 1}]
+
+
+@pytest.mark.parametrize("bad_name", ["../secret", "sub/table", "..\\secret", "", ".", ".."])
+def test_fixture_name_rejects_path_traversal(tmp_path: Path, bad_name: str) -> None:
+    """open_fixture_sync and write_fixture_sync reject fixture names with path separators or traversal."""
+    with pytest.raises(ValueError, match="Invalid fixture name"):
+        open_fixture_sync(tmp_path, bad_name)
+    with pytest.raises(ValueError, match="Invalid fixture name"):
+        write_fixture_sync(str(tmp_path), bad_name, [{"id": 1}])
+
+
+def test_read_compressed_file_rejects_oversized_zip_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_read_compressed_file rejects ZIP members larger than _MAX_ZIP_FIXTURE_BYTES."""
+    zip_file = tmp_path / "bomb.json.zip"
+    with zipfile.ZipFile(zip_file, "w") as zf:
+        zf.writestr("bomb.json", json.dumps([{"id": 1, "payload": "x" * 200}]))
+
+    monkeypatch.setattr(fixture_module, "_MAX_ZIP_FIXTURE_BYTES", 50)
+    with pytest.raises(ValueError, match="exceeds maximum allowed size"):
+        _read_compressed_file(zip_file)
+
+
+def test_postgres_table_columns_falls_back_to_current_schema() -> None:
+    """Unqualified PostgreSQL table column lookup falls back to SELECT current_schema() when initial lookup is empty."""
+    driver = MagicMock()
+    driver.statement_config.dialect = "postgres"
+    driver.select_value_or_none.return_value = "tenant_a"
+    driver.data_dictionary.get_columns.side_effect = [
+        [],
+        [{"column_name": "id", "data_type": "integer", "is_primary": True}],
+    ]
+
+    cols = fixture_module._table_columns_sync(driver, "postgres", "users")
+    assert len(cols) == 1
+    assert cols[0].name == "id"
+    assert driver.data_dictionary.get_columns.call_count == 2
+    assert driver.data_dictionary.get_columns.call_args_list[1].kwargs["schema"] == '"tenant_a"'
+
+
+def test_table_insert_statement_overriding_system_value_does_not_corrupt_conflict_clause() -> None:
+    """OVERRIDING SYSTEM VALUE insertion targets only the top-level column list boundary."""
+    cols = [
+        fixture_module._TableColumn(
+            name="id", data_type="integer", is_primary=True, identity_kind="a", sequence_name=None, is_generated=False
+        ),
+        fixture_module._TableColumn(
+            name="note", data_type="text", is_primary=False, identity_kind="", sequence_name=None, is_generated=False
+        ),
+    ]
+    stmt = fixture_module._table_insert_statement(
+        dialect="postgres",
+        family="postgres",
+        table="users",
+        columns=["id", "note"],
+        conflict_keys=("id",),
+        table_columns=cols,
+    )
+    assert isinstance(stmt, str)
+    assert stmt.count("OVERRIDING SYSTEM VALUE") == 1
+    assert ") OVERRIDING SYSTEM VALUE VALUES (" in stmt
+
+
+def test_sequence_resync_disabled_for_cockroach_dialects() -> None:
+    """CockroachDB dialects are treated as postgres family for inserts/upserts but skip pg_get_serial_sequence resync."""
+    assert fixture_module._dialect_family("cockroach") == "postgres"
+    assert fixture_module._dialect_family("cockroachdb") == "postgres"
+    assert fixture_module._sequence_resync_enabled(True, "postgres", "postgres") is True
+    assert fixture_module._sequence_resync_enabled(True, "cockroach", "postgres") is False
+    assert fixture_module._sequence_resync_enabled(True, "cockroachdb", "postgres") is False

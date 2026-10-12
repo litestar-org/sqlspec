@@ -3,6 +3,7 @@
 SELECT
     interval_end,
     text,
+    text AS query_text,
     text_fingerprint,
     execution_count,
     avg_latency_seconds,

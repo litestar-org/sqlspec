@@ -152,7 +152,6 @@ def _expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[s
     if not parameters:
         return identifiers
 
-    # Check if we have mixed styles - if so, use ordinal-based counting for positional styles
     styles = {p.style for p in parameters}
     has_mixed_positional_styles = len(styles) > 1 and any(
         s in styles for s in {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
@@ -164,7 +163,6 @@ def _expected_identifiers(parameter_profile: "ParameterProfile") -> "set[tuple[s
         if style in _NAMED_STYLES:
             identifiers.add(("named", name or f"param_{parameter.ordinal}"))
         elif style in {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}:
-            # When mixed with ordinal styles (like QMARK), use ordinal instead of explicit index
             if has_mixed_positional_styles:
                 identifiers.add(("index", parameter.ordinal))
             elif name and name.isdigit():

@@ -14,12 +14,15 @@ import pytest
 from sqlspec.adapters.cockroach_asyncpg import (
     CockroachAsyncpgConfig,
     CockroachAsyncpgConnectionConfig,
+    CockroachAsyncpgDriver,
     CockroachAsyncpgDriverFeatures,
     CockroachAsyncpgPoolConfig,
     CockroachAsyncpgRetryConfig,
     build_connection_config,
 )
-from sqlspec.core import StatementConfig
+from sqlspec.adapters.cockroach_asyncpg.adk.store import CockroachAsyncpgADKMemoryStore, CockroachAsyncpgADKStore
+from sqlspec.adapters.cockroach_asyncpg.litestar.store import CockroachAsyncpgStore
+from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -390,3 +393,159 @@ def test_cockroach_asyncpg_config_normalizes_aliases() -> None:
     assert "conninfo" not in config.connection_config
     assert "dbname" not in config.connection_config
     assert "username" not in config.connection_config
+
+
+def test_cockroach_asyncpg_build_connection_config_cluster_and_extra() -> None:
+    """build_connection_config should route cluster to server_settings.options and flatten extra."""
+    cfg = build_connection_config({
+        "host": "localhost",
+        "cluster": "brave-hippo-42",
+        "server_settings": {"application_name": "sqlspec"},
+        "extra": {"statement_cache_size": 0},
+    })
+    assert cfg["server_settings"] == {"application_name": "sqlspec", "options": "--cluster=brave-hippo-42"}
+    assert cfg["statement_cache_size"] == 0
+    assert "cluster" not in cfg
+    assert "extra" not in cfg
+
+
+def test_cockroach_asyncpg_preserves_on_connection_create_in_driver_features() -> None:
+    """CockroachAsyncpgConfig should preserve on_connection_create in driver_features."""
+
+    async def _hook(_conn: Any) -> None:
+        return None
+
+    config = CockroachAsyncpgConfig(driver_features={"on_connection_create": _hook})
+    assert config.driver_features["on_connection_create"] is _hook
+
+
+def test_cockroach_asyncpg_retry_config_rejects_negative_values() -> None:
+    """CockroachAsyncpgRetryConfig.from_features should reject negative values."""
+    with pytest.raises(ImproperConfigurationError, match="max_retries"):
+        CockroachAsyncpgRetryConfig.from_features({"max_retries": -1})
+    with pytest.raises(ImproperConfigurationError, match="base_delay_ms"):
+        CockroachAsyncpgRetryConfig.from_features({"retry_delay_base_ms": -5.0})
+    with pytest.raises(ImproperConfigurationError, match="max_delay_ms"):
+        CockroachAsyncpgRetryConfig.from_features({"retry_delay_max_ms": -10.0})
+
+
+async def test_cockroach_asyncpg_follower_read_auto_transaction_commits_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto-started follower-read transactions must commit after read and rollback on error."""
+    in_tx = False
+
+    def _in_tx(_self: Any) -> bool:
+        return in_tx
+
+    async def _begin(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = True
+
+    async def _commit(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = False
+
+    async def _rollback(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = False
+
+    monkeypatch.setattr(CockroachAsyncpgDriver, "_connection_in_transaction", _in_tx)
+    monkeypatch.setattr(CockroachAsyncpgDriver, "begin", _begin)
+    monkeypatch.setattr(CockroachAsyncpgDriver, "commit", _commit)
+    monkeypatch.setattr(CockroachAsyncpgDriver, "rollback", _rollback)
+
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[])
+    driver = CockroachAsyncpgDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    stmt = SQL("SELECT 1")
+    await driver.dispatch_execute(conn, stmt)
+    assert in_tx is False
+
+    conn.fetch = AsyncMock(side_effect=RuntimeError("boom"))
+    with pytest.raises(RuntimeError, match="boom"):
+        await driver.dispatch_execute(conn, stmt)
+    assert in_tx is False
+
+
+async def test_cockroach_asyncpg_adk_memory_insert_12_and_13_placeholders() -> None:
+    """CockroachAsyncpgADKMemoryStore.insert_memory_entries must bind 12 or 13 placeholders inside a transaction."""
+    executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    class _FakeTx:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    class _FakeConn:
+        def transaction(self) -> _FakeTx:
+            return _FakeTx()
+
+        async def execute(self, sql: str, *args: Any) -> str:
+            executed.append((sql, args))
+            return "INSERT 0 1"
+
+    class _FakeCtx:
+        async def __aenter__(self) -> _FakeConn:
+            return _FakeConn()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    config = CockroachAsyncpgConfig(extension_config={"adk": {"enable_memory": True}})
+    monkeypatch_conn = MagicMock(return_value=_FakeCtx())
+    object.__setattr__(config, "provide_connection", monkeypatch_conn)
+    store = CockroachAsyncpgADKMemoryStore(config)
+    entry: Any = {
+        "id": "m1",
+        "session_id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "scope": "user",
+        "event_id": "e1",
+        "author": "user",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "content_json": {},
+        "content_text": "hello",
+        "metadata_json": None,
+        "inserted_at": "2026-01-01T00:00:00Z",
+    }
+    count = await store.insert_memory_entries([entry])
+    assert count == 1
+    assert "$12" in executed[0][0]
+    assert "$13" not in executed[0][0]
+    assert len(executed[0][1]) == 12
+
+    executed.clear()
+    config_with_owner = CockroachAsyncpgConfig(
+        extension_config={"adk": {"enable_memory": True, "owner_id_column": "tenant_id UUID"}}
+    )
+    object.__setattr__(config_with_owner, "provide_connection", monkeypatch_conn)
+    store_with_owner = CockroachAsyncpgADKMemoryStore(config_with_owner)
+    count_owner = await store_with_owner.insert_memory_entries([entry], owner_id="t1")
+    assert count_owner == 1
+    assert "$13" in executed[0][0]
+    assert len(executed[0][1]) == 13
+
+
+async def test_cockroach_asyncpg_adk_locality_validation_and_schema_qualified_ddl() -> None:
+    """ADK and Litestar stores must validate LOCALITY clauses and sanitize schema-qualified index names."""
+    bad_config = CockroachAsyncpgConfig(extension_config={"adk": {"table_locality": "GLOBAL; DROP TABLE users"}})
+    bad_store = CockroachAsyncpgADKStore(bad_config)
+    with pytest.raises(ImproperConfigurationError, match="LOCALITY"):
+        await bad_store._sessions_table_ddl()
+
+    good_config = CockroachAsyncpgConfig(extension_config={"adk": {"table_locality": "REGIONAL BY ROW AS region"}})
+    adk_store = CockroachAsyncpgADKStore(good_config)
+    adk_store._session_table = "tenant_a.adk_sessions"
+    ddl = await adk_store._sessions_table_ddl()
+    assert "idx_tenant_a_adk_sessions_app_user" in ddl
+    assert "LOCALITY REGIONAL BY ROW AS region" in ddl
+
+    litestar_store = CockroachAsyncpgStore(good_config)
+    litestar_store._table_name = "tenant_a.litestar_sessions"
+    assert "idx_tenant_a_litestar_sessions_expires_at" in litestar_store._table_ddl()

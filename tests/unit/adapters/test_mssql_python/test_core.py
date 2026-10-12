@@ -7,8 +7,13 @@ from sqlspec.adapters.mssql_python.core import build_connection_config, create_m
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
+    DataError,
     ForeignKeyViolationError,
     NotNullViolationError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SerializationConflictError,
+    SQLParsingError,
     UniqueViolationError,
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
@@ -282,3 +287,50 @@ def test_extract_error_number_from_string_regex() -> None:
     assert extract_error_number(Exception("Transaction was deadlocked on lock resources (1205)")) == 1205
     assert extract_error_number(Exception("Msg 4712, Level 16, State 1")) == 4712
     assert extract_error_number(Exception("No numbers here")) is None
+
+
+def test_extract_error_number_from_nested_tuple() -> None:
+    """extract_error_number extracts integer from nested tuple args."""
+    assert extract_error_number(Exception((2627, b"Violation of UNIQUE KEY constraint"))) == 2627
+    assert extract_error_number(Exception((0, "Msg 1222, Level 16, State 51"))) == 1222
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_type"),
+    [
+        (102, SQLParsingError),
+        (105, SQLParsingError),
+        (156, SQLParsingError),
+        (207, SQLParsingError),
+        (208, SQLParsingError),
+        (241, DataError),
+        (242, DataError),
+        (245, DataError),
+        (2628, DataError),
+        (8115, DataError),
+        (8152, DataError),
+        (1222, QueryTimeoutError),
+        (3960, SerializationConflictError),
+        (229, PermissionDeniedError),
+        (230, PermissionDeniedError),
+        (262, PermissionDeniedError),
+    ],
+)
+def test_create_mapped_exception_maps_expanded_sql_server_error_codes(
+    code: int, expected_type: type[Exception]
+) -> None:
+    """Expanded SQL Server error codes map to their specific SQLSpec exception types."""
+    mapped = create_mapped_exception(Exception(code, f"SQL Server failure ({code})"))
+    assert isinstance(mapped, expected_type)
+
+
+def test_build_connection_config_forwards_unmapped_kwargs_without_connection_string() -> None:
+    """Unmapped non-ODBC kwargs should be forwarded to connect_kwargs when building from discrete parts."""
+    connection_string, connect_kwargs = build_connection_config({
+        "server": "localhost",
+        "database": "app",
+        "attrs_before": {1256: b"token"},
+    })
+
+    assert connection_string == "Server=localhost;Database=app;"
+    assert connect_kwargs == {"attrs_before": {1256: b"token"}}

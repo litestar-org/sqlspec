@@ -5,7 +5,7 @@ automatic parsing of query parameters into SQLSpec filter objects.
 """
 
 import copy
-import datetime
+import datetime as dt
 import inspect
 import typing
 from collections.abc import Callable, Mapping
@@ -61,7 +61,7 @@ __all__ = (
     "provide_filters",
 )
 
-DTorNone = datetime.datetime | None
+DTorNone = dt.datetime | None
 StringOrNone = str | None
 UuidOrNone = UUID | None
 IntOrNone = int | None
@@ -131,7 +131,6 @@ def normalize_choice_field_types(choices: list[Any] | tuple[Any, ...] | type[Enu
     return cast("Any", typing.Literal).__getitem__(tuple(choices))
 
 
-# Keep FilterConfig field unions and provider signatures in sync with sqlspec.extensions.litestar.providers.
 class FilterConfig(TypedDict):
     """Configuration for generated FastAPI filter dependencies.
 
@@ -553,13 +552,13 @@ class _BeforeAfterFilterProvider:
         )
 
     @staticmethod
-    def _parse_datetime(value: Any, alias: str) -> datetime.datetime | None:
+    def _parse_datetime(value: Any, alias: str) -> dt.datetime | None:
         if value is None:
             return None
-        if isinstance(value, datetime.datetime):
+        if isinstance(value, dt.datetime):
             return value
         try:
-            return datetime.datetime.fromisoformat(value)
+            return dt.datetime.fromisoformat(value)
         except (ValueError, TypeError, AttributeError):
             msg = f"Invalid date format for {alias}"
             raise RequestValidationError(errors=[{"loc": ("query", alias), "msg": msg, "type": "value_error.datetime"}])

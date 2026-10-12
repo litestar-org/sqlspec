@@ -14,6 +14,7 @@ WITH RECURSIVE dependency_tree AS (
           WHERE root_key.table_name = root_table.table_name
             AND root_key.table_schema = root_table.table_schema
             AND root_key.referenced_table_name IS NOT NULL
+            AND root_key.referenced_table_name <> root_table.table_name
       )
 
     UNION ALL
@@ -26,9 +27,10 @@ WITH RECURSIVE dependency_tree AS (
     JOIN dependency_tree ON child_key.referenced_table_name = dependency_tree.table_name
     WHERE child_key.table_schema = COALESCE(:schema_name, DATABASE())
       AND child_key.referenced_table_name IS NOT NULL
+      AND child_key.referenced_table_name <> child_key.table_name
       AND NOT FIND_IN_SET(child_key.table_name, dependency_tree.path)
 ), dependency_levels AS (
-    SELECT table_name, MIN(level) AS dependency_level
+    SELECT table_name, MAX(level) AS dependency_level
     FROM dependency_tree
     GROUP BY table_name
 )

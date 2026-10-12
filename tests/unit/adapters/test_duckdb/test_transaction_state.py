@@ -2,11 +2,12 @@
 
 from collections.abc import Generator
 
+import duckdb as raw_duckdb
 import pytest
 
 from sqlspec import StatementStack
 from sqlspec.adapters.duckdb import DuckDBConfig, DuckDBDriver
-from sqlspec.exceptions import ImproperConfigurationError
+from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
 from sqlspec.service import SQLSpecSyncService
 
 pytestmark = pytest.mark.xdist_group("duckdb")
@@ -80,3 +81,34 @@ def test_nested_service_transaction_reports_missing_savepoints(duckdb_stack_sess
                 pytest.fail("nested block entered")
         session.execute("INSERT INTO stack_txn_table (id) VALUES (1)")
     assert _table_count(duckdb_stack_session) == 1
+
+
+def test_commit_and_rollback_map_duckdb_errors_and_reset_transaction_active() -> None:
+    """begin, commit, and rollback must map duckdb.Error and reset _transaction_active in finally."""
+
+    class _FailingConn:
+        def cursor(self) -> "_FailingConn":
+            return self
+
+        def execute(self, sql: str) -> None:
+            raise raw_duckdb.TransactionException("transaction conflict")
+
+        def commit(self) -> None:
+            raise raw_duckdb.TransactionException("commit conflict")
+
+        def rollback(self) -> None:
+            raise raw_duckdb.TransactionException("rollback failure")
+
+    driver = DuckDBDriver(connection=_FailingConn())  # type: ignore[arg-type]
+    with pytest.raises(SQLSpecError):
+        driver.begin()
+
+    driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(SQLSpecError):
+        driver.commit()
+    assert driver._transaction_active is False  # pyright: ignore[reportPrivateUsage]
+
+    driver._transaction_active = True  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(SQLSpecError):
+        driver.rollback()
+    assert driver._transaction_active is False  # pyright: ignore[reportPrivateUsage]

@@ -1,6 +1,16 @@
+"""Cloud Spanner dialect static configuration and reflection helpers."""
+
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
+
+__all__ = (
+    "SPANNER_CONFIG",
+    "SPANNER_FEATURE_FLAGS",
+    "SPANNER_FEATURE_VERSIONS",
+    "SPANNER_TYPE_MAPPINGS",
+    "SPANNER_VERSION_PATTERN",
+)
 
 SPANNER_VERSION_PATTERN = re.compile(r".*")
 

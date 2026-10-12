@@ -1,6 +1,16 @@
+"""DuckDB dialect static configuration and reflection helpers."""
+
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
+
+__all__ = (
+    "DUCKDB_CONFIG",
+    "DUCKDB_FEATURE_FLAGS",
+    "DUCKDB_FEATURE_VERSIONS",
+    "DUCKDB_TYPE_MAPPINGS",
+    "DUCKDB_VERSION_PATTERN",
+)
 
 DUCKDB_VERSION_PATTERN = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 

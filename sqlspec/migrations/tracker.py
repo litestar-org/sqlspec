@@ -3,12 +3,14 @@
 This module provides functionality to track applied migrations in the database.
 """
 
+import importlib
 import logging
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.exceptions import MigrationError
 from sqlspec.migrations.base import BaseMigrationTracker
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async, ensure_schema_sync
 from sqlspec.observability import resolve_db_system
@@ -24,15 +26,6 @@ __all__ = ("AsyncMigrationTracker", "SyncMigrationTracker")
 
 logger = get_logger("sqlspec.migrations.tracker")
 _console: "Console | None" = None
-
-
-def _get_console() -> "Console":
-    global _console
-    if _console is None:
-        from rich.console import Console
-
-        _console = Console()
-    return _console
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -77,7 +70,14 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
         return _finalize_applied_migrations(driver, result)
 
     def record_migration(
-        self, driver: "SyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
+        self,
+        driver: "SyncDriverAdapterBase",
+        version: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        *,
+        commit: bool = True,
     ) -> None:
         """Record a successfully applied migration.
 
@@ -90,6 +90,7 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
+            commit: Whether to commit immediately after recording.
         """
         version_type = self._derive_version_type(version)
 
@@ -101,18 +102,21 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
                 version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by()
             )
         )
-        self._safe_commit(driver)
+        if commit:
+            self._safe_commit(driver)
         _log_migration_recorded(driver, version)
 
-    def remove_migration(self, driver: "SyncDriverAdapterBase", version: str) -> None:
+    def remove_migration(self, driver: "SyncDriverAdapterBase", version: str, *, commit: bool = True) -> None:
         """Remove a migration record (used during downgrade).
 
         Args:
             driver: The database driver to use.
             version: Version number to remove.
+            commit: Whether to commit immediately after removing.
         """
         driver.execute(self._remove_migration_statement(version))
-        self._safe_commit(driver)
+        if commit:
+            self._safe_commit(driver)
         _log_migration_removed(driver, version)
 
     def update_version_record(
@@ -201,19 +205,22 @@ class SyncMigrationTracker(BaseMigrationTracker["SyncDriverAdapterBase"]):
     ) -> bool:
         """Check if a squash operation has already been applied.
 
-        Determines if any of the replaced versions exist in the database,
+        Determines if all of the replaced versions exist in the database,
         indicating that the original migrations were applied before the squash.
 
         Args:
             driver: The database driver to use.
-            squashed_version: Version number of the squashed migration (unused but kept for API consistency).
+            squashed_version: Version number of the squashed migration.
             replaced_versions: List of version strings that would be replaced.
 
         Returns:
-            True if any replaced version exists (squash already applied), False otherwise.
+            True if all replaced versions exist (squash already applied), False if none exist.
+
+        Raises:
+            MigrationError: If only a strict subset of replaced_versions exists in the database.
         """
         result = driver.execute(self._check_versions_query(replaced_versions))
-        return bool(result.data)
+        return _validate_squash_applied_state(result, squashed_version, replaced_versions)
 
     def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Add missing tracking-table columns through the shared schema engine.
@@ -301,7 +308,14 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
         return _finalize_applied_migrations(driver, result)
 
     async def record_migration(
-        self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
+        self,
+        driver: "AsyncDriverAdapterBase",
+        version: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        *,
+        commit: bool = True,
     ) -> None:
         """Record a successfully applied migration.
 
@@ -314,6 +328,7 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
+            commit: Whether to commit immediately after recording.
         """
         version_type = self._derive_version_type(version)
 
@@ -325,18 +340,21 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 version, version_type, next_sequence, description, execution_time_ms, checksum, self._applied_by()
             )
         )
-        await self._safe_commit(driver)
+        if commit:
+            await self._safe_commit(driver)
         _log_migration_recorded(driver, version)
 
-    async def remove_migration(self, driver: "AsyncDriverAdapterBase", version: str) -> None:
+    async def remove_migration(self, driver: "AsyncDriverAdapterBase", version: str, *, commit: bool = True) -> None:
         """Remove a migration record (used during downgrade).
 
         Args:
             driver: The database driver to use.
             version: Version number to remove.
+            commit: Whether to commit immediately after removing.
         """
         await driver.execute(self._remove_migration_statement(version))
-        await self._safe_commit(driver)
+        if commit:
+            await self._safe_commit(driver)
         _log_migration_removed(driver, version)
 
     async def update_version_record(
@@ -425,19 +443,22 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
     ) -> bool:
         """Check if a squash operation has already been applied.
 
-        Determines if any of the replaced versions exist in the database,
+        Determines if all of the replaced versions exist in the database,
         indicating that the original migrations were applied before the squash.
 
         Args:
             driver: The database driver to use.
-            squashed_version: Version number of the squashed migration (unused but kept for API consistency).
+            squashed_version: Version number of the squashed migration.
             replaced_versions: List of version strings that would be replaced.
 
         Returns:
-            True if any replaced version exists (squash already applied), False otherwise.
+            True if all replaced versions exist (squash already applied), False if none exist.
+
+        Raises:
+            MigrationError: If only a strict subset of replaced_versions exists in the database.
         """
         result = await driver.execute(self._check_versions_query(replaced_versions))
-        return bool(result.data)
+        return _validate_squash_applied_state(result, squashed_version, replaced_versions)
 
     async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
         """Add missing tracking-table columns through the shared schema engine.
@@ -483,6 +504,31 @@ class AsyncMigrationTracker(BaseMigrationTracker["AsyncDriverAdapterBase"]):
                 _log_commit_skipped(driver, exc)
             else:
                 raise
+
+
+def _validate_squash_applied_state(result: Any, squashed_version: str, replaced_versions: "list[str]") -> bool:
+    """Validate that either all or none of the replaced versions are applied."""
+    if not result.data:
+        return False
+    data = result.get_data() if callable(getattr(result, "get_data", None)) else result.data
+    if isinstance(data, list) and data and isinstance(data[0], dict) and "version_num" in data[0]:
+        found_versions = {row["version_num"] for row in data if "version_num" in row}
+        expected_versions = set(replaced_versions)
+        if 0 < len(found_versions) < len(expected_versions):
+            missing = sorted(expected_versions - found_versions)
+            msg = (
+                f"Partial squash state detected for {squashed_version}: "
+                f"found {sorted(found_versions)}, missing {missing}"
+            )
+            raise MigrationError(msg)
+    return True
+
+
+def _get_console() -> "Console":
+    global _console
+    if _console is None:
+        _console = cast("Console", importlib.import_module("rich.console").Console())
+    return _console
 
 
 def _log_schema_current(driver: Any, version_table: str) -> None:

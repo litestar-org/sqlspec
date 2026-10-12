@@ -4,6 +4,8 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
+import importlib
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.typing import import_optional_attr
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
 
 
 else:
+    PSQLPY_JSONB = import_optional_attr("psqlpy.extra_types", "JSONB")
     PsqlpyConnection = import_optional_attr("psqlpy", "Connection") or Any
     PsqlpyConnectionPool = import_optional_attr("psqlpy", "ConnectionPool") or Any
     PsqlpyDataError = import_optional_attr("psqlpy.exceptions", "DataError") or _PsqlpyUnavailableError
@@ -143,11 +146,10 @@ class PsqlpySessionContext:
         self._driver: PsqlpyDriver | None = None
 
     async def __aenter__(self) -> "PsqlpyDriver":
-        from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
-
+        driver_cls = _resolve_psqlpy_driver()
         self._connection = await self._acquire_connection()
         statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = PsqlpyDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -155,27 +157,17 @@ class PsqlpySessionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        driver = self._driver
+        self._driver = None
+        if driver is not None and getattr(driver, "_transaction_active", False):
+            with contextlib.suppress(Exception):
+                await driver.rollback()
         if self._connection is not None:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
 
 
-_LAZY_DRIVER_EXPORTS: dict[str, tuple[str, str]] = {
-    "PSQLPY_JSONB": ("psqlpy.extra_types", "JSONB"),
-    "PsqlpyConnectionPool": ("psqlpy", "ConnectionPool"),
-}
-
-
-def __getattr__(name: str) -> Any:
-    """Resolve optional driver symbols only when a consumer requests them."""
-    target = _LAZY_DRIVER_EXPORTS.get(name)
-    if target is None:
-        msg = f"module {__name__!r} has no attribute {name!r}"
-        raise AttributeError(msg)
-    module_name, attribute = target
-    value = import_optional_attr(module_name, attribute)
-    if value is None:
-        msg = f"Cannot import {attribute!r} from {module_name!r}"
-        raise ImportError(msg)
-    return value
+def _resolve_psqlpy_driver() -> "type[PsqlpyDriver]":
+    module = importlib.import_module("sqlspec.adapters.psqlpy.driver")
+    return module.PsqlpyDriver  # type: ignore[no-any-return]

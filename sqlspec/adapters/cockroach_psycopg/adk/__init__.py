@@ -1,3 +1,5 @@
+"""CockroachDB psycopg ADK store module."""
+
 from sqlspec.adapters.cockroach_psycopg.adk.store import (
     CockroachPsycopgADKConfig,
     CockroachPsycopgAsyncADKMemoryStore,

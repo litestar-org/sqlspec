@@ -48,12 +48,11 @@ from sqlspec.adapters.oracledb._typing import (
     DB_TYPE_NVARCHAR,
     DB_TYPE_VARCHAR,
 )
-from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
-from sqlspec.data_dictionary.dialects.oracle import (
-    ORACLE_JSON_STORAGE_BLOB_JSON,
-    ORACLE_JSON_STORAGE_NATIVE,
-    resolve_oracle_json_storage,
+from sqlspec.adapters.oracledb.data_dictionary import (
+    resolve_oracle_connection_compatible_major,
+    resolve_oracle_connection_major,
 )
+from sqlspec.data_dictionary.dialects.oracle import ORACLE_JSON_STORAGE_NATIVE, resolve_oracle_json_storage
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -132,19 +131,6 @@ def json_output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> A
     return _output_type_handler(cursor, metadata)
 
 
-def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
-    current = handler
-    while current is not None:
-        if current is target_inner:
-            return True
-        if not isinstance(current, partial) or current.func is not chain_function:
-            return False
-        inner, current = current.args
-        if inner is target_inner:
-            return True
-    return False
-
-
 def register_json_handlers(connection: "Connection | AsyncConnection") -> None:
     """Register JSON type handlers on an Oracle connection idempotently.
 
@@ -185,13 +171,10 @@ def chain_output_handler(inner: Any, fallback: "Any | None") -> Any:
 def is_json_payload(value: Any) -> bool:
     """Return True if the value should be claimed by the JSON input handler.
 
-    ``OracleJson``, ``dict``, and ``tuple``/``list`` of dicts are claimed.
-    Unwrapped sequences whose first element is a number are NOT claimed — those
-    are vector embeddings and belong to the vector handler.
-
-    An unwrapped empty sequence is ambiguous (could be empty vector or empty
-    list) and defers to the next handler in the chain. Sequences of numbers
-    (vector embeddings) are rejected unless wrapped in ``OracleJson``.
+    ``OracleJson``, ``dict``, empty ``list``/``tuple``, and ``list``/``tuple``
+    containing any non-numeric element are claimed. Non-empty sequences where
+    all elements are ``int``/``float`` (excluding ``bool``) are reserved for
+    the vector handler unless wrapped in ``OracleJson``.
     """
     if isinstance(value, OracleJson):
         return True
@@ -199,9 +182,21 @@ def is_json_payload(value: Any) -> bool:
         return True
     if isinstance(value, (list, tuple)):
         if not value:
+            return True
+        return not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
+    return False
+
+
+def _has_handler(handler: Any, target_inner: Any, chain_function: Any) -> bool:
+    current = handler
+    while current is not None:
+        if current is target_inner:
+            return True
+        if not isinstance(current, partial) or current.func is not chain_function:
             return False
-        first = value[0]
-        return not (isinstance(first, (int, float)) and not isinstance(first, bool))
+        inner, current = current.args
+        if inner is target_inner:
+            return True
     return False
 
 
@@ -217,14 +212,13 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
             return cursor.var(DB_TYPE_JSON, arraysize=arraysize, inconverter=json_converter_in_native)
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
 
-    storage = resolve_oracle_json_storage(server_major)
+    compatible_major = resolve_oracle_connection_compatible_major(cursor.connection)
+    storage = resolve_oracle_json_storage(server_major, compatible_major=compatible_major)
     if storage == ORACLE_JSON_STORAGE_NATIVE:
         if isinstance(value, OracleJson):
             return cursor.var(DB_TYPE_JSON, arraysize=arraysize, inconverter=json_converter_in_native)
         return cursor.var(DB_TYPE_JSON, arraysize=arraysize)
-    if storage == ORACLE_JSON_STORAGE_BLOB_JSON:
-        return cursor.var(DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)
-    return cursor.var(DB_TYPE_CLOB, arraysize=arraysize, inconverter=json_converter_in_clob)
+    return cursor.var(DB_TYPE_BLOB, arraysize=arraysize, inconverter=json_converter_in_blob)
 
 
 def _output_type_handler(cursor: "Cursor | AsyncCursor", metadata: Any) -> Any:

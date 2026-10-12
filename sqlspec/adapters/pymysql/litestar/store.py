@@ -112,27 +112,22 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
                 try:
                     cursor.execute(sql, (key,))
                     row = cursor.fetchone()
+                    if row is None:
+                        return None
+
+                    if renew_for is not None and row["expires_at"] is not None:
+                        new_expires_at = self._calculate_expires_at(renew_for)
+                        if new_expires_at is not None:
+                            naive_expires_at = new_expires_at.replace(tzinfo=None)
+                            update_sql = f"""
+                            UPDATE {self._table_name}
+                            SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
+                            WHERE session_id = %s
+                            """
+                            cursor.execute(update_sql, (naive_expires_at, key))
+                            conn.commit()
                 finally:
                     cursor.close()
-
-                if row is None:
-                    return None
-
-                if renew_for is not None and row["expires_at"] is not None:
-                    new_expires_at = self._calculate_expires_at(renew_for)
-                    if new_expires_at is not None:
-                        naive_expires_at = new_expires_at.replace(tzinfo=None)
-                        update_sql = f"""
-                        UPDATE {self._table_name}
-                        SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
-                        WHERE session_id = %s
-                        """
-                        update_cursor = conn.cursor()
-                        try:
-                            update_cursor.execute(update_sql, (naive_expires_at, key))
-                        finally:
-                            update_cursor.close()
-                        conn.commit()
 
                 return bytes(row["data"])
         except PyMysqlMySQLError as exc:
@@ -218,41 +213,51 @@ class PyMysqlStore(BaseSQLSpecStore["PyMysqlConfig"]):
         WHERE session_id = %s
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key,))
-                row = cursor.fetchone()
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (key,))
+                    row = cursor.fetchone()
+                finally:
+                    cursor.close()
 
-            if row is None or row[0] is None:
+                if row is None or row[0] is None:
+                    return None
+
+                expires_at_naive = row[0]
+                expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+                now = datetime.now(UTC)
+
+                if expires_at_utc <= now:
+                    return 0
+
+                delta = expires_at_utc - now
+                return int(delta.total_seconds())
+        except PyMysqlMySQLError as exc:
+            if "doesn't exist" in str(exc) or (exc.args[0] if exc.args else None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
-
-            expires_at_naive = row[0]
-            expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
-            now = datetime.now(UTC)
-
-            if expires_at_utc <= now:
-                return 0
-
-            delta = expires_at_utc - now
-            return int(delta.total_seconds())
+            raise
 
     def _delete_expired(self) -> int:
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql)
-                conn.commit()
-                count: int = cursor.rowcount
-            finally:
-                cursor.close()
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql)
+                    conn.commit()
+                    count = cursor.rowcount if isinstance(cursor.rowcount, int) and cursor.rowcount > 0 else 0
+                finally:
+                    cursor.close()
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
+        except PyMysqlMySQLError as exc:
+            if "doesn't exist" in str(exc) or (exc.args[0] if exc.args else None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
 
 
 def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:

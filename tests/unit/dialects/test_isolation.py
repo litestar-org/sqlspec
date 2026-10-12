@@ -1,8 +1,13 @@
 """Regression test verifying that Spanner dialects do not mutate base dialect behavior."""
 
+import importlib
+
 from sqlglot import exp, parse_one
 
+import sqlspec.dialects.postgres._generators as pg_gen
+import sqlspec.dialects.postgres._operators as pg_ops
 import sqlspec.dialects.spanner
+from sqlspec.builder._vector_distance import VectorDistance
 from sqlspec.dialects.spanner import _parsers
 
 _ = sqlspec.dialects.spanner
@@ -61,3 +66,28 @@ def test_spanner_parsers_contain_spanner_property_parsers() -> None:
     assert "PRIMARY KEY" in _parsers.SpangresParser.PROPERTY_PARSERS
     assert "ROW" in _parsers.SpangresParser.PROPERTY_PARSERS
     assert "TTL" in _parsers.SpangresParser.PROPERTY_PARSERS
+
+
+def test_bigquery_ast_nodes_preserved_for_search_and_cosine_distance() -> None:
+    """Verify BigQuery SEARCH and COSINE_DISTANCE parse to native exp.Search and exp.CosineDistance."""
+    parsed = parse_one("SELECT SEARCH(t, 'q'), COSINE_DISTANCE(a, b) FROM tbl", read="bigquery")
+    assert parsed.find(exp.Search) is not None
+    assert parsed.find(exp.CosineDistance) is not None
+
+
+def test_spangres_vector_distance_renders_functions_not_pgvector_operators() -> None:
+    """Verify VectorDistance expressions render as Spanner distance functions in Spangres."""
+    cosine_node = VectorDistance(this=exp.column("a"), expression=exp.column("b"), metric="cosine")
+    l2_node = VectorDistance(this=exp.column("a"), expression=exp.column("b"), metric="euclidean")
+    ip_node = VectorDistance(this=exp.column("a"), expression=exp.column("b"), metric="inner_product")
+    assert cosine_node.sql(dialect="spangres") == "COSINE_DISTANCE(a, b)"
+    assert l2_node.sql(dialect="spangres") == "EUCLIDEAN_DISTANCE(a, b)"
+    assert ip_node.sql(dialect="spangres") == "DOT_PRODUCT(a, b)"
+
+
+def test_postgres_generators_and_operators_reload_idempotent() -> None:
+    """Verify importlib.reload on postgres._generators and postgres._operators is idempotent."""
+    importlib.reload(pg_ops)
+    importlib.reload(pg_gen)
+    assert parse_one("SELECT a <=> b FROM t", dialect="pgvector").sql(dialect="pgvector") == "SELECT a <=> b FROM t"
+    assert parse_one("SELECT 1", dialect="postgres").sql(dialect="postgres") == "SELECT 1"

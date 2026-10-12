@@ -76,6 +76,9 @@ class QueryCache:
         self._cache: OrderedDict[str, CachedQuery] = OrderedDict()
         self._max_size = max_size
 
+    def __len__(self) -> int:
+        return len(self._cache)
+
     def get(self, sql: str) -> "CachedQuery | None":
         entry = self._cache.get(sql)
         if entry is None:
@@ -95,6 +98,3 @@ class QueryCache:
     def clear(self) -> None:
         """Clear all cached entries."""
         self._cache.clear()
-
-    def __len__(self) -> int:
-        return len(self._cache)

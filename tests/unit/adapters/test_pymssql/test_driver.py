@@ -1,6 +1,6 @@
 """pymssql driver tests."""
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from pymssql import IntegrityError as PymssqlIntegrityError
@@ -278,3 +278,65 @@ def test_execute_stack_preserves_caller_transaction(fails: bool, monkeypatch: py
     assert sum(sql == "BEGIN TRANSACTION" for sql, _ in connection.cursor_obj.calls) == 1
     driver.rollback()
     assert connection.cursor_obj.calls[-1] == ("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", None)
+
+
+def test_pymssql_driver_escapes_literal_percent_across_execution_paths() -> None:
+    """dispatch_execute, dispatch_execute_script, _execute_cache_hit, and select_stream must escape literal %."""
+    from types import SimpleNamespace
+
+    from sqlspec.adapters.pymssql.core import default_statement_config
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor(rows=[(1, "Ada")], description=[("id",), ("name",)])
+    driver = PymssqlDriver(cast("PymssqlConnection", FakeConnection(cursor)), statement_config=default_statement_config)
+
+    stmt = SQL(
+        "SELECT id, name FROM dbo.users WHERE name LIKE '50%' AND id = ?", 1, statement_config=default_statement_config
+    )
+    driver.dispatch_execute(cast("PymssqlRawCursor", cursor), stmt)
+    assert cursor.calls[-1] == ("SELECT id, name FROM dbo.users WHERE name LIKE '50%%' AND id = %s", (1,))
+
+    script_stmt = SQL("UPDATE dbo.users SET note = '100%' WHERE id = ?", 1, statement_config=default_statement_config)
+    driver.dispatch_execute_script(cast("PymssqlRawCursor", cursor), script_stmt)
+    assert cursor.calls[-1] == ("UPDATE dbo.users SET note = '100%%' WHERE id = %s", (1,))
+
+    from sqlspec.core.statement import ProcessedState
+
+    cached = SimpleNamespace(
+        compiled_sql="SELECT id, name FROM dbo.users WHERE name LIKE '50%' AND id = %s",
+        expression=None,
+        operation_type="SELECT",
+        operation_profile=SimpleNamespace(returns_rows=True, modifies_rows=False),
+        input_named_parameters=(),
+        processed_state=ProcessedState("", ()),
+    )
+    driver._execute_cache_hit(
+        "SELECT id, name FROM dbo.users WHERE name LIKE '50%' AND id = %s", [7], cast("Any", cached)
+    )
+    assert cursor.calls[-1] == ("SELECT id, name FROM dbo.users WHERE name LIKE '50%%' AND id = %s", (7,))
+
+    with driver.select_stream(
+        "SELECT id, name FROM dbo.users WHERE name LIKE '50%' AND id = ?", 9, native_only=True
+    ) as stream:
+        list(stream)
+    assert cursor.calls[-1] == ("SELECT id, name FROM dbo.users WHERE name LIKE '50%%' AND id = %s", (9,))
+
+
+def test_pymssql_load_from_arrow_truncates_and_inserts_batches() -> None:
+    """load_from_arrow should support overwrite mode and batch insert Arrow records via executemany."""
+    pa = pytest.importorskip("pyarrow")
+    from sqlspec.adapters.pymssql.config import PymssqlConfig
+    from sqlspec.adapters.pymssql.driver import PymssqlDriver
+
+    cursor = FakeCursor(rowcount=2)
+    connection = FakeConnection(cursor)
+    driver = PymssqlDriver(cast("PymssqlConnection", connection), driver_features=PymssqlConfig().driver_features)
+    table = pa.table({"id": [1, 2], "label": ["50%", "100%"]})
+
+    job = driver.load_from_arrow("dbo.metrics", table, overwrite=True)
+
+    assert job.telemetry["rows_processed"] == 2
+    assert cursor.calls[0] == ("DELETE FROM [dbo].[metrics]", None)
+    assert cursor.many_calls == [
+        ("INSERT INTO [dbo].[metrics] ([id], [label]) VALUES (%s, %s)", [(1, "50%"), (2, "100%")])
+    ]

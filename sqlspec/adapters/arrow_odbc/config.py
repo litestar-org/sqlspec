@@ -28,7 +28,7 @@ from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_guards import supports_close
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from sqlspec.core import StatementConfig
@@ -39,27 +39,6 @@ __all__ = ("ArrowOdbcConfig", "ArrowOdbcConnectionParams", "ArrowOdbcDriverFeatu
 
 _DRIVER_POOLING_ENABLED = False
 _DRIVER_POOLING_LOCK = threading.Lock()
-
-
-def _apply_driver_pooling(requested: bool) -> None:
-    """Apply the ODBC driver manager's process-global connection pooling switch.
-
-    The upstream switch can only be turned on once, before the first connection
-    in the process. Declining it is therefore not a decision that can be latched:
-    only an opt-in is recorded, and a later configuration that does not ask for
-    pooling simply inherits it.
-
-    Args:
-        requested: Whether this configuration asks for driver-level pooling.
-    """
-    global _DRIVER_POOLING_ENABLED
-    if not requested:
-        return
-    with _DRIVER_POOLING_LOCK:
-        if _DRIVER_POOLING_ENABLED:
-            return
-        enable_odbc_connection_pooling()
-        _DRIVER_POOLING_ENABLED = True
 
 
 class ArrowOdbcConnectionParams(TypedDict):
@@ -192,16 +171,24 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
     ) -> None:
         """Initialize arrow-odbc configuration."""
         normalized = normalize_connection_config(connection_config)
+        effective_config = dict(normalized)
+        extra = effective_config.get("extra")
+        if isinstance(extra, dict):
+            effective_config.update(extra)
         provided_statement_config = statement_config
         statement_config, features = apply_driver_features(
             statement_config or default_statement_config, driver_features
         )
-        connection_string = normalized.get("connection_string")
+        connection_string = effective_config.get("connection_string")
         if connection_string is not None:
             features.setdefault("connection_string", str(connection_string))
-        elif normalized.get("driver") is not None:
-            features.setdefault("dbms_name", str(normalized["driver"]))
-        features["connection_autocommit"] = bool(normalized.get("autocommit", True))
+        if effective_config.get("driver") is not None:
+            features.setdefault("dbms_name", str(effective_config["driver"]))
+        elif effective_config.get("dsn") is not None and (
+            connection_string is None or resolve_dialect_from_dbms_name(str(connection_string)) == "sqlite"
+        ):
+            features.setdefault("dbms_name", str(effective_config["dsn"]))
+        features["connection_autocommit"] = bool(effective_config.get("autocommit", True))
         if provided_statement_config is None:
             statement_config = _resolve_statement_config(features)
         self._user_connection_hook = cast(
@@ -224,16 +211,16 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         """Create and return a new arrow-odbc connection."""
         if self.connection_instance is not None:
             return cast("ArrowOdbcConnection", self.connection_instance)
-        _apply_driver_pooling(bool(self.driver_features.get("enable_driver_pooling", False)))
-        dialect = resolve_dialect_from_dbms_name(
-            self.driver_features.get("dbms_name") or self.driver_features.get("connection_string")
-        )
-        connection_string, connect_kwargs = build_connection_config(self.connection_config, dialect=dialect)
         try:
+            _apply_driver_pooling(bool(self.driver_features.get("enable_driver_pooling", False)))
+            dialect = _resolve_connection_dialect_hint(self.driver_features)
+            connection_string, connect_kwargs = build_connection_config(self.connection_config, dialect=dialect)
             connection = cast("ArrowOdbcConnection", arrow_odbc_connect(connection_string, **connect_kwargs))
             if self._user_connection_hook is not None:
                 self._user_connection_hook(connection)
             return cast("ArrowOdbcConnection", connection)
+        except ImproperConfigurationError:
+            raise
         except Exception as exc:
             msg = f"Could not configure arrow-odbc connection. Error: {exc}"
             raise ImproperConfigurationError(msg) from exc
@@ -274,6 +261,27 @@ class ArrowOdbcConfig(NoPoolSyncConfig[ArrowOdbcConnection, ArrowOdbcDriver]):
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
 
 
+def _apply_driver_pooling(requested: bool) -> None:
+    """Apply the ODBC driver manager's process-global connection pooling switch.
+
+    The upstream switch can only be turned on once, before the first connection
+    in the process. Declining it is therefore not a decision that can be latched:
+    only an opt-in is recorded, and a later configuration that does not ask for
+    pooling simply inherits it.
+
+    Args:
+        requested: Whether this configuration asks for driver-level pooling.
+    """
+    global _DRIVER_POOLING_ENABLED
+    if not requested:
+        return
+    with _DRIVER_POOLING_LOCK:
+        if _DRIVER_POOLING_ENABLED:
+            return
+        enable_odbc_connection_pooling()
+        _DRIVER_POOLING_ENABLED = True
+
+
 def _apply_json_serializer_override(statement_config: "StatementConfig", features: dict[str, Any]) -> "StatementConfig":
     serializer = cast("Callable[[Any], str] | None", features.get("json_serializer"))
     deserializer = cast("Callable[[str], Any] | None", features.get("json_deserializer"))
@@ -292,8 +300,19 @@ def _close_arrow_odbc_connection(connection: "ArrowOdbcConnection") -> None:
         connection.close()
 
 
+def _resolve_connection_dialect_hint(features: "Mapping[str, Any]") -> str | None:
+    for key in ("dbms_name", "connection_string"):
+        value = features.get(key)
+        if not value:
+            continue
+        resolved = resolve_dialect_from_dbms_name(str(value))
+        if resolved != "sqlite" or "sqlite" in str(value).lower():
+            return resolved
+    return None
+
+
 def _resolve_statement_config(features: dict[str, Any]) -> "StatementConfig":
-    dialect = resolve_dialect_from_dbms_name(str(features.get("dbms_name") or features.get("connection_string") or ""))
+    dialect = _resolve_connection_dialect_hint(features) or "sqlite"
     if dialect == "sqlite":
         return _apply_json_serializer_override(default_statement_config, features)
     if dialect == "mssql":

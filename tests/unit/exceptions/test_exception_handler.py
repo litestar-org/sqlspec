@@ -6,9 +6,14 @@ from typing import Self
 
 import pytest
 
-from sqlspec.driver import BaseAsyncExceptionHandler, BaseSyncExceptionHandler
-from sqlspec.driver._exception_handler import _run_with_async_exception_handler
-from sqlspec.exceptions import SerializationConflictError, UniqueViolationError
+from sqlspec.driver import (
+    AsyncDriverAdapterBase,
+    BaseAsyncExceptionHandler,
+    BaseSyncExceptionHandler,
+    SyncDriverAdapterBase,
+)
+from sqlspec.driver._exception_handler import _run_with_async_exception_handler, _run_with_sync_exception_handler
+from sqlspec.exceptions import ForeignKeyViolationError, SerializationConflictError, UniqueViolationError
 
 
 class _AsyncOnlyExceptionHandler:
@@ -444,13 +449,9 @@ async def test_async_handler_none_exc_val_returns_false() -> None:
 
 
 def test_check_pending_exception_raises_when_set() -> None:
-    """_check_pending_exception should raise the pending exception from None."""
-    from sqlspec.exceptions import UniqueViolationError
-
+    """_check_pending_exception should raise the pending exception."""
     handler = BaseSyncExceptionHandler()
     handler.pending_exception = UniqueViolationError("duplicate key")
-
-    from sqlspec.driver import SyncDriverAdapterBase
 
     with pytest.raises(UniqueViolationError, match="duplicate key"):
         SyncDriverAdapterBase._check_pending_exception(handler)
@@ -461,20 +462,14 @@ def test_check_pending_exception_noop_when_none() -> None:
     handler = BaseSyncExceptionHandler()
     assert handler.pending_exception is None
 
-    from sqlspec.driver import SyncDriverAdapterBase
-
     SyncDriverAdapterBase._check_pending_exception(handler)
 
 
 @pytest.mark.anyio
 async def test_async_check_pending_exception_raises_when_set() -> None:
-    """Async _check_pending_exception should raise the pending exception from None."""
-    from sqlspec.exceptions import ForeignKeyViolationError
-
+    """Async _check_pending_exception should raise the pending exception."""
     handler = BaseAsyncExceptionHandler()
     handler.pending_exception = ForeignKeyViolationError("fk violation")
-
-    from sqlspec.driver import AsyncDriverAdapterBase
 
     with pytest.raises(ForeignKeyViolationError, match="fk violation"):
         AsyncDriverAdapterBase._check_pending_exception(handler)
@@ -486,6 +481,45 @@ async def test_async_check_pending_exception_noop_when_none() -> None:
     handler = BaseAsyncExceptionHandler()
     assert handler.pending_exception is None
 
-    from sqlspec.driver import AsyncDriverAdapterBase
-
     AsyncDriverAdapterBase._check_pending_exception(handler)
+
+
+def test_check_pending_exception_preserves_original_cause() -> None:
+    """_check_pending_exception and BaseSyncExceptionHandler.__exit__ preserve __cause__."""
+
+    class _MappingSyncHandler(BaseSyncExceptionHandler):
+        def _handle_exception(self, exc_type: type[BaseException] | None, exc_val: BaseException) -> bool:
+            self.pending_exception = UniqueViolationError("mapped")
+            return True
+
+    handler = _MappingSyncHandler()
+    original = RuntimeError("raw db driver failure")
+    assert handler.__exit__(RuntimeError, original, None) is True
+    assert handler.pending_exception is not None
+    assert handler.pending_exception.__cause__ is original
+
+    with pytest.raises(UniqueViolationError) as exc_info:
+        SyncDriverAdapterBase._check_pending_exception(handler)
+    assert exc_info.value.__cause__ is original
+
+
+def test_run_with_sync_exception_handler_dispatches_fast_and_context_paths() -> None:
+    """_run_with_sync_exception_handler populates pending_exception with __cause__ even inside an active except block."""
+
+    class _MappingSyncHandler(BaseSyncExceptionHandler):
+        def _handle_exception(self, exc_type: type[BaseException] | None, exc_val: BaseException) -> bool:
+            self.pending_exception = UniqueViolationError("sync mapped")
+            return True
+
+    def raise_runtime() -> int:
+        raise RuntimeError("boom")
+
+    handler = _MappingSyncHandler()
+    try:
+        raise ValueError("ambient outer exception")
+    except ValueError:
+        result = _run_with_sync_exception_handler(handler, raise_runtime)
+    assert result is None
+    with pytest.raises(UniqueViolationError, match="sync mapped") as exc_info:
+        SyncDriverAdapterBase._check_pending_exception(handler)
+    assert isinstance(exc_info.value.__cause__, RuntimeError)

@@ -1057,7 +1057,7 @@ def test_mixed_sql_objects_and_regular_parameters() -> None:
 
 
 def test_sql_raw_parameter_name_conflicts_handled() -> None:
-    """Test that parameter name conflicts are detected when merging SQL objects."""
+    """Test that parameter name conflicts are automatically renamed without collision."""
     raw_expr1 = sql.raw("COALESCE(name, :value)", value="default1")
     raw_expr2 = sql.raw("COALESCE(email, :other_value)", other_value="default2")
     query = sql.select("id", raw_expr1, raw_expr2).from_("users")
@@ -1068,8 +1068,12 @@ def test_sql_raw_parameter_name_conflicts_handled() -> None:
     assert stmt.parameters["other_value"] == "default2"
     raw_conflict1 = sql.raw("COALESCE(name, :conflict)", conflict="first")
     raw_conflict2 = sql.raw("COALESCE(email, :conflict)", conflict="second")
-    with pytest.raises(SQLBuilderError, match="Parameter name 'conflict' already exists"):
-        sql.select("id", raw_conflict1, raw_conflict2).from_("users").build()
+    conflict_stmt = sql.select("id", raw_conflict1, raw_conflict2).from_("users").build()
+    assert conflict_stmt.parameters == {"conflict": "first", "conflict_1": "second"}
+    assert ":conflict" in conflict_stmt.sql
+    assert ":conflict_1" in conflict_stmt.sql
+    assert isinstance(raw_conflict2, SQL)
+    assert ":conflict_1" not in raw_conflict2.sql
 
 
 def test_original_user_case_example_regression_test() -> None:
@@ -2083,3 +2087,108 @@ def test_join_builder_known_join_types_match_join_for_type() -> None:
         join_expr = create_join_builder(join_type)("orders").on("orders.user_id = users.id")
         assert join_expr.args.get("side") == side, join_type
         assert join_expr.args.get("kind") == kind, join_type
+
+
+def test_build_and_to_statement_parity() -> None:
+    hinted = sql.select("*").from_("users").with_hint("INDEX(users idx_users_id)", location="table", table="users")
+    assert "/*+ INDEX(users idx_users_id) */" in hinted.build().sql
+    assert "/*+ INDEX(users idx_users_id) */" in hinted.to_statement().sql
+
+    with pytest.raises(SQLBuilderError):
+        sql.delete().to_statement()
+    with pytest.raises(SQLBuilderError):
+        sql.update("users").to_statement()
+    with pytest.raises(SQLBuilderError):
+        sql.merge("users", dialect="mysql").using("src", alias="s").on("users.id = s.id").to_statement()
+
+
+def test_merge_literal_vs_qualified_column_reference() -> None:
+    merge_stmt = (
+        sql
+        .merge("users", dialect="postgres")
+        .using("staging", alias="src")
+        .on("users.id = src.id")
+        .when_matched_then_update(status="active.pending", name="src.name")
+        .when_not_matched_then_insert(columns=["id", "status"], values=["src.id", "new.user"])
+        .build()
+    )
+    assert "active.pending" in merge_stmt.parameters.values()
+    assert "new.user" in merge_stmt.parameters.values()
+    assert '"src"."name"' in merge_stmt.sql or "src.name" in merge_stmt.sql
+
+
+def test_column_expression_boolean_combinators_do_not_mutate_operands() -> None:
+    cond_a = sql.column("a") == 1
+    cond_b = sql.column("b") == 2
+    cond_c = sql.column("c") == 3
+    _ = cond_a & cond_b
+    _ = cond_a | cond_c
+    _ = ~cond_a
+    assert cond_a.sqlglot_expression.parent is None
+
+
+def test_vector_distance_postgres_spangres_mysql_oracle() -> None:
+    col = sql.column("embedding_array")
+    pg_sql = col.vector_distance([1.0, 2.0], metric="euclidean").sqlglot_expression.sql(dialect="postgres")
+    assert "CAST(ARRAY[1.0, 2.0] AS VECTOR)" in pg_sql
+
+    spangres_sql = col.vector_distance([1.0, 2.0], metric="cosine").sqlglot_expression.sql(dialect="spangres")
+    assert "COSINE_DISTANCE" in spangres_sql
+
+    mysql_col_sql = col.vector_distance(sql.column("other_array"), metric="cosine").sqlglot_expression.sql(
+        dialect="mysql"
+    )
+    assert "STRING_TO_VECTOR" not in mysql_col_sql
+
+    oracle_col_sql = col.vector_distance(sql.column("other_array"), metric="cosine").sqlglot_expression.sql(
+        dialect="oracle"
+    )
+    assert "TO_VECTOR" not in oracle_col_sql
+
+
+def test_subquery_embedding_preserves_ctes_and_renames_colliding_params() -> None:
+    cte_sub = (
+        sql
+        .select("id")
+        .from_("active_u")
+        .with_cte("active_u", sql.select("id").from_("users").where_eq("status", "active"))
+        .where_eq("status", "verified")
+    )
+    ins_stmt = sql.insert("archive").columns("id").from_select(cte_sub).build()
+    assert "WITH" in ins_stmt.sql
+    assert len(ins_stmt.parameters) == 2
+
+    upd_sub = sql.select("name").from_("profiles").where_eq("status", "Override")
+    upd_stmt = sql.update("users").set("status", " initial ").set("name", upd_sub).build()
+    assert len(upd_stmt.parameters) == 2
+    assert set(upd_stmt.parameters.values()) == {" initial ", "Override"}
+
+
+def test_positional_where_placeholders_and_show_parameters() -> None:
+    qmark_stmt = sql.select("*").from_("users").where("a = ? AND b = ?", 10, 20).build()
+    assert list(qmark_stmt.parameters.values()) == [10, 20]
+
+    mixed_stmt = sql.select("*").from_("users").where("x = :named AND a = $1", 99, named="foo").build()
+    assert mixed_stmt.parameters == {"named": "foo", "param_1": 99}
+    assert ":param_1" in mixed_stmt.sql
+
+    builder = sql.select("*").from_("users")
+    builder.set_expression(exp.maybe_parse("SELECT * FROM users WHERE a = :p1 AND b = :p10") or exp.Select())
+    builder.set_parameters({"p1": "x'y", "p10": "ten", "p": "base", "p_10": "ten_u"})
+    rendered = builder.to_sql(show_parameters=True)
+    assert "'x''y'" in rendered
+    assert "'ten'" in rendered
+    assert "'x''y'0" not in rendered
+    _, next_name = builder.add_parameter("eleven", name=builder.generate_unique_parameter_name("p"))
+    assert next_name == "p_11"
+
+
+def test_explain_oracle_and_factory_dialect_preservation() -> None:
+    explain_stmt = Explain("SELECT * FROM users", dialect="oracle").build()
+    assert explain_stmt.sql.startswith("EXPLAIN PLAN FOR ")
+
+    pg_factory = SQLFactory(dialect="postgresql")
+    returning_stmt = pg_factory("INSERT INTO users (name) VALUES ('Alice') RETURNING id")
+    assert returning_stmt.statement_config.dialect == "postgres"
+    trunc = sql.truncate("users", dialect="postgresql")
+    assert trunc.dialect_name == "postgres"

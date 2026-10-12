@@ -1,8 +1,18 @@
+"""BigQuery dialect static configuration and reflection helpers."""
+
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, register_dialect
 
-__all__ = ("format_bigquery_information_schema_tables", "format_bigquery_schema_prefix")
+__all__ = (
+    "BIGQUERY_CONFIG",
+    "BIGQUERY_FEATURE_FLAGS",
+    "BIGQUERY_FEATURE_VERSIONS",
+    "BIGQUERY_TYPE_MAPPINGS",
+    "BIGQUERY_VERSION_PATTERN",
+    "format_bigquery_information_schema_tables",
+    "format_bigquery_schema_prefix",
+)
 
 
 BIGQUERY_VERSION_PATTERN = re.compile(r".*")

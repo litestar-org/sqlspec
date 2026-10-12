@@ -70,17 +70,24 @@ __all__ = (
 )
 
 
+_resolved_driver_type: "type[PyMysqlDriver] | None" = None
+
+
 class PyMysqlCursor:
     """Context manager for PyMySQL cursor operations."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("connection", "cursor", "cursor_class")
 
-    def __init__(self, connection: "PyMysqlConnection") -> None:
+    def __init__(self, connection: "PyMysqlConnection", cursor_class: "type[PyMysqlRawCursor] | None" = None) -> None:
         self.connection = connection
+        self.cursor_class = cursor_class
         self.cursor: PyMysqlRawCursor | None = None
 
     def __enter__(self) -> "PyMysqlRawCursor":
-        self.cursor = self.connection.cursor()
+        if self.cursor_class is not None:
+            self.cursor = self.connection.cursor(self.cursor_class)
+        else:
+            self.cursor = self.connection.cursor()
         return self.cursor
 
     def __exit__(self, *_: object) -> None:
@@ -119,13 +126,13 @@ class PyMysqlSessionContext:
         self._driver: PyMysqlDriver | None = None
 
     def __enter__(self) -> "PyMysqlDriver":
-        from sqlspec.adapters.pymysql.driver import PyMysqlDriver
-
+        driver_cls = _get_pymysql_driver_type()
         self._connection = self._acquire_connection()
-        self._driver = PyMysqlDriver(
+        driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
-        return self._prepare_driver(self._driver)
+        self._driver = driver
+        return self._prepare_driver(driver)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -134,3 +141,12 @@ class PyMysqlSessionContext:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def _get_pymysql_driver_type() -> "type[PyMysqlDriver]":
+    global _resolved_driver_type
+    driver_cls = _resolved_driver_type
+    if driver_cls is None:
+        driver_cls = import_optional_attr("sqlspec.adapters.pymysql.driver", "PyMysqlDriver")
+        _resolved_driver_type = driver_cls
+    return driver_cls

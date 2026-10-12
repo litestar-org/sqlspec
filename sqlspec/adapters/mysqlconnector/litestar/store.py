@@ -70,32 +70,27 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
                 try:
                     await cursor.execute(sql, (key,))
                     row = await cursor.fetchone()
+                    if row is None:
+                        return None
+
+                    data_value: Any = row[0]
+                    expires_at: Any = row[1]
+
+                    if renew_for is not None and expires_at is not None:
+                        new_expires_at = self._calculate_expires_at(renew_for)
+                        if new_expires_at is not None:
+                            naive_expires_at = new_expires_at.replace(tzinfo=None)
+                            update_sql = f"""
+                                UPDATE {self._table_name}
+                                SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
+                                WHERE session_id = %s
+                                """
+                            await cursor.execute(update_sql, (naive_expires_at, key))
+                            await conn.commit()
+
+                    return bytes(cast("bytes", data_value))
                 finally:
                     await cursor.close()
-
-                if row is None:
-                    return None
-
-                data_value: Any = row[0]
-                expires_at: Any = row[1]
-
-                if renew_for is not None and expires_at is not None:
-                    new_expires_at = self._calculate_expires_at(renew_for)
-                    if new_expires_at is not None:
-                        naive_expires_at = new_expires_at.replace(tzinfo=None)
-                        update_sql = f"""
-                            UPDATE {self._table_name}
-                            SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
-                            WHERE session_id = %s
-                            """
-                        update_cursor = await conn.cursor()
-                        try:
-                            await update_cursor.execute(update_sql, (naive_expires_at, key))
-                        finally:
-                            await update_cursor.close()
-                        await conn.commit()
-
-                return bytes(cast("bytes", data_value))
         except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -181,43 +176,55 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
         WHERE session_id = %s
         """
 
-        async with self._config.provide_connection() as conn:
-            cursor = await conn.cursor()
-            try:
-                await cursor.execute(sql, (key,))
-                row = await cursor.fetchone()
-            finally:
-                await cursor.close()
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql, (key,))
+                    row = await cursor.fetchone()
+                finally:
+                    await cursor.close()
 
-            if row is None or row[0] is None:
+                if row is None or row[0] is None:
+                    return None
+
+                expires_at_naive: datetime = cast("datetime", row[0])
+                expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+                now = datetime.now(UTC)
+
+                if expires_at_utc <= now:
+                    return 0
+
+                delta = expires_at_utc - now
+                return int(delta.total_seconds())
+        except MysqlConnectorError as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
-
-            expires_at_naive: datetime = cast("datetime", row[0])
-            expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
-            now = datetime.now(UTC)
-
-            if expires_at_utc <= now:
-                return 0
-
-            delta = expires_at_utc - now
-            return int(delta.total_seconds())
+            raise
 
     async def delete_expired(self) -> int:
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
-        async with self._config.provide_connection() as conn:
-            cursor = await conn.cursor()
-            try:
-                await cursor.execute(sql)
-                await conn.commit()
-                count: int = cursor.rowcount
-            finally:
-                await cursor.close()
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+        try:
+            async with self._config.provide_connection() as conn:
+                cursor = await conn.cursor()
+                try:
+                    await cursor.execute(sql)
+                    await conn.commit()
+                    raw_count = cursor.rowcount
+                    count: int = raw_count if raw_count and raw_count > 0 else 0
+                finally:
+                    await cursor.close()
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
+        except MysqlConnectorError as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
 
     def _table_ddl(self) -> str:
+        safe_index_table = self._table_name.replace(".", "_")
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id VARCHAR(255) PRIMARY KEY,
@@ -225,13 +232,14 @@ class MysqlConnectorAsyncStore(BaseSQLSpecStore["MysqlConnectorAsyncConfig"]):
             expires_at DATETIME(6),
             created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._table_name}_expires_at (expires_at){self._index_options}
+            INDEX idx_{safe_index_table}_expires_at (expires_at){self._index_options}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
         """
 
     def _drop_table_sql(self) -> "list[str]":
+        safe_index_table = self._table_name.replace(".", "_")
         return [
-            f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
+            f"DROP INDEX idx_{safe_index_table}_expires_at ON {self._table_name}",
             f"DROP TABLE IF EXISTS {self._table_name}",
         ]
 
@@ -277,6 +285,7 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         return await async_(self._delete_expired)()
 
     def _table_ddl(self) -> str:
+        safe_index_table = self._table_name.replace(".", "_")
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id VARCHAR(255) PRIMARY KEY,
@@ -284,13 +293,14 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
             expires_at DATETIME(6),
             created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-            INDEX idx_{self._table_name}_expires_at (expires_at){self._index_options}
+            INDEX idx_{safe_index_table}_expires_at (expires_at){self._index_options}
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci{self._table_options}
         """
 
     def _drop_table_sql(self) -> "list[str]":
+        safe_index_table = self._table_name.replace(".", "_")
         return [
-            f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
+            f"DROP INDEX idx_{safe_index_table}_expires_at ON {self._table_name}",
             f"DROP TABLE IF EXISTS {self._table_name}",
         ]
 
@@ -315,32 +325,27 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
                 try:
                     cursor.execute(sql, (key,))
                     row = cursor.fetchone()
+                    if row is None:
+                        return None
+
+                    data_value: Any = row[0]
+                    expires_at: Any = row[1]
+
+                    if renew_for is not None and expires_at is not None:
+                        new_expires_at = self._calculate_expires_at(renew_for)
+                        if new_expires_at is not None:
+                            naive_expires_at = new_expires_at.replace(tzinfo=None)
+                            update_sql = f"""
+                                UPDATE {self._table_name}
+                                SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
+                                WHERE session_id = %s
+                                """
+                            cursor.execute(update_sql, (naive_expires_at, key))
+                            conn.commit()
+
+                    return bytes(cast("bytes", data_value))
                 finally:
                     cursor.close()
-
-                if row is None:
-                    return None
-
-                data_value: Any = row[0]
-                expires_at: Any = row[1]
-
-                if renew_for is not None and expires_at is not None:
-                    new_expires_at = self._calculate_expires_at(renew_for)
-                    if new_expires_at is not None:
-                        naive_expires_at = new_expires_at.replace(tzinfo=None)
-                        update_sql = f"""
-                            UPDATE {self._table_name}
-                            SET expires_at = %s, updated_at = UTC_TIMESTAMP(6)
-                            WHERE session_id = %s
-                            """
-                        update_cursor = conn.cursor()
-                        try:
-                            update_cursor.execute(update_sql, (naive_expires_at, key))
-                        finally:
-                            update_cursor.close()
-                        conn.commit()
-
-                return bytes(cast("bytes", data_value))
         except MysqlConnectorError as exc:
             if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
@@ -426,41 +431,52 @@ class MysqlConnectorSyncStore(BaseSQLSpecStore["MysqlConnectorSyncConfig"]):
         WHERE session_id = %s
         """
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql, (key,))
-                row = cursor.fetchone()
-            finally:
-                cursor.close()
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql, (key,))
+                    row = cursor.fetchone()
+                finally:
+                    cursor.close()
 
-            if row is None or row[0] is None:
+                if row is None or row[0] is None:
+                    return None
+
+                expires_at_naive: datetime = cast("datetime", row[0])
+                expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+                now = datetime.now(UTC)
+
+                if expires_at_utc <= now:
+                    return 0
+
+                delta = expires_at_utc - now
+                return int(delta.total_seconds())
+        except MysqlConnectorError as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
                 return None
-
-            expires_at_naive: datetime = cast("datetime", row[0])
-            expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
-            now = datetime.now(UTC)
-
-            if expires_at_utc <= now:
-                return 0
-
-            delta = expires_at_utc - now
-            return int(delta.total_seconds())
+            raise
 
     def _delete_expired(self) -> int:
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
-        with self._config.provide_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute(sql)
-                conn.commit()
-                count: int = cursor.rowcount
-            finally:
-                cursor.close()
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+        try:
+            with self._config.provide_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(sql)
+                    conn.commit()
+                    raw_count = cursor.rowcount
+                    count: int = raw_count if raw_count and raw_count > 0 else 0
+                finally:
+                    cursor.close()
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
+        except MysqlConnectorError as exc:
+            if "doesn't exist" in str(exc) or getattr(exc, "errno", None) == MYSQL_TABLE_NOT_FOUND_ERROR:
+                return 0
+            raise
 
 
 def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:

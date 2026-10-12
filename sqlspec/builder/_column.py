@@ -28,17 +28,17 @@ class ColumnExpression:
         """Combine with AND operator (&)."""
         if not isinstance(other, ColumnExpression):
             return NotImplemented
-        return ColumnExpression(exp.And(this=self._expression, expression=other._expression))
+        return ColumnExpression(exp.And(this=self._expression.copy(), expression=other._expression.copy()))
 
     def __or__(self, other: "ColumnExpression") -> "ColumnExpression":
         """Combine with OR operator (|)."""
         if not isinstance(other, ColumnExpression):
             return NotImplemented
-        return ColumnExpression(exp.Or(this=self._expression, expression=other._expression))
+        return ColumnExpression(exp.Or(this=self._expression.copy(), expression=other._expression.copy()))
 
     def __invert__(self) -> "ColumnExpression":
         """Apply NOT operator (~)."""
-        return ColumnExpression(exp.Not(this=self._expression))
+        return ColumnExpression(exp.Not(this=self._expression.copy()))
 
     def __bool__(self) -> bool:
         """Prevent accidental use of 'and'/'or' keywords."""
@@ -60,22 +60,29 @@ class _ScalarExpressionMixin:
 
     Hosts the comparison, membership, casting, and ordering helpers that are
     identical between :class:`Column` and :class:`FunctionColumn`. Concrete
-    subclasses own the ``_expression`` slot along with their own ``__init__``,
-    equality, hashing, and ``like`` semantics.
+    subclasses own the ``_expression`` slot along with their own ``__init__``
+    and hashing semantics.
     """
 
     __slots__ = ("_expression",)
 
     _expression: "exp.Expr"
 
-    def _convert_value(self, value: Any) -> exp.Expr:
-        """Convert a Python value to a SQLGlot expression."""
-        return _convert_value(value)
+    def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
+        """Equal to (==)."""
+        if other is None:
+            return ColumnExpression(exp.Is(this=self._expression, expression=exp.Null()))
+        return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
 
-    @property
-    def sqlglot_expression(self) -> "exp.Expr":
-        """Get the underlying SQLGlot expression."""
-        return self._expression
+    def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
+        """Not equal to (!=)."""
+        if other is None:
+            return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
+        return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
+
+    def __hash__(self) -> int:
+        """Hash based on the expression identity."""
+        return hash(id(self._expression))
 
     def __gt__(self, other: Any) -> ColumnExpression:
         """Greater than (>)."""
@@ -93,6 +100,22 @@ class _ScalarExpressionMixin:
         """Less than or equal (<=)."""
         return ColumnExpression(exp.LTE(this=self._expression, expression=self._convert_value(other)))
 
+    def __invert__(self) -> ColumnExpression:
+        """Apply NOT operator (~)."""
+        return ColumnExpression(exp.Not(this=self._expression))
+
+    @property
+    def sqlglot_expression(self) -> "exp.Expr":
+        """Get the underlying SQLGlot expression."""
+        return self._expression
+
+    def like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
+        """SQL LIKE pattern matching."""
+        like_expr: exp.Expr = exp.Like(this=self._expression, expression=self._convert_value(pattern))
+        if escape:
+            like_expr = exp.Escape(this=like_expr, expression=self._convert_value(escape))
+        return ColumnExpression(like_expr)
+
     def ilike(self, pattern: str) -> ColumnExpression:
         """Case-insensitive LIKE."""
         return ColumnExpression(exp.ILike(this=self._expression, expression=self._convert_value(pattern)))
@@ -101,6 +124,22 @@ class _ScalarExpressionMixin:
         """SQL IN clause."""
         converted_values = [self._convert_value(v) for v in values]
         return ColumnExpression(exp.In(this=self._expression, expressions=converted_values))
+
+    def not_in(self, values: Iterable[Any]) -> ColumnExpression:
+        """SQL NOT IN clause."""
+        return ~self.in_(values)
+
+    def not_in_(self, values: Iterable[Any]) -> ColumnExpression:
+        """SQL NOT IN clause."""
+        return ~self.in_(values)
+
+    def not_like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
+        """SQL NOT LIKE pattern matching."""
+        return ~self.like(pattern, escape)
+
+    def not_ilike(self, pattern: str) -> ColumnExpression:
+        """Case-insensitive NOT LIKE."""
+        return ~self.ilike(pattern)
 
     def between(self, start: Any, end: Any) -> ColumnExpression:
         """SQL BETWEEN clause."""
@@ -168,6 +207,10 @@ class _ScalarExpressionMixin:
         """Create an aliased expression."""
         return cast("exp.Alias", exp.alias_(self._expression, alias))
 
+    def _convert_value(self, value: Any) -> exp.Expr:
+        """Convert a Python value to a SQLGlot expression."""
+        return _convert_value(value)
+
 
 class Column(_ScalarExpressionMixin):
     """Represents a database column with Python operator support."""
@@ -183,40 +226,14 @@ class Column(_ScalarExpressionMixin):
         else:
             self._expression = exp.Column(this=exp.Identifier(this=name))
 
-    def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        """Equal to (==)."""
-        if other is None:
-            return ColumnExpression(exp.Is(this=self._expression, expression=exp.Null()))
-        return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
+    def __repr__(self) -> str:
+        if self.table:
+            return f"Column<{self.table}.{self.name}>"
+        return f"Column<{self.name}>"
 
-    def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        """Not equal to (!=)."""
-        if other is None:
-            return ColumnExpression(exp.Not(this=exp.Is(this=self._expression, expression=exp.Null())))
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
-
-    def __invert__(self) -> ColumnExpression:
-        """Apply NOT operator (~)."""
-        return ColumnExpression(exp.Not(this=self._expression))
-
-    def like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
-        """SQL LIKE pattern matching."""
-        like_expr: exp.Expr = exp.Like(this=self._expression, expression=self._convert_value(pattern))
-        if escape:
-            like_expr = exp.Escape(this=like_expr, expression=self._convert_value(escape))
-        return ColumnExpression(like_expr)
-
-    def not_in(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL NOT IN clause."""
-        return ~self.in_(values)
-
-    def not_like(self, pattern: str, escape: str | None = None) -> ColumnExpression:
-        """SQL NOT LIKE pattern matching."""
-        return ~self.like(pattern, escape)
-
-    def not_ilike(self, pattern: str) -> ColumnExpression:
-        """Case-insensitive NOT LIKE."""
-        return ~self.ilike(pattern)
+    def __hash__(self) -> int:
+        """Hash based on table and column name."""
+        return hash((self.table, self.name))
 
     def lower(self) -> "FunctionColumn":
         """SQL LOWER() function."""
@@ -298,27 +315,6 @@ class Column(_ScalarExpressionMixin):
         """SQL COUNT(*) function."""
         return FunctionColumn(exp.Count(this=exp.Star()))
 
-    @staticmethod
-    def _normalize_metric(metric: str) -> str:
-        """Normalize and validate vector distance metric."""
-        normalized_metric = metric.lower()
-        valid_metrics = {"euclidean", "cosine", "inner_product", "euclidean_squared"}
-        if normalized_metric not in valid_metrics:
-            msg = f"Invalid metric: {metric}. Must be one of {valid_metrics}"
-            raise ValueError(msg)
-        return normalized_metric
-
-    def _convert_vector_value(self, value: "list[float] | Column | exp.Expr") -> "exp.Expr":
-        """Convert a vector input into a SQLGlot expression."""
-        if isinstance(value, list):
-            return exp.Array(expressions=[exp.Literal.number(v) for v in value])
-        if isinstance(value, Column):
-            return value._expression
-        if isinstance(value, exp.Expr):
-            return value
-        msg = f"Unsupported vector type: {type(value)}"
-        raise TypeError(msg)
-
     def vector_distance(
         self, other_vector: "list[float] | Column | exp.Expr", metric: str = "euclidean"
     ) -> "FunctionColumn":
@@ -361,14 +357,26 @@ class Column(_ScalarExpressionMixin):
         similarity_expr = exp.Sub(this=exp.Literal.number(1), expression=exp.Paren(this=cosine_dist._expression))  # pyright: ignore[reportPrivateUsage]
         return FunctionColumn(similarity_expr)
 
-    def __repr__(self) -> str:
-        if self.table:
-            return f"Column<{self.table}.{self.name}>"
-        return f"Column<{self.name}>"
+    @staticmethod
+    def _normalize_metric(metric: str) -> str:
+        """Normalize and validate vector distance metric."""
+        normalized_metric = metric.lower()
+        valid_metrics = {"euclidean", "cosine", "inner_product", "euclidean_squared"}
+        if normalized_metric not in valid_metrics:
+            msg = f"Invalid metric: {metric}. Must be one of {valid_metrics}"
+            raise ValueError(msg)
+        return normalized_metric
 
-    def __hash__(self) -> int:
-        """Hash based on table and column name."""
-        return hash((self.table, self.name))
+    def _convert_vector_value(self, value: "list[float] | Column | exp.Expr") -> "exp.Expr":
+        """Convert a vector input into a SQLGlot expression."""
+        if isinstance(value, list):
+            return exp.Array(expressions=[exp.Literal.number(v) for v in value])
+        if isinstance(value, Column):
+            return value._expression
+        if isinstance(value, exp.Expr):
+            return value
+        msg = f"Unsupported vector type: {type(value)}"
+        raise TypeError(msg)
 
 
 class FunctionColumn(_ScalarExpressionMixin):
@@ -378,27 +386,6 @@ class FunctionColumn(_ScalarExpressionMixin):
 
     def __init__(self, expression: "exp.Expr") -> None:
         self._expression = expression
-
-    def __eq__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        return ColumnExpression(exp.EQ(this=self._expression, expression=self._convert_value(other)))
-
-    def __ne__(self, other: object) -> ColumnExpression:  # type: ignore[override]
-        return ColumnExpression(exp.NEQ(this=self._expression, expression=self._convert_value(other)))
-
-    def like(self, pattern: str) -> ColumnExpression:
-        return ColumnExpression(exp.Like(this=self._expression, expression=self._convert_value(pattern)))
-
-    def not_in_(self, values: Iterable[Any]) -> ColumnExpression:
-        """SQL NOT IN clause."""
-        return ~self.in_(values)
-
-    def not_like(self, pattern: str) -> ColumnExpression:
-        """SQL NOT LIKE."""
-        return ~self.like(pattern)
-
-    def not_ilike(self, pattern: str) -> ColumnExpression:
-        """Case-insensitive NOT LIKE."""
-        return ~self.ilike(pattern)
 
     def __hash__(self) -> int:
         """Hash based on the expression identity."""

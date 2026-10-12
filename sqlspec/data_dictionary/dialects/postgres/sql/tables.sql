@@ -17,6 +17,7 @@ WITH RECURSIVE dependency_tree AS (
           FROM pg_catalog.pg_constraint fk
           WHERE fk.conrelid = c.oid
             AND fk.contype = 'f'
+            AND fk.confrelid <> c.oid
       )
 
     UNION ALL
@@ -32,11 +33,19 @@ WITH RECURSIVE dependency_tree AS (
     JOIN pg_catalog.pg_namespace child_ns ON child_ns.oid = child.relnamespace
     JOIN dependency_tree parent ON parent.oid = fk.confrelid
     WHERE fk.contype = 'f'
+      AND fk.confrelid <> fk.conrelid
       AND child_ns.nspname = :schema_name
       AND (:table_name::text IS NULL OR child.relname = :table_name)
       AND NOT child.oid = ANY(parent.path)
+),
+dependency_levels AS (
+    SELECT
+        oid,
+        MAX(dependency_level) AS dependency_level
+    FROM dependency_tree
+    GROUP BY oid
 )
-SELECT DISTINCT ON (t.oid)
+SELECT
     current_database()::text AS table_catalog,
     n.nspname::text AS table_schema,
     n.nspname::text AS schema_name,
@@ -51,8 +60,8 @@ SELECT DISTINCT ON (t.oid)
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
-LEFT JOIN dependency_tree t ON t.oid = c.oid
+LEFT JOIN dependency_levels t ON t.oid = c.oid
 WHERE n.nspname = :schema_name
   AND (:table_name::text IS NULL OR c.relname = :table_name)
   AND c.relkind IN ('r', 'p')
-ORDER BY t.oid, dependency_level, c.relname;
+ORDER BY dependency_level, c.relname;

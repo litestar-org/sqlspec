@@ -68,6 +68,126 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
+    def init_app(self, app: "Starlette") -> None:
+        """Initialize Starlette application with SQLSpec.
+
+        Validates configuration, wraps lifespan, and adds middleware.
+
+        Args:
+            app: Starlette application instance.
+        """
+        if getattr(app.state, "sqlspec_plugin", None) is self:
+            return
+
+        self._ensure_unique_keys()
+        app.state.sqlspec_plugin = self
+
+        original_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def combined_lifespan(app: "Starlette") -> "AsyncGenerator[None, None]":
+            async with self.lifespan(app), original_lifespan(app):
+                yield
+
+        app.router.lifespan_context = combined_lifespan
+
+        for config_state in self._config_states:
+            if not config_state.disable_di:
+                self._add_middleware(app, config_state)
+
+        self._add_correlation_middleware(app)
+        self._add_sqlcommenter_middleware(app)
+
+        log_with_context(
+            logger,
+            logging.DEBUG,
+            "extension.init",
+            framework="starlette",
+            stage="configured",
+            config_count=len(self._config_states),
+        )
+
+    @asynccontextmanager
+    async def lifespan(self, app: "Starlette") -> "AsyncGenerator[None, None]":
+        """Manage connection pool lifecycle.
+
+        Args:
+            app: Starlette application instance.
+
+        Yields:
+            None
+        """
+        for config_state in self._config_states:
+            if config_state.config.supports_connection_pooling:
+                pool = await ensure_async_(config_state.config.create_pool)()
+                setattr(app.state, config_state.pool_key, pool)
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "session.create",
+                    framework="starlette",
+                    session_key=config_state.session_key,
+                    pool_key=config_state.pool_key,
+                )
+
+        try:
+            yield
+        finally:
+            for config_state in self._config_states:
+                if config_state.config.supports_connection_pooling:
+                    try:
+                        await ensure_async_(config_state.config.close_pool)()
+                    except Exception as exc:
+                        log_with_context(
+                            logger,
+                            logging.ERROR,
+                            "session.close",
+                            framework="starlette",
+                            session_key=config_state.session_key,
+                            pool_key=config_state.pool_key,
+                            status="failed",
+                            error_type=type(exc).__name__,
+                        )
+                    else:
+                        log_with_context(
+                            logger,
+                            logging.DEBUG,
+                            "session.close",
+                            framework="starlette",
+                            session_key=config_state.session_key,
+                            pool_key=config_state.pool_key,
+                        )
+
+    def get_session(self, request: "Request", key: "str | None" = None) -> Any:
+        """Get or create database session for request.
+
+        Sessions are cached per request to ensure consistency.
+
+        Args:
+            request: Starlette request instance.
+            key: Optional session key to retrieve specific database session.
+
+        Returns:
+            Database session (driver instance).
+        """
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+
+        return get_or_create_session(request, config_state)
+
+    def get_connection(self, request: "Request", key: "str | None" = None) -> Any:
+        """Get database connection from request state.
+
+        Args:
+            request: Starlette request instance.
+            key: Optional session key to retrieve specific database connection.
+
+        Returns:
+            Database connection object.
+        """
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+
+        return get_state_value(request.state, config_state.connection_key)
+
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Starlette settings from config.extension_config.
 
@@ -123,41 +243,6 @@ class SQLSpecPlugin:
             auto_trace_headers=settings["auto_trace_headers"],
             enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
             sqlcommenter_framework=settings["sqlcommenter_framework"],
-        )
-
-    def init_app(self, app: "Starlette") -> None:
-        """Initialize Starlette application with SQLSpec.
-
-        Validates configuration, wraps lifespan, and adds middleware.
-
-        Args:
-            app: Starlette application instance.
-        """
-        self._ensure_unique_keys()
-
-        original_lifespan = app.router.lifespan_context
-
-        @asynccontextmanager
-        async def combined_lifespan(app: "Starlette") -> "AsyncGenerator[None, None]":
-            async with self.lifespan(app), original_lifespan(app):
-                yield
-
-        app.router.lifespan_context = combined_lifespan
-
-        for config_state in self._config_states:
-            if not config_state.disable_di:
-                self._add_middleware(app, config_state)
-
-        self._add_correlation_middleware(app)
-        self._add_sqlcommenter_middleware(app)
-
-        log_with_context(
-            logger,
-            logging.DEBUG,
-            "extension.init",
-            framework="starlette",
-            stage="configured",
-            config_count=len(self._config_states),
         )
 
     def _ensure_unique_keys(self) -> None:
@@ -238,74 +323,6 @@ class SQLSpecPlugin:
                     logger, logging.DEBUG, "extension.init", framework="starlette", stage="sqlcommenter_middleware"
                 )
                 break
-
-    @asynccontextmanager
-    async def lifespan(self, app: "Starlette") -> "AsyncGenerator[None, None]":
-        """Manage connection pool lifecycle.
-
-        Args:
-            app: Starlette application instance.
-
-        Yields:
-            None
-        """
-        for config_state in self._config_states:
-            if config_state.config.supports_connection_pooling:
-                pool = await ensure_async_(config_state.config.create_pool)()
-                setattr(app.state, config_state.pool_key, pool)
-                log_with_context(
-                    logger,
-                    logging.DEBUG,
-                    "session.create",
-                    framework="starlette",
-                    session_key=config_state.session_key,
-                    pool_key=config_state.pool_key,
-                )
-
-        try:
-            yield
-        finally:
-            for config_state in self._config_states:
-                if config_state.config.supports_connection_pooling:
-                    await ensure_async_(config_state.config.close_pool)()
-                    log_with_context(
-                        logger,
-                        logging.DEBUG,
-                        "session.close",
-                        framework="starlette",
-                        session_key=config_state.session_key,
-                        pool_key=config_state.pool_key,
-                    )
-
-    def get_session(self, request: "Request", key: "str | None" = None) -> Any:
-        """Get or create database session for request.
-
-        Sessions are cached per request to ensure consistency.
-
-        Args:
-            request: Starlette request instance.
-            key: Optional session key to retrieve specific database session.
-
-        Returns:
-            Database session (driver instance).
-        """
-        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-
-        return get_or_create_session(request, config_state)
-
-    def get_connection(self, request: "Request", key: "str | None" = None) -> Any:
-        """Get database connection from request state.
-
-        Args:
-            request: Starlette request instance.
-            key: Optional session key to retrieve specific database connection.
-
-        Returns:
-            Database connection object.
-        """
-        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-
-        return get_state_value(request.state, config_state.connection_key)
 
     def _config_state_by_key(self, key: str) -> SQLSpecConfigState:
         """Get configuration state by session key.

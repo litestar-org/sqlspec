@@ -192,3 +192,37 @@ async def test_async_savepoint_round_trip(aiosqlite_async_driver) -> None:
 
     rows = await aiosqlite_async_driver.execute("SELECT id FROM sp ORDER BY id")
     assert [row["id"] for row in rows.get_data()] == [1]
+
+
+@requires_interpreted
+def test_sync_execute_stack_preserves_caller_transaction(sqlite_sync_driver) -> None:
+    """Sync execute_stack should not commit or rollback a caller-managed transaction."""
+    sqlite_sync_driver.execute("CREATE TABLE t_caller (id INTEGER)")
+    sqlite_sync_driver.begin()
+    sqlite_sync_driver.execute("INSERT INTO t_caller (id) VALUES (1)")
+
+    stack = StatementStack().push_execute("INSERT INTO t_caller (id) VALUES (2)")
+    sqlite_sync_driver.execute_stack(stack, continue_on_error=True)
+
+    assert sqlite_sync_driver.connection.in_transaction is True
+    sqlite_sync_driver.rollback()
+
+    rows = sqlite_sync_driver.execute("SELECT id FROM t_caller")
+    assert rows.get_data() == []
+
+
+@requires_interpreted
+async def test_async_execute_stack_preserves_caller_transaction(aiosqlite_async_driver) -> None:
+    """Async execute_stack should not commit or rollback a caller-managed transaction."""
+    await aiosqlite_async_driver.execute("CREATE TABLE t_caller (id INTEGER)")
+    await aiosqlite_async_driver.begin()
+    await aiosqlite_async_driver.execute("INSERT INTO t_caller (id) VALUES (1)")
+
+    stack = StatementStack().push_execute("INSERT INTO t_caller (id) VALUES (2)")
+    await aiosqlite_async_driver.execute_stack(stack, continue_on_error=True)
+
+    assert aiosqlite_async_driver.connection.in_transaction is True
+    await aiosqlite_async_driver.rollback()
+
+    rows = await aiosqlite_async_driver.execute("SELECT id FROM t_caller")
+    assert rows.get_data() == []

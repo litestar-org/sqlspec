@@ -153,6 +153,7 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
         """Get CockroachDB CREATE TABLE SQL with optimized schema."""
         settings = cast("dict[str, Any]", self._config.extension_config.get("litestar", {}))
         table_options, hash_clause = _cockroach_storage_clauses(settings)
+        idx_table_name = self._table_name.replace(".", "_")
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
@@ -162,12 +163,13 @@ class CockroachAsyncpgStore(BaseSQLSpecStore["CockroachAsyncpgConfig"]):
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         ){table_options};
 
-        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
+        CREATE INDEX IF NOT EXISTS idx_{idx_table_name}_expires_at
         ON {self._table_name}(expires_at){hash_clause} WHERE expires_at IS NOT NULL;
         """
 
     def _drop_table_sql(self) -> "list[str]":
-        return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
+        idx_table_name = self._table_name.replace(".", "_")
+        return [f"DROP INDEX IF EXISTS idx_{idx_table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
 
 
 def _cockroach_storage_clauses(settings: "dict[str, Any]") -> "tuple[str, str]":

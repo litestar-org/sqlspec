@@ -15,15 +15,17 @@ from typing import TYPE_CHECKING, Any, ClassVar, NotRequired, cast
 
 from typing_extensions import TypedDict
 
+from sqlspec.adapters.bigquery._typing import GoogleCloudError
 from sqlspec.adapters.bigquery._typing import bigquery_module as bigquery
 from sqlspec.adapters.bigquery.config import BigQueryConfig
+from sqlspec.adapters.bigquery.core import build_dml_rowcount, create_mapped_exception
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk._config_utils import _adk_config_from_extension
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
     from sqlspec.extensions.adk import SessionOrderBy
 
@@ -65,7 +67,15 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
     """
 
     connector_name: ClassVar[str] = "bigquery"
-    __slots__ = ("_dataset_qualifier", "_lookup_window_days", "_partition_expiration_days", "_require_partition_filter")
+    __slots__ = (
+        "_dataset_qualifier",
+        "_json_deserializer",
+        "_json_serializer",
+        "_last_dml_affected_rows",
+        "_lookup_window_days",
+        "_partition_expiration_days",
+        "_require_partition_filter",
+    )
 
     def __init__(self, config: BigQueryConfig) -> None:
         """Initialize the BigQuery ADK store.
@@ -83,8 +93,15 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             max(1, math.ceil(int(ttl_seconds) / 86400)) if ttl_seconds else None
         )
         self._require_partition_filter: bool = bool(adk_config.get("require_partition_filter", False))
+        self._json_serializer: Callable[[Any], str] = cast(
+            "Callable[[Any], str]", config.driver_features.get("json_serializer", to_json)
+        )
+        self._json_deserializer: Callable[[str], Any] = cast(
+            "Callable[[str], Any]", config.driver_features.get("json_deserializer", from_json)
+        )
+        self._last_dml_affected_rows: int = 0
 
-        dataset_id = config.connection_config.get("dataset_id")
+        dataset_id = _resolve_config_dataset_id(config)
         self._dataset_qualifier: str = f"{dataset_id}." if dataset_id else ""
 
     def create_tables(self) -> None:
@@ -204,6 +221,8 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
 
     def _qualified(self, table: str) -> str:
         """Return the dataset-qualified table identifier when available."""
+        if "." in table:
+            return table
         return f"{self._dataset_qualifier}{table}"
 
     def _partition_filter(self, column: str, *, alias: str | None = None) -> str:
@@ -214,19 +233,22 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         return f" AND {qualified_column} IS NOT NULL"
 
     def _run_query(self, sql: str, parameters: "Iterable[Any] | None" = None) -> "list[dict[str, Any]]":
-
         client = self._config.create_connection()
         job_config = bigquery.QueryJobConfig(query_parameters=list(parameters)) if parameters is not None else None
-        job = client.query(sql, job_config=job_config)
-        return [dict(row) for row in job.result()]
+        try:
+            job = client.query(sql, job_config=job_config)
+            rows = [dict(row) for row in job.result()]
+        except GoogleCloudError as exc:
+            raise create_mapped_exception(exc) from exc
+        self._last_dml_affected_rows = build_dml_rowcount(job, 0)
+        return rows
 
     def _query_param(self, name: str, value: Any, *, bq_type: str = "STRING") -> Any:
-
         return bigquery.ScalarQueryParameter(name, bq_type, value)
 
     def _json_param(self, name: str, value: "dict[str, Any] | None") -> Any:
-
-        return bigquery.ScalarQueryParameter(name, "JSON", to_json(value) if value is not None else None)
+        normalized = from_json(self._json_serializer(value)) if value is not None else None
+        return bigquery.ScalarQueryParameter(name, "JSON", normalized)
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -258,7 +280,8 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             self._query_param("update_time", now, bq_type="TIMESTAMP"),
         ]
         if self._owner_id_column_name:
-            params.append(self._query_param("owner_id", owner_id))
+            owner_bq_type = "INT64" if isinstance(owner_id, int) and not isinstance(owner_id, bool) else "STRING"
+            params.append(self._query_param("owner_id", owner_id, bq_type=owner_bq_type))
         self._run_query(sql, params)
         return {
             "id": session_id,
@@ -292,7 +315,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         )
         if not rows:
             return None
-        return _session_record_from_row(rows[0])
+        return _session_record_from_row(rows[0], deserializer=self._json_deserializer)
 
     def _update_session_touch(self, app_name: str, user_id: str, session_id: str) -> None:
         sql = f"""
@@ -361,7 +384,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             params.append(self._query_param("limit", page_limit, bq_type="INT64"))
             params.append(self._query_param("offset", page_offset, bq_type="INT64"))
         rows = self._run_query(sql, params)
-        return [_session_record_from_row(row) for row in rows]
+        return [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
 
     def _delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
         events_sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE app_name = @app_name AND user_id = @user_id AND session_id = @id{self._partition_filter('timestamp')}"
@@ -442,7 +465,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             sql += " LIMIT @row_limit"
             params.append(self._query_param("row_limit", limit, bq_type="INT64"))
         rows = self._run_query(sql, params)
-        return [_event_record_from_row(row) for row in rows]
+        return [_event_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
 
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._qualified(self._events_table)} WHERE timestamp < @before{self._partition_filter('timestamp')}"
@@ -450,8 +473,9 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params.append(self._query_param("app_name", app_name))
+        self._last_dml_affected_rows = 0
         self._run_query(sql, params)
-        return 0
+        return self._last_dml_affected_rows
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._qualified(self._session_table)} WHERE update_time < @before{self._partition_filter('create_time')}"
@@ -459,8 +483,9 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params.append(self._query_param("app_name", app_name))
+        self._last_dml_affected_rows = 0
         self._run_query(sql, params)
-        return 0
+        return self._last_dml_affected_rows
 
     def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
         sql = f"DELETE FROM {self._qualified(self._user_state_table)} WHERE update_time < @before"
@@ -468,15 +493,16 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         if app_name is not None:
             sql += " AND app_name = @app_name"
             params.append(self._query_param("app_name", app_name))
+        self._last_dml_affected_rows = 0
         self._run_query(sql, params)
-        return 0
+        return self._last_dml_affected_rows
 
     def _get_app_state(self, app_name: str) -> "dict[str, Any] | None":
         sql = f"""
         SELECT state FROM {self._qualified(self._app_state_table)} WHERE app_name = @app_name LIMIT 1
         """
         rows = self._run_query(sql, [self._query_param("app_name", app_name)])
-        return self._decode_json(rows[0]["state"]) if rows else None
+        return self._decode_json(rows[0]["state"], deserializer=self._json_deserializer) if rows else None
 
     def _get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         sql = f"""
@@ -485,7 +511,7 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
         WHERE app_name = @app_name AND user_id = @user_id LIMIT 1
         """
         rows = self._run_query(sql, [self._query_param("app_name", app_name), self._query_param("user_id", user_id)])
-        return self._decode_json(rows[0]["state"]) if rows else None
+        return self._decode_json(rows[0]["state"], deserializer=self._json_deserializer) if rows else None
 
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         sql = f"""
@@ -632,31 +658,53 @@ class BigQueryADKStore(BaseSyncADKStore[BigQueryConfig]):
             self._run_query(statement)
 
     @staticmethod
-    def _decode_json(value: Any) -> "dict[str, Any] | None":
+    def _decode_json(value: Any, *, deserializer: "Callable[[str], Any]" = from_json) -> "dict[str, Any] | None":
         if value is None:
             return None
         if isinstance(value, dict):
             return cast("dict[str, Any]", value)
         if isinstance(value, (bytes, bytearray)):
-            return cast("dict[str, Any]", from_json(bytes(value).decode("utf-8")))
+            return cast("dict[str, Any]", deserializer(bytes(value).decode("utf-8")))
         if isinstance(value, str):
-            return cast("dict[str, Any]", from_json(value))
+            return cast("dict[str, Any]", deserializer(value))
         msg = f"Unsupported JSON column representation from BigQuery: {type(value).__name__}"
         raise TypeError(msg)
 
 
-def _session_record_from_row(row: "dict[str, Any]") -> StoredSession:
+def _resolve_config_dataset_id(config: BigQueryConfig) -> str | None:
+    dataset_id = config.connection_config.get("dataset_id")
+    if isinstance(dataset_id, str) and dataset_id:
+        return dataset_id
+    default_job_config = config.connection_config.get("default_query_job_config") or config.driver_features.get(
+        "default_query_job_config"
+    )
+    if default_job_config is None:
+        return None
+    default_dataset = getattr(default_job_config, "default_dataset", None)
+    if default_dataset is None:
+        return None
+    if isinstance(default_dataset, str):
+        return default_dataset or None
+    resolved_id = getattr(default_dataset, "dataset_id", None)
+    if resolved_id:
+        return str(resolved_id)
+    return str(default_dataset)
+
+
+def _session_record_from_row(
+    row: "dict[str, Any]", *, deserializer: "Callable[[str], Any]" = from_json
+) -> StoredSession:
     return {
         "id": row["id"],
         "app_name": row["app_name"],
         "user_id": row["user_id"],
-        "state": BigQueryADKStore._decode_json(row["state"]) or {},
+        "state": BigQueryADKStore._decode_json(row["state"], deserializer=deserializer) or {},
         "create_time": row["create_time"],
         "update_time": row["update_time"],
     }
 
 
-def _event_record_from_row(row: "dict[str, Any]") -> StoredEvent:
+def _event_record_from_row(row: "dict[str, Any]", *, deserializer: "Callable[[str], Any]" = from_json) -> StoredEvent:
     return {
         "id": row["id"],
         "app_name": row["app_name"],
@@ -664,5 +712,5 @@ def _event_record_from_row(row: "dict[str, Any]") -> StoredEvent:
         "session_id": row["session_id"],
         "invocation_id": row["invocation_id"],
         "timestamp": row["timestamp"],
-        "event_data": BigQueryADKStore._decode_json(row["event_data"]) or {},
+        "event_data": BigQueryADKStore._decode_json(row["event_data"], deserializer=deserializer) or {},
     }

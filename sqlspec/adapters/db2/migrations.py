@@ -47,14 +47,13 @@ class Db2MigrationTrackerMixin:
     def _tracking_table_exists_sql(self) -> "tuple[str, tuple[str | None, str]]":
         """Return the catalog probe for the tracking table and its bound names.
 
-        The tracker's DDL and DML render the table name unquoted, so Db2 stores it uppercase; the
-        probe binds the upper-folded names.
+        Unquoted identifiers are upper-folded while quoted identifiers keep their case.
 
         Returns:
             The probe SQL and its ``(schema, table)`` parameters; the schema is ``None`` for an
             unqualified table so the probe checks ``CURRENT SCHEMA``.
         """
-        return TABLE_EXISTS_SQL, split_db2_table_name(self.version_table.upper())
+        return TABLE_EXISTS_SQL, split_db2_table_name(self.version_table)
 
     def _record_migration_statement(
         self,

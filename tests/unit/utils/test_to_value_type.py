@@ -1,6 +1,7 @@
 """Tests for to_value_type() value conversion utility."""
 
-import datetime
+import datetime as dt
+import enum
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -14,21 +15,23 @@ import pytest
 from pydantic import BaseModel
 
 import sqlspec.utils.schema as schema_utils
-from sqlspec.utils.schema import to_value_type
+from sqlspec.data_dictionary import ForeignKeyMetadata
+from sqlspec.utils.schema import (
+    _convert_foreign_key_metadata,
+    _default_msgspec_deserializer,
+    _get_schema_converter,
+    to_schema,
+    to_value_type,
+)
 
 
 def test_foreign_key_metadata_recognized_via_issubclass() -> None:
     """Real ForeignKeyMetadata resolves to a schema converter."""
-    from sqlspec.data_dictionary import ForeignKeyMetadata
-    from sqlspec.utils.schema import _get_schema_converter
-
     assert _get_schema_converter(ForeignKeyMetadata) is not None
 
 
 def test_foreign_key_metadata_conversion_roundtrip() -> None:
     """Dict with FK column data converts to ForeignKeyMetadata."""
-    from sqlspec.data_dictionary import ForeignKeyMetadata
-
     result = to_value_type(
         {
             "table_name": "orders",
@@ -49,19 +52,15 @@ def test_foreign_key_metadata_conversion_roundtrip() -> None:
 
 def test_unrelated_class_named_foreign_key_metadata_not_matched() -> None:
     """A same-named third-party class must not use the FK metadata converter."""
-    from sqlspec.utils.schema import _get_schema_converter
 
-    class ForeignKeyMetadata:
+    class LocalForeignKeyMetadata:
         __slots__ = ("column_name", "referenced_column", "referenced_table", "table_name")
 
-    assert _get_schema_converter(ForeignKeyMetadata) is None
+    assert _get_schema_converter(LocalForeignKeyMetadata) is None
 
 
 def test_foreign_key_metadata_list_conversion() -> None:
     """A list of FK dictionaries converts to FK metadata instances."""
-    from sqlspec.data_dictionary import ForeignKeyMetadata
-    from sqlspec.utils.schema import _convert_foreign_key_metadata
-
     result = _convert_foreign_key_metadata(
         [
             {"table_name": "orders", "column_name": "user_id", "referenced_table": "users", "referenced_column": "id"},
@@ -83,9 +82,9 @@ def test_foreign_key_metadata_list_conversion() -> None:
         pytest.param(3.14, float, id="float"),
         pytest.param("hello", str, id="str"),
         pytest.param(True, bool, id="bool"),
-        pytest.param(datetime.datetime(2024, 1, 15, 12, 30, 45), datetime.datetime, id="datetime"),
-        pytest.param(datetime.date(2024, 1, 15), datetime.date, id="date"),
-        pytest.param(datetime.time(12, 30, 45), datetime.time, id="time"),
+        pytest.param(dt.datetime(2024, 1, 15, 12, 30, 45), dt.datetime, id="datetime"),
+        pytest.param(dt.date(2024, 1, 15), dt.date, id="date"),
+        pytest.param(dt.time(12, 30, 45), dt.time, id="time"),
         pytest.param(Decimal("123.45"), Decimal, id="decimal"),
         pytest.param(UUID("550e8400-e29b-41d4-a716-446655440000"), UUID, id="uuid"),
         pytest.param(Path("/tmp/test.txt"), Path, id="path"),
@@ -115,22 +114,22 @@ def test_subclass_bug_fixes_bool_to_int(val: bool, expected: int) -> None:
 @pytest.mark.parametrize(
     ("target_type", "expected_type", "expected_value"),
     [
-        pytest.param(datetime.date, datetime.date, datetime.date(2024, 1, 15), id="datetime_to_date"),
-        pytest.param(datetime.time, datetime.time, datetime.time(12, 30, 45), id="datetime_to_time"),
+        pytest.param(dt.date, dt.date, dt.date(2024, 1, 15), id="datetime_to_date"),
+        pytest.param(dt.time, dt.time, dt.time(12, 30, 45), id="datetime_to_time"),
     ],
 )
 def test_subclass_bug_fixes_datetime_subtypes(
-    target_type: type[datetime.date] | type[datetime.time],
-    expected_type: type[datetime.date] | type[datetime.time],
-    expected_value: datetime.date | datetime.time,
+    target_type: type[dt.date] | type[dt.time],
+    expected_type: type[dt.date] | type[dt.time],
+    expected_value: dt.date | dt.time,
 ) -> None:
     """Datetime instances should convert to strict date or time instances."""
-    dt = datetime.datetime(2024, 1, 15, 12, 30, 45)
-    result = to_value_type(dt, target_type)
+    sample_dt = dt.datetime(2024, 1, 15, 12, 30, 45)
+    result = to_value_type(sample_dt, target_type)
     assert result == expected_value
     assert type(result) is expected_type
-    if target_type is datetime.date:
-        assert not isinstance(result, datetime.datetime)
+    if target_type is dt.date:
+        assert not isinstance(result, dt.datetime)
 
 
 def test_convert_numpy_recursive_preserves_tuple_shape() -> None:
@@ -182,13 +181,14 @@ def test_msgspec_conversion_falls_back_to_numpy_walk_for_ndarray_payload() -> No
         pytest.param(-3.7, -3, id="float_negative"),
         pytest.param("42", 42, id="str_positive"),
         pytest.param("-123", -123, id="str_negative"),
-        pytest.param("42.7", 42, id="str_float_positive"),
-        pytest.param("-3.9", -3, id="str_float_negative"),
+        pytest.param("42.0", 42, id="str_integral_float_positive"),
+        pytest.param("-3.0", -3, id="str_integral_float_negative"),
+        pytest.param("9007199254740993", 9007199254740993, id="str_large_64bit_int"),
         pytest.param(Decimal("42.7"), 42, id="decimal"),
     ],
 )
 def test_int_conversions(value: Any, expected: int) -> None:
-    """Values convert to integer with truncation where applicable."""
+    """Values convert to integer with exact precision for integral strings."""
     assert to_value_type(value, int) == expected
 
 
@@ -245,9 +245,7 @@ def test_bool_conversion_str_true_values(val: str) -> None:
     assert to_value_type(val, bool) is True
 
 
-@pytest.mark.parametrize(
-    "val", ["false", "False", "FALSE", "0", "no", "No", "n", "N", "f", "F", "off", "OFF", "", "anything"]
-)
+@pytest.mark.parametrize("val", ["false", "False", "FALSE", "0", "no", "No", "n", "N", "f", "F", "off", "OFF", ""])
 def test_bool_conversion_str_false_values(val: str) -> None:
     """String representations of falsity or empty strings convert to False."""
     assert to_value_type(val, bool) is False
@@ -256,18 +254,18 @@ def test_bool_conversion_str_false_values(val: str) -> None:
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        pytest.param("2024-01-15T12:30:45", datetime.datetime(2024, 1, 15, 12, 30, 45), id="iso_str"),
-        pytest.param(datetime.date(2024, 1, 15), datetime.datetime(2024, 1, 15, 0, 0, 0), id="date_to_datetime"),
+        pytest.param("2024-01-15T12:30:45", dt.datetime(2024, 1, 15, 12, 30, 45), id="iso_str"),
+        pytest.param(dt.date(2024, 1, 15), dt.datetime(2024, 1, 15, 0, 0, 0), id="date_to_datetime"),
     ],
 )
-def test_datetime_conversions(value: Any, expected: datetime.datetime) -> None:
+def test_datetime_conversions(value: Any, expected: dt.datetime) -> None:
     """Values convert to datetime instances."""
-    assert to_value_type(value, datetime.datetime) == expected
+    assert to_value_type(value, dt.datetime) == expected
 
 
 def test_datetime_conversion_str_iso_with_tz_to_datetime() -> None:
     """ISO format string with timezone converts to datetime."""
-    result = to_value_type("2024-01-15T12:30:45+00:00", datetime.datetime)
+    result = to_value_type("2024-01-15T12:30:45+00:00", dt.datetime)
     assert result.year == 2024
     assert result.month == 1
     assert result.day == 15
@@ -276,26 +274,31 @@ def test_datetime_conversion_str_iso_with_tz_to_datetime() -> None:
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        pytest.param("2024-01-15", datetime.date(2024, 1, 15), id="iso_date_str"),
-        pytest.param("2024-01-15T12:30:45", datetime.date(2024, 1, 15), id="iso_datetime_str"),
-        pytest.param(datetime.datetime(2024, 1, 15, 12, 30, 45), datetime.date(2024, 1, 15), id="datetime_instance"),
+        pytest.param("2024-01-15", dt.date(2024, 1, 15), id="iso_date_str"),
+        pytest.param("2024-01-15T12:30:45", dt.date(2024, 1, 15), id="iso_datetime_str"),
+        pytest.param(dt.datetime(2024, 1, 15, 12, 30, 45), dt.date(2024, 1, 15), id="datetime_instance"),
     ],
 )
-def test_date_conversions(value: Any, expected: datetime.date) -> None:
+def test_date_conversions(value: Any, expected: dt.date) -> None:
     """Values convert to date instances."""
-    assert to_value_type(value, datetime.date) == expected
+    assert to_value_type(value, dt.date) == expected
 
 
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        pytest.param("12:30:45", datetime.time(12, 30, 45), id="iso_time_str"),
-        pytest.param(datetime.datetime(2024, 1, 15, 12, 30, 45), datetime.time(12, 30, 45), id="datetime_instance"),
+        pytest.param("12:30:45", dt.time(12, 30, 45), id="iso_time_str"),
+        pytest.param(dt.datetime(2024, 1, 15, 12, 30, 45), dt.time(12, 30, 45), id="datetime_instance"),
+        pytest.param(
+            dt.datetime(2024, 1, 15, 12, 30, 45, tzinfo=dt.UTC),
+            dt.time(12, 30, 45, tzinfo=dt.UTC),
+            id="tz_aware_datetime_instance",
+        ),
     ],
 )
-def test_time_conversions(value: Any, expected: datetime.time) -> None:
-    """Values convert to time instances."""
-    assert to_value_type(value, datetime.time) == expected
+def test_time_conversions(value: Any, expected: dt.time) -> None:
+    """Values convert to time instances preserving tzinfo."""
+    assert to_value_type(value, dt.time) == expected
 
 
 @pytest.mark.parametrize(
@@ -372,10 +375,14 @@ def test_set_to_list_conversions(value: Any) -> None:
     ("value", "target_type", "match"),
     [
         pytest.param("not a number", int, "Cannot convert str to int", id="str_to_int"),
+        pytest.param("42.7", int, "Cannot convert str to int", id="fractional_str_to_int"),
+        pytest.param("-3.9", int, "Cannot convert str to int", id="negative_fractional_str_to_int"),
+        pytest.param("inf", int, "Cannot convert str to int", id="inf_str_to_int"),
+        pytest.param("anything", bool, "Cannot convert str to bool", id="unrecognized_str_to_bool"),
         pytest.param("not a number", float, "Cannot convert str to float", id="str_to_float"),
-        pytest.param("not a date", datetime.datetime, "Cannot convert str to datetime", id="str_to_datetime"),
-        pytest.param("not a date", datetime.date, "Cannot convert str to date", id="str_to_date"),
-        pytest.param("not a time", datetime.time, "Cannot convert str to time", id="str_to_time"),
+        pytest.param("not a date", dt.datetime, "Cannot convert str to datetime", id="str_to_datetime"),
+        pytest.param("not a date", dt.date, "Cannot convert str to date", id="str_to_date"),
+        pytest.param("not a time", dt.time, "Cannot convert str to time", id="str_to_time"),
         pytest.param("not a number", Decimal, "Cannot convert str to Decimal", id="str_to_decimal"),
         pytest.param("not-a-uuid", UUID, "Cannot convert str to UUID", id="str_to_uuid"),
         pytest.param(123, Path, "Cannot convert int to Path", id="int_to_path"),
@@ -547,3 +554,35 @@ def test_schema_type_edge_cases_already_parsed_dict_works() -> None:
     result = to_value_type(data, UserMsgspec)
     assert isinstance(result, UserMsgspec)
     assert result.name == "Charlie"
+
+
+def test_default_msgspec_deserializer_coerces_uuid_date_and_enum() -> None:
+    """_default_msgspec_deserializer converts UUID, ISO date/datetime/time, and Enum subclasses."""
+
+    class Status(enum.Enum):
+        ACTIVE = "active"
+
+    uid_str = "550e8400-e29b-41d4-a716-446655440000"
+    assert _default_msgspec_deserializer(UUID, uid_str) == UUID(uid_str)
+    assert _default_msgspec_deserializer(UUID, UUID(uid_str).bytes) == UUID(uid_str)
+    assert _default_msgspec_deserializer(dt.date, "2024-01-15") == dt.date(2024, 1, 15)
+    assert _default_msgspec_deserializer(dt.datetime, "2024-01-15T12:30:00Z") == dt.datetime(
+        2024, 1, 15, 12, 30, 0, tzinfo=dt.UTC
+    )
+    assert _default_msgspec_deserializer(dt.time, "12:30:00Z") == dt.time(12, 30, 0, tzinfo=dt.UTC)
+    assert _default_msgspec_deserializer(Status, "active") is Status.ACTIVE
+
+
+@pytest.mark.parametrize("model_cls", [UserPydantic, UserDataclass, UserMsgspec, UserAttrs, UserTypedDict])
+def test_to_schema_supports_tuple_sequences(model_cls: Any) -> None:
+    """to_schema converts tuple sequences of mappings into a list of schema instances."""
+    rows = ({"name": "Alice", "email": "a@example.com"}, {"name": "Bob", "email": "b@example.com"})
+    result = to_schema(rows, schema_type=model_cls)
+    assert isinstance(result, list)
+    assert len(result) == 2
+
+
+def test_attrs_converter_rejects_non_mapping_sequence_items() -> None:
+    """_convert_attrs raises TypeError instead of crashing when given a sequence of non-mappings."""
+    with pytest.raises(TypeError, match="Cannot convert"):
+        to_schema(["not-a-mapping"], schema_type=UserAttrs)

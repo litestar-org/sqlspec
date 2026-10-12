@@ -1242,3 +1242,26 @@ def test_c11_mypyc_native_class_pass(basic_statement_config: "StatementConfig") 
 
     casts = SQLProcessor._parameter_casts(sqlglot.parse_one("SELECT ?"))
     assert isinstance(casts, dict)
+
+
+def test_compiler_cache_key_includes_expression_override(basic_statement_config: "StatementConfig") -> None:
+    processor = SQLProcessor(basic_statement_config)
+    sql = "SELECT * FROM users"
+    res1 = processor.compile(sql, None)
+    assert res1.operation_type == "SELECT"
+
+    override_expr = sqlglot.parse_one("DELETE FROM users")
+    res2 = processor.compile(sql, None, expression=override_expr)
+    assert res2.operation_type == "DELETE"
+
+
+def test_compiler_cache_isolates_expression_mutations(basic_statement_config: "StatementConfig") -> None:
+    processor = SQLProcessor(basic_statement_config)
+    sql = "SELECT id FROM users"
+    res1 = processor.compile(sql, None)
+    assert res1.expression is not None
+    res1.expression.set("where", exp.Where(this=exp.false()))
+
+    res2 = processor.compile(sql, None)
+    assert res2.expression is not None
+    assert res2.expression.args.get("where") is None

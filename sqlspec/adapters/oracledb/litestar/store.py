@@ -323,6 +323,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
             SQL statement to create the sessions table with proper indexes.
         """
         table_clause = _litestar_table_feature_clause(self._config, self._in_memory)
+        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
@@ -340,7 +341,7 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         END;
 
         BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
+            EXECUTE IMMEDIATE 'CREATE INDEX {index_name}
                 ON {self._table_name}(expires_at)';
         EXCEPTION
             WHEN OTHERS THEN
@@ -356,10 +357,11 @@ class OracleAsyncStore(BaseSQLSpecStore["OracleAsyncConfig"]):
         Returns:
             List of SQL statements with exception handling for non-existent objects.
         """
+        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
         return [
             f"""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._table_name}_expires_at';
+                EXECUTE IMMEDIATE 'DROP INDEX {index_name}';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -1418 THEN
@@ -496,6 +498,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
             SQL statement to create the sessions table with proper indexes.
         """
         table_clause = _litestar_table_feature_clause(self._config, self._in_memory)
+        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
         return f"""
         BEGIN
             EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
@@ -513,7 +516,7 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         END;
 
         BEGIN
-            EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at
+            EXECUTE IMMEDIATE 'CREATE INDEX {index_name}
                 ON {self._table_name}(expires_at)';
         EXCEPTION
             WHEN OTHERS THEN
@@ -529,10 +532,11 @@ class OracleSyncStore(BaseSQLSpecStore["OracleSyncConfig"]):
         Returns:
             List of SQL statements with exception handling for non-existent objects.
         """
+        index_name = f"idx_{self._table_name.replace('.', '_')}_expires_at"[:30]
         return [
             f"""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._table_name}_expires_at';
+                EXECUTE IMMEDIATE 'DROP INDEX {index_name}';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -1418 THEN

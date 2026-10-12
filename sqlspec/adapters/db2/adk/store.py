@@ -313,15 +313,15 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             raise
 
     def _delete_counted(self, count_sql: str, delete_sql: str, params: tuple[Any, ...]) -> int:
-        """Count, then delete, the matching rows; a missing table deletes nothing."""
+        """Delete the matching rows in a single session; a missing table deletes nothing."""
+        _ = count_sql
         try:
-            count = self._select_count(count_sql, params)
-            self._execute(delete_sql, params, commit=True)
+            count = self._execute(delete_sql, params, commit=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return 0
             raise
-        return count
+        return max(count, 0)
 
     def _execute_fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
         with self._config.provide_session() as driver:
@@ -337,11 +337,6 @@ class Db2SyncADKStore(_Db2ADKStoreMixin, BaseSyncADKStore[Db2SyncConfig]):
             if commit:
                 driver.commit()
             return int(result.rows_affected)
-
-    def _select_count(self, sql: str, params: tuple[Any, ...] = ()) -> int:
-        with self._config.provide_session() as driver:
-            value = driver.select_value(sql, params)
-        return int(value or 0)
 
 
 class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
@@ -566,15 +561,15 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             raise
 
     async def _delete_counted(self, count_sql: str, delete_sql: str, params: tuple[Any, ...]) -> int:
-        """Count, then delete, the matching rows; a missing table deletes nothing."""
+        """Delete the matching rows in a single session; a missing table deletes nothing."""
+        _ = count_sql
         try:
-            count = await self._select_count(count_sql, params)
-            await self._execute(delete_sql, params, commit=True)
+            count = await self._execute(delete_sql, params, commit=True)
         except SQLSpecError as exc:
             if _is_table_missing(exc):
                 return 0
             raise
-        return count
+        return max(count, 0)
 
     async def _execute_fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
         async with self._config.provide_session() as driver:
@@ -586,11 +581,6 @@ class Db2AsyncADKStore(_Db2ADKStoreMixin, BaseAsyncADKStore[Db2AsyncConfig]):
             if commit:
                 await driver.commit()
             return int(result.rows_affected)
-
-    async def _select_count(self, sql: str, params: tuple[Any, ...] = ()) -> int:
-        async with self._config.provide_session() as driver:
-            value = await driver.select_value(sql, params)
-        return int(value or 0)
 
 
 class _Db2ADKMemoryStoreMixin:
@@ -663,21 +653,35 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
         sql, params = _memory_search_statement(
             self._memory_table, query, app_name, user_id, scope_filter, effective_limit
         )
-        return [_memory_record_from_row(row) for row in self._execute_fetchall(sql, params)]
+        try:
+            rows = self._execute_fetchall(sql, params)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return []
+            raise
+        return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
-        count_sql, delete_sql = _memory_session_delete_statements(self._memory_table)
-        count = self._select_count(count_sql, (session_id,))
-        self._execute(delete_sql, (session_id,), commit=True)
-        return count
+        _, delete_sql = _memory_session_delete_statements(self._memory_table)
+        try:
+            count = self._execute(delete_sql, (session_id,), commit=True)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return 0
+            raise
+        return max(count, 0)
 
     def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
         """Delete memory entries older than specified days."""
-        count_sql, delete_sql, params = _memory_retention_statements(self._memory_table, days, app_name, scope)
-        count = self._select_count(count_sql, params)
-        self._execute(delete_sql, params, commit=True)
-        return count
+        _, delete_sql, params = _memory_retention_statements(self._memory_table, days, app_name, scope)
+        try:
+            count = self._execute(delete_sql, params, commit=True)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return 0
+            raise
+        return max(count, 0)
 
     def _memory_table_ddl(self) -> str:
         return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
@@ -692,11 +696,6 @@ class Db2SyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseSyncADKMemoryStore[Db2S
             if commit:
                 driver.commit()
             return int(result.rows_affected)
-
-    def _select_count(self, sql: str, params: tuple[Any, ...] = ()) -> int:
-        with self._config.provide_session() as driver:
-            value = driver.select_value(sql, params)
-        return int(value or 0)
 
 
 class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db2AsyncConfig]):
@@ -757,21 +756,35 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
         sql, params = _memory_search_statement(
             self._memory_table, query, app_name, user_id, scope_filter, effective_limit
         )
-        return [_memory_record_from_row(row) for row in await self._execute_fetchall(sql, params)]
+        try:
+            rows = await self._execute_fetchall(sql, params)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return []
+            raise
+        return [_memory_record_from_row(row) for row in rows]
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
-        count_sql, delete_sql = _memory_session_delete_statements(self._memory_table)
-        count = await self._select_count(count_sql, (session_id,))
-        await self._execute(delete_sql, (session_id,), commit=True)
-        return count
+        _, delete_sql = _memory_session_delete_statements(self._memory_table)
+        try:
+            count = await self._execute(delete_sql, (session_id,), commit=True)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return 0
+            raise
+        return max(count, 0)
 
     async def delete_entries_older_than(self, days: int, app_name: str | None = None, scope: str | None = None) -> int:
         """Delete memory entries older than specified days."""
-        count_sql, delete_sql, params = _memory_retention_statements(self._memory_table, days, app_name, scope)
-        count = await self._select_count(count_sql, params)
-        await self._execute(delete_sql, params, commit=True)
-        return count
+        _, delete_sql, params = _memory_retention_statements(self._memory_table, days, app_name, scope)
+        try:
+            count = await self._execute(delete_sql, params, commit=True)
+        except SQLSpecError as exc:
+            if _is_table_missing(exc):
+                return 0
+            raise
+        return max(count, 0)
 
     async def _memory_table_ddl(self) -> str:
         return _memory_table_ddl(self._memory_table, self._owner_id_column_ddl)
@@ -787,14 +800,15 @@ class Db2AsyncADKMemoryStore(_Db2ADKMemoryStoreMixin, BaseAsyncADKMemoryStore[Db
                 await driver.commit()
             return int(result.rows_affected)
 
-    async def _select_count(self, sql: str, params: tuple[Any, ...] = ()) -> int:
-        async with self._config.provide_session() as driver:
-            value = await driver.select_value(sql, params)
-        return int(value or 0)
+
+def _constraint_prefix(table: str) -> str:
+    """Return a dot-free identifier prefix for constraint and index names."""
+    return table.replace(".", "_").replace('"', "")
 
 
 def _sessions_table_ddl(table: str, owner_id_column_ddl: str | None) -> str:
     owner_line = f",\n    {owner_id_column_ddl}" if owner_id_column_ddl else ""
+    prefix = _constraint_prefix(table)
     return f"""
 CREATE TABLE {table} (
     id VARCHAR(128) NOT NULL,
@@ -803,16 +817,18 @@ CREATE TABLE {table} (
     state {JSON_COLUMN_TYPE} NOT NULL,
     create_time TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP,
     update_time TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP,
-    CONSTRAINT pk_{table}_id PRIMARY KEY (id)
+    CONSTRAINT pk_{prefix}_id PRIMARY KEY (id)
 )
 """
 
 
 def _sessions_index_specs(table: str) -> list[tuple[str, str, str]]:
-    return [(f"idx_{table}_app_user", table, "app_name, user_id"), (f"idx_{table}_update_time", table, "update_time")]
+    prefix = _constraint_prefix(table)
+    return [(f"idx_{prefix}_app_user", table, "app_name, user_id"), (f"idx_{prefix}_update_time", table, "update_time")]
 
 
 def _events_table_ddl(table: str, session_table: str) -> str:
+    prefix = _constraint_prefix(table)
     return f"""
 CREATE TABLE {table} (
     id VARCHAR(128) NOT NULL,
@@ -822,52 +838,56 @@ CREATE TABLE {table} (
     invocation_id VARCHAR(256) NOT NULL,
     timestamp TIMESTAMP NOT NULL,
     event_data {JSON_COLUMN_TYPE} NOT NULL,
-    CONSTRAINT pk_{table}_id PRIMARY KEY (id),
-    CONSTRAINT fk_{table}_session FOREIGN KEY (session_id)
+    CONSTRAINT pk_{prefix}_id PRIMARY KEY (id),
+    CONSTRAINT fk_{prefix}_session FOREIGN KEY (session_id)
         REFERENCES {session_table}(id) ON DELETE CASCADE
 )
 """
 
 
 def _events_index_specs(table: str) -> list[tuple[str, str, str]]:
+    prefix = _constraint_prefix(table)
     return [
-        (f"idx_{table}_scope", table, "app_name, user_id, session_id, timestamp"),
-        (f"idx_{table}_session", table, "session_id, timestamp"),
-        (f"idx_{table}_invocation", table, "invocation_id"),
-        (f"idx_{table}_timestamp", table, "timestamp"),
-        (f"idx_{table}_app_timestamp", table, "app_name, timestamp"),
+        (f"idx_{prefix}_scope", table, "app_name, user_id, session_id, timestamp"),
+        (f"idx_{prefix}_session", table, "session_id, timestamp"),
+        (f"idx_{prefix}_invocation", table, "invocation_id"),
+        (f"idx_{prefix}_timestamp", table, "timestamp"),
+        (f"idx_{prefix}_app_timestamp", table, "app_name, timestamp"),
     ]
 
 
 def _app_states_table_ddl(table: str) -> str:
+    prefix = _constraint_prefix(table)
     return f"""
 CREATE TABLE {table} (
     app_name VARCHAR(128) NOT NULL,
     state {JSON_COLUMN_TYPE} NOT NULL,
     update_time TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP,
-    CONSTRAINT pk_{table}_app_name PRIMARY KEY (app_name)
+    CONSTRAINT pk_{prefix}_app_name PRIMARY KEY (app_name)
 )
 """
 
 
 def _user_states_table_ddl(table: str) -> str:
+    prefix = _constraint_prefix(table)
     return f"""
 CREATE TABLE {table} (
     app_name VARCHAR(128) NOT NULL,
     user_id VARCHAR(128) NOT NULL,
     state {JSON_COLUMN_TYPE} NOT NULL,
     update_time TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP,
-    CONSTRAINT pk_{table}_app_user PRIMARY KEY (app_name, user_id)
+    CONSTRAINT pk_{prefix}_app_user PRIMARY KEY (app_name, user_id)
 )
 """
 
 
 def _metadata_table_ddl(table: str) -> str:
+    prefix = _constraint_prefix(table)
     return f"""
 CREATE TABLE {table} (
     "KEY" VARCHAR(128) NOT NULL,
     value VARCHAR(512) NOT NULL,
-    CONSTRAINT pk_{table}_key PRIMARY KEY ("KEY")
+    CONSTRAINT pk_{prefix}_key PRIMARY KEY ("KEY")
 )
 """
 
@@ -1115,8 +1135,8 @@ def _drop_table_sql(table: str) -> str:
 
 
 def _catalog_names(name: str) -> "tuple[str | None, str]":
-    """Return the catalog schema and name of an object whose DDL writes the name unquoted."""
-    return split_db2_table_name(name.upper())
+    """Return the catalog schema and name of an ADK table or index."""
+    return split_db2_table_name(name)
 
 
 def _create_missing(driver: "Db2SyncDriver", probe_sql: str, name: str, ddl: str) -> None:
@@ -1237,6 +1257,7 @@ def _metadata_value(row: "dict[str, Any] | None") -> "str | None":
 
 def _memory_table_ddl(table: str, owner_id_column_ddl: "str | None") -> str:
     owner_line = f",\n    {owner_id_column_ddl}" if owner_id_column_ddl else ""
+    prefix = _constraint_prefix(table)
     return f"""
 CREATE TABLE {table} (
     id VARCHAR(128) NOT NULL,
@@ -1251,17 +1272,18 @@ CREATE TABLE {table} (
     content_text CLOB(1M) NOT NULL,
     metadata_json {JSON_COLUMN_TYPE},
     inserted_at TIMESTAMP NOT NULL{owner_line},
-    CONSTRAINT pk_{table}_id PRIMARY KEY (id),
-    CONSTRAINT uq_{table}_event UNIQUE (event_id)
+    CONSTRAINT pk_{prefix}_id PRIMARY KEY (id),
+    CONSTRAINT uq_{prefix}_event UNIQUE (event_id)
 )
 """
 
 
 def _memory_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    prefix = _constraint_prefix(table)
     return [
-        (f"idx_{table}_scope", table, "app_name, user_id, scope, timestamp"),
-        (f"idx_{table}_session", table, "session_id, timestamp"),
-        (f"idx_{table}_inserted", table, "inserted_at"),
+        (f"idx_{prefix}_scope", table, "app_name, user_id, scope, timestamp"),
+        (f"idx_{prefix}_session", table, "session_id, timestamp"),
+        (f"idx_{prefix}_inserted", table, "inserted_at"),
     ]
 
 
@@ -1295,7 +1317,7 @@ def _memory_search_statement(
            timestamp, content_json, content_text, metadata_json, inserted_at
     FROM {table}
     WHERE {where_scope}
-      AND POSSTR(LOWER(content_text), LOWER(?)) > 0
+      AND LOCATE(LOWER(CAST(? AS VARCHAR(4000))), LOWER(content_text)) > 0
     ORDER BY timestamp DESC
     FETCH FIRST {int(limit)} ROWS ONLY
     """

@@ -8,6 +8,7 @@ from sqlspec.adapters.mysql_common import (
     bool_to_int,
     build_insert_statement,
     build_load_data_statement,
+    can_use_local_infile_records,
     collect_rows,
     collect_stream_rows,
     create_mapped_exception,
@@ -39,6 +40,7 @@ __all__ = (
     "build_load_data_statement",
     "build_profile",
     "build_statement_config",
+    "can_use_local_infile_records",
     "collect_rows",
     "collect_stream_rows",
     "create_mapped_exception",
@@ -133,8 +135,9 @@ class MysqlConnectorSyncStreamSource:
         connection = self._driver.connection
         raw_connection = getattr(connection, "_cnx", None) or connection
         try:
-            if getattr(raw_connection, "unread_result", False):
-                raw_connection.consume_results()
+            with contextlib.suppress(Exception):
+                if getattr(raw_connection, "unread_result", False):
+                    raw_connection.consume_results()
         finally:
             if cursor is not None:
                 with contextlib.suppress(Exception):
@@ -179,16 +182,6 @@ class MysqlConnectorAsyncStreamSource:
         await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    async def _start(self) -> None:
-        try:
-            cursor = await self._driver.connection.cursor(**self._cursor_options)
-            self._cursor = cursor
-            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
-            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        except BaseException:
-            await self.close(error=True)
-            raise
-
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
@@ -210,12 +203,23 @@ class MysqlConnectorAsyncStreamSource:
         connection = self._driver.connection
         raw_connection = getattr(connection, "_cnx", None) or connection
         try:
-            if getattr(raw_connection, "unread_result", False):
-                await raw_connection.consume_results()
+            with contextlib.suppress(Exception):
+                if getattr(raw_connection, "unread_result", False):
+                    await raw_connection.consume_results()
         finally:
             if cursor is not None:
                 with contextlib.suppress(Exception):
                     await cursor.close()
+
+    async def _start(self) -> None:
+        try:
+            cursor = await self._driver.connection.cursor(**self._cursor_options)
+            self._cursor = cursor
+            await cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        except BaseException:
+            await self.close(error=True)
+            raise
 
 
 def build_profile() -> "DriverParameterProfile":

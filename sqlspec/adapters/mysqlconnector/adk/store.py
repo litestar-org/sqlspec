@@ -1,7 +1,7 @@
 """MysqlConnector ADK store for Google Agent Development Kit session/event storage."""
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.mysqlconnector._typing import MysqlConnectorError
@@ -166,10 +166,20 @@ class MysqlConnectorADKConfig(ADKConfig):
 class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector async driver."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
         super().__init__(config)
+        driver_features = getattr(config, "driver_features", None)
+        features = driver_features if isinstance(driver_features, Mapping) else {}
+        serializer = features.get("json_serializer")
+        deserializer = features.get("json_deserializer")
+        self._json_serializer: Callable[[Any], str] = (
+            cast("Callable[[Any], str]", serializer) if callable(serializer) else to_json
+        )
+        self._json_deserializer: Callable[[Any], Any] = (
+            cast("Callable[[Any], Any]", deserializer) if callable(deserializer) else from_json
+        )
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -182,23 +192,25 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
             await driver.execute_script(await self._app_states_table_ddl())
             await driver.execute_script(await self._user_states_table_ddl())
             await driver.execute_script(await self._metadata_table_ddl())
+        await self.reconcile_schema(assume_existing=True)
 
     async def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         params: tuple[Any, ...]
+        state_json = self._json_serializer(state)
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
-            params = (session_id, app_name, user_id, owner_id, to_json(state))
+            params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
-            params = (session_id, app_name, user_id, to_json(state))
+            params = (session_id, app_name, user_id, state_json)
 
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
@@ -245,7 +257,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 finally:
                     await cursor.close()
 
-            return _session_record_from_row(row) if row is not None else None
+            return _session_record_from_row(row, deserializer=self._json_deserializer) if row is not None else None
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
@@ -260,7 +272,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
-                await cursor.execute(sql, (to_json(state), app_name, user_id, session_id))
+                await cursor.execute(sql, (self._json_serializer(state), app_name, user_id, session_id))
             finally:
                 await cursor.close()
             await conn.commit()
@@ -291,7 +303,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     rows = await cursor.fetchall()
                 finally:
                     await cursor.close()
-            return [_session_record_from_row(row) for row in rows]
+            return [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
@@ -316,7 +328,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
-                await cursor.execute(sql, _event_insert_params(event_record))
+                await cursor.execute(sql, _event_insert_params(event_record, serializer=self._json_serializer))
             finally:
                 await cursor.close()
             await conn.commit()
@@ -350,7 +362,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
         async with self._config.provide_connection() as conn:
             cursor = await conn.cursor()
             try:
-                await cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+                await cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
                 await cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = await cursor.fetchone()
                 if row is None:
@@ -364,16 +376,17 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                         session_id,
                         event_record["invocation_id"],
                         event_record["timestamp"],
-                        _json_for_storage(event_record["event_data"]),
+                        _json_for_storage(event_record["event_data"], serializer=self._json_serializer),
                     ),
                 )
                 if app_state is not None:
                     await cursor.execute(
-                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(app_state))
+                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(app_state))
                     )
                 if user_state is not None:
                     await cursor.execute(
-                        _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(user_state))
+                        _mysql_upsert_user_state_sql(self._user_state_table),
+                        (app_name, user_id, self._json_serializer(user_state)),
                     )
                 await conn.commit()
             except Exception:
@@ -381,7 +394,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                 raise
             finally:
                 await cursor.close()
-        return _session_record_from_row(row)
+        return _session_record_from_row(row, deserializer=self._json_deserializer)
 
     async def get_events(
         self,
@@ -420,7 +433,7 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
                     rows = await cursor.fetchall()
                 finally:
                     await cursor.close()
-            return [_event_record_from_row(row) for row in rows]
+            return [_event_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
@@ -443,12 +456,14 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 
     async def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         await _async_execute_commit(
-            self, _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(state))
+            self, _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(state))
         )
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         await _async_execute_commit(
-            self, _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(state))
+            self,
+            _mysql_upsert_user_state_sql(self._user_state_table),
+            (app_name, user_id, self._json_serializer(state)),
         )
 
     async def get_metadata(self, key: str) -> "str | None":
@@ -514,10 +529,20 @@ class MysqlConnectorAsyncADKStore(BaseAsyncADKStore["MysqlConnectorAsyncConfig"]
 class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK store using mysql-connector sync driver."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
+        driver_features = getattr(config, "driver_features", None)
+        features = driver_features if isinstance(driver_features, Mapping) else {}
+        serializer = features.get("json_serializer")
+        deserializer = features.get("json_deserializer")
+        self._json_serializer: Callable[[Any], str] = (
+            cast("Callable[[Any], str]", serializer) if callable(serializer) else to_json
+        )
+        self._json_deserializer: Callable[[Any], Any] = (
+            cast("Callable[[Any], Any]", deserializer) if callable(deserializer) else from_json
+        )
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -531,24 +556,26 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
+        self.reconcile_schema(assume_existing=True)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         """Create a new session."""
         params: tuple[Any, ...]
+        state_json = self._json_serializer(state)
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
-            params = (session_id, app_name, user_id, owner_id, to_json(state))
+            params = (session_id, app_name, user_id, owner_id, state_json)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
             VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
             """
-            params = (session_id, app_name, user_id, to_json(state))
+            params = (session_id, app_name, user_id, state_json)
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -595,7 +622,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                     row = cursor.fetchone()
                 finally:
                     cursor.close()
-            return _session_record_from_row(row) if row is not None else None
+            return _session_record_from_row(row, deserializer=self._json_deserializer) if row is not None else None
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return None
@@ -611,7 +638,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, (to_json(state), app_name, user_id, session_id))
+                cursor.execute(sql, (self._json_serializer(state), app_name, user_id, session_id))
             finally:
                 cursor.close()
             conn.commit()
@@ -643,7 +670,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
-            return [_session_record_from_row(row) for row in rows]
+            return [_session_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
@@ -670,7 +697,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(sql, _event_insert_params(event_record))
+                cursor.execute(sql, _event_insert_params(event_record, serializer=self._json_serializer))
             finally:
                 cursor.close()
             conn.commit()
@@ -706,7 +733,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+                cursor.execute(update_sql, (self._json_serializer(state), app_name, user_id, session_id))
                 cursor.execute(select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
                 if row is None:
@@ -720,14 +747,17 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                         session_id,
                         event_record["invocation_id"],
                         event_record["timestamp"],
-                        _json_for_storage(event_record["event_data"]),
+                        _json_for_storage(event_record["event_data"], serializer=self._json_serializer),
                     ),
                 )
                 if app_state is not None:
-                    cursor.execute(_mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(app_state)))
+                    cursor.execute(
+                        _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(app_state))
+                    )
                 if user_state is not None:
                     cursor.execute(
-                        _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(user_state))
+                        _mysql_upsert_user_state_sql(self._user_state_table),
+                        (app_name, user_id, self._json_serializer(user_state)),
                     )
             except Exception:
                 conn.rollback()
@@ -736,7 +766,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                 cursor.close()
             conn.commit()
 
-        return _session_record_from_row(row)
+        return _session_record_from_row(row, deserializer=self._json_deserializer)
 
     def get_events(
         self,
@@ -776,7 +806,7 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
-            return [_event_record_from_row(row) for row in rows]
+            return [_event_record_from_row(row, deserializer=self._json_deserializer) for row in rows]
         except MysqlConnectorError as exc:
             if _is_mysql_table_missing(exc):
                 return []
@@ -804,12 +834,16 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state for an application."""
-        _sync_execute_commit(self, _mysql_upsert_app_state_sql(self._app_state_table), (app_name, to_json(state)))
+        _sync_execute_commit(
+            self, _mysql_upsert_app_state_sql(self._app_state_table), (app_name, self._json_serializer(state))
+        )
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
         _sync_execute_commit(
-            self, _mysql_upsert_user_state_sql(self._user_state_table), (app_name, user_id, to_json(state))
+            self,
+            _mysql_upsert_user_state_sql(self._user_state_table),
+            (app_name, user_id, self._json_serializer(state)),
         )
 
     def get_metadata(self, key: str) -> "str | None":
@@ -877,10 +911,20 @@ class MysqlConnectorSyncADKStore(BaseSyncADKStore["MysqlConnectorSyncConfig"]):
 class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorAsyncConfig"]):
     """MySQL/MariaDB ADK memory store using mysql-connector async driver."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "MysqlConnectorAsyncConfig") -> None:
         super().__init__(config)
+        driver_features = getattr(config, "driver_features", None)
+        features = driver_features if isinstance(driver_features, Mapping) else {}
+        serializer = features.get("json_serializer")
+        deserializer = features.get("json_deserializer")
+        self._json_serializer: Callable[[Any], str] = (
+            cast("Callable[[Any], str]", serializer) if callable(serializer) else to_json
+        )
+        self._json_deserializer: Callable[[Any], Any] = (
+            cast("Callable[[Any], Any]", deserializer) if callable(deserializer) else from_json
+        )
 
     async def create_tables(self) -> None:
         if not self.create_schema_enabled:
@@ -892,6 +936,7 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
 
         async with self._config.provide_session() as driver:
             await driver.execute_script(await self._memory_table_ddl())
+        await self.reconcile_schema(assume_existing=True)
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -923,6 +968,9 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             try:
                 for entry in entries:
                     params: tuple[Any, ...]
+                    content_json = self._json_serializer(entry["content_json"])
+                    metadata_val = entry.get("metadata_json")
+                    metadata_json = self._json_serializer(metadata_val) if metadata_val is not None else None
                     if self._owner_id_column_name:
                         params = (
                             entry["id"],
@@ -934,9 +982,9 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                             entry.get("author"),
                             owner_id,
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            content_json,
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            metadata_json,
                             entry["inserted_at"],
                         )
                     else:
@@ -949,13 +997,13 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
                             entry["event_id"],
                             entry.get("author"),
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            content_json,
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            metadata_json,
                             entry["inserted_at"],
                         )
                     await cursor.execute(sql, params)
-                    inserted_count += cursor.rowcount
+                    inserted_count += max(0, int(cursor.rowcount or 0))
             finally:
                 await cursor.close()
             await conn.commit()
@@ -1009,9 +1057,11 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
         records: list[StoredMemory] = []
         for row in rows:
             rec = cast("StoredMemory", dict(zip(columns, row, strict=False)))
-            rec["content_json"] = _json_dict(rec.get("content_json"))
+            rec["content_json"] = _json_dict(rec.get("content_json"), deserializer=self._json_deserializer)
             metadata_val = rec.get("metadata_json")
-            rec["metadata_json"] = _json_dict(metadata_val) if metadata_val is not None else None
+            rec["metadata_json"] = (
+                _json_dict(metadata_val, deserializer=self._json_deserializer) if metadata_val is not None else None
+            )
             rec["embedding"] = None
             records.append(rec)
         return records
@@ -1068,17 +1118,18 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
             if fk_def:
                 fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
+        safe_index_table = self._memory_table.replace(".", "_")
         fts_index = ""
         if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table)
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(safe_index_table)
         table_options = _mysql_table_options(adk_config, "memory_table_options")
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
             self._memory_table,
             owner_id_line,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
+            safe_index_table,
+            safe_index_table,
+            safe_index_table,
             fts_index,
             fk_constraint,
             table_options,
@@ -1091,10 +1142,20 @@ class MysqlConnectorAsyncADKMemoryStore(BaseAsyncADKMemoryStore["MysqlConnectorA
 class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyncConfig"]):
     """MySQL/MariaDB ADK memory store using mysql-connector sync driver."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "MysqlConnectorSyncConfig") -> None:
         super().__init__(config)
+        driver_features = getattr(config, "driver_features", None)
+        features = driver_features if isinstance(driver_features, Mapping) else {}
+        serializer = features.get("json_serializer")
+        deserializer = features.get("json_deserializer")
+        self._json_serializer: Callable[[Any], str] = (
+            cast("Callable[[Any], str]", serializer) if callable(serializer) else to_json
+        )
+        self._json_deserializer: Callable[[Any], Any] = (
+            cast("Callable[[Any], Any]", deserializer) if callable(deserializer) else from_json
+        )
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1107,6 +1168,7 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
 
         with self._config.provide_session() as driver:
             driver.execute_script(self._memory_table_ddl())
+        self.reconcile_schema(assume_existing=True)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -1139,6 +1201,9 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             try:
                 for entry in entries:
                     params: tuple[Any, ...]
+                    content_json = self._json_serializer(entry["content_json"])
+                    metadata_val = entry.get("metadata_json")
+                    metadata_json = self._json_serializer(metadata_val) if metadata_val is not None else None
                     if self._owner_id_column_name:
                         params = (
                             entry["id"],
@@ -1150,9 +1215,9 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
                             entry.get("author"),
                             owner_id,
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            content_json,
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            metadata_json,
                             entry["inserted_at"],
                         )
                     else:
@@ -1165,13 +1230,13 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
                             entry["event_id"],
                             entry.get("author"),
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            content_json,
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            metadata_json,
                             entry["inserted_at"],
                         )
                     cursor.execute(sql, cast("tuple[Any, ...]", params))
-                    inserted_count += cursor.rowcount
+                    inserted_count += max(0, int(cursor.rowcount or 0))
             finally:
                 cursor.close()
             conn.commit()
@@ -1226,9 +1291,11 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
         records: list[StoredMemory] = []
         for row in rows:
             rec = cast("StoredMemory", dict(zip(columns, row, strict=False)))
-            rec["content_json"] = _json_dict(rec.get("content_json"))
+            rec["content_json"] = _json_dict(rec.get("content_json"), deserializer=self._json_deserializer)
             metadata_val = rec.get("metadata_json")
-            rec["metadata_json"] = _json_dict(metadata_val) if metadata_val is not None else None
+            rec["metadata_json"] = (
+                _json_dict(metadata_val, deserializer=self._json_deserializer) if metadata_val is not None else None
+            )
             rec["embedding"] = None
             records.append(rec)
         return records
@@ -1285,17 +1352,18 @@ class MysqlConnectorSyncADKMemoryStore(BaseSyncADKMemoryStore["MysqlConnectorSyn
             if fk_def:
                 fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
+        safe_index_table = self._memory_table.replace(".", "_")
         fts_index = ""
         if self._use_fts:
-            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(self._memory_table)
+            fts_index = _ADK_MEMORY_TABLE_DDL_TEMPLATE_2.format(safe_index_table)
         table_options = _mysql_table_options(adk_config, "memory_table_options")
 
         return _ADK_MEMORY_TABLE_DDL_TEMPLATE_3.format(
             self._memory_table,
             owner_id_line,
-            self._memory_table,
-            self._memory_table,
-            self._memory_table,
+            safe_index_table,
+            safe_index_table,
+            safe_index_table,
             fts_index,
             fk_constraint,
             table_options,
@@ -1347,25 +1415,30 @@ def _is_mysql_table_missing(exc: BaseException) -> bool:
     )
 
 
-def _json_for_storage(value: Any) -> str:
-    return value if isinstance(value, str) else to_json(value)
+def _json_for_storage(value: Any, *, serializer: Callable[[Any], str] = to_json) -> str:
+    return value if isinstance(value, str) else serializer(value)
 
 
-def _json_dict(value: Any) -> "dict[str, Any]":
+def _json_dict(value: Any, *, deserializer: Callable[[Any], Any] = from_json) -> "dict[str, Any]":
     if isinstance(value, bytearray):
         value = bytes(value)
     if isinstance(value, (bytes, str)):
-        return cast("dict[str, Any]", from_json(value))
+        return cast("dict[str, Any]", deserializer(value))
     return cast("dict[str, Any]", value)
 
 
-def _session_record_from_row(row: Any) -> StoredSession:
+def _session_record_from_row(row: Any, *, deserializer: Callable[[Any], Any] = from_json) -> StoredSession:
     return StoredSession(
-        id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
+        id=row[0],
+        app_name=row[1],
+        user_id=row[2],
+        state=_json_dict(row[3], deserializer=deserializer),
+        create_time=row[4],
+        update_time=row[5],
     )
 
 
-def _event_record_from_row(row: Any) -> StoredEvent:
+def _event_record_from_row(row: Any, *, deserializer: Callable[[Any], Any] = from_json) -> StoredEvent:
     return StoredEvent(
         id=row[0],
         app_name=row[1],
@@ -1373,11 +1446,11 @@ def _event_record_from_row(row: Any) -> StoredEvent:
         session_id=row[3],
         invocation_id=row[4],
         timestamp=row[5],
-        event_data=_json_dict(row[6]),
+        event_data=_json_dict(row[6], deserializer=deserializer),
     )
 
 
-def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent, *, serializer: Callable[[Any], str] = to_json) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -1385,7 +1458,7 @@ def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
         event_record["session_id"],
         event_record["invocation_id"],
         event_record["timestamp"],
-        _json_for_storage(event_record["event_data"]),
+        _json_for_storage(event_record["event_data"], serializer=serializer),
     )
 
 
@@ -1437,7 +1510,7 @@ async def _async_state(
                 row = await cursor.fetchone()
             finally:
                 await cursor.close()
-        return _json_dict(row[0]) if row is not None else None
+        return _json_dict(row[0], deserializer=store._json_deserializer) if row is not None else None
     except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return None
@@ -1497,7 +1570,7 @@ def _sync_state(
                 row = cursor.fetchone()
             finally:
                 cursor.close()
-        return _json_dict(row[0]) if row is not None else None
+        return _json_dict(row[0], deserializer=store._json_deserializer) if row is not None else None
     except MysqlConnectorError as exc:
         if _is_mysql_table_missing(exc):
             return None
@@ -1523,20 +1596,22 @@ def _mysql_sessions_ddl(session_table: str, owner_id_column_ddl: "str | None", t
         if fk_def:
             fk_constraint = _ADK_MEMORY_TABLE_DDL_TEMPLATE.format(fk_def)
 
+    safe_index_table = session_table.replace(".", "_")
     return _ADK_MYSQL_SESSIONS_DDL_TEMPLATE_2.format(
-        session_table, owner_id_line, session_table, session_table, fk_constraint, table_options
+        session_table, owner_id_line, safe_index_table, safe_index_table, fk_constraint, table_options
     )
 
 
 def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping[str, Any] | None = None) -> str:
     adk_config = adk_config or {}
+    safe_index_table = events_table.replace(".", "_")
     generated_columns = ""
     generated_indexes = ""
     if adk_config.get("enable_event_generated_columns", False):
         generated_columns = """,
             author_gc VARCHAR(256) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.author'))) STORED,
             node_path_gc VARCHAR(512) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(event_data, '$.node_info.path'))) STORED"""
-        generated_indexes = _ADK_MYSQL_EVENTS_DDL_TEMPLATE.format(events_table, events_table)
+        generated_indexes = _ADK_MYSQL_EVENTS_DDL_TEMPLATE.format(safe_index_table, safe_index_table)
 
     covering_column = ", invocation_id" if adk_config.get("enable_covering_indexes", False) else ""
     table_options = _mysql_table_options(adk_config, "events_table_options")
@@ -1545,13 +1620,13 @@ def _mysql_events_ddl(events_table: str, session_table: str, adk_config: Mapping
         events_table,
         generated_columns,
         session_table,
-        events_table,
+        safe_index_table,
         covering_column,
-        events_table,
+        safe_index_table,
         covering_column,
         generated_indexes,
         table_options,
-        events_table,
+        safe_index_table,
     )
 
 

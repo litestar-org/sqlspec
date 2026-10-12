@@ -89,6 +89,7 @@ if TYPE_CHECKING:
     from sqlspec.typing import SupportedSchemaModel
 
 __all__ = (
+    "_reset_msgspec_rename_caches",
     "dataclass_to_dict",
     "expression_has_limit",
     "extract_dataclass_fields",
@@ -697,6 +698,7 @@ def is_msgspec_struct_without_field(obj: Any, field_name: str) -> "TypeGuard[Str
     return all(field.name != field_name for field in fields)
 
 
+_MSGSPEC_RENAME_CACHE_MAX_SIZE = 1024
 _MSGSPEC_RENAME_CONFIG_CACHE: "dict[object, str | None]" = {}
 _MSGSPEC_RENAME_PATTERN_CACHE: "dict[tuple[str, str], str | None]" = {}
 
@@ -719,6 +721,8 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
         return _MSGSPEC_RENAME_CONFIG_CACHE[schema_type]
 
     if not MSGSPEC_INSTALLED or not is_msgspec_struct(schema_type):
+        if len(_MSGSPEC_RENAME_CONFIG_CACHE) >= _MSGSPEC_RENAME_CACHE_MAX_SIZE:
+            _MSGSPEC_RENAME_CONFIG_CACHE.pop(next(iter(_MSGSPEC_RENAME_CONFIG_CACHE)), None)
         _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = None
         return None
 
@@ -726,15 +730,21 @@ def get_msgspec_rename_config(schema_type: type) -> "str | None":
 
     fields: tuple[Any, ...] = structs.fields(cast("Any", schema_type))
     if not fields:
+        if len(_MSGSPEC_RENAME_CONFIG_CACHE) >= _MSGSPEC_RENAME_CACHE_MAX_SIZE:
+            _MSGSPEC_RENAME_CONFIG_CACHE.pop(next(iter(_MSGSPEC_RENAME_CONFIG_CACHE)), None)
         _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = None
         return None
 
     for field in fields:
         if field.name != field.encode_name:
             rename_config = _detect_rename_pattern(field.name, field.encode_name)
+            if len(_MSGSPEC_RENAME_CONFIG_CACHE) >= _MSGSPEC_RENAME_CACHE_MAX_SIZE:
+                _MSGSPEC_RENAME_CONFIG_CACHE.pop(next(iter(_MSGSPEC_RENAME_CONFIG_CACHE)), None)
             _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = rename_config
             return rename_config
 
+    if len(_MSGSPEC_RENAME_CONFIG_CACHE) >= _MSGSPEC_RENAME_CACHE_MAX_SIZE:
+        _MSGSPEC_RENAME_CONFIG_CACHE.pop(next(iter(_MSGSPEC_RENAME_CONFIG_CACHE)), None)
     _MSGSPEC_RENAME_CONFIG_CACHE[schema_type] = None
     return None
 
@@ -878,7 +888,7 @@ def is_schema_or_dict(obj: Any) -> "TypeGuard[SupportedSchemaModel | dict[str, A
 
 
 def is_schema_with_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSchemaModel]":
-    """Check if a value is a msgspec Struct or Pydantic model with a specific field.
+    """Check if a value is a supported schema model with a specific field.
 
     Args:
         obj: Value to check.
@@ -887,11 +897,16 @@ def is_schema_with_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSchem
     Returns:
         bool
     """
-    return is_msgspec_struct_with_field(obj, field_name) or is_pydantic_model_with_field(obj, field_name)
+    return (
+        is_msgspec_struct_with_field(obj, field_name)
+        or is_pydantic_model_with_field(obj, field_name)
+        or is_dataclass_with_field(obj, field_name)
+        or is_attrs_instance_with_field(obj, field_name)
+    )
 
 
 def is_schema_without_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSchemaModel]":
-    """Check if a value is a msgspec Struct or Pydantic model without a specific field.
+    """Check if a value is a supported schema model without a specific field.
 
     Args:
         obj: Value to check.
@@ -900,11 +915,11 @@ def is_schema_without_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSc
     Returns:
         bool
     """
-    return not is_schema_with_field(obj, field_name)
+    return is_schema(obj) and not is_schema_with_field(obj, field_name)
 
 
 def is_schema_or_dict_with_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSchemaModel | dict[str, Any]]":
-    """Check if a value is a msgspec Struct, Pydantic model, or dict with a specific field.
+    """Check if a value is a supported schema model or dict with a specific field.
 
     Args:
         obj: Value to check.
@@ -917,7 +932,7 @@ def is_schema_or_dict_with_field(obj: Any, field_name: str) -> "TypeGuard[Suppor
 
 
 def is_schema_or_dict_without_field(obj: Any, field_name: str) -> "TypeGuard[SupportedSchemaModel | dict[str, Any]]":
-    """Check if a value is a msgspec Struct, Pydantic model, or dict without a specific field.
+    """Check if a value is a supported schema model or dict without a specific field.
 
     Args:
         obj: Value to check.
@@ -926,7 +941,7 @@ def is_schema_or_dict_without_field(obj: Any, field_name: str) -> "TypeGuard[Sup
     Returns:
         bool
     """
-    return not is_schema_or_dict_with_field(obj, field_name)
+    return is_schema_or_dict(obj) and not is_schema_or_dict_with_field(obj, field_name)
 
 
 def is_dto_data(v: Any) -> "TypeGuard[DTODataStub[Any]]":
@@ -1431,6 +1446,12 @@ def has_migration_config(obj: Any) -> "TypeGuard[HasMigrationConfigProtocol]":
     return isinstance(obj, HasMigrationConfigProtocol)
 
 
+def _reset_msgspec_rename_caches() -> None:
+    """Clear internal msgspec rename configuration caches."""
+    _MSGSPEC_RENAME_CONFIG_CACHE.clear()
+    _MSGSPEC_RENAME_PATTERN_CACHE.clear()
+
+
 def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     """Detect the rename pattern by comparing field name transformations.
 
@@ -1455,5 +1476,7 @@ def _detect_rename_pattern(field_name: str, encode_name: str) -> "str | None":
     else:
         result = None
 
+    if len(_MSGSPEC_RENAME_PATTERN_CACHE) >= _MSGSPEC_RENAME_CACHE_MAX_SIZE:
+        _MSGSPEC_RENAME_PATTERN_CACHE.pop(next(iter(_MSGSPEC_RENAME_PATTERN_CACHE)), None)
     _MSGSPEC_RENAME_PATTERN_CACHE[key] = result
     return result

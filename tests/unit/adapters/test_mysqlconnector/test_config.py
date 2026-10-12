@@ -371,7 +371,7 @@ def test_build_connection_config_parses_key_value_dsn() -> None:
     assert cfg["password"] == "kvpass"
     assert cfg["host"] == "kvhost"
     assert cfg["database"] == "kvdb"
-    assert cfg["port"] == "3309"
+    assert cfg["port"] == 3309
 
 
 def test_sync_config_with_dsn_does_not_forward_dsn_to_connect(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -484,3 +484,39 @@ def test_sync_create_pool_preserves_zero_pool_size(monkeypatch: pytest.MonkeyPat
 
     assert len(pool_kwargs) == 1
     assert pool_kwargs[0]["pool_size"] == 0
+
+
+def test_charset_defaults_to_utf8mb4() -> None:
+    assert MysqlConnectorSyncConfig().connection_config["charset"] == "utf8mb4"
+    assert MysqlConnectorAsyncConfig().connection_config["charset"] == "utf8mb4"
+
+
+def test_sync_close_pool_drains_cnx_queue() -> None:
+    import queue
+    from typing import cast
+
+    conn1 = MagicMock()
+    conn2 = MagicMock()
+    cnx_queue: queue.Queue[Any] = queue.Queue()
+    cnx_queue.put_nowait(conn1)
+    cnx_queue.put_nowait(conn2)
+    fake_pool = SimpleNamespace(_cnx_queue=cnx_queue)
+    config = MysqlConnectorSyncConfig(connection_instance=cast("Any", fake_pool))
+
+    config.close_pool()
+
+    conn1.close.assert_called_once()
+    conn2.close.assert_called_once()
+    assert config.connection_instance is None
+
+
+def test_sync_connection_context_rolls_back_when_pool_reset_session_disabled() -> None:
+    pooled_conn = MagicMock(in_transaction=True)
+    fake_pool = MagicMock(get_connection=MagicMock(return_value=pooled_conn))
+    config = MysqlConnectorSyncConfig(connection_config={"pool_reset_session": False}, connection_instance=fake_pool)
+
+    with config.provide_connection() as conn:
+        assert conn is pooled_conn
+
+    pooled_conn.rollback.assert_called_once()
+    pooled_conn.close.assert_called_once()

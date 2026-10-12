@@ -71,6 +71,7 @@ class _SpannerAnonymousNodeMeta(type):
 class SpannerPropertyGraph(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
     """AST node builder and type matcher for a Cloud Spanner PROPERTY GRAPH definition."""
 
+    __slots__ = ()
     _anonymous_name = "SPANNER_PROPERTY_GRAPH"
     _required_arg = "node_tables"
 
@@ -84,11 +85,102 @@ class SpannerPropertyGraph(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNod
 class SpannerGraphTable(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
     """AST node builder and type matcher for a Cloud Spanner GRAPH_TABLE(...) query expression."""
 
+    __slots__ = ()
     _anonymous_name = "GRAPH_TABLE"
     _required_arg = "match"
 
     def __new__(cls, *, this: Any, match: Any, columns: Any, where: Any = None) -> "Self":
         return cast("Self", exp.Anonymous(this="GRAPH_TABLE", graph=this, match=match, where=where, columns=columns))
+
+
+class ApproxCosineDistance(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for APPROX_COSINE_DISTANCE."""
+
+    __slots__ = ()
+    _anonymous_name = "APPROX_COSINE_DISTANCE"
+
+    def __new__(cls, this: Any, expression: Any, options: Any = None) -> "Self":
+        return cast("Self", approx_cosine_distance(this, expression, options))
+
+
+class SearchSubstring(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for SEARCH_SUBSTRING."""
+
+    __slots__ = ()
+    _anonymous_name = "SEARCH_SUBSTRING"
+
+    def __new__(cls, this: Any, expression: Any) -> "Self":
+        return cast("Self", search_substring(this, expression))
+
+
+class Score(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for SCORE."""
+
+    __slots__ = ()
+    _anonymous_name = "SCORE"
+
+    def __new__(cls, this: Any, expression: Any) -> "Self":
+        return cast("Self", score(this, expression))
+
+
+class ScoreNgrams(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for SCORE_NGRAMS."""
+
+    __slots__ = ()
+    _anonymous_name = "SCORE_NGRAMS"
+
+    def __new__(cls, this: Any, expression: Any, *expressions: Any) -> "Self":
+        return cast("Self", score_ngrams(this, expression, *expressions))
+
+
+class Snippet(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for SNIPPET."""
+
+    __slots__ = ()
+    _anonymous_name = "SNIPPET"
+
+    def __new__(cls, this: Any, expression: Any, *expressions: Any) -> "Self":
+        return cast("Self", snippet(this, expression, *expressions))
+
+
+class TokenizeFulltext(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for TOKENIZE_FULLTEXT."""
+
+    __slots__ = ()
+    _anonymous_name = "TOKENIZE_FULLTEXT"
+
+    def __new__(cls, this: Any, *expressions: Any) -> "Self":
+        return cast("Self", tokenize_fulltext(this, *expressions))
+
+
+class TokenizeSubstring(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for TOKENIZE_SUBSTRING."""
+
+    __slots__ = ()
+    _anonymous_name = "TOKENIZE_SUBSTRING"
+
+    def __new__(cls, this: Any) -> "Self":
+        return cast("Self", tokenize_substring(this))
+
+
+class TokenizeNgrams(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for TOKENIZE_NGRAMS."""
+
+    __slots__ = ()
+    _anonymous_name = "TOKENIZE_NGRAMS"
+
+    def __new__(cls, this: Any) -> "Self":
+        return cast("Self", tokenize_ngrams(this))
+
+
+class GetNextSequenceValue(_SpannerAnonymousBase, metaclass=_SpannerAnonymousNodeMeta):
+    """AST node builder and type matcher for GET_NEXT_SEQUENCE_VALUE."""
+
+    __slots__ = ()
+    _anonymous_name = "GET_NEXT_SEQUENCE_VALUE"
+
+    def __new__(cls, this: Any) -> "Self":
+        return cast("Self", get_next_sequence_value(this))
 
 
 def approx_cosine_distance(this: Any, expression: Any, options: Any = None) -> exp.Anonymous:
@@ -137,7 +229,8 @@ def tokenize_ngrams(this: Any) -> exp.Anonymous:
 
 def get_next_sequence_value(this: Any) -> exp.Anonymous:
     """Build a GET_NEXT_SEQUENCE_VALUE function call."""
-    return exp.Anonymous(this="GET_NEXT_SEQUENCE_VALUE", expressions=[this])
+    seq_expr = exp.var(this) if isinstance(this, str) else this
+    return exp.Anonymous(this="GET_NEXT_SEQUENCE_VALUE", expressions=[seq_expr])
 
 
 def graph_table(
@@ -152,14 +245,3 @@ def graph_table(
     where_expr = parse_one(where, read="spanner") if isinstance(where, str) else where
     column_exprs = [parse_one(col, read="spanner") if isinstance(col, str) else col for col in columns]
     return SpannerGraphTable(this=graph_expr, match=match_expr, where=where_expr, columns=column_exprs)
-
-
-ApproxCosineDistance = approx_cosine_distance
-SearchSubstring = search_substring
-Score = score
-ScoreNgrams = score_ngrams
-Snippet = snippet
-TokenizeFulltext = tokenize_fulltext
-TokenizeSubstring = tokenize_substring
-TokenizeNgrams = tokenize_ngrams
-GetNextSequenceValue = get_next_sequence_value

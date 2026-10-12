@@ -69,13 +69,12 @@ class CorrelationContext:
         if correlation_id is None:
             correlation_id = cls.generate()
 
-        previous_id = cls.get()
+        token = cls._correlation_id.set(correlation_id)
 
         try:
-            cls.set(correlation_id)
             yield correlation_id
         finally:
-            cls.set(previous_id)
+            cls._correlation_id.reset(token)
 
     @classmethod
     def clear(cls) -> None:
@@ -128,8 +127,8 @@ class _CorrelationAdapter(LoggerAdapter):  # pyright: ignore
 
     def process(self, msg: str, kwargs: MutableMapping[str, Any]) -> "tuple[str, dict[str, Any]]":
         """Add correlation ID to the log record."""
-
-        extra = kwargs.get("extra", {})
+        raw_extra = kwargs.get("extra")
+        extra: dict[str, Any] = dict(raw_extra) if isinstance(raw_extra, MutableMapping) else {}
 
         if correlation_id := CorrelationContext.get():
             extra["correlation_id"] = correlation_id

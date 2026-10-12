@@ -42,6 +42,26 @@ class _SpannerEventStoreMixin:
 
         def _index_name(self) -> str: ...
 
+    def create_statements(self) -> "list[str]":
+        """Return separate statements for table and index creation.
+
+        Spanner requires DDL statements to be executed individually.
+        The caller should handle errors for already-existing objects.
+        """
+        statements = [self._table_ddl()]
+        index_sql = self._index_ddl()
+        if index_sql:
+            statements.append(index_sql)
+        return statements
+
+    def drop_statements(self) -> "list[str]":
+        """Return drop statements in reverse dependency order.
+
+        Spanner requires index to be dropped before the table.
+        The caller should handle errors for non-existent objects.
+        """
+        return [f"DROP INDEX {self._index_name()}", f"DROP TABLE {self.table_name}"]
+
     def _column_types(self) -> "tuple[str, str, str]":
         """Return Spanner-specific column types."""
         return "JSON", "JSON", "TIMESTAMP"
@@ -167,26 +187,6 @@ class _SpannerEventStoreMixin:
     def _wrap_drop_statement(self, statement: str) -> str:
         """Return statement unchanged because Spanner does not support IF EXISTS."""
         return statement
-
-    def create_statements(self) -> "list[str]":
-        """Return separate statements for table and index creation.
-
-        Spanner requires DDL statements to be executed individually.
-        The caller should handle errors for already-existing objects.
-        """
-        statements = [self._table_ddl()]
-        index_sql = self._index_ddl()
-        if index_sql:
-            statements.append(index_sql)
-        return statements
-
-    def drop_statements(self) -> "list[str]":
-        """Return drop statements in reverse dependency order.
-
-        Spanner requires index to be dropped before the table.
-        The caller should handle errors for non-existent objects.
-        """
-        return [f"DROP INDEX {self._index_name()}", f"DROP TABLE {self.table_name}"]
 
     def _log_ddl(self, event: str, statement_count: int) -> None:
         log_with_context(

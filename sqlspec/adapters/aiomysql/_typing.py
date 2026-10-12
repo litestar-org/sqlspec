@@ -7,17 +7,17 @@ compilation to avoid ABI boundary issues.
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import aiomysql as _aiomysql  # pyright: ignore
-from aiomysql import Connection  # pyright: ignore
-from aiomysql import Error as _AiomysqlError  # pyright: ignore
-from aiomysql import MySQLError as _AiomysqlMySQLError  # pyright: ignore
-from aiomysql import Pool as _AiomysqlPool  # pyright: ignore
-from aiomysql import ProgrammingError as AiomysqlProgrammingError  # pyright: ignore
+import aiomysql as _aiomysql
+from aiomysql import Connection
+from aiomysql import Error as _AiomysqlError
+from aiomysql import MySQLError as _AiomysqlMySQLError
+from aiomysql import Pool as _AiomysqlPool
+from aiomysql import ProgrammingError as AiomysqlProgrammingError
 from aiomysql import SSCursor as AiomysqlSSCursor
 from aiomysql.cursors import RE_INSERT_VALUES as AIOMYSQL_INSERT_VALUES_PATTERN
-from aiomysql.cursors import Cursor as _AiomysqlCursor  # pyright: ignore
-from aiomysql.cursors import DictCursor as _AiomysqlDictCursor  # pyright: ignore
-from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE  # pyright: ignore
+from aiomysql.cursors import Cursor as _AiomysqlCursor
+from aiomysql.cursors import DictCursor as _AiomysqlDictCursor
+from pymysql.constants import FIELD_TYPE as _PYMYSQL_FIELD_TYPE
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -33,11 +33,15 @@ if TYPE_CHECKING:
     class AiomysqlConnectionProtocol(Protocol):
         async def cursor(self, cursor: "type[AiomysqlRawCursor] | None" = None) -> "AiomysqlRawCursor": ...
 
+        async def begin(self) -> Any: ...
+
         async def commit(self) -> object: ...
 
         async def rollback(self) -> object: ...
 
         def close(self) -> object: ...
+
+        def ensure_closed(self) -> Any: ...
 
         def get_transaction_status(self) -> bool: ...
 
@@ -83,6 +87,8 @@ __all__ = (
     "AiomysqlSSCursor",
     "AiomysqlSessionContext",
 )
+
+_resolved_driver_type: "type[AiomysqlDriver] | None" = None
 
 
 class AiomysqlCursor:
@@ -155,10 +161,9 @@ class AiomysqlSessionContext:
         self._driver: AiomysqlDriver | None = None
 
     async def __aenter__(self) -> "AiomysqlDriver":
-        from sqlspec.adapters.aiomysql.driver import AiomysqlDriver
-
+        driver_cls = _get_aiomysql_driver_type()
         self._connection = await self._acquire_connection()
-        self._driver = AiomysqlDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -170,3 +175,12 @@ class AiomysqlSessionContext:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def _get_aiomysql_driver_type() -> "type[AiomysqlDriver]":
+    global _resolved_driver_type
+    if _resolved_driver_type is None:
+        from sqlspec.adapters.aiomysql.driver import AiomysqlDriver as _Driver
+
+        _resolved_driver_type = _Driver
+    return _resolved_driver_type

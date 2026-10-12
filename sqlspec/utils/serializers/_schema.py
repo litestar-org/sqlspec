@@ -10,8 +10,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.typing import MSGSPEC_INSTALLED, UNSET, ArrowReturnFormat, Empty, msgspec_fields
 from sqlspec.utils.arrow_helpers import convert_dict_to_arrow
+from sqlspec.utils.schema import _reset_schema_caches
 from sqlspec.utils.serializers._json import _dump_attrs_instance as _dump_attrs
+from sqlspec.utils.serializers._json import _reset_structural_encoder_cache
 from sqlspec.utils.type_guards import (
+    _reset_msgspec_rename_caches,
     dataclass_to_dict,
     has_dict_attribute,
     is_attrs_instance,
@@ -38,16 +41,7 @@ DEBUG_ENV_FLAG: Final[str] = "SQLSPEC_DEBUG_PIPELINE_CACHE"
 _PRIMITIVE_TYPES: Final[tuple[type[Any], ...]] = (str, bytes, int, float, bool)
 _PRIMITIVE_TYPES_SET: Final[frozenset[type[Any]]] = frozenset(_PRIMITIVE_TYPES)
 _SCHEMA_SERIALIZER_CACHE_MAX_SIZE: Final[int] = 1000
-
-
-def _is_truthy(value: "str | None") -> bool:
-    if value is None:
-        return False
-    normalized = value.strip().lower()
-    return normalized in {"1", "true", "yes", "on"}
-
-
-_METRICS_ENABLED: Final[bool] = _is_truthy(os.getenv(DEBUG_ENV_FLAG))
+_DATACLASS_FIELDS_CACHE_MAX_SIZE: Final[int] = 1024
 
 
 class _SerializerCacheMetrics:
@@ -115,8 +109,11 @@ class SchemaSerializer:
 
 
 _SERIALIZER_LOCK: RLock = RLock()
+
 _SCHEMA_SERIALIZERS: "OrderedDict[tuple[type[Any] | None, bool, bool], SchemaSerializer]" = OrderedDict()
+
 _SERIALIZER_METRICS = _SerializerCacheMetrics()
+
 _DATACLASS_FIELDS_CACHE: "dict[type[Any], tuple[Field[Any], ...]]" = {}
 
 
@@ -125,16 +122,6 @@ def get_collection_serializer(
 ) -> "SchemaSerializer":
     """Return cached serializer pipeline for the provided sample object."""
     key = _make_serializer_key(sample, exclude_unset, wire_format)
-    pipeline = _SCHEMA_SERIALIZERS.get(key)
-    if pipeline is not None:
-        try:
-            _SCHEMA_SERIALIZERS.move_to_end(key)
-        except KeyError:
-            pipeline = None
-        else:
-            _SERIALIZER_METRICS.record_hit(len(_SCHEMA_SERIALIZERS))
-            return pipeline
-
     with _SERIALIZER_LOCK:
         pipeline = _SCHEMA_SERIALIZERS.get(key)
         if pipeline is not None:
@@ -178,6 +165,9 @@ def reset_serializer_cache() -> None:
         _SCHEMA_SERIALIZERS.clear()
         _DATACLASS_FIELDS_CACHE.clear()
         _SERIALIZER_METRICS.reset()
+        _reset_schema_caches()
+        _reset_structural_encoder_cache()
+        _reset_msgspec_rename_caches()
 
 
 def get_serializer_metrics() -> "dict[str, int]":
@@ -212,6 +202,16 @@ def schema_dump(data: Any, *, exclude_unset: bool = True, wire_format: bool = Fa
     return serializer.dump_one(data)
 
 
+def _is_truthy(value: "str | None") -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+_METRICS_ENABLED: Final[bool] = _is_truthy(os.getenv(DEBUG_ENV_FLAG))
+
+
 def _make_serializer_key(sample: Any, exclude_unset: bool, wire_format: bool) -> "tuple[type[Any] | None, bool, bool]":
     if sample is None or isinstance(sample, dict):
         return (None, exclude_unset, wire_format)
@@ -227,6 +227,8 @@ def _dataclass_fields(schema_type: type[Any]) -> "tuple[Field[Any], ...]":
     if cached is not None:
         return cached
     fields = dataclasses_fields(schema_type)
+    if len(_DATACLASS_FIELDS_CACHE) >= _DATACLASS_FIELDS_CACHE_MAX_SIZE:
+        _DATACLASS_FIELDS_CACHE.clear()
     _DATACLASS_FIELDS_CACHE[schema_type] = fields
     return fields
 
@@ -241,13 +243,38 @@ def _msgspec_field_pairs(schema_type: type[Any], *, wire_format: bool) -> "tuple
     return tuple((field.name, field.name) for field in msgspec_fields(schema_type))
 
 
+def _dump_msgspec_nested(value: Any, *, exclude_unset: bool, wire_format: bool) -> Any:
+    if is_msgspec_struct(value):
+        return _dump_msgspec_struct(
+            value,
+            field_pairs=_msgspec_field_pairs(type(value), wire_format=wire_format),
+            exclude_unset=exclude_unset,
+            wire_format=wire_format,
+        )
+    if isinstance(value, list):
+        return [_dump_msgspec_nested(item, exclude_unset=exclude_unset, wire_format=wire_format) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_dump_msgspec_nested(item, exclude_unset=exclude_unset, wire_format=wire_format) for item in value)
+    if isinstance(value, dict):
+        return {
+            key: _dump_msgspec_nested(item, exclude_unset=exclude_unset, wire_format=wire_format)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _dump_msgspec_struct(
-    value: Any, *, field_pairs: "tuple[tuple[str, str], ...]", exclude_unset: bool
+    value: Any, *, field_pairs: "tuple[tuple[str, str], ...]", exclude_unset: bool, wire_format: bool = False
 ) -> "dict[str, Any]":
     if not exclude_unset:
-        return {output_name: value.__getattribute__(field_name) for output_name, field_name in field_pairs}
+        return {
+            output_name: _dump_msgspec_nested(
+                value.__getattribute__(field_name), exclude_unset=exclude_unset, wire_format=wire_format
+            )
+            for output_name, field_name in field_pairs
+        }
     return {
-        output_name: field_value
+        output_name: _dump_msgspec_nested(field_value, exclude_unset=exclude_unset, wire_format=wire_format)
         for output_name, field_name in field_pairs
         if (field_value := value.__getattribute__(field_name)) != UNSET
     }
@@ -282,7 +309,7 @@ def _msgspec_dump_function(sample: Any, *, exclude_unset: bool, wire_format: boo
     field_pairs = _msgspec_field_pairs(type(sample), wire_format=wire_format)
     return cast(
         "Callable[[Any], dict[str, Any]]",
-        partial(_dump_msgspec_struct, field_pairs=field_pairs, exclude_unset=exclude_unset),
+        partial(_dump_msgspec_struct, field_pairs=field_pairs, exclude_unset=exclude_unset, wire_format=wire_format),
     )
 
 

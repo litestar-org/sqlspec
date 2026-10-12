@@ -5,7 +5,8 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+import importlib
+from typing import TYPE_CHECKING, Any, cast
 
 import oracledb as oracledb_module
 from oracledb import (
@@ -44,20 +45,12 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
     from sqlspec.core import StatementConfig
 
-    OracleSyncConnection: TypeAlias = Connection
-    OracleAsyncConnection: TypeAlias = AsyncConnection
-    OracleSyncConnectionPool: TypeAlias = ConnectionPool
-    OracleAsyncConnectionPool: TypeAlias = AsyncConnectionPool
-    OracleSyncRawCursor: TypeAlias = Cursor
-    OracleAsyncRawCursor: TypeAlias = AsyncCursor
-
-if not TYPE_CHECKING:
-    OracleSyncConnection = Connection
-    OracleAsyncConnection = AsyncConnection
-    OracleSyncConnectionPool = ConnectionPool
-    OracleAsyncConnectionPool = AsyncConnectionPool
-    OracleSyncRawCursor = Cursor
-    OracleAsyncRawCursor = AsyncCursor
+OracleSyncConnection: "TypeAlias" = Connection
+OracleAsyncConnection: "TypeAlias" = AsyncConnection
+OracleSyncConnectionPool: "TypeAlias" = ConnectionPool
+OracleAsyncConnectionPool: "TypeAlias" = AsyncConnectionPool
+OracleSyncRawCursor: "TypeAlias" = Cursor
+OracleAsyncRawCursor: "TypeAlias" = AsyncCursor
 
 __all__ = (
     "DB_TYPE_BLOB",
@@ -186,10 +179,9 @@ class OracleSyncSessionContext:
         self._driver: OracleSyncDriver | None = None
 
     def __enter__(self) -> "OracleSyncDriver":
-        from sqlspec.adapters.oracledb.driver import OracleSyncDriver
-
+        driver_cls = _resolve_sync_driver_type()
         self._connection = self._acquire_connection()
-        self._driver = OracleSyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -241,10 +233,9 @@ class OracleAsyncSessionContext:
         self._driver: OracleAsyncDriver | None = None
 
     async def __aenter__(self) -> "OracleAsyncDriver":
-        from sqlspec.adapters.oracledb.driver import OracleAsyncDriver
-
+        driver_cls = _resolve_async_driver_type()
         self._connection = await self._acquire_connection()
-        self._driver = OracleAsyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -256,3 +247,18 @@ class OracleAsyncSessionContext:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def _resolve_sync_driver_type() -> "Callable[..., OracleSyncDriver]":
+    """Resolve OracleSyncDriver without a function-scoped import."""
+    return cast(
+        "Callable[..., OracleSyncDriver]", importlib.import_module("sqlspec.adapters.oracledb.driver").OracleSyncDriver
+    )
+
+
+def _resolve_async_driver_type() -> "Callable[..., OracleAsyncDriver]":
+    """Resolve OracleAsyncDriver without a function-scoped import."""
+    return cast(
+        "Callable[..., OracleAsyncDriver]",
+        importlib.import_module("sqlspec.adapters.oracledb.driver").OracleAsyncDriver,
+    )

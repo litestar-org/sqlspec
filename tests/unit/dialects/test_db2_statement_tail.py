@@ -79,3 +79,12 @@ def test_fetch_only_and_single_row_optimize_render_canonical_spelling() -> None:
     assert sqlglot.transpile("SELECT a FROM t FOR FETCH ONLY OPTIMIZE FOR 1 ROW", read="db2", write="db2") == [
         "SELECT a FROM t FOR READ ONLY OPTIMIZE FOR 1 ROWS"
     ]
+
+
+def test_cte_with_clause_not_treated_as_isolation_tail() -> None:
+    """Verify leading CTE WITH clause is not misidentified as a statement tail."""
+    cte_sql = "WITH cte AS (SELECT id FROM t) SELECT id FROM cte"
+    assert sqlglot.transpile(cte_sql, read="db2", write="db2") == [cte_sql]
+
+    cte_with_ur = "WITH cte AS (SELECT id FROM t) SELECT id FROM cte WITH UR"
+    assert sqlglot.transpile(cte_with_ur, read="db2", write="db2") == [cte_with_ur]

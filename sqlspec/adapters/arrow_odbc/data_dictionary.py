@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from mypy_extensions import mypyc_attr
 
+from sqlspec.adapters.arrow_odbc.core import normalize_column_names
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -22,14 +23,20 @@ from sqlspec.data_dictionary import (
 )
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import SQLFileNotFoundError
+from sqlspec.typing import import_optional
+from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    import pyarrow as pa
+
     from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcDriver
     from sqlspec.core import SQL
     from sqlspec.data_dictionary._types import DialectConfig
+else:
+    pa = import_optional("pyarrow")
 
 __all__ = ("ArrowOdbcDataDictionary",)
 
@@ -68,6 +75,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     def __init__(self, dialect: str = "sqlite") -> None:
         super().__init__()
         self._dialect = dialect
+        object.__setattr__(self, "dialect", dialect)
 
     def get_dialect_config(self) -> "DialectConfig":
         """Return the runtime dialect configuration for this data dictionary."""
@@ -107,29 +115,6 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
     def resolve_identifier(self, identifier: str) -> str:
         """Return a runtime-dialect-normalized identifier."""
         return normalize_identifier(identifier, self.get_dialect_config().name)
-
-    def _probe_columns(self, driver: "ArrowOdbcDriver", table: str, schema: "str | None") -> "list[ColumnMetadata]":
-        qualified = (
-            quote_identifier(table) if schema is None else f"{quote_identifier(schema)}.{quote_identifier(table)}"
-        )
-        probe_sql = f"SELECT * FROM {qualified} WHERE 1=0"
-        try:
-            reader = driver._read_arrow_batches(probe_sql, None, 1)  # pyright: ignore[reportPrivateUsage]
-        except Exception:
-            return []
-        columns: list[ColumnMetadata] = []
-        for position, field in enumerate(reader.schema, start=1):
-            entry: ColumnMetadata = {
-                "table_name": table,
-                "column_name": field.name,
-                "data_type": _arrow_type_to_sql(field.type),
-                "is_nullable": bool(field.nullable),
-                "ordinal_position": position,
-            }
-            if schema is not None:
-                entry["schema_name"] = schema
-            columns.append(entry)
-        return columns
 
     def get_version(self, driver: "ArrowOdbcDriver") -> VersionInfo | None:
         """Get database version information when the runtime dialect provides a query."""
@@ -254,6 +239,36 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
             identity, source=MetadataSource.DRIVER_METADATA, warnings=(_ODBC_DDL_UNSUPPORTED_WARNING,)
         )
 
+    def _probe_columns(self, driver: "ArrowOdbcDriver", table: str, schema: "str | None") -> "list[ColumnMetadata]":
+        qualified = (
+            quote_identifier(table) if schema is None else f"{quote_identifier(schema)}.{quote_identifier(table)}"
+        )
+        probe_sql = f"SELECT * FROM {qualified} WHERE 1=0"
+        try:
+            reader = driver._read_arrow_batches(  # pyright: ignore[reportPrivateUsage]
+                probe_sql, None, 1, fetch_concurrently=False
+            )
+        except Exception:
+            return []
+        columns: list[ColumnMetadata] = []
+        raw_names = [field.name for field in reader.schema]
+        normalized_names = normalize_column_names(
+            raw_names,
+            driver._lowercase_column_names,  # pyright: ignore[reportPrivateUsage]
+        )
+        for position, (field, column_name) in enumerate(zip(reader.schema, normalized_names, strict=False), start=1):
+            entry: ColumnMetadata = {
+                "table_name": table,
+                "column_name": column_name,
+                "data_type": _arrow_type_to_sql(field.type),
+                "is_nullable": bool(field.nullable),
+                "ordinal_position": position,
+            }
+            if schema is not None:
+                entry["schema_name"] = schema
+            columns.append(entry)
+        return columns
+
     def _capability_for_domain(self, domain: str) -> MetadataCapability:
         if domain == "odbc_catalog":
             return MetadataCapability(
@@ -272,6 +287,13 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
                 warnings=(_ODBC_DDL_UNSUPPORTED_WARNING,),
             )
         if domain == "columns":
+            if self._has_query("columns", "by_schema"):
+                return MetadataCapability(
+                    domain=domain,
+                    support=MetadataSupport.SUPPORTED,
+                    fidelity=MetadataFidelity.NATIVE,
+                    source=MetadataSource.CATALOG,
+                )
             return MetadataCapability(
                 domain=domain,
                 support=MetadataSupport.SUPPORTED,
@@ -303,8 +325,7 @@ class ArrowOdbcDataDictionary(SyncDataDictionaryBase):
 
 
 def _arrow_type_to_sql(data_type: Any) -> str:
-    import pyarrow as pa
-
+    ensure_pyarrow()
     types = pa.types
     if types.is_boolean(data_type):
         return "BOOLEAN"

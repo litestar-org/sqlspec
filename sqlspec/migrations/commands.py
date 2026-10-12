@@ -3,6 +3,7 @@
 This module provides the main command interface for database migrations.
 """
 
+import asyncio
 import functools
 import inspect
 import logging
@@ -11,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from rich.console import Console
+from rich.prompt import Prompt
 from rich.table import Table
 
 from sqlspec.builder import sql
@@ -20,9 +22,10 @@ from sqlspec.migrations.context import MigrationContext
 from sqlspec.migrations.fix import MigrationFixer
 from sqlspec.migrations.runner import AsyncMigrationRunner, SyncMigrationRunner
 from sqlspec.migrations.squash import MigrationSquasher
+from sqlspec.migrations.tracker import AsyncMigrationTracker, SyncMigrationTracker
 from sqlspec.migrations.utils import create_migration_file
 from sqlspec.migrations.validation import validate_migration_order
-from sqlspec.migrations.version import generate_conversion_map, generate_timestamp_version
+from sqlspec.migrations.version import generate_conversion_map, generate_timestamp_version, parse_version
 from sqlspec.observability import resolve_db_system
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -170,16 +173,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             description_hints=self._template_settings.description_hints,
         )
 
-    def _validate_migration_schema(self, driver: Any) -> None:
-        """Validate the configured migration schema exists before issuing DDL."""
-        default_schema = self._resolve_default_schema()
-        if default_schema is None:
-            return
-        self._require_schema_support(default_schema)
-        if not driver.has_schema(default_schema):
-            msg = f"Configured schema '{default_schema}' does not exist"
-            raise MigrationError(msg)
-
     def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
 
@@ -254,250 +247,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 status="complete",
             )
             return cast("str | None", current)
-
-    def _checksum_for_migration(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
-        """Load checksum for a single migration.
-
-        Args:
-            version: Migration version.
-            file_path: Path to migration file.
-
-        Returns:
-            Tuple of (version, (checksum, file_path)) or None if load fails.
-        """
-        try:
-            migration = self.runner.load_migration(file_path, version)
-            return (version, (migration["checksum"], file_path))
-        except Exception as exc:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "migration.list",
-                db_system=resolve_db_system(type(self.config).__name__),
-                version=version,
-                file_path=str(file_path),
-                error_type=type(exc).__name__,
-                status="failed",
-                operation="load_checksum",
-            )
-            return None
-
-    def _load_migration_checksums(self, all_migrations: "list[tuple[str, Path]]") -> "dict[str, tuple[str, Path]]":
-        """Load checksums for all migrations.
-
-        Args:
-            all_migrations: List of (version, file_path) tuples.
-
-        Returns:
-            Dictionary mapping version to (checksum, file_path) tuples.
-        """
-        file_checksums = {}
-        for version, file_path in all_migrations:
-            result = self._checksum_for_migration(version, file_path)
-            if result:
-                file_checksums[result[0]] = result[1]
-        return file_checksums
-
-    def _apply_single_migration(
-        self,
-        driver: Any,
-        migration: "LoadedMigrationMetadata",
-        version: str,
-        use_logger: bool,
-        echo: bool,
-        summary_only: bool,
-    ) -> int | None:
-        """Apply a single migration and record it.
-
-        Args:
-            driver: Database driver instance.
-            migration: Migration dictionary with version, description, checksum.
-            version: Version string.
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-
-        Returns:
-            Execution time in ms on success, None on failure.
-        """
-        try:
-
-            def record_version(exec_time: int, migration: "LoadedMigrationMetadata" = migration) -> None:
-                self.tracker.record_migration(
-                    driver, migration["version"], migration["description"], exec_time, migration["checksum"]
-                )
-
-            _, execution_time = self.runner.execute_upgrade(driver, migration, on_success=record_version)
-        except Exception as exc:
-            use_txn = self.runner.should_use_transaction(migration, self.config)
-            rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_error(
-                use_logger,
-                echo,
-                summary_only,
-                "Migration %s failed%s",
-                version,
-                rollback_msg,
-                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
-            )
-            self._last_command_error = exc
-            return None
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Applied migration %s in %dms",
-                version,
-                execution_time,
-                rich_message=f"[green]✓ Applied in {execution_time}ms[/]",
-            )
-            return execution_time
-
-    def _revert_single_migration(
-        self,
-        driver: Any,
-        migration: "LoadedMigrationMetadata",
-        version: str,
-        use_logger: bool,
-        echo: bool,
-        summary_only: bool,
-    ) -> int | None:
-        """Revert a single migration.
-
-        Args:
-            driver: Database driver instance.
-            migration: Migration dictionary.
-            version: Version string.
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-
-        Returns:
-            Execution time in ms on success, None on failure.
-        """
-        try:
-
-            def remove_version(exec_time: int, version: str = version) -> None:
-                self.tracker.remove_migration(driver, version)
-
-            _, execution_time = self.runner.execute_downgrade(driver, migration, on_success=remove_version)
-        except Exception as exc:
-            use_txn = self.runner.should_use_transaction(migration, self.config)
-            rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_error(
-                use_logger,
-                echo,
-                summary_only,
-                "Migration %s failed%s",
-                version,
-                rollback_msg,
-                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
-            )
-            self._last_command_error = exc
-            return None
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Reverted migration %s in %dms",
-                version,
-                execution_time,
-                rich_message=f"[green]✓ Reverted in {execution_time}ms[/]",
-            )
-            return execution_time
-
-    def _synchronize_version_records(
-        self, driver: Any, *, use_logger: bool = False, echo: bool = True, summary_only: bool = False
-    ) -> int:
-        """Synchronize database version records with migration files.
-
-        Auto-updates DB tracking when migrations have been renamed by fix command.
-        This allows developers to just run upgrade after pulling changes without
-        manually running fix.
-
-        Validates checksums match before updating to prevent incorrect matches.
-
-        Args:
-            driver: Database driver instance.
-            use_logger: If True, output to logger instead of Rich console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-
-        Returns:
-            Number of version records updated.
-        """
-        all_migrations = self.runner.get_migration_files()
-
-        try:
-            applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
-        except Exception as exc:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "migration.list",
-                db_system=resolve_db_system(type(driver).__name__),
-                error_type=type(exc).__name__,
-                status="failed",
-                operation="applied_fetch",
-            )
-            return 0
-
-        applied_map = {m["version_num"]: m for m in applied_migrations}
-
-        conversion_map = generate_conversion_map(all_migrations)
-
-        updated_count = 0
-        if conversion_map:
-            for old_version, new_version in conversion_map.items():
-                if old_version in applied_map and new_version not in applied_map:
-                    applied_checksum = applied_map[old_version]["checksum"]
-
-                    file_path = next((path for v, path in all_migrations if v == new_version), None)
-                    if file_path:
-                        migration = self.runner.load_migration(file_path, new_version)
-                        if migration["checksum"] == applied_checksum:
-                            self.tracker.update_version_record(
-                                driver, old_version, new_version, applied_versions=set(applied_map)
-                            )
-                            if use_logger:
-                                if not summary_only:
-                                    logger.info("Reconciled version: %s -> %s", old_version, new_version)
-                            elif echo:
-                                console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
-                            updated_count += 1
-                        elif use_logger:
-                            logger.warning(
-                                "Checksum mismatch for %s -> %s, skipping auto-sync", old_version, new_version
-                            )
-                        elif echo:
-                            console.print(
-                                f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
-                            )
-        else:
-            file_checksums = self._load_migration_checksums(all_migrations)
-
-            for applied_version, applied_record in applied_map.items():
-                for file_version, (file_checksum, _) in file_checksums.items():
-                    if file_version not in applied_map and applied_record["checksum"] == file_checksum:
-                        self.tracker.update_version_record(driver, applied_version, file_version)
-                        if use_logger:
-                            if not summary_only:
-                                logger.info("Reconciled version: %s -> %s", applied_version, file_version)
-                        elif echo:
-                            console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
-                        updated_count += 1
-                        break
-
-        if updated_count > 0:
-            if use_logger:
-                if not summary_only:
-                    logger.info("Reconciled %d version record(s)", updated_count)
-            elif echo:
-                console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
-
-        return updated_count
 
     @_with_command_span("upgrade", metadata_fn=_command_metadata)
     def upgrade(
@@ -620,12 +369,15 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             error = exc
             raise
         finally:
+            effective_error = error or self._last_command_error
+            if not dry_run and applied_count:
+                self._record_command_metric("applied", float(applied_count))
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             _log_command_summary(
                 use_logger=ul,
                 summary_only=summary_value,
                 command="upgrade",
-                status="failed" if error else "complete",
+                status="failed" if effective_error else "complete",
                 revision=revision,
                 dry_run=dry_run,
                 pending_count=pending_count,
@@ -635,7 +387,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 db_system=db_system,
                 bind_key=getattr(self.config, "bind_key", None),
                 config_name=type(self.config).__name__,
-                error=error,
+                error=effective_error,
                 allow_missing=allow_missing,
                 auto_sync=auto_sync,
             )
@@ -645,8 +397,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 "Dry run complete. No changes were made to the database.",
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
-        elif applied_count:
-            self._record_command_metric("applied", float(applied_count))
 
     @_with_command_span("downgrade", metadata_fn=_command_metadata)
     def downgrade(
@@ -727,7 +477,8 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                         )
                         if runtime is not None:
                             runtime.increment_metric("migrations.command.downgrade.missing_files")
-                        continue
+                        self._last_command_error = MigrationError(f"Migration file not found for {version}")
+                        return
 
                     migration = self.runner.load_migration(all_files[version], version)
                     action_verb = "Would revert" if dry_run else "Reverting"
@@ -756,12 +507,15 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             error = exc
             raise
         finally:
+            effective_error = error or self._last_command_error
+            if not dry_run and reverted_count:
+                self._record_command_metric("reverted", float(reverted_count))
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             _log_command_summary(
                 use_logger=ul,
                 summary_only=summary_value,
                 command="downgrade",
-                status="failed" if error else "complete",
+                status="failed" if effective_error else "complete",
                 revision=revision,
                 dry_run=dry_run,
                 pending_count=pending_count,
@@ -771,7 +525,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 db_system=db_system,
                 bind_key=getattr(self.config, "bind_key", None),
                 config_name=type(self.config).__name__,
-                error=error,
+                error=effective_error,
             )
 
         if dry_run:
@@ -779,8 +533,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 "Dry run complete. No changes were made to the database.",
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
-        elif reverted_count:
-            self._record_command_metric("applied", float(reverted_count))
 
     def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
@@ -790,14 +542,61 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         with self.config.provide_session() as driver:
             self.tracker.ensure_tracking_table(driver)
-            all_migrations = dict(self.runner.get_migration_files())
-            if revision not in all_migrations:
+            if revision == "base":
+                clear_sql = sql.delete().from_(self.tracker.version_table)
+                driver.execute(clear_sql)
+                if isinstance(self.tracker, SyncMigrationTracker):
+                    self.tracker._safe_commit(driver)
+                console.print("[green]Database stamped at revision base[/]")
+                return
+
+            all_migrations_list = self.runner.get_migration_files()
+            target_version: str | None = None
+            try:
+                parsed_target = parse_version(revision)
+            except ValueError:
+                parsed_target = None
+
+            for v, _ in all_migrations_list:
+                if v == revision:
+                    target_version = v
+                    break
+                if parsed_target is not None:
+                    try:
+                        if parse_version(v) == parsed_target:
+                            target_version = v
+                            break
+                    except ValueError:
+                        continue
+
+            if target_version is None:
                 console.print(f"[red]Unknown revision: {revision}[/]")
                 return
+
+            target_parsed = parse_version(target_version) if parsed_target is not None else None
             clear_sql = sql.delete().from_(self.tracker.version_table)
             driver.execute(clear_sql)
-            self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
-            console.print(f"[green]Database stamped at revision {revision}[/]")
+            for v, path in all_migrations_list:
+                should_record = False
+                if target_parsed is not None:
+                    try:
+                        v_parsed = parse_version(v)
+                        if v_parsed.extension == target_parsed.extension and v_parsed <= target_parsed:
+                            should_record = True
+                    except ValueError:
+                        should_record = v == target_version
+                elif v == target_version:
+                    should_record = True
+                if should_record:
+                    if path.exists():
+                        migration = self.runner.load_migration(path, v)
+                        description = migration["description"] or f"Stamped to {v}"
+                        checksum = migration["checksum"]
+                    else:
+                        description = f"Stamped to {v}"
+                        checksum = "manual-stamp"
+                    self.tracker.record_migration(driver, v, description, 0, checksum)
+            console.print(f"[green]Database stamped at revision {target_version}[/]")
 
     def revision(self, message: str, file_type: str | None = None) -> None:
         """Create a new migration file with timestamp-based versioning.
@@ -856,8 +655,6 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print(f"[cyan]Squashing range: {start_version} to {end_version}[/]")
 
         if description is None:
-            from rich.prompt import Prompt
-
             description = Prompt.ask("Migration description", default="squashed_migrations")
 
         plans = squasher.plan_squash(
@@ -891,27 +688,36 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
                 console.print("[yellow]Squash cancelled[/]")
                 return
 
-        squasher.apply_squash(plans)
-        for plan in plans:
-            console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
+        try:
+            squasher.apply_squash(plans, cleanup_backup=False)
+            for plan in plans:
+                console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
 
-        if update_database:
-            with self.config.provide_session() as driver:
-                self.tracker.ensure_tracking_table(driver)
+            if update_database:
+                with self.config.provide_session() as driver:
+                    self.tracker.ensure_tracking_table(driver)
 
-                for plan in plans:
-                    if self.tracker.is_squash_already_applied(driver, plan.target_version, plan.source_versions):
-                        up_sql, down_sql = squasher.extract_sql(plan.source_migrations)
-                        if plan.target_path.suffix == ".py":
-                            content = squasher.generate_python_squash(plan, up_sql, down_sql)
-                        else:
-                            content = squasher.generate_squashed_content(plan, up_sql, down_sql)
-                        checksum = self.runner.calculate_checksum(content)
+                    for plan in plans:
+                        if self.tracker.is_squash_already_applied(driver, plan.target_version, plan.source_versions):
+                            if plan.target_path.exists():
+                                content = plan.target_path.read_text(encoding="utf-8")
+                            else:
+                                up_sql, down_sql = squasher.extract_sql(plan.source_migrations)
+                                if plan.target_path.suffix == ".py":
+                                    content = squasher.generate_python_squash(plan, up_sql, down_sql)
+                                else:
+                                    content = squasher.generate_squashed_content(plan, up_sql, down_sql)
+                            checksum = self.runner.calculate_checksum(content)
 
-                        self.tracker.replace_with_squash(
-                            driver, plan.target_version, plan.source_versions, description, checksum
-                        )
-                console.print("[green]✓ Updated migration tracking table[/]")
+                            self.tracker.replace_with_squash(
+                                driver, plan.target_version, plan.source_versions, description, checksum
+                            )
+                    console.print("[green]✓ Updated migration tracking table[/]")
+
+            squasher._cleanup_backup()
+        except Exception:
+            squasher._rollback_backup()
+            raise
 
         console.print("[green]✓ Squash complete![/]")
 
@@ -997,6 +803,313 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
             console.print("[yellow]Restored files from backup[/]")
             raise
 
+    def _validate_migration_schema(self, driver: Any) -> None:
+        """Validate the configured migration schema exists before issuing DDL."""
+        default_schema = self._resolve_default_schema()
+        if default_schema is None:
+            return
+        self._require_schema_support(default_schema)
+        if not driver.has_schema(default_schema):
+            msg = f"Configured schema '{default_schema}' does not exist"
+            raise MigrationError(msg)
+
+    def _checksum_for_migration(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
+        """Load checksum for a single migration.
+
+        Args:
+            version: Migration version.
+            file_path: Path to migration file.
+
+        Returns:
+            Tuple of (version, (checksum, file_path)) or None if load fails.
+        """
+        try:
+            migration = self.runner.load_migration(file_path, version)
+            return (version, (migration["checksum"], file_path))
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(self.config).__name__),
+                version=version,
+                file_path=str(file_path),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="load_checksum",
+            )
+            return None
+
+    def _load_migration_checksums(self, all_migrations: "list[tuple[str, Path]]") -> "dict[str, tuple[str, Path]]":
+        """Load checksums for all migrations.
+
+        Args:
+            all_migrations: List of (version, file_path) tuples.
+
+        Returns:
+            Dictionary mapping version to (checksum, file_path) tuples.
+        """
+        file_checksums = {}
+        for version, file_path in all_migrations:
+            result = self._checksum_for_migration(version, file_path)
+            if result:
+                file_checksums[result[0]] = result[1]
+        return file_checksums
+
+    def _apply_single_migration(
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> int | None:
+        """Apply a single migration and record it.
+
+        Args:
+            driver: Database driver instance.
+            migration: Migration dictionary with version, description, checksum.
+            version: Version string.
+            use_logger: Whether to output to logger instead of console.
+            echo: Whether to echo output to the console.
+            summary_only: Whether summary-only logging is enabled.
+
+        Returns:
+            Execution time in ms on success, None on failure.
+        """
+        use_txn = self.runner.should_use_transaction(migration, self.config)
+        try:
+
+            def record_version(
+                exec_time: int,
+                migration: "LoadedMigrationMetadata" = migration,
+                version: str = version,
+                use_txn: bool = use_txn,
+            ) -> None:
+                recorded_version = migration["version"] or version
+                if isinstance(self.tracker, SyncMigrationTracker):
+                    self.tracker.record_migration(
+                        driver,
+                        recorded_version,
+                        migration["description"],
+                        exec_time,
+                        migration["checksum"],
+                        commit=not use_txn,
+                    )
+                else:
+                    self.tracker.record_migration(
+                        driver, recorded_version, migration["description"], exec_time, migration["checksum"]
+                    )
+
+            _, execution_time = self.runner.execute_upgrade(
+                driver, migration, use_transaction=use_txn, on_success=record_version
+            )
+        except Exception as exc:
+            rollback_msg = " (transaction rolled back)" if use_txn else ""
+            _output_error(
+                use_logger,
+                echo,
+                summary_only,
+                "Migration %s failed%s",
+                version,
+                rollback_msg,
+                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
+            )
+            self._last_command_error = exc
+            return None
+        else:
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Applied migration %s in %dms",
+                version,
+                execution_time,
+                rich_message=f"[green]✓ Applied in {execution_time}ms[/]",
+            )
+            return execution_time
+
+    def _revert_single_migration(
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> int | None:
+        """Revert a single migration.
+
+        Args:
+            driver: Database driver instance.
+            migration: Migration dictionary.
+            version: Version string.
+            use_logger: Whether to output to logger instead of console.
+            echo: Whether to echo output to the console.
+            summary_only: Whether summary-only logging is enabled.
+
+        Returns:
+            Execution time in ms on success, None on failure.
+        """
+        use_txn = self.runner.should_use_transaction(migration, self.config)
+        reverted = False
+        try:
+
+            def remove_version(exec_time: int, version: str = version, use_txn: bool = use_txn) -> None:
+                nonlocal reverted
+                reverted = True
+                if isinstance(self.tracker, SyncMigrationTracker):
+                    self.tracker.remove_migration(driver, version, commit=not use_txn)
+                else:
+                    self.tracker.remove_migration(driver, version)
+
+            _, execution_time = self.runner.execute_downgrade(
+                driver, migration, use_transaction=use_txn, on_success=remove_version
+            )
+        except Exception as exc:
+            rollback_msg = " (transaction rolled back)" if use_txn else ""
+            _output_error(
+                use_logger,
+                echo,
+                summary_only,
+                "Migration %s failed%s",
+                version,
+                rollback_msg,
+                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
+            )
+            self._last_command_error = exc
+            return None
+        if not reverted:
+            missing_exc = MigrationError(f"Migration {version} does not support downgrade")
+            _output_error(
+                use_logger,
+                echo,
+                summary_only,
+                "Migration %s failed",
+                version,
+                rich_message=f"[red]✗ Failed: {missing_exc}[/]",
+            )
+            self._last_command_error = missing_exc
+            return None
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "Reverted migration %s in %dms",
+            version,
+            execution_time,
+            rich_message=f"[green]✓ Reverted in {execution_time}ms[/]",
+        )
+        return execution_time
+
+    def _synchronize_version_records(
+        self, driver: Any, *, use_logger: bool = False, echo: bool = True, summary_only: bool = False
+    ) -> int:
+        """Synchronize database version records with migration files.
+
+        Auto-updates DB tracking when migrations have been renamed by fix command.
+        This allows developers to just run upgrade after pulling changes without
+        manually running fix.
+
+        Validates checksums match before updating to prevent incorrect matches.
+
+        Args:
+            driver: Database driver instance.
+            use_logger: If True, output to logger instead of Rich console.
+            echo: Whether to echo output to the console.
+            summary_only: Whether summary-only logging is enabled.
+
+        Returns:
+            Number of version records updated.
+        """
+        all_migrations = self.runner.get_migration_files()
+
+        try:
+            applied_migrations: list[AppliedMigrationRecord] = self.tracker.get_applied_migrations(driver)
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(driver).__name__),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="applied_fetch",
+            )
+            return 0
+
+        applied_map = {m["version_num"]: m for m in applied_migrations}
+        all_files_map = dict(all_migrations)
+        claimed_versions = set(applied_map)
+        reconciled_old_versions: set[str] = set()
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        updated_count = 0
+        if conversion_map:
+            for old_version, new_version in conversion_map.items():
+                if old_version in applied_map and new_version not in claimed_versions:
+                    applied_checksum = applied_map[old_version]["checksum"]
+
+                    file_path = all_files_map.get(new_version)
+                    if file_path:
+                        migration = self.runner.load_migration(file_path, new_version)
+                        if migration["checksum"] == applied_checksum:
+                            self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=claimed_versions
+                            )
+                            claimed_versions.discard(old_version)
+                            claimed_versions.add(new_version)
+                            reconciled_old_versions.add(old_version)
+                            if use_logger:
+                                if not summary_only:
+                                    logger.info("Reconciled version: %s -> %s", old_version, new_version)
+                            elif echo:
+                                console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            updated_count += 1
+                        else:
+                            reconciled_old_versions.add(old_version)
+                            if use_logger:
+                                logger.warning(
+                                    "Checksum mismatch for %s -> %s, skipping auto-sync", old_version, new_version
+                                )
+                            elif echo:
+                                console.print(
+                                    f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                                )
+
+        unreconciled = [
+            (v, rec) for v, rec in applied_map.items() if v not in all_files_map and v not in reconciled_old_versions
+        ]
+        if unreconciled:
+            file_checksums = self._load_migration_checksums(all_migrations)
+
+            for applied_version, applied_record in unreconciled:
+                for file_version, (file_checksum, _) in file_checksums.items():
+                    if file_version not in claimed_versions and applied_record["checksum"] == file_checksum:
+                        self.tracker.update_version_record(
+                            driver, applied_version, file_version, applied_versions=claimed_versions
+                        )
+                        claimed_versions.discard(applied_version)
+                        claimed_versions.add(file_version)
+                        if use_logger:
+                            if not summary_only:
+                                logger.info("Reconciled version: %s -> %s", applied_version, file_version)
+                        elif echo:
+                            console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
+                        updated_count += 1
+                        break
+
+        if updated_count > 0:
+            if use_logger:
+                if not summary_only:
+                    logger.info("Reconciled %d version record(s)", updated_count)
+            elif echo:
+                console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+
+        return updated_count
+
 
 class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
     """Asynchronous migration commands."""
@@ -1020,16 +1133,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             runtime=self._runtime,
             description_hints=self._template_settings.description_hints,
         )
-
-    async def _validate_migration_schema(self, driver: Any) -> None:
-        """Validate the configured migration schema exists before issuing DDL."""
-        default_schema = self._resolve_default_schema()
-        if default_schema is None:
-            return
-        self._require_schema_support(default_schema)
-        if not await driver.has_schema(default_schema):
-            msg = f"Configured schema '{default_schema}' does not exist"
-            raise MigrationError(msg)
 
     async def init(self, directory: str, package: bool = True) -> None:
         """Initialize migration directory structure.
@@ -1102,252 +1205,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 status="complete",
             )
             return cast("str | None", current)
-
-    async def _checksum_for_migration(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
-        """Load checksum for a single migration.
-
-        Args:
-            version: Migration version.
-            file_path: Path to migration file.
-
-        Returns:
-            Tuple of (version, (checksum, file_path)) or None if load fails.
-        """
-        try:
-            migration = await self.runner.load_migration(file_path, version)
-            return (version, (migration["checksum"], file_path))
-        except Exception as exc:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "migration.list",
-                db_system=resolve_db_system(type(self.config).__name__),
-                version=version,
-                file_path=str(file_path),
-                error_type=type(exc).__name__,
-                status="failed",
-                operation="load_checksum",
-            )
-            return None
-
-    async def _load_migration_checksums(
-        self, all_migrations: "list[tuple[str, Path]]"
-    ) -> "dict[str, tuple[str, Path]]":
-        """Load checksums for all migrations.
-
-        Args:
-            all_migrations: List of (version, file_path) tuples.
-
-        Returns:
-            Dictionary mapping version to (checksum, file_path) tuples.
-        """
-        file_checksums = {}
-        for version, file_path in all_migrations:
-            result = await self._checksum_for_migration(version, file_path)
-            if result:
-                file_checksums[result[0]] = result[1]
-        return file_checksums
-
-    async def _apply_single_migration(
-        self,
-        driver: Any,
-        migration: "LoadedMigrationMetadata",
-        version: str,
-        use_logger: bool,
-        echo: bool,
-        summary_only: bool,
-    ) -> int | None:
-        """Apply a single migration and record it.
-
-        Args:
-            driver: Database driver instance.
-            migration: Migration dictionary with version, description, checksum.
-            version: Version string.
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-
-        Returns:
-            Execution time in ms on success, None on failure.
-        """
-        try:
-
-            async def record_version(exec_time: int, migration: "LoadedMigrationMetadata" = migration) -> None:
-                await self.tracker.record_migration(
-                    driver, migration["version"], migration["description"], exec_time, migration["checksum"]
-                )
-
-            _, execution_time = await self.runner.execute_upgrade(driver, migration, on_success=record_version)
-        except Exception as exc:
-            use_txn = self.runner.should_use_transaction(migration, self.config)
-            rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_error(
-                use_logger,
-                echo,
-                summary_only,
-                "Migration %s failed%s",
-                version,
-                rollback_msg,
-                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
-            )
-            self._last_command_error = exc
-            return None
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Applied migration %s in %dms",
-                version,
-                execution_time,
-                rich_message=f"[green]✓ Applied in {execution_time}ms[/]",
-            )
-            return execution_time
-
-    async def _revert_single_migration(
-        self,
-        driver: Any,
-        migration: "LoadedMigrationMetadata",
-        version: str,
-        use_logger: bool,
-        echo: bool,
-        summary_only: bool,
-    ) -> int | None:
-        """Revert a single migration.
-
-        Args:
-            driver: Database driver instance.
-            migration: Migration dictionary.
-            version: Version string.
-            use_logger: Whether to output to logger instead of console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-
-        Returns:
-            Execution time in ms on success, None on failure.
-        """
-        try:
-
-            async def remove_version(exec_time: int, version: str = version) -> None:
-                await self.tracker.remove_migration(driver, version)
-
-            _, execution_time = await self.runner.execute_downgrade(driver, migration, on_success=remove_version)
-        except Exception as exc:
-            use_txn = self.runner.should_use_transaction(migration, self.config)
-            rollback_msg = " (transaction rolled back)" if use_txn else ""
-            _output_error(
-                use_logger,
-                echo,
-                summary_only,
-                "Migration %s failed%s",
-                version,
-                rollback_msg,
-                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
-            )
-            self._last_command_error = exc
-            return None
-        else:
-            _output_info(
-                use_logger,
-                echo,
-                summary_only,
-                "Reverted migration %s in %dms",
-                version,
-                execution_time,
-                rich_message=f"[green]✓ Reverted in {execution_time}ms[/]",
-            )
-            return execution_time
-
-    async def _synchronize_version_records(
-        self, driver: Any, *, use_logger: bool = False, echo: bool = True, summary_only: bool = False
-    ) -> int:
-        """Synchronize database version records with migration files.
-
-        Auto-updates DB tracking when migrations have been renamed by fix command.
-        This allows developers to just run upgrade after pulling changes without
-        manually running fix.
-
-        Validates checksums match before updating to prevent incorrect matches.
-
-        Args:
-            driver: Database driver instance.
-            use_logger: If True, output to logger instead of Rich console.
-            echo: Whether to echo output to the console.
-            summary_only: Whether summary-only logging is enabled.
-
-        Returns:
-            Number of version records updated.
-        """
-        all_migrations = await self.runner.get_migration_files()
-
-        try:
-            applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
-        except Exception as exc:
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "migration.list",
-                db_system=resolve_db_system(type(driver).__name__),
-                error_type=type(exc).__name__,
-                status="failed",
-                operation="applied_fetch",
-            )
-            return 0
-
-        applied_map = {m["version_num"]: m for m in applied_migrations}
-
-        conversion_map = generate_conversion_map(all_migrations)
-
-        updated_count = 0
-        if conversion_map:
-            for old_version, new_version in conversion_map.items():
-                if old_version in applied_map and new_version not in applied_map:
-                    applied_checksum = applied_map[old_version]["checksum"]
-
-                    file_path = next((path for v, path in all_migrations if v == new_version), None)
-                    if file_path:
-                        migration = await self.runner.load_migration(file_path, new_version)
-                        if migration["checksum"] == applied_checksum:
-                            await self.tracker.update_version_record(
-                                driver, old_version, new_version, applied_versions=set(applied_map)
-                            )
-                            if use_logger:
-                                if not summary_only:
-                                    logger.info("Reconciled version: %s -> %s", old_version, new_version)
-                            elif echo:
-                                console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
-                            updated_count += 1
-                        elif use_logger:
-                            logger.warning(
-                                "Checksum mismatch for %s -> %s, skipping auto-sync", old_version, new_version
-                            )
-                        elif echo:
-                            console.print(
-                                f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
-                            )
-        else:
-            file_checksums = await self._load_migration_checksums(all_migrations)
-
-            for applied_version, applied_record in applied_map.items():
-                for file_version, (file_checksum, _) in file_checksums.items():
-                    if file_version not in applied_map and applied_record["checksum"] == file_checksum:
-                        await self.tracker.update_version_record(driver, applied_version, file_version)
-                        if use_logger:
-                            if not summary_only:
-                                logger.info("Reconciled version: %s -> %s", applied_version, file_version)
-                        elif echo:
-                            console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
-                        updated_count += 1
-                        break
-
-        if updated_count > 0:
-            if use_logger:
-                if not summary_only:
-                    logger.info("Reconciled %d version record(s)", updated_count)
-            elif echo:
-                console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
-
-        return updated_count
 
     @_with_command_span("upgrade", metadata_fn=_command_metadata)
     async def upgrade(
@@ -1472,12 +1329,15 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             error = exc
             raise
         finally:
+            effective_error = error or self._last_command_error
+            if not dry_run and applied_count:
+                self._record_command_metric("applied", float(applied_count))
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             _log_command_summary(
                 use_logger=ul,
                 summary_only=summary_value,
                 command="upgrade",
-                status="failed" if error else "complete",
+                status="failed" if effective_error else "complete",
                 revision=revision,
                 dry_run=dry_run,
                 pending_count=pending_count,
@@ -1487,7 +1347,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 db_system=db_system,
                 bind_key=getattr(self.config, "bind_key", None),
                 config_name=type(self.config).__name__,
-                error=error,
+                error=effective_error,
                 allow_missing=allow_missing,
                 auto_sync=auto_sync,
             )
@@ -1497,8 +1357,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 "Dry run complete. No changes were made to the database.",
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
-        elif applied_count:
-            self._record_command_metric("applied", float(applied_count))
 
     @_with_command_span("downgrade", metadata_fn=_command_metadata)
     async def downgrade(
@@ -1580,7 +1438,8 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                         )
                         if runtime is not None:
                             runtime.increment_metric("migrations.command.downgrade.missing_files")
-                        continue
+                        self._last_command_error = MigrationError(f"Migration file not found for {version}")
+                        return
 
                     migration = await self.runner.load_migration(all_files[version], version)
                     action_verb = "Would revert" if dry_run else "Reverting"
@@ -1611,12 +1470,15 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             error = exc
             raise
         finally:
+            effective_error = error or self._last_command_error
+            if not dry_run and reverted_count:
+                self._record_command_metric("reverted", float(reverted_count))
             duration_ms = int((time.perf_counter() - start_time) * 1000)
             _log_command_summary(
                 use_logger=ul,
                 summary_only=summary_value,
                 command="downgrade",
-                status="failed" if error else "complete",
+                status="failed" if effective_error else "complete",
                 revision=revision,
                 dry_run=dry_run,
                 pending_count=pending_count,
@@ -1626,7 +1488,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 db_system=db_system,
                 bind_key=getattr(self.config, "bind_key", None),
                 config_name=type(self.config).__name__,
-                error=error,
+                error=effective_error,
             )
 
         if dry_run:
@@ -1634,8 +1496,6 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
                 "Dry run complete. No changes were made to the database.",
                 rich_message="\n[bold yellow]Dry run complete.[/] No changes were made to the database.",
             )
-        elif reverted_count:
-            self._record_command_metric("applied", float(reverted_count))
 
     async def stamp(self, revision: str) -> None:
         """Mark database as being at a specific revision without running migrations.
@@ -1646,15 +1506,61 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         async with self.config.provide_session() as driver:
             await self.tracker.ensure_tracking_table(driver)
 
-            all_migrations = dict(await self.runner.get_migration_files())
-            if revision not in all_migrations:
+            if revision == "base":
+                clear_sql = sql.delete().from_(self.tracker.version_table)
+                await driver.execute(clear_sql)
+                if isinstance(self.tracker, AsyncMigrationTracker):
+                    await self.tracker._safe_commit(driver)
+                console.print("[green]Database stamped at revision base[/]")
+                return
+
+            all_migrations_list = await self.runner.get_migration_files()
+            target_version: str | None = None
+            try:
+                parsed_target = parse_version(revision)
+            except ValueError:
+                parsed_target = None
+
+            for v, _ in all_migrations_list:
+                if v == revision:
+                    target_version = v
+                    break
+                if parsed_target is not None:
+                    try:
+                        if parse_version(v) == parsed_target:
+                            target_version = v
+                            break
+                    except ValueError:
+                        continue
+
+            if target_version is None:
                 console.print(f"[red]Unknown revision: {revision}[/]")
                 return
 
+            target_parsed = parse_version(target_version) if parsed_target is not None else None
             clear_sql = sql.delete().from_(self.tracker.version_table)
             await driver.execute(clear_sql)
-            await self.tracker.record_migration(driver, revision, f"Stamped to {revision}", 0, "manual-stamp")
-            console.print(f"[green]Database stamped at revision {revision}[/]")
+            for v, path in all_migrations_list:
+                should_record = False
+                if target_parsed is not None:
+                    try:
+                        v_parsed = parse_version(v)
+                        if v_parsed.extension == target_parsed.extension and v_parsed <= target_parsed:
+                            should_record = True
+                    except ValueError:
+                        should_record = v == target_version
+                elif v == target_version:
+                    should_record = True
+                if should_record:
+                    if path.exists():
+                        migration = await self.runner.load_migration(path, v)
+                        description = migration["description"] or f"Stamped to {v}"
+                        checksum = migration["checksum"]
+                    else:
+                        description = f"Stamped to {v}"
+                        checksum = "manual-stamp"
+                    await self.tracker.record_migration(driver, v, description, 0, checksum)
+            console.print(f"[green]Database stamped at revision {target_version}[/]")
 
     async def revision(self, message: str, file_type: str | None = None) -> None:
         """Create a new migration file with timestamp-based versioning.
@@ -1725,19 +1631,12 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             console.print(f"[cyan]Squashing range: {start_version} to {end_version}[/]")
 
         if description is None:
-            import anyio
-            from rich.prompt import Prompt
-
-            description = await anyio.to_thread.run_sync(  # pyright: ignore[reportAttributeAccessIssue]
+            description = await asyncio.to_thread(
                 lambda: Prompt.ask("Migration description", default="squashed_migrations")
             )
 
         plans = squasher.plan_squash(
-            start_version,
-            end_version,
-            description,  # pyright: ignore[reportArgumentType]
-            allow_gaps=allow_gaps,
-            output_format=output_format,
+            start_version, end_version, description, allow_gaps=allow_gaps, output_format=output_format
         )
 
         table = Table(title="Squash Plan")
@@ -1762,34 +1661,43 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return
 
         if not yes:
-            import anyio
-
-            response = await anyio.to_thread.run_sync(input, "\nProceed with squash? [y/N]: ")  # pyright: ignore[reportAttributeAccessIssue]
+            response = await asyncio.to_thread(input, "\nProceed with squash? [y/N]: ")
             if response.lower() != "y":
                 console.print("[yellow]Squash cancelled[/]")
                 return
 
-        squasher.apply_squash(plans)
-        for plan in plans:
-            console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
+        try:
+            squasher.apply_squash(plans, cleanup_backup=False)
+            for plan in plans:
+                console.print(f"[green]✓ Created squashed migration: {plan.target_path.name}[/]")
 
-        if update_database:
-            async with self.config.provide_session() as driver:
-                await self.tracker.ensure_tracking_table(driver)
+            if update_database:
+                async with self.config.provide_session() as driver:
+                    await self.tracker.ensure_tracking_table(driver)
 
-                for plan in plans:
-                    if await self.tracker.is_squash_already_applied(driver, plan.target_version, plan.source_versions):
-                        up_sql, down_sql = squasher.extract_sql(plan.source_migrations)
-                        if plan.target_path.suffix == ".py":
-                            content = squasher.generate_python_squash(plan, up_sql, down_sql)
-                        else:
-                            content = squasher.generate_squashed_content(plan, up_sql, down_sql)
-                        checksum = sync_runner.calculate_checksum(content)
+                    for plan in plans:
+                        if await self.tracker.is_squash_already_applied(
+                            driver, plan.target_version, plan.source_versions
+                        ):
+                            if plan.target_path.exists():
+                                content = plan.target_path.read_text(encoding="utf-8")
+                            else:
+                                up_sql, down_sql = squasher.extract_sql(plan.source_migrations)
+                                if plan.target_path.suffix == ".py":
+                                    content = squasher.generate_python_squash(plan, up_sql, down_sql)
+                                else:
+                                    content = squasher.generate_squashed_content(plan, up_sql, down_sql)
+                            checksum = sync_runner.calculate_checksum(content)
 
-                        await self.tracker.replace_with_squash(
-                            driver, plan.target_version, plan.source_versions, description, checksum
-                        )
-                console.print("[green]✓ Updated migration tracking table[/]")
+                            await self.tracker.replace_with_squash(
+                                driver, plan.target_version, plan.source_versions, description, checksum
+                            )
+                    console.print("[green]✓ Updated migration tracking table[/]")
+
+            squasher._cleanup_backup()
+        except Exception:
+            squasher._rollback_backup()
+            raise
 
         console.print("[green]✓ Squash complete![/]")
 
@@ -1832,9 +1740,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             return
 
         if not yes:
-            import anyio
-
-            response = await anyio.to_thread.run_sync(input, "\nProceed with conversion? [y/N]: ")  # pyright: ignore[reportAttributeAccessIssue]
+            response = await asyncio.to_thread(input, "\nProceed with conversion? [y/N]: ")
             if response.lower() != "y":
                 console.print("[yellow]Conversion cancelled[/]")
                 return
@@ -1876,6 +1782,315 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
             fixer.rollback()
             console.print("[yellow]Restored files from backup[/]")
             raise
+
+    async def _validate_migration_schema(self, driver: Any) -> None:
+        """Validate the configured migration schema exists before issuing DDL."""
+        default_schema = self._resolve_default_schema()
+        if default_schema is None:
+            return
+        self._require_schema_support(default_schema)
+        if not await driver.has_schema(default_schema):
+            msg = f"Configured schema '{default_schema}' does not exist"
+            raise MigrationError(msg)
+
+    async def _checksum_for_migration(self, version: str, file_path: "Path") -> "tuple[str, tuple[str, Path]] | None":
+        """Load checksum for a single migration.
+
+        Args:
+            version: Migration version.
+            file_path: Path to migration file.
+
+        Returns:
+            Tuple of (version, (checksum, file_path)) or None if load fails.
+        """
+        try:
+            migration = await self.runner.load_migration(file_path, version)
+            return (version, (migration["checksum"], file_path))
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(self.config).__name__),
+                version=version,
+                file_path=str(file_path),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="load_checksum",
+            )
+            return None
+
+    async def _load_migration_checksums(
+        self, all_migrations: "list[tuple[str, Path]]"
+    ) -> "dict[str, tuple[str, Path]]":
+        """Load checksums for all migrations.
+
+        Args:
+            all_migrations: List of (version, file_path) tuples.
+
+        Returns:
+            Dictionary mapping version to (checksum, file_path) tuples.
+        """
+        file_checksums = {}
+        for version, file_path in all_migrations:
+            result = await self._checksum_for_migration(version, file_path)
+            if result:
+                file_checksums[result[0]] = result[1]
+        return file_checksums
+
+    async def _apply_single_migration(
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> int | None:
+        """Apply a single migration and record it.
+
+        Args:
+            driver: Database driver instance.
+            migration: Migration dictionary with version, description, checksum.
+            version: Version string.
+            use_logger: Whether to output to logger instead of console.
+            echo: Whether to echo output to the console.
+            summary_only: Whether summary-only logging is enabled.
+
+        Returns:
+            Execution time in ms on success, None on failure.
+        """
+        use_txn = self.runner.should_use_transaction(migration, self.config)
+        try:
+
+            async def record_version(
+                exec_time: int,
+                migration: "LoadedMigrationMetadata" = migration,
+                version: str = version,
+                use_txn: bool = use_txn,
+            ) -> None:
+                recorded_version = migration["version"] or version
+                if isinstance(self.tracker, AsyncMigrationTracker):
+                    await self.tracker.record_migration(
+                        driver,
+                        recorded_version,
+                        migration["description"],
+                        exec_time,
+                        migration["checksum"],
+                        commit=not use_txn,
+                    )
+                else:
+                    await self.tracker.record_migration(
+                        driver, recorded_version, migration["description"], exec_time, migration["checksum"]
+                    )
+
+            _, execution_time = await self.runner.execute_upgrade(
+                driver, migration, use_transaction=use_txn, on_success=record_version
+            )
+        except Exception as exc:
+            rollback_msg = " (transaction rolled back)" if use_txn else ""
+            _output_error(
+                use_logger,
+                echo,
+                summary_only,
+                "Migration %s failed%s",
+                version,
+                rollback_msg,
+                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
+            )
+            self._last_command_error = exc
+            return None
+        else:
+            _output_info(
+                use_logger,
+                echo,
+                summary_only,
+                "Applied migration %s in %dms",
+                version,
+                execution_time,
+                rich_message=f"[green]✓ Applied in {execution_time}ms[/]",
+            )
+            return execution_time
+
+    async def _revert_single_migration(
+        self,
+        driver: Any,
+        migration: "LoadedMigrationMetadata",
+        version: str,
+        use_logger: bool,
+        echo: bool,
+        summary_only: bool,
+    ) -> int | None:
+        """Revert a single migration.
+
+        Args:
+            driver: Database driver instance.
+            migration: Migration dictionary.
+            version: Version string.
+            use_logger: Whether to output to logger instead of console.
+            echo: Whether to echo output to the console.
+            summary_only: Whether summary-only logging is enabled.
+
+        Returns:
+            Execution time in ms on success, None on failure.
+        """
+        use_txn = self.runner.should_use_transaction(migration, self.config)
+        reverted = False
+        try:
+
+            async def remove_version(exec_time: int, version: str = version, use_txn: bool = use_txn) -> None:
+                nonlocal reverted
+                reverted = True
+                if isinstance(self.tracker, AsyncMigrationTracker):
+                    await self.tracker.remove_migration(driver, version, commit=not use_txn)
+                else:
+                    await self.tracker.remove_migration(driver, version)
+
+            _, execution_time = await self.runner.execute_downgrade(
+                driver, migration, use_transaction=use_txn, on_success=remove_version
+            )
+        except Exception as exc:
+            rollback_msg = " (transaction rolled back)" if use_txn else ""
+            _output_error(
+                use_logger,
+                echo,
+                summary_only,
+                "Migration %s failed%s",
+                version,
+                rollback_msg,
+                rich_message=f"[red]✗ Failed{rollback_msg}: {exc}[/]",
+            )
+            self._last_command_error = exc
+            return None
+        if not reverted:
+            missing_exc = MigrationError(f"Migration {version} does not support downgrade")
+            _output_error(
+                use_logger,
+                echo,
+                summary_only,
+                "Migration %s failed",
+                version,
+                rich_message=f"[red]✗ Failed: {missing_exc}[/]",
+            )
+            self._last_command_error = missing_exc
+            return None
+        _output_info(
+            use_logger,
+            echo,
+            summary_only,
+            "Reverted migration %s in %dms",
+            version,
+            execution_time,
+            rich_message=f"[green]✓ Reverted in {execution_time}ms[/]",
+        )
+        return execution_time
+
+    async def _synchronize_version_records(
+        self, driver: Any, *, use_logger: bool = False, echo: bool = True, summary_only: bool = False
+    ) -> int:
+        """Synchronize database version records with migration files.
+
+        Auto-updates DB tracking when migrations have been renamed by fix command.
+        This allows developers to just run upgrade after pulling changes without
+        manually running fix.
+
+        Validates checksums match before updating to prevent incorrect matches.
+
+        Args:
+            driver: Database driver instance.
+            use_logger: If True, output to logger instead of Rich console.
+            echo: Whether to echo output to the console.
+            summary_only: Whether summary-only logging is enabled.
+
+        Returns:
+            Number of version records updated.
+        """
+        all_migrations = await self.runner.get_migration_files()
+
+        try:
+            applied_migrations: list[AppliedMigrationRecord] = await self.tracker.get_applied_migrations(driver)
+        except Exception as exc:
+            log_with_context(
+                logger,
+                logging.DEBUG,
+                "migration.list",
+                db_system=resolve_db_system(type(driver).__name__),
+                error_type=type(exc).__name__,
+                status="failed",
+                operation="applied_fetch",
+            )
+            return 0
+
+        applied_map = {m["version_num"]: m for m in applied_migrations}
+        all_files_map = dict(all_migrations)
+        claimed_versions = set(applied_map)
+        reconciled_old_versions: set[str] = set()
+
+        conversion_map = generate_conversion_map(all_migrations)
+
+        updated_count = 0
+        if conversion_map:
+            for old_version, new_version in conversion_map.items():
+                if old_version in applied_map and new_version not in claimed_versions:
+                    applied_checksum = applied_map[old_version]["checksum"]
+
+                    file_path = all_files_map.get(new_version)
+                    if file_path:
+                        migration = await self.runner.load_migration(file_path, new_version)
+                        if migration["checksum"] == applied_checksum:
+                            await self.tracker.update_version_record(
+                                driver, old_version, new_version, applied_versions=claimed_versions
+                            )
+                            claimed_versions.discard(old_version)
+                            claimed_versions.add(new_version)
+                            reconciled_old_versions.add(old_version)
+                            if use_logger:
+                                if not summary_only:
+                                    logger.info("Reconciled version: %s -> %s", old_version, new_version)
+                            elif echo:
+                                console.print(f"  [dim]Reconciled version:[/] {old_version} → {new_version}")
+                            updated_count += 1
+                        else:
+                            reconciled_old_versions.add(old_version)
+                            if use_logger:
+                                logger.warning(
+                                    "Checksum mismatch for %s -> %s, skipping auto-sync", old_version, new_version
+                                )
+                            elif echo:
+                                console.print(
+                                    f"  [yellow]Warning: Checksum mismatch for {old_version} → {new_version}, skipping auto-sync[/]"
+                                )
+
+        unreconciled = [
+            (v, rec) for v, rec in applied_map.items() if v not in all_files_map and v not in reconciled_old_versions
+        ]
+        if unreconciled:
+            file_checksums = await self._load_migration_checksums(all_migrations)
+
+            for applied_version, applied_record in unreconciled:
+                for file_version, (file_checksum, _) in file_checksums.items():
+                    if file_version not in claimed_versions and applied_record["checksum"] == file_checksum:
+                        await self.tracker.update_version_record(
+                            driver, applied_version, file_version, applied_versions=claimed_versions
+                        )
+                        claimed_versions.discard(applied_version)
+                        claimed_versions.add(file_version)
+                        if use_logger:
+                            if not summary_only:
+                                logger.info("Reconciled version: %s -> %s", applied_version, file_version)
+                        elif echo:
+                            console.print(f"  [dim]Reconciled version:[/] {applied_version} → {file_version}")
+                        updated_count += 1
+                        break
+
+        if updated_count > 0:
+            if use_logger:
+                if not summary_only:
+                    logger.info("Reconciled %d version record(s)", updated_count)
+            elif echo:
+                console.print(f"[cyan]Reconciled {updated_count} version record(s)[/]")
+
+        return updated_count
 
 
 def create_migration_commands(

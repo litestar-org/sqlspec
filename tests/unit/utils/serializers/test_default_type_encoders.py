@@ -5,7 +5,7 @@ Mirrors ``advanced-alchemy`` test coverage adapted to sqlspec semantics:
 - Unsupported objects raise ``TypeError`` instead of falling back to ``str``.
 """
 
-import datetime
+import datetime as dt
 import enum
 import ipaddress
 import json
@@ -194,10 +194,10 @@ def test_registry_retries_after_optional_registration_failure(monkeypatch: pytes
 def test_registry_covers_required_types() -> None:
     """Registry covers every type listed in the AC."""
     required = {
-        datetime.datetime,
-        datetime.date,
-        datetime.time,
-        datetime.timedelta,
+        dt.datetime,
+        dt.date,
+        dt.time,
+        dt.timedelta,
         Decimal,
         uuid.UUID,
         bytes,
@@ -316,9 +316,9 @@ def test_enc_hook_resolves_subclass_of_enum() -> None:
 
 def test_enc_hook_user_override_wins() -> None:
     """A user-supplied registry entry takes precedence over the default."""
-    overrides = {**DEFAULT_TYPE_ENCODERS, datetime.datetime: lambda _: "OVERRIDE"}
+    overrides = {**DEFAULT_TYPE_ENCODERS, dt.datetime: lambda _: "OVERRIDE"}
     enc_hook = _enc_hook(overrides)
-    assert enc_hook(datetime.datetime(2026, 1, 1)) == "OVERRIDE"
+    assert enc_hook(dt.datetime(2026, 1, 1)) == "OVERRIDE"
 
 
 def test_enc_hook_raises_on_unknown_type() -> None:
@@ -387,10 +387,10 @@ def test_behavioural_equivalence_battery() -> None:
     """
     serializer = StandardLibSerializer()
     payload = {
-        "ts": datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
-        "d": datetime.date(2026, 1, 1),
-        "t": datetime.time(12, 30, 0),
-        "td": datetime.timedelta(seconds=90),
+        "ts": dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+        "d": dt.date(2026, 1, 1),
+        "t": dt.time(12, 30, 0),
+        "td": dt.timedelta(seconds=90),
         "dec": Decimal("1.5"),
         "uid": uuid.UUID("12345678-1234-5678-1234-567812345678"),
         "raw": b"abc",

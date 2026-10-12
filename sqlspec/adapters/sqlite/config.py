@@ -1,5 +1,6 @@
 """SQLite database configuration with thread-local connections."""
 
+from collections.abc import Mapping, Sequence
 from os import PathLike
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
 
@@ -14,6 +15,7 @@ from sqlspec.adapters.sqlite.core import (
     build_connection_config,
     default_statement_config,
     render_pragmas,
+    require_python_version,
 )
 from sqlspec.adapters.sqlite.driver import SqliteDriver, SqliteExceptionHandler
 from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
@@ -26,7 +28,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -43,6 +45,8 @@ __all__ = (
 
 logger = get_logger("sqlspec.adapters.sqlite")
 
+SQLiteAutocommitMode = bool | Literal[-1]
+
 
 class SqliteConnectionParams(TypedDict):
     """SQLite connection parameters."""
@@ -55,7 +59,7 @@ class SqliteConnectionParams(TypedDict):
     factory: "NotRequired[SqliteConnectionFactory | None]"
     cached_statements: NotRequired[int]
     uri: NotRequired[bool]
-    autocommit: NotRequired[bool]
+    autocommit: NotRequired[SQLiteAutocommitMode]
     pool_recycle_seconds: NotRequired[int]
     health_check_interval: NotRequired[float]
     enable_optimizations: NotRequired[bool]
@@ -101,8 +105,8 @@ class SqliteDriverFeatures(TypedDict):
     Controls optional type handling and serialization features for SQLite connections.
 
     enable_custom_adapters: Enable custom type adapters for JSON/UUID/datetime conversion.
-     Defaults to True for enhanced Python type support.
-     Set to False only if you need pure SQLite behavior without type conversions.
+     Defaults to False.
+     Set to True if you want global sqlite3 module type adapter/converter registration.
     json_serializer: Custom JSON serializer function.
      Defaults to sqlspec.utils.serializers.to_json.
     json_deserializer: Custom JSON deserializer function.
@@ -163,6 +167,7 @@ class SqliteDriverFeatures(TypedDict):
 
 
 _ROW_FACTORY_LITERALS = frozenset({"dict", "row", "tuple"})
+_TRANSACTION_MODE_LITERALS = frozenset({"DEFERRED", "IMMEDIATE", "EXCLUSIVE"})
 _RUNTIME_FEATURE_KEYS = (
     "authorizer_callback",
     "custom_aggregates",
@@ -276,6 +281,8 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
             observability_config=observability_config,
             **kwargs,
         )
+        if self._user_connection_hook is not None:
+            self.driver_features["on_connection_create"] = self._user_connection_hook
 
     def create_connection(self) -> SqliteConnection:
         """Open a standalone connection owned by the caller.
@@ -367,7 +374,13 @@ class SqliteConfig(SyncDatabaseConfig[SqliteConnection, SqliteConnectionPool, Sq
 
 
 def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_name: str) -> None:
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+        msg = f"driver_features['{feature_name}'] must be a sequence of mappings"
+        raise ImproperConfigurationError(msg)
     for entry in entries:
+        if not isinstance(entry, Mapping):
+            msg = f"driver_features['{feature_name}'] entry must be a mapping"
+            raise ImproperConfigurationError(msg)
         for required_key in required_keys:
             if required_key not in entry:
                 msg = f"driver_features['{feature_name}'] entry is missing required key {required_key!r}"
@@ -375,6 +388,13 @@ def _validate_entries(entries: Any, required_keys: "tuple[str, ...]", feature_na
 
 
 def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
+    if "default_transaction_mode" in features and features["default_transaction_mode"] is not None:
+        mode = features["default_transaction_mode"]
+        if not isinstance(mode, str) or mode.upper() not in _TRANSACTION_MODE_LITERALS:
+            msg = f"driver_features['default_transaction_mode'] must be DEFERRED, IMMEDIATE, or EXCLUSIVE; got {mode!r}"
+            raise ImproperConfigurationError(msg)
+        features["default_transaction_mode"] = mode.upper()
+
     runtime_setup: dict[str, Any] = {}
     for key in _RUNTIME_FEATURE_KEYS:
         if key in features:
@@ -382,8 +402,17 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
     if not runtime_setup:
         return None
 
-    if "pragmas" in runtime_setup:
+    if "pragmas" in runtime_setup and runtime_setup["pragmas"] is not None:
+        if not isinstance(runtime_setup["pragmas"], Mapping):
+            msg = "driver_features['pragmas'] must be a mapping of PRAGMA names to values"
+            raise ImproperConfigurationError(msg)
         runtime_setup["pragmas"] = render_pragmas(runtime_setup["pragmas"])
+
+    if "extensions" in runtime_setup and runtime_setup["extensions"] is not None:
+        extensions = runtime_setup["extensions"]
+        if not isinstance(extensions, Sequence) or isinstance(extensions, (str, bytes)):
+            msg = "driver_features['extensions'] must be a sequence of extension paths"
+            raise ImproperConfigurationError(msg)
 
     row_factory = runtime_setup.get("row_factory")
     if row_factory is not None and not isinstance(row_factory, str) and not callable(row_factory):
@@ -398,9 +427,10 @@ def _build_runtime_setup(features: "dict[str, Any]") -> "dict[str, Any] | None":
     _validate_entries(
         runtime_setup.get("custom_aggregates", ()), ("name", "narg", "aggregate_class"), "custom_aggregates"
     )
-    _validate_entries(
-        runtime_setup.get("custom_window_functions", ()), ("name", "narg", "window_class"), "custom_window_functions"
-    )
+    window_functions = runtime_setup.get("custom_window_functions", ())
+    _validate_entries(window_functions, ("name", "narg", "window_class"), "custom_window_functions")
+    if window_functions:
+        require_python_version("Custom SQLite window functions", (3, 11))
 
     interval = runtime_setup.get("progress_handler_interval")
     if interval is not None and (not isinstance(interval, int) or isinstance(interval, bool) or interval < 1):

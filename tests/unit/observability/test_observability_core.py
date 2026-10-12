@@ -3,7 +3,9 @@
 import asyncio
 import builtins
 import hashlib
+import logging
 import sys
+import zlib
 from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,7 +21,16 @@ from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
-from sqlspec.observability import LifecycleDispatcher, compute_sql_hash, get_trace_context, resolve_db_system
+from sqlspec.observability import (
+    GCPLogFormatter,
+    LifecycleDispatcher,
+    SamplingConfig,
+    compute_sql_hash,
+    get_trace_context,
+    resolve_db_system,
+)
+from sqlspec.observability._diagnostics import collect_diagnostics
+from sqlspec.observability._observer import _maybe_truncate_parameters
 from sqlspec.storage import StorageTelemetry
 from sqlspec.storage.pipeline import (
     record_storage_diagnostic_event,
@@ -773,3 +784,245 @@ def test_get_trace_context_with_otel(monkeypatch) -> None:
     trace_id, span_id = get_trace_context()
     assert trace_id == "00000000000000000000000000000001"
     assert span_id == "0000000000000002"
+
+
+def test_parameter_allow_list_preserves_scalar_and_sequence_values() -> None:
+    """Verify parameter_allow_list preserves allowed scalar and sequence values while masking others."""
+    observed: list[dict[str, Any]] = []
+    config = ObservabilityConfig(
+        redaction=RedactionConfig(mask_parameters=True, parameter_allow_list=("tenant_id", "ids")),
+        statement_observers=(lambda event: observed.append(event.as_dict()),),
+    )
+    runtime = ObservabilityRuntime(config)
+    runtime.emit_statement_event(
+        sql="SELECT * FROM items WHERE tenant_id = :tenant_id",
+        parameters={"tenant_id": "acme", "ids": [1, 2, 3], "secret": "xyz"},
+        driver="SqliteDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+    )
+    assert observed[0]["parameters"] == {"tenant_id": "acme", "ids": [1, 2, 3], "secret": "***"}
+
+
+def test_lifecycle_hooks_redact_sql_and_parameters() -> None:
+    """Verify on_query_start, on_query_complete, and on_error redact SQL literals and parameters."""
+    captured: list[dict[str, Any]] = []
+    config = ObservabilityConfig(
+        redaction=RedactionConfig(mask_literals=True, mask_parameters=True, parameter_allow_list=("tenant_id",)),
+        lifecycle=_lifecycle_config({
+            "on_query_start": [captured.append],
+            "on_query_complete": [captured.append],
+            "on_error": [captured.append],
+        }),
+    )
+    runtime = ObservabilityRuntime(config)
+    runtime.emit_query_start_sync(sql="SELECT 'secret'", parameters={"tenant_id": "acme", "pw": "hunter2"})
+    runtime.emit_query_complete_sync(sql="SELECT 'secret'", parameters={"tenant_id": "acme", "pw": "hunter2"})
+    runtime.emit_error_sync(
+        RuntimeError("fail"), sql="SELECT 'secret'", parameters={"tenant_id": "acme", "pw": "hunter2"}
+    )
+    assert len(captured) == 3
+    for ctx in captured:
+        assert ctx["sql"] == "SELECT '***'"
+        assert ctx["parameters"] == {"tenant_id": "acme", "pw": "***"}
+
+
+def test_sql_literal_redaction_handles_backslash_and_dollar_quotes() -> None:
+    """Verify _redact_sql masks backslash-escaped quotes and dollar-quoted strings."""
+    observed: list[dict[str, Any]] = []
+    config = ObservabilityConfig(
+        redaction=RedactionConfig(mask_literals=True),
+        statement_observers=(lambda event: observed.append(event.as_dict()),),
+    )
+    runtime = ObservabilityRuntime(config)
+    runtime.emit_statement_event(
+        sql=r"SELECT 'admin\'s secret', $$top_secret$$, $tag$tagged_secret$tag$",
+        parameters=None,
+        driver="AsyncpgDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+    )
+    redacted_sql = observed[0]["sql"]
+    assert "secret" not in redacted_sql
+    assert redacted_sql == "SELECT '***', '***', '***'"
+
+
+def test_precomputed_sql_hash_hashes_sanitized_sql_when_mask_literals_enabled() -> None:
+    """Verify precomputed_sql_hash is recomputed on redacted SQL when mask_literals is active."""
+    observed: list[dict[str, Any]] = []
+    config = ObservabilityConfig(
+        redaction=RedactionConfig(mask_literals=True),
+        statement_observers=(lambda event: observed.append(event.as_dict()),),
+    )
+    runtime = ObservabilityRuntime(config)
+    raw_sql = "SELECT * FROM users WHERE ssn = '123-45-6789'"
+    raw_hash = compute_sql_hash(raw_sql)
+    expected_redacted_hash = compute_sql_hash("SELECT * FROM users WHERE ssn = '***'")
+    runtime.emit_statement_event(
+        sql=raw_sql,
+        parameters=None,
+        driver="SqliteDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+        precomputed_sql_hash=raw_hash,
+    )
+    assert observed[0]["sql_hash"] == expected_redacted_hash
+
+
+def test_deterministic_sampling_uses_crc32_across_processes() -> None:
+    """Verify deterministic sampling uses zlib.crc32 rather than process-seeded hash()."""
+    cid = "cross-process-cid-99"
+    expected_bucket = zlib.crc32(cid.encode("utf-8")) % SamplingConfig.HASH_MODULUS
+    rate_above = (expected_bucket + 1) / SamplingConfig.HASH_MODULUS
+    rate_below = expected_bucket / SamplingConfig.HASH_MODULUS
+    assert SamplingConfig(sample_rate=rate_above, deterministic=True).should_sample(correlation_id=cid) is True
+    assert SamplingConfig(sample_rate=rate_below, deterministic=True).should_sample(correlation_id=cid) is False
+
+
+def test_statement_observer_exception_is_isolated() -> None:
+    """Verify exceptions raised by a StatementObserver do not abort subsequent observers or callers."""
+    observed: list[str] = []
+
+    def bad_observer(_event: Any) -> None:
+        msg = "observer boom"
+        raise RuntimeError(msg)
+
+    def good_observer(event: Any) -> None:
+        observed.append(event.sql)
+
+    config = ObservabilityConfig(statement_observers=(bad_observer, good_observer))
+    runtime = ObservabilityRuntime(config)
+    runtime.emit_statement_event(
+        sql="SELECT 1",
+        parameters=None,
+        driver="SqliteDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+    )
+    assert observed == ["SELECT 1"]
+
+
+def test_register_lifecycle_hook_updates_is_idle() -> None:
+    """Verify register_lifecycle_hook updates is_idle from True to False."""
+    runtime = ObservabilityRuntime()
+    assert runtime.is_idle is True
+    runtime.register_lifecycle_hook("on_query_start", lambda _ctx: None)
+    assert runtime.is_idle is False
+
+
+def test_span_manager_attaches_context_and_resolves_db_system(monkeypatch) -> None:
+    """Verify SpanManager attaches active span context and resolves db.system from driver fallback."""
+    assert resolve_db_system("CockroachAsyncpgConfig") == "cockroachdb"
+    assert resolve_db_system("PymssqlDriver") == "mssql"
+    assert resolve_db_system("MariaDBConfig") == "mariadb"
+
+    observed: list[dict[str, Any]] = []
+    runtime = ObservabilityRuntime(
+        ObservabilityConfig(statement_observers=(lambda e: observed.append(e.as_dict()),)), config_name="SQLSpecConfig"
+    )
+    runtime.emit_statement_event(
+        sql="SELECT 1",
+        parameters=None,
+        driver="AsyncpgDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+    )
+    assert observed[0]["db_system"] == "postgresql"
+
+
+def test_observability_config_diagnostics_and_logging(caplog) -> None:
+    """Verify sampling merge, diagnostics prefixing, hook validation, and GCP log formatting."""
+    base = ObservabilityConfig(sampling=SamplingConfig(sample_rate=0.5, force_sample_slow_queries_ms=500.0))
+    override_partial = ObservabilityConfig(sampling=SamplingConfig(sample_rate=0.2))
+    merged_partial = ObservabilityConfig.merge(base, override_partial)
+    assert merged_partial.sampling is not None
+    assert merged_partial.sampling.force_sample_slow_queries_ms == 500.0
+
+    override_disable = ObservabilityConfig(sampling=SamplingConfig(sample_rate=0.2, force_sample_slow_queries_ms=None))
+    merged_disable = ObservabilityConfig.merge(base, override_disable)
+    assert merged_disable.sampling is not None
+    assert merged_disable.sampling.force_sample_slow_queries_ms is None
+
+    diag = collect_diagnostics([("db1", {"lifecycle.query_start": 2}), ("db2", {"lifecycle.query_start": 3})])
+    assert diag["db1.lifecycle.query_start"] == 2.0
+    assert diag["db2.lifecycle.query_start"] == 3.0
+
+    dispatcher = LifecycleDispatcher()
+    with pytest.raises(ValueError, match="Unsupported lifecycle event"):
+        dispatcher.register_hook(cast(Any, "on_invalid_event"), lambda _ctx: None)
+
+    caplog.set_level(logging.INFO, logger="sqlspec.sql")
+    runtime_gcp = ObservabilityRuntime(
+        ObservabilityConfig(print_sql=True, cloud_formatter=GCPLogFormatter(project_id="my-gcp-proj"))
+    )
+    runtime_gcp.emit_statement_event(
+        sql="SELECT 1",
+        parameters=None,
+        driver="SqliteDriver",
+        operation="SELECT",
+        execution_mode="single",
+        is_many=False,
+        is_script=False,
+        rows_affected=1,
+        duration_s=0.01,
+        storage_backend=None,
+        started_at=12.34,
+        transaction_state="in_transaction",
+        prepared_statement=True,
+    )
+    sql_records = [r for r in caplog.records if r.name == "sqlspec.sql"]
+    assert sql_records
+    last_record = sql_records[-1]
+    assert last_record.__dict__.get("severity") == "INFO"
+    assert last_record.__dict__.get("sqlspec.transaction_state") == "in_transaction"
+    assert last_record.__dict__.get("sqlspec.prepared_statement") is True
+    assert cast(float, last_record.__dict__.get("started_at")) >= 1_000_000_000.0
+
+    span_manager = _FakeSpanManager()
+    runtime_gcp.span_manager = cast(Any, span_manager)
+    runtime_gcp.emit_pool_destroying_sync(object())
+    assert any(s.name == "sqlspec.lifecycle.pool.destroying" for s in span_manager.finished)
+
+    storage_span = runtime_gcp.start_storage_span(
+        "write", destination="s3://user:secret_pass@bucket/path/file.parquet?X-Amz-Signature=secret"
+    )
+    assert storage_span.attributes["sqlspec.storage.destination"] == "s3://bucket/path/file.parquet"
+
+    orig_telemetry: StorageTelemetry = {
+        "destination": "s3://user:secret@bucket/key?sig=123",
+        "backend": "s3",
+        "bytes_processed": 10,
+        "rows_processed": 1,
+    }
+    annotated = runtime_gcp.annotate_storage_telemetry(orig_telemetry)
+    assert annotated is not orig_telemetry
+    assert "config" not in orig_telemetry
+
+    truncated_batch, was_truncated = _maybe_truncate_parameters([[1, 2, 3, 4], [5, 6, 7, 8]], max_items=2)
+    assert was_truncated is True
+    assert truncated_batch == [[1, 2], [5, 6]]

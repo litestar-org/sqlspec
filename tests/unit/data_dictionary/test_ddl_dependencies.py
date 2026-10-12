@@ -92,6 +92,45 @@ def test_dependency_graph_reports_cycle_with_edge_kind() -> None:
     assert "view_reference" in message
 
 
+def test_sort_dependencies_fifo_stability_and_scc_cycle_isolation() -> None:
+    """Topological sort preserves input order via priority queue and isolates distinct SCC cycles."""
+    root = ObjectIdentity("root", "table", schema="public")
+    alpha = ObjectIdentity("alpha", "table", schema="public")
+    beta = ObjectIdentity("beta", "table", schema="public")
+    gamma = ObjectIdentity("gamma", "table", schema="public")
+
+    ordered_result = sort_dependencies(
+        (alpha, beta, root, gamma),
+        (
+            DependencyEdge(alpha, root, DependencyEdgeKind.FOREIGN_KEY),
+            DependencyEdge(gamma, root, DependencyEdgeKind.FOREIGN_KEY),
+        ),
+    )
+    assert ordered_result.cycles == ()
+    assert ordered_result.ordered == (beta, root, alpha, gamma)
+
+    cycle_a1 = ObjectIdentity("cycle_a1", "table", schema="public")
+    cycle_a2 = ObjectIdentity("cycle_a2", "table", schema="public")
+    downstream = ObjectIdentity("downstream_view", "view", schema="public")
+    cycle_b1 = ObjectIdentity("cycle_b1", "table", schema="public")
+    cycle_b2 = ObjectIdentity("cycle_b2", "table", schema="public")
+
+    cycle_result = sort_dependencies(
+        (cycle_a1, cycle_a2, downstream, cycle_b1, cycle_b2),
+        (
+            DependencyEdge(cycle_a1, cycle_a2, DependencyEdgeKind.FOREIGN_KEY),
+            DependencyEdge(cycle_a2, cycle_a1, DependencyEdgeKind.FOREIGN_KEY),
+            DependencyEdge(downstream, cycle_a1, DependencyEdgeKind.VIEW_REFERENCE),
+            DependencyEdge(cycle_b1, cycle_b2, DependencyEdgeKind.FOREIGN_KEY),
+            DependencyEdge(cycle_b2, cycle_b1, DependencyEdgeKind.FOREIGN_KEY),
+        ),
+    )
+    assert len(cycle_result.cycles) == 2
+    assert cycle_result.cycles[0].objects == (cycle_a1, cycle_a2)
+    assert downstream not in cycle_result.cycles[0].objects
+    assert cycle_result.cycles[1].objects == (cycle_b1, cycle_b2)
+
+
 def test_ddl_result_requires_fidelity_status_and_dependency_context() -> None:
     """DDL payloads expose fidelity, source, status, redaction, context, and dependencies."""
     sequence = ObjectIdentity("order_id_seq", "sequence", schema="public")

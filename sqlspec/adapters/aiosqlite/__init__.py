@@ -1,3 +1,5 @@
+"""AIOSQLite database adapter for SQLSpec."""
+
 from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection, AiosqliteCursor, AiosqliteRawCursor
 from sqlspec.adapters.aiosqlite.config import (
     AiosqliteAggregateConfig,

@@ -12,7 +12,10 @@ from pymssql import Connection as _PymssqlConnection  # pyright: ignore[reportMi
 from pymssql import Cursor as _PymssqlRawCursor  # pyright: ignore[reportMissingTypeStubs]
 from pymssql import Error as PymssqlError
 
+from sqlspec.utils.module_loader import import_optional_attr
+
 PYMSSQL_MODULE = _pymssql
+_DRIVER_CLS: Any = None
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -46,14 +49,25 @@ __all__ = (
 class PymssqlCursor:
     """Context manager for pymssql cursor operations."""
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("_as_dict", "connection", "cursor")
 
-    def __init__(self, connection: "PymssqlConnection") -> None:
+    def __init__(self, connection: "PymssqlConnection", *, as_dict: bool | None = None) -> None:
         self.connection = connection
         self.cursor: PymssqlRawCursor | None = None
+        self._as_dict = as_dict
 
     def __enter__(self) -> "PymssqlRawCursor":
-        self.cursor = self.connection.cursor()
+        if self._as_dict is None:
+            self.cursor = self.connection.cursor()
+        else:
+            try:
+                raw_cursor: Any = (
+                    self.connection.cursor(as_dict=True) if self._as_dict else self.connection.cursor(as_dict=False)
+                )
+                self.cursor = raw_cursor
+            except TypeError:
+                self.cursor = self.connection.cursor()
+        assert self.cursor is not None
         return self.cursor
 
     def __exit__(self, *_: Any) -> None:
@@ -92,18 +106,24 @@ class PymssqlSessionContext:
         self._driver: PymssqlDriver | None = None
 
     def __enter__(self) -> "PymssqlDriver":
-        from sqlspec.adapters.pymssql.driver import PymssqlDriver
-
+        global _DRIVER_CLS
+        if _DRIVER_CLS is None:
+            _DRIVER_CLS = import_optional_attr("sqlspec.adapters.pymssql.driver", "PymssqlDriver")
         self._connection = self._acquire_connection()
-        self._driver = PymssqlDriver(
+        self._driver = _DRIVER_CLS(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
+        assert self._driver is not None
         return self._prepare_driver(self._driver)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
+            with contextlib.suppress(Exception):
+                self._driver.rollback()
         if self._connection is not None:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
+            self._driver = None
         return None

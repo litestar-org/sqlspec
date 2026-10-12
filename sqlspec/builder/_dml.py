@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from mypy_extensions import trait
 from sqlglot import exp
 
-from sqlspec.builder._base import BuiltQuery, QueryBuilder
+from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import (
     _mark_explicit_table_quotes,
     extract_expression,
@@ -224,15 +224,32 @@ class InsertFromSelectMixin:
         if current_expr.args.get("this") is None:
             msg = "The target table must be set using .into() before adding values."
             raise SQLBuilderError(msg)
-        subquery_parameters = select_builder.parameters
-        if subquery_parameters:
-            builder_with_params = cast("SQLBuilderProtocol", self)
-            for param_name, param_value in subquery_parameters.items():
-                builder_with_params.add_parameter(param_value, name=param_name)
 
-        select_expr = select_builder.get_expression()
-        if select_expr and isinstance(select_expr, exp.Select):
-            current_expr.set("expression", select_expr.copy())
+        if isinstance(self, QueryBuilder):
+            select_expr: exp.Expr | None = self._embed_subquery(select_builder, alias_hint="insert_src")
+        else:
+            subquery_parameters = select_builder.parameters
+            if subquery_parameters:
+                builder_with_params = cast("SQLBuilderProtocol", self)
+                for param_name, param_value in subquery_parameters.items():
+                    builder_with_params.add_parameter(param_value, name=param_name)
+            raw_expr = select_builder.get_expression()
+            select_expr = raw_expr.copy() if isinstance(raw_expr, exp.Expr) else None
+
+        if select_expr is not None and isinstance(select_expr, (exp.Select, exp.SetOperation)):
+            select_with = select_expr.args.get("with_")
+            if isinstance(select_with, exp.With):
+                select_expr.set("with_", None)
+                existing_with = current_expr.args.get("with_")
+                if isinstance(existing_with, exp.With):
+                    for cte_node in select_with.expressions:
+                        if cte_node not in existing_with.expressions:
+                            existing_with.append("expressions", cte_node.copy())
+                    if select_with.args.get("recursive"):
+                        existing_with.set("recursive", True)
+                else:
+                    current_expr.set("with_", select_with)
+            current_expr.set("expression", select_expr)
         else:
             msg = "SelectBuilder must have a valid SELECT expression."
             raise SQLBuilderError(msg)
@@ -265,27 +282,6 @@ class UpdateSetClauseMixin:
 
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
-
-    def _process_update_value(self, val: Any, col: Any) -> exp.Expr:
-        if isinstance(val, exp.Expr):
-            return val
-        if has_parameter_builder(val):
-            subquery = val.build()
-            sql_text = subquery.sql if isinstance(subquery, BuiltQuery) else str(subquery)
-            query_builder = cast("QueryBuilder", self)
-            value_expr = exp.paren(exp.maybe_parse(sql_text, dialect=query_builder.dialect))
-            for p_name, p_value in val.parameters.items():
-                query_builder.add_parameter(p_value, name=p_name)
-            return value_expr
-        if has_expression_and_sql(val):
-            return extract_sql_object_expression(val, builder=self)
-        sql_builder = cast("SQLBuilderProtocol", self)
-        column_name = col if isinstance(col, str) else str(col)
-        if "." in column_name:
-            column_name = column_name.split(".")[-1]
-        placeholder, _ = sql_builder.create_placeholder(val, column_name)
-        return placeholder
-
     def set(self, *args: Any, **kwargs: Any) -> Self:
         if not args and not kwargs:
             return self
@@ -336,6 +332,25 @@ class UpdateSetClauseMixin:
         """
         payload = schema_dump(data, exclude_unset=exclude_unset, wire_format=False)
         return self.set(**payload)
+
+    def _process_update_value(self, val: Any, col: Any) -> exp.Expr:
+        if isinstance(val, exp.Expr):
+            return val
+        if has_parameter_builder(val):
+            query_builder = cast("QueryBuilder", self)
+            column_name = col if isinstance(col, str) else str(col)
+            if "." in column_name:
+                column_name = column_name.split(".")[-1]
+            subquery_expr = query_builder._embed_subquery(val, alias_hint=column_name or "set_src")
+            return exp.paren(subquery_expr)
+        if has_expression_and_sql(val):
+            return extract_sql_object_expression(val, builder=self)
+        sql_builder = cast("SQLBuilderProtocol", self)
+        column_name = col if isinstance(col, str) else str(col)
+        if "." in column_name:
+            column_name = column_name.split(".")[-1]
+        placeholder, _ = sql_builder.create_placeholder(val, column_name)
+        return placeholder
 
 
 @trait

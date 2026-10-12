@@ -27,6 +27,7 @@ from sqlspec.adapters.spanner._typing import SpannerJsonObject as JsonObject
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.core import TypedParameter
 from sqlspec.utils.module_loader import import_optional_attr
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_converters import should_json_encode_sequence
 from sqlspec.utils.uuids import uuid_from_bytes
 
@@ -51,6 +52,20 @@ if _uuid_utils_uuid is not None:
     _UUID_TYPES = (UUID, _uuid_utils_uuid)
 
 _STRING_PARAM_TYPES: "tuple[type[Any], ...]" = (str, *_UUID_TYPES)
+
+_NULL_PARAM_TYPE_NAMES: "dict[type[Any], str]" = {
+    bool: "BOOL",
+    int: "INT64",
+    float: "FLOAT64",
+    str: "STRING",
+    bytes: "BYTES",
+    datetime: "TIMESTAMP",
+    date: "DATE",
+    timedelta: "INTERVAL",
+    Decimal: "NUMERIC",
+    dict: "JSON",
+    **dict.fromkeys(_UUID_TYPES, "STRING"),
+}
 
 UUID_BYTE_LENGTH: int = 16
 _SPANNER_PARAM_TYPES: "SpannerParamTypesProtocol | None" = None
@@ -127,11 +142,13 @@ def spanner_to_uuid(value: "bytes | None") -> "UUID | bytes | None":
         return value
 
 
-def spanner_json(value: Any) -> Any:
+def spanner_json(value: Any, json_serializer: "Callable[[Any], str] | None" = None) -> Any:
     """Wrap JSON values for Spanner JSON parameters.
 
     Args:
         value: JSON-compatible value (dict, list, tuple, or scalar).
+        json_serializer: Optional custom JSON serializer used to normalize values
+            before constructing ``JsonObject``.
 
     Returns:
         JsonObject wrapper when available, otherwise the original value.
@@ -139,6 +156,9 @@ def spanner_json(value: Any) -> Any:
     json_type = _get_json_object_type()
     if isinstance(value, json_type):
         return value
+    if json_serializer is not None:
+        normalized = from_json(json_serializer(value))
+        return json_type(normalized)
     return json_type(value)
 
 
@@ -159,7 +179,7 @@ def coerce_params_for_spanner(
 
     Args:
         params: Parameter dictionary or None.
-        json_serializer: Optional JSON serializer (unused for JSON dicts).
+        json_serializer: Optional JSON serializer used to normalize JSON dicts/lists.
         enable_uuid_conversion: Enable automatic UUID string conversion.
 
     Returns:
@@ -203,108 +223,22 @@ def coerce_params_for_spanner(
         elif isinstance(value, json_object_type):
             coerced[key] = value
         elif isinstance(value, dict):
-            coerced[key] = spanner_json(value)
+            coerced[key] = spanner_json(value, json_serializer=json_serializer)
             changed = True
         elif isinstance(value, (list, tuple)):
-            if any(isinstance(item, timedelta) for item in value):
-                coerced[key] = [
-                    Interval(days=item.days, nanos=(item.seconds * 1_000_000 + item.microseconds) * 1000)
-                    if isinstance(item, timedelta)
-                    else item
-                    for item in value
-                ]
-                changed = True
-            elif should_json_encode_sequence(value):
-                coerced[key] = spanner_json(list(value))
-                changed = True
-            elif isinstance(value, tuple):
-                coerced[key] = list(value)
+            if should_json_encode_sequence(value):
+                coerced[key] = spanner_json(list(value), json_serializer=json_serializer)
                 changed = True
             else:
-                coerced[key] = value
+                coerced_seq, seq_changed = _coerce_sequence_elements(
+                    value, enable_uuid_conversion=enable_uuid_conversion
+                )
+                coerced[key] = coerced_seq
+                if seq_changed:
+                    changed = True
         else:
             coerced[key] = value
     return coerced if changed else params
-
-
-_NULL_PARAM_TYPE_NAMES: "dict[type[Any], str]" = {
-    bool: "BOOL",
-    int: "INT64",
-    float: "FLOAT64",
-    str: "STRING",
-    bytes: "BYTES",
-    datetime: "TIMESTAMP",
-    date: "DATE",
-    timedelta: "INTERVAL",
-    Decimal: "NUMERIC",
-    UUID: "STRING",
-    dict: "JSON",
-}
-
-
-def _resolve_declared_param_type(
-    raw_value: TypedParameter, param_types_mod: "SpannerParamTypesProtocol"
-) -> "Any | None":
-    """Resolve a TypedParameter's declared Spanner type.
-
-    ``semantic_name`` names a Spanner type such as ``"FLOAT32"``,
-    ``"ARRAY<FLOAT32>"``, ``"VECTOR"``, ``"INTERVAL"``, or ``"JSON"``; without
-    one, the declared Python ``original_type`` maps to its Spanner type.
-
-    Args:
-        raw_value: The typed parameter.
-        param_types_mod: The Spanner param_types module.
-
-    Returns:
-        The Spanner param type, or None when nothing is declared.
-    """
-    semantic_name = raw_value.semantic_name
-    if semantic_name is not None:
-        normalized = semantic_name.strip().upper()
-        if normalized == "FLOAT32":
-            return param_types_mod.FLOAT32
-        if normalized in {"ARRAY<FLOAT32>", "VECTOR"}:
-            return param_types_mod.Array(param_types_mod.FLOAT32)
-        if normalized == "INTERVAL":
-            return param_types_mod.INTERVAL
-        if normalized == "JSON":
-            return _json_param_type()
-        return getattr(param_types_mod, normalized, None)
-    resolver = _NULL_PARAM_TYPE_NAMES.get(raw_value.original_type)
-    if resolver == "JSON":
-        return _json_param_type()
-    return getattr(param_types_mod, resolver, None) if resolver is not None else None
-
-
-def _infer_sequence_param_type(value: Any, param_types: Any, json_type: Any) -> Any | None:
-    """Infer Spanner parameter type for sequence values.
-
-    Args:
-        value: Sequence value to inspect.
-        param_types: The Spanner param_types module.
-        json_type: The Spanner JSON param type.
-
-    Returns:
-        Spanner Array type, JSON type, or None if sequence is empty or unhandled.
-    """
-    if should_json_encode_sequence(value):
-        return json_type
-    if not value:
-        return None
-    first = value[0]
-    if isinstance(first, bool):
-        return param_types.Array(param_types.BOOL)
-    if isinstance(first, int):
-        return param_types.Array(param_types.INT64)
-    if isinstance(first, str):
-        return param_types.Array(param_types.STRING)
-    if isinstance(first, float):
-        return param_types.Array(param_types.FLOAT64)
-    if isinstance(first, Decimal):
-        return param_types.Array(param_types.NUMERIC)
-    if isinstance(first, timedelta):
-        return param_types.Array(param_types.INTERVAL)
-    return None
 
 
 def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any]":
@@ -361,6 +295,108 @@ def infer_spanner_param_types(params: "dict[str, Any] | None") -> "dict[str, Any
             if seq_type is not None:
                 types[key] = seq_type
     return types
+
+
+def _coerce_sequence_elements(
+    value: "list[Any] | tuple[Any, ...]", *, enable_uuid_conversion: bool
+) -> "tuple[list[Any] | tuple[Any, ...], bool]":
+    """Coerce elements inside a 1-D sequence parameter when required by Spanner."""
+    needs_element_coercion = any(
+        isinstance(item, (timedelta, bytes))
+        or (enable_uuid_conversion and isinstance(item, _UUID_TYPES))
+        or (isinstance(item, datetime) and item.tzinfo is None)
+        for item in value
+    )
+    if not needs_element_coercion:
+        if isinstance(value, tuple):
+            return list(value), True
+        return value, False
+    coerced_items: list[Any] = []
+    for item in value:
+        if isinstance(item, timedelta):
+            coerced_items.append(Interval(days=item.days, nanos=(item.seconds * 1_000_000 + item.microseconds) * 1000))
+        elif enable_uuid_conversion and isinstance(item, _UUID_TYPES):
+            coerced_items.append(str(item))
+        elif isinstance(item, bytes):
+            coerced_items.append(bytes_to_spanner(item))
+        elif isinstance(item, datetime) and item.tzinfo is None:
+            coerced_items.append(item.replace(tzinfo=UTC))
+        else:
+            coerced_items.append(item)
+    return coerced_items, True
+
+
+def _resolve_declared_param_type(
+    raw_value: TypedParameter, param_types_mod: "SpannerParamTypesProtocol"
+) -> "Any | None":
+    """Resolve a TypedParameter's declared Spanner type.
+
+    ``semantic_name`` names a Spanner type such as ``"FLOAT32"``,
+    ``"ARRAY<FLOAT32>"``, ``"VECTOR"``, ``"INTERVAL"``, or ``"JSON"``; without
+    one, the declared Python ``original_type`` maps to its Spanner type.
+
+    Args:
+        raw_value: The typed parameter.
+        param_types_mod: The Spanner param_types module.
+
+    Returns:
+        The Spanner param type, or None when nothing is declared.
+    """
+    semantic_name = raw_value.semantic_name
+    if semantic_name is not None:
+        normalized = semantic_name.strip().upper()
+        if normalized == "FLOAT32":
+            return param_types_mod.FLOAT32
+        if normalized in {"ARRAY<FLOAT32>", "VECTOR"}:
+            return param_types_mod.Array(param_types_mod.FLOAT32)
+        if normalized == "INTERVAL":
+            return param_types_mod.INTERVAL
+        if normalized == "JSON":
+            return _json_param_type()
+        return getattr(param_types_mod, normalized, None)
+    resolver = _NULL_PARAM_TYPE_NAMES.get(raw_value.original_type)
+    if resolver == "JSON":
+        return _json_param_type()
+    return getattr(param_types_mod, resolver, None) if resolver is not None else None
+
+
+def _infer_sequence_param_type(value: Any, param_types: Any, json_type: Any) -> Any | None:
+    """Infer Spanner parameter type for sequence values.
+
+    Args:
+        value: Sequence value to inspect.
+        param_types: The Spanner param_types module.
+        json_type: The Spanner JSON param type.
+
+    Returns:
+        Spanner Array type, JSON type, or None if sequence is empty or unhandled.
+    """
+    if should_json_encode_sequence(value):
+        return json_type
+    if not value:
+        return None
+    first = next((item for item in value if item is not None), None)
+    if first is None:
+        return None
+    if isinstance(first, bool):
+        return param_types.Array(param_types.BOOL)
+    if isinstance(first, int):
+        return param_types.Array(param_types.INT64)
+    if isinstance(first, _STRING_PARAM_TYPES):
+        return param_types.Array(param_types.STRING)
+    if isinstance(first, float):
+        return param_types.Array(param_types.FLOAT64)
+    if isinstance(first, Decimal):
+        return param_types.Array(param_types.NUMERIC)
+    if isinstance(first, bytes):
+        return param_types.Array(param_types.BYTES)
+    if isinstance(first, datetime):
+        return param_types.Array(param_types.TIMESTAMP)
+    if isinstance(first, date):
+        return param_types.Array(param_types.DATE)
+    if isinstance(first, timedelta):
+        return param_types.Array(param_types.INTERVAL)
+    return None
 
 
 def _null_param_type(raw_value: Any, param_types: "SpannerParamTypesProtocol") -> "Any | None":

@@ -6,8 +6,14 @@ from unittest.mock import AsyncMock
 import pytest
 from asyncpg.pool import PoolConnectionProxy, PoolConnectionProxyMeta
 
+import sqlspec.adapters.asyncpg.config as config_mod
 from sqlspec.adapters.asyncpg._typing import AsyncpgSessionContext
-from sqlspec.adapters.asyncpg.config import AsyncpgConfig, AsyncpgConnectionConfig, AsyncpgPoolConfig
+from sqlspec.adapters.asyncpg.config import (
+    AsyncpgConfig,
+    AsyncpgConnectionConfig,
+    AsyncpgDriverFeatures,
+    AsyncpgPoolConfig,
+)
 from sqlspec.adapters.asyncpg.core import (
     build_connection_config,
     build_postgres_extension_probe_names,
@@ -310,3 +316,76 @@ def test_asyncpg_config_normalizes_aliases() -> None:
     assert "conninfo" not in config.connection_config
     assert "dbname" not in config.connection_config
     assert "username" not in config.connection_config
+
+
+def test_asyncpg_driver_features_contract_retains_configured_keys() -> None:
+    """AsyncpgConfig retains on_connection_create and type_codecs and populates event defaults."""
+    assert "connection_instance" not in AsyncpgDriverFeatures.__annotations__
+
+    async def hook(_: object) -> None:
+        return None
+
+    codecs = [{"typename": "citext", "encoder": str, "decoder": str}]
+    config = AsyncpgConfig(driver_features={"on_connection_create": hook, "type_codecs": codecs})
+
+    assert config.driver_features["on_connection_create"] is hook
+    assert config.driver_features["type_codecs"] == codecs
+    assert config.driver_features["enable_events"] is True
+    assert config.driver_features["events_backend"] == "notify"
+
+
+async def test_asyncpg_user_init_callback_chains_after_internal_init(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Custom connection_config['init'] should run after _init_connection in both _create_pool and create_connection."""
+    order: list[str] = []
+
+    async def user_init(_: object) -> None:
+        order.append("user_init")
+
+    captured_init: dict[str, Any] = {}
+
+    async def fake_create_pool(*, init: Any = None, **_: Any) -> object:
+        captured_init["init"] = init
+        return object()
+
+    monkeypatch.setattr(config_mod, "asyncpg_create_pool", fake_create_pool)
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test", "init": user_init},
+        driver_features={
+            "enable_json_codecs": False,
+            "enable_pgvector": False,
+            "enable_paradedb": False,
+            "enable_pg_textsearch": False,
+            "on_connection_create": AsyncMock(side_effect=lambda _: order.append("hook")),
+        },
+    )
+
+    await config._create_pool()  # pyright: ignore[reportPrivateUsage]
+    await captured_init["init"](AsyncMock())
+    assert order == ["hook", "user_init"]
+
+    order.clear()
+    monkeypatch.setattr(config_mod, "asyncpg_connect", AsyncMock(return_value=AsyncMock()))
+    await config.create_connection()
+    assert order == ["hook", "user_init"]
+
+
+async def test_asyncpg_extension_probe_retries_after_transient_error() -> None:
+    """A failed extension probe should not permanently poison _pgvector_available."""
+    failing_conn = AsyncMock()
+    failing_conn.fetch.side_effect = RuntimeError("transient connection error")
+    healthy_conn = AsyncMock()
+    healthy_conn.fetch.return_value = [{"extname": "pg_textsearch"}]
+
+    config = AsyncpgConfig(
+        driver_features={"enable_json_codecs": False, "enable_pgvector": False, "enable_paradedb": False}
+    )
+
+    await config._init_connection(failing_conn)  # pyright: ignore[reportPrivateUsage]
+    assert config._pgvector_available is None  # pyright: ignore[reportPrivateUsage]
+    assert config.pg_textsearch_available is False
+
+    await config._init_connection(healthy_conn)  # pyright: ignore[reportPrivateUsage]
+    assert config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
+    assert config.pg_textsearch_available is True
+    assert config.statement_config.dialect == "pg_textsearch"

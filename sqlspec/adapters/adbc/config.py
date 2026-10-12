@@ -9,6 +9,7 @@ from sqlspec.adapters.adbc.core import (
     detect_postgres_extensions,
     get_statement_config,
     is_postgres_dialect,
+    normalize_connection_aliases,
     resolve_dialect_from_config,
     resolve_dialect_name,
     resolve_driver_connect_func,
@@ -164,8 +165,9 @@ class AdbcConnectionContext(SyncPoolConnectionContext):
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
-        if self._connection:
-            self._connection.close()
+        if self._connection is not None:
+            if self._connection is not self._config.connection_instance:
+                self._connection.close()
             self._connection = None
         return None
 
@@ -184,7 +186,8 @@ class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
     def release_connection(self, _conn: "AdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
-        self._connection.close()
+        if self._connection is not self._config.connection_instance:
+            self._connection.close()
         self._connection = None
 
 
@@ -251,41 +254,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             observability_config: Adapter-level observability overrides for lifecycle hooks and observers
             **kwargs: Additional keyword arguments passed to the base configuration.
         """
-        config_dict = normalize_connection_config(connection_config)
-        if "uri" not in config_dict:
-            uri = (
-                config_dict.pop("url", None)
-                or config_dict.pop("dsn", None)
-                or config_dict.pop("connection_string", None)
-            )
-            if uri is not None:
-                config_dict["uri"] = uri
-        else:
-            config_dict.pop("url", None)
-            config_dict.pop("dsn", None)
-            config_dict.pop("connection_string", None)
-
-        driver_name = config_dict.get("driver_name")
-        if (driver_name in {"sqlite", "adbc_driver_sqlite"} or driver_name is None) and "uri" not in config_dict:
-            db_path = (
-                config_dict.pop("database", None)
-                or config_dict.pop("db", None)
-                or config_dict.pop("path", None)
-                or config_dict.pop("file", None)
-            )
-            if db_path is not None:
-                config_dict["uri"] = db_path
-        elif driver_name in {"duckdb", "adbc_driver_duckdb"} and "path" not in config_dict:
-            duck_path = (
-                config_dict.pop("database", None)
-                or config_dict.pop("db", None)
-                or config_dict.pop("file", None)
-                or config_dict.pop("path", None)
-            )
-            if duck_path is not None:
-                config_dict["path"] = duck_path
-
-        self.connection_config = config_dict
+        self.connection_config = normalize_connection_aliases(normalize_connection_config(connection_config))
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
@@ -319,15 +288,22 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """Migration schema support is only available for PostgreSQL-backed ADBC drivers."""
         return is_postgres_dialect(self._resolved_dialect)
 
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
+
     def create_connection(self) -> AdbcConnection:
         """Create and return a new connection using the specified driver.
 
         Returns:
-            A new connection instance.
+            A new connection instance, or ``connection_instance`` when configured.
 
         Raises:
             ImproperConfigurationError: If the connection could not be established.
         """
+        if self.connection_instance is not None:
+            return self.connection_instance
 
         try:
             driver_name = cast("str | None", self.connection_config.get("driver_name"))
@@ -342,51 +318,6 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             err_driver_name = self.connection_config.get("driver_name", "Unknown")
             msg = f"Could not configure connection using driver '{err_driver_name}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
-
-    @property
-    def pg_textsearch_available(self) -> bool:
-        """Return True if the pg_textsearch extension is available."""
-        return bool(self._pg_textsearch_available)
-
-    def _detect_extensions_if_needed(self) -> None:
-        """Detect postgres extensions on first call, caching results.
-
-        Only queries ``pg_extension`` when the resolved dialect is PostgreSQL
-        and detection has not yet run (``_pgvector_available is None``).
-        """
-        if self._pgvector_available is not None:
-            return
-
-        dialect = resolve_dialect_name(self.statement_config.dialect)
-        if not is_postgres_dialect(dialect):
-            self._pgvector_available = False
-            self._paradedb_available = False
-            self._pg_textsearch_available = False
-            return
-
-        connection = self.create_connection()
-        try:
-            probe_names = build_postgres_extension_probe_names(self.driver_features)
-            pgvector_available, paradedb_available, pg_textsearch_available = detect_postgres_extensions(
-                connection,
-                enable_pgvector="vector" in probe_names,
-                enable_paradedb="pg_search" in probe_names,
-                enable_pg_textsearch="pg_textsearch" in probe_names,
-            )
-        finally:
-            connection.close()
-
-        detected_extensions: set[str] = set()
-        if pgvector_available:
-            detected_extensions.add("vector")
-        if paradedb_available:
-            detected_extensions.add("pg_search")
-        if pg_textsearch_available:
-            detected_extensions.add("pg_textsearch")
-        self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
-            self.statement_config, self.driver_features, detected_extensions
-        )
-        self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
 
     def provide_connection(self, *args: Any, **kwargs: Any) -> "AdbcConnectionContext":
         """Provide a connection context manager.
@@ -453,3 +384,50 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         """Return polling defaults suitable for ADBC warehouses."""
 
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
+
+    def _detect_extensions_if_needed(self) -> None:
+        """Detect postgres extensions on first call, caching results.
+
+        Only queries ``pg_extension`` when the resolved dialect is PostgreSQL
+        and detection has not yet run (``_pgvector_available is None``).
+        """
+        if self._pgvector_available is not None:
+            return
+
+        dialect = resolve_dialect_name(self.statement_config.dialect)
+        if not is_postgres_dialect(dialect):
+            self._pgvector_available = False
+            self._paradedb_available = False
+            self._pg_textsearch_available = False
+            return
+
+        probe_names = build_postgres_extension_probe_names(self.driver_features)
+        if not probe_names:
+            self._pgvector_available = False
+            self._paradedb_available = False
+            self._pg_textsearch_available = False
+            return
+
+        connection = self.create_connection()
+        try:
+            pgvector_available, paradedb_available, pg_textsearch_available = detect_postgres_extensions(
+                connection,
+                enable_pgvector="vector" in probe_names,
+                enable_paradedb="pg_search" in probe_names,
+                enable_pg_textsearch="pg_textsearch" in probe_names,
+            )
+        finally:
+            if connection is not self.connection_instance:
+                connection.close()
+
+        detected_extensions: set[str] = set()
+        if pgvector_available:
+            detected_extensions.add("vector")
+        if paradedb_available:
+            detected_extensions.add("pg_search")
+        if pg_textsearch_available:
+            detected_extensions.add("pg_textsearch")
+        self.statement_config, self._pgvector_available, self._paradedb_available = resolve_postgres_extension_state(
+            self.statement_config, self.driver_features, detected_extensions
+        )
+        self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")

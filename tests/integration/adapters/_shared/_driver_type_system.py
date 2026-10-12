@@ -68,11 +68,16 @@ DRIVER_FEATURE_TYPED_DICTS: dict[str, tuple[str, str]] = {
 }
 
 _MIGRATED_DRIVER_FEATURE_ADAPTERS = (
+    "adbc",
     "aiomysql",
     "aiosqlite",
     "arrow_odbc",
     "asyncmy",
+    "asyncpg",
     "bigquery",
+    "cockroach_asyncpg",
+    "cockroach_psycopg",
+    "db2",
     "duckdb",
     "mssql_python",
     "mysqlconnector",
@@ -85,9 +90,23 @@ _MIGRATED_DRIVER_FEATURE_ADAPTERS = (
     "sqlite",
 )
 
-# Downstream migrations populate the consumed-key registry adapter by adapter.
 DRIVER_FEATURE_CONSUMED_KEYS: dict[str, tuple[str, ...]] = dict.fromkeys(DRIVER_FEATURE_TYPED_DICTS, ())
+
 DRIVER_FEATURE_CONSUMED_KEYS.update({
+    "adbc": (
+        "json_serializer",
+        "enable_cast_detection",
+        "enable_strict_type_coercion",
+        "strict_type_coercion",
+        "enable_arrow_extension_types",
+        "arrow_extension_types",
+        "enable_pgvector",
+        "enable_paradedb",
+        "enable_pg_textsearch",
+        "enable_events",
+        "on_connection_create",
+        "events_backend",
+    ),
     "aiomysql": (
         "json_serializer",
         "json_deserializer",
@@ -143,6 +162,27 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
         "enable_local_infile_bulk_load",
     ),
+    "asyncpg": (
+        "json_serializer",
+        "json_deserializer",
+        "enable_json_codecs",
+        "enable_pgvector",
+        "enable_paradedb",
+        "enable_pg_textsearch",
+        "enable_cloud_sql",
+        "cloud_sql_instance",
+        "cloud_sql_enable_iam_auth",
+        "cloud_sql_ip_type",
+        "enable_alloydb",
+        "alloydb_instance_uri",
+        "enable_alloydb_iam_auth",
+        "alloydb_ip_type",
+        "enable_events",
+        "events_backend",
+        "on_connection_create",
+        "pgbouncer",
+        "type_codecs",
+    ),
     "bigquery": (
         "connection_instance",
         "on_connection_create",
@@ -161,6 +201,48 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_native_storage",
         "native_export_connection",
     ),
+    "cockroach_asyncpg": (
+        "enable_native_storage",
+        "native_storage_csv_options",
+        "enable_auto_retry",
+        "max_retries",
+        "retry_delay_base_ms",
+        "retry_delay_max_ms",
+        "enable_retry_logging",
+        "enable_follower_reads",
+        "default_staleness",
+        "json_serializer",
+        "json_deserializer",
+        "enable_json_codecs",
+        "enable_pgvector",
+        "on_connection_create",
+        "enable_events",
+        "events_backend",
+    ),
+    "cockroach_psycopg": (
+        "enable_native_storage",
+        "native_storage_csv_options",
+        "enable_auto_retry",
+        "max_retries",
+        "retry_delay_base_ms",
+        "retry_delay_max_ms",
+        "enable_retry_logging",
+        "enable_follower_reads",
+        "default_staleness",
+        "json_serializer",
+        "json_deserializer",
+        "on_connection_create",
+        "enable_events",
+        "events_backend",
+    ),
+    "db2": (
+        "json_serializer",
+        "json_deserializer",
+        "on_connection_create",
+        "enable_events",
+        "events_backend",
+        "enable_lowercase_column_names",
+    ),
     "duckdb": (
         "extensions",
         "secrets",
@@ -171,7 +253,14 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "events_backend",
     ),
-    "mssql_python": ("use_pool", "json_serializer", "json_deserializer", "on_connection_create", "enable_events"),
+    "mssql_python": (
+        "use_pool",
+        "json_serializer",
+        "json_deserializer",
+        "on_connection_create",
+        "enable_events",
+        "events_backend",
+    ),
     "mysqlconnector": (
         "json_serializer",
         "json_deserializer",
@@ -483,19 +572,10 @@ SOURCE_EQUIVALENCE_CASES: tuple[SourceEquivalenceCase, ...] = (
 SOURCE_EQUIVALENCE_ALLOWLIST: dict[str, frozenset[str]] = {
     case.allowlist_key: frozenset() for case in SOURCE_EQUIVALENCE_CASES
 }
-# mysqlconnector intentionally resolves error codes from errno instead of args[0].
+
 SOURCE_EQUIVALENCE_ALLOWLIST["mysql_four_way:create_mapped_exception"] = frozenset({
     "sqlspec.adapters.mysqlconnector.core"
 })
-
-
-def _load_symbol(module_path: str, symbol_name: str) -> Any:
-    try:
-        module = importlib.import_module(module_path)
-        return getattr(module, symbol_name)
-    except (AttributeError, ImportError) as exc:
-        msg = f"Unable to load {symbol_name} from {module_path}: {exc}"
-        raise AssertionError(msg) from exc
 
 
 def get_driver_feature_keys(adapter: str) -> tuple[str, ...]:
@@ -515,13 +595,6 @@ def get_driver_feature_consumed_keys(adapter: str) -> tuple[str, ...]:
 
 
 class _DocstringStripper(ast.NodeTransformer):
-    def _strip_body(self, body: list[ast.stmt]) -> list[ast.stmt]:
-        if body and isinstance(body[0], ast.Expr):
-            value = body[0].value
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                return body[1:]
-        return body
-
     def visit_Module(self, node: ast.Module) -> ast.Module:
         node.body = self._strip_body(node.body)
         return cast("ast.Module", self.generic_visit(node))
@@ -538,6 +611,13 @@ class _DocstringStripper(ast.NodeTransformer):
         node.body = self._strip_body(node.body)
         return cast("ast.ClassDef", self.generic_visit(node))
 
+    def _strip_body(self, body: list[ast.stmt]) -> list[ast.stmt]:
+        if body and isinstance(body[0], ast.Expr):
+            value = body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                return body[1:]
+        return body
+
 
 def normalize_source(source: str) -> str:
     """Normalize Python source so source-equality checks ignore docstrings and formatting."""
@@ -546,15 +626,6 @@ def normalize_source(source: str) -> str:
     stripped = _DocstringStripper().visit(tree)
     ast.fix_missing_locations(stripped)
     return ast.unparse(stripped).strip()
-
-
-def _load_symbol_source(module_path: str, symbol_name: str) -> str:
-    symbol = _load_symbol(module_path, symbol_name)
-    try:
-        return inspect.getsource(symbol)
-    except OSError as exc:
-        msg = f"Unable to read source for {symbol_name} from {module_path}: {exc}"
-        raise AssertionError(msg) from exc
 
 
 def assert_source_equivalent(case: SourceEquivalenceCase) -> None:
@@ -590,3 +661,21 @@ def assert_source_equivalent(case: SourceEquivalenceCase) -> None:
         details = "\n\n".join(mismatches)
         msg = f"{case.case_id} source mismatch for {case.symbol}:\n{details}"
         raise AssertionError(msg)
+
+
+def _load_symbol(module_path: str, symbol_name: str) -> Any:
+    try:
+        module = importlib.import_module(module_path)
+        return getattr(module, symbol_name)
+    except (AttributeError, ImportError) as exc:
+        msg = f"Unable to load {symbol_name} from {module_path}: {exc}"
+        raise AssertionError(msg) from exc
+
+
+def _load_symbol_source(module_path: str, symbol_name: str) -> str:
+    symbol = _load_symbol(module_path, symbol_name)
+    try:
+        return inspect.getsource(symbol)
+    except OSError as exc:
+        msg = f"Unable to read source for {symbol_name} from {module_path}: {exc}"
+        raise AssertionError(msg) from exc

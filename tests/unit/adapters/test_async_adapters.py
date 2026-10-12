@@ -240,7 +240,7 @@ async def test_async_dispatch_no_dead_processed_state_cast(aiosqlite_async_drive
 
 
 async def test_async_driver_releases_pooled_statement(aiosqlite_async_driver: AiosqliteDriver) -> None:
-    """Pooled statements should be reset after dispatch execution."""
+    """Pooled statements stay intact when attached to SQLResult and reset when released on failure."""
     seed = "SELECT * FROM users WHERE id = ?"
     aiosqlite_async_driver.prepare_statement(
         seed, (1,), statement_config=aiosqlite_async_driver.statement_config, kwargs={}
@@ -251,12 +251,28 @@ async def test_async_driver_releases_pooled_statement(aiosqlite_async_driver: Ai
 
     assert pooled._pooled is True
 
-    await aiosqlite_async_driver.dispatch_statement_execution(pooled, aiosqlite_async_driver.connection)
+    result = await aiosqlite_async_driver.dispatch_statement_execution(pooled, aiosqlite_async_driver.connection)
 
-    assert pooled._raw_sql == ""
-    assert pooled._processed_state is Empty
-    assert pooled._filters == []
-    assert pooled._statement_config is get_default_config()
+    assert result.statement is pooled
+    assert pooled._pooled is False
+    assert pooled._raw_sql == seed
+
+    failing_seed = "SELECT * FROM nonexistent_table WHERE id = ?"
+    aiosqlite_async_driver.prepare_statement(
+        failing_seed, (1,), statement_config=aiosqlite_async_driver.statement_config, kwargs={}
+    )
+    failing_pooled = aiosqlite_async_driver.prepare_statement(
+        failing_seed, (2,), statement_config=aiosqlite_async_driver.statement_config, kwargs={}
+    )
+    assert failing_pooled._pooled is True
+
+    with pytest.raises(Exception):
+        await aiosqlite_async_driver.dispatch_statement_execution(failing_pooled, aiosqlite_async_driver.connection)
+
+    assert failing_pooled._raw_sql == ""
+    assert failing_pooled._processed_state is Empty
+    assert failing_pooled._filters == []
+    assert failing_pooled._statement_config is get_default_config()
 
 
 async def test_async_driver_transaction_management(aiosqlite_async_driver: AiosqliteDriver) -> None:

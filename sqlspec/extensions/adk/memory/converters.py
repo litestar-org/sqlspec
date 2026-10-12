@@ -160,6 +160,8 @@ def memory_entry_to_record(
     if entry.timestamp:
         try:
             timestamp = datetime.fromisoformat(entry.timestamp)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=UTC)
         except (ValueError, TypeError):
             timestamp = now
 

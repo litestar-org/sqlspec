@@ -1,3 +1,5 @@
+"""Data dictionary SQL query loader and domain resolver."""
+
 from importlib import resources
 from importlib.resources import as_file
 from typing import TYPE_CHECKING
@@ -35,6 +37,159 @@ class DataDictionaryLoader:
         """Initialize the data dictionary loader."""
         self._domain_loaders: dict[tuple[str, str, str | None], SQLFileLoader] = {}
         self._loaded_domain_paths: set[tuple[str, str, str | None]] = set()
+
+    def get_domain_query(
+        self,
+        dialect: str,
+        domain: str,
+        query_name: str,
+        *,
+        mode: str | None = None,
+        version: "VersionInfo | None" = None,
+        required_features: "tuple[str, ...]" = (),
+    ) -> MetadataQuery:
+        """Get a data-dictionary query by dialect, domain, and query name.
+
+        Args:
+            dialect: Dialect or dialect alias.
+            domain: Metadata domain name.
+            query_name: Query name inside the domain pack.
+            mode: Optional SQL dialect mode for multi-mode engines.
+            version: Optional database version used for feature gates.
+            required_features: Feature flags/version gates required by the query.
+
+        Returns:
+            MetadataQuery containing SQL when supported, otherwise an unsupported status.
+        """
+        normalized_dialect = normalize_dialect_name(dialect)
+        normalized_domain = _normalize_domain_key(domain)
+        normalized_query = _normalize_query_key(query_name)
+        normalized_mode = normalize_dialect_mode(normalized_dialect, mode)
+
+        gated = self._feature_gate_query(
+            normalized_dialect,
+            normalized_domain,
+            normalized_query,
+            mode=normalized_mode,
+            version=version,
+            required_features=required_features,
+        )
+        if gated is not None:
+            return gated
+
+        if not self._ensure_domain_loaded(normalized_dialect, normalized_domain, normalized_mode):
+            return self._unsupported_domain_query(
+                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
+            )
+
+        loader = self._get_domain_loader(normalized_dialect, normalized_domain, normalized_mode)
+        if not loader.has_query(normalized_query):
+            return self._unsupported_domain_query(
+                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
+            )
+
+        capability = MetadataCapability(
+            domain=normalized_domain,
+            support=MetadataSupport.SUPPORTED,
+            fidelity=MetadataFidelity.NATIVE,
+            source=MetadataSource.CATALOG,
+        )
+        return MetadataQuery(
+            dialect=normalized_dialect,
+            domain=normalized_domain,
+            name=query_name,
+            mode=normalized_mode,
+            capability=capability,
+            sql=loader.get_sql(normalized_query),
+        )
+
+    def get_domain_queries(
+        self,
+        dialect: str,
+        domain: str,
+        query_names: "Iterable[str]",
+        *,
+        mode: str | None = None,
+        version: "VersionInfo | None" = None,
+        required_features: "tuple[str, ...]" = (),
+    ) -> "dict[str, MetadataQuery]":
+        """Get multiple data-dictionary queries from one domain pack.
+
+        Args:
+            dialect: Dialect or dialect alias.
+            domain: Metadata domain name.
+            query_names: Query names inside the domain pack.
+            mode: Optional SQL dialect mode for multi-mode engines.
+            version: Optional database version used for feature gates.
+            required_features: Feature flags/version gates required by every query.
+
+        Returns:
+            Ordered mapping of normalized query names to metadata query results.
+        """
+        results: dict[str, MetadataQuery] = {}
+        for query_name in query_names:
+            normalized_query = _normalize_query_key(query_name)
+            results[normalized_query] = self.get_domain_query(
+                dialect, domain, normalized_query, mode=mode, version=version, required_features=required_features
+            )
+        return results
+
+    def get_domain_query_text(
+        self,
+        dialect: str,
+        domain: str,
+        query_name: str,
+        *,
+        mode: str | None = None,
+        version: "VersionInfo | None" = None,
+        required_features: "tuple[str, ...]" = (),
+    ) -> str | None:
+        """Get raw SQL text for a domain query, or None when unsupported."""
+        query = self.get_domain_query(
+            dialect, domain, query_name, mode=mode, version=version, required_features=required_features
+        )
+        return query.query_text
+
+    def get_dialect_config(self, dialect: str) -> "DialectConfig":
+        """Get static configuration for a dialect.
+
+        Args:
+            dialect: Dialect name.
+
+        Returns:
+            DialectConfig for the dialect.
+        """
+        return get_dialect_config(dialect)
+
+    def has_domain_queries(self, dialect: str, domain: str, *, mode: str | None = None) -> bool:
+        """Return whether a dialect/domain/mode pack has any SQL queries."""
+        normalized_dialect = normalize_dialect_name(dialect)
+        normalized_domain = _normalize_domain_key(domain)
+        normalized_mode = normalize_dialect_mode(normalized_dialect, mode)
+        if mode is not None and normalized_mode is None:
+            return False
+        if not self._ensure_domain_loaded(normalized_dialect, normalized_domain, normalized_mode):
+            return False
+        loader = self._get_domain_loader(normalized_dialect, normalized_domain, normalized_mode)
+        return bool(loader.list_queries())
+
+    def list_dialects(self) -> "list[str]":
+        """List available SQL dialects.
+
+        Returns:
+            List of dialect names with SQL directories.
+        """
+        try:
+            dialects_root = resources.files("sqlspec.data_dictionary.dialects")
+        except (ModuleNotFoundError, FileNotFoundError):
+            return []
+        if not dialects_root.is_dir():
+            return []
+        return sorted([
+            path.name
+            for path in dialects_root.iterdir()
+            if path.is_dir() and path.name != "__pycache__" and path.joinpath("sql").is_dir()
+        ])
 
     def _get_domain_loader(self, dialect: str, domain: str, mode: str | None) -> "SQLFileLoader":
         """Return or create a SQL loader for a dialect/domain/mode pack."""
@@ -163,147 +318,6 @@ class DataDictionaryLoader:
                     warnings=(f"{dialect}/{domain}/{query_name} requires unknown feature {feature}",),
                 )
         return None
-
-    def get_domain_query(
-        self,
-        dialect: str,
-        domain: str,
-        query_name: str,
-        *,
-        mode: str | None = None,
-        version: "VersionInfo | None" = None,
-        required_features: "tuple[str, ...]" = (),
-    ) -> MetadataQuery:
-        """Get a data-dictionary query by dialect, domain, and query name.
-
-        Args:
-            dialect: Dialect or dialect alias.
-            domain: Metadata domain name.
-            query_name: Query name inside the domain pack.
-            mode: Optional SQL dialect mode for multi-mode engines.
-            version: Optional database version used for feature gates.
-            required_features: Feature flags/version gates required by the query.
-
-        Returns:
-            MetadataQuery containing SQL when supported, otherwise an unsupported status.
-        """
-        normalized_dialect = normalize_dialect_name(dialect)
-        normalized_domain = _normalize_domain_key(domain)
-        normalized_query = _normalize_query_key(query_name)
-        normalized_mode = normalize_dialect_mode(normalized_dialect, mode)
-
-        gated = self._feature_gate_query(
-            normalized_dialect,
-            normalized_domain,
-            normalized_query,
-            mode=normalized_mode,
-            version=version,
-            required_features=required_features,
-        )
-        if gated is not None:
-            return gated
-
-        if not self._ensure_domain_loaded(normalized_dialect, normalized_domain, normalized_mode):
-            return self._unsupported_domain_query(
-                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
-            )
-
-        loader = self._get_domain_loader(normalized_dialect, normalized_domain, normalized_mode)
-        if not loader.has_query(normalized_query):
-            return self._unsupported_domain_query(
-                normalized_dialect, normalized_domain, normalized_query, mode=normalized_mode
-            )
-
-        capability = MetadataCapability(
-            domain=normalized_domain,
-            support=MetadataSupport.SUPPORTED,
-            fidelity=MetadataFidelity.NATIVE,
-            source=MetadataSource.CATALOG,
-        )
-        return MetadataQuery(
-            dialect=normalized_dialect,
-            domain=normalized_domain,
-            name=query_name,
-            mode=normalized_mode,
-            capability=capability,
-            sql=loader.get_sql(normalized_query),
-        )
-
-    def get_domain_queries(
-        self,
-        dialect: str,
-        domain: str,
-        query_names: "Iterable[str]",
-        *,
-        mode: str | None = None,
-        version: "VersionInfo | None" = None,
-        required_features: "tuple[str, ...]" = (),
-    ) -> "dict[str, MetadataQuery]":
-        """Get multiple data-dictionary queries from one domain pack.
-
-        Args:
-            dialect: Dialect or dialect alias.
-            domain: Metadata domain name.
-            query_names: Query names inside the domain pack.
-            mode: Optional SQL dialect mode for multi-mode engines.
-            version: Optional database version used for feature gates.
-            required_features: Feature flags/version gates required by every query.
-
-        Returns:
-            Ordered mapping of normalized query names to metadata query results.
-        """
-        results: dict[str, MetadataQuery] = {}
-        for query_name in query_names:
-            normalized_query = _normalize_query_key(query_name)
-            results[normalized_query] = self.get_domain_query(
-                dialect, domain, normalized_query, mode=mode, version=version, required_features=required_features
-            )
-        return results
-
-    def get_domain_query_text(
-        self,
-        dialect: str,
-        domain: str,
-        query_name: str,
-        *,
-        mode: str | None = None,
-        version: "VersionInfo | None" = None,
-        required_features: "tuple[str, ...]" = (),
-    ) -> str | None:
-        """Get raw SQL text for a domain query, or None when unsupported."""
-        query = self.get_domain_query(
-            dialect, domain, query_name, mode=mode, version=version, required_features=required_features
-        )
-        return query.query_text
-
-    def get_dialect_config(self, dialect: str) -> "DialectConfig":
-        """Get static configuration for a dialect.
-
-        Args:
-            dialect: Dialect name.
-
-        Returns:
-            DialectConfig for the dialect.
-        """
-        return get_dialect_config(dialect)
-
-    def list_dialects(self) -> "list[str]":
-        """List available SQL dialects.
-
-        Returns:
-            List of dialect names with SQL directories.
-        """
-        try:
-            dialects_root = resources.files("sqlspec.data_dictionary.dialects")
-        except (ModuleNotFoundError, FileNotFoundError):
-            return []
-        if not dialects_root.is_dir():
-            return []
-        return sorted([
-            path.name
-            for path in dialects_root.iterdir()
-            if path.is_dir() and path.name != "__pycache__" and path.joinpath("sql").is_dir()
-        ])
 
 
 _loader_instance: DataDictionaryLoader | None = None

@@ -33,10 +33,34 @@ def test_litestar_store_ddl_is_tsql_idempotent() -> None:
     ddl = store._table_ddl()
 
     assert "IF NOT EXISTS" in ddl
-    assert "CREATE TABLE litestar_session" in ddl
+    assert "CREATE TABLE [dbo].[litestar_session]" in ddl
     assert "VARBINARY(MAX)" in ddl
     assert "SYSUTCDATETIME()" in ddl
     assert "%s" not in ddl
+
+
+def test_event_and_litestar_stores_escape_single_quotes_in_metadata_probes() -> None:
+    """Event and Litestar stores should escape single quotes inside N'...' literals."""
+    from sqlspec.adapters.pymssql.events.store import PymssqlEventQueueStore
+    from sqlspec.adapters.pymssql.litestar.store import PymssqlStore
+
+    event_store = PymssqlEventQueueStore(
+        PymssqlConfig(extension_config={"events": {"queue_table": "app.queue_events"}})
+    )
+    event_store._table_name = "app.queue's_events"
+    event_statements = event_store.create_statements()
+    assert "OBJECT_ID(N'[app].[queue''s_events]', N'U')" in event_statements[0]
+    assert "OBJECT_ID(N'[app].[queue''s_events]')" in event_statements[1]
+    assert "OBJECT_ID(N'[app].[queue''s_events]', N'U')" in event_store.drop_statements()[0]
+
+    litestar_store = PymssqlStore(
+        PymssqlConfig(extension_config={"litestar": {"session_table": "litestar_session", "manage_schema": False}})
+    )
+    litestar_store._table_name = "auth.user's_sessions"
+    litestar_ddl = litestar_store._table_ddl()
+    assert "SCHEMA_ID(N'auth')" in litestar_ddl
+    assert "WHERE name = N'user''s_sessions'" in litestar_ddl
+    assert "CREATE TABLE [auth].[user's_sessions]" in litestar_ddl
 
 
 @pytest.mark.anyio

@@ -26,6 +26,7 @@ class PyMysqlConnectionPool:
     """Thread-local connection manager for PyMySQL."""
 
     __slots__ = (
+        "_checked_out",
         "_connection_factory",
         "_connection_parameters",
         "_connection_registry",
@@ -59,6 +60,7 @@ class PyMysqlConnectionPool:
         self._connection_factory = connection_factory
         self._thread_local = threading.local()
         self._connection_registry: set[PyMysqlConnection] = set()
+        self._checked_out = 0
         self._generation = 0
         self._registry_lock = threading.Lock()
         self._recycle_seconds = recycle_seconds
@@ -70,14 +72,6 @@ class PyMysqlConnectionPool:
     def _database_name(self) -> str:
         """Get sanitized database name for logging."""
         return str(self._connection_parameters.get("database", "unknown"))
-
-    def _create_connection(self) -> PyMysqlConnection:
-        connection = self.new_connection()
-
-        with self._registry_lock:
-            self._connection_registry.add(connection)
-
-        return connection
 
     def new_connection(self) -> PyMysqlConnection:
         """Open a standalone connection configured like a pooled one.
@@ -94,7 +88,91 @@ class PyMysqlConnectionPool:
             connection = _pymysql_connect(**self._connection_parameters)
 
         if self._on_connection_create is not None:
-            self._on_connection_create(connection)
+            try:
+                self._on_connection_create(connection)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    connection.close()
+                raise
+
+        return connection
+
+    @contextmanager
+    def get_connection(self) -> "Generator[PyMysqlConnection, None, None]":
+        """Get a thread-local connection.
+
+        Yields:
+            A thread-local database connection.
+        """
+        connection = self.acquire()
+        try:
+            yield connection
+        except BaseException:
+            with self._registry_lock:
+                self._checked_out = max(0, self._checked_out - 1)
+            with contextlib.suppress(Exception):
+                self._close_thread_connection()
+            raise
+        else:
+            self.release(connection)
+
+    def close(self) -> None:
+        """Close every connection this pool opened, on any thread."""
+        self._close_thread_connection()
+        with self._registry_lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+            self._generation += 1
+        for connection in orphaned:
+            with contextlib.suppress(Exception):
+                connection.close()
+
+    def acquire(self) -> PyMysqlConnection:
+        connection = self._get_thread_connection()
+        with self._registry_lock:
+            self._checked_out += 1
+        return connection
+
+    def release(self, connection: PyMysqlConnection) -> None:
+        """Release connection back to the pool, sanitizing transactions."""
+        try:
+            if (
+                getattr(getattr(connection, "_result", None), "unbuffered_active", False) is True
+                or getattr(connection, "unbuffered_active", False) is True
+            ):
+                if getattr(self._thread_local, "connection", None) is connection:
+                    self._close_thread_connection()
+                else:
+                    self._retire_connection(connection)
+                return
+
+            if bool(getattr(connection, "server_status", 0) & PyMysqlServerStatus.SERVER_STATUS_IN_TRANS):
+                try:
+                    connection.rollback()
+                except Exception:
+                    if getattr(self._thread_local, "connection", None) is connection:
+                        self._close_thread_connection()
+                    else:
+                        self._retire_connection(connection)
+                    raise
+        finally:
+            with self._registry_lock:
+                self._checked_out = max(0, self._checked_out - 1)
+
+    def size(self) -> int:
+        """Report total active connections managed by this pool."""
+        with self._registry_lock:
+            return len(self._connection_registry)
+
+    def checked_out(self) -> int:
+        with self._registry_lock:
+            return self._checked_out
+
+    def _create_connection(self) -> PyMysqlConnection:
+        connection = self.new_connection()
+
+        with self._registry_lock:
+            self._connection_registry.add(connection)
 
         return connection
 
@@ -172,54 +250,3 @@ class PyMysqlConnectionPool:
                 del self._thread_local.created_at
             if "last_used" in thread_state:
                 del self._thread_local.last_used
-
-    @contextmanager
-    def get_connection(self) -> "Generator[PyMysqlConnection, None, None]":
-        """Get a thread-local connection.
-
-        Yields:
-            A thread-local database connection.
-        """
-        connection = self._get_thread_connection()
-        try:
-            yield connection
-        except Exception:
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
-            raise
-        else:
-            self.release(connection)
-
-    def close(self) -> None:
-        """Close every connection this pool opened, on any thread."""
-        self._close_thread_connection()
-        with self._registry_lock:
-            orphaned = list(self._connection_registry)
-            self._connection_registry.clear()
-            self._generation += 1
-        for connection in orphaned:
-            with contextlib.suppress(Exception):
-                connection.close()
-
-    def acquire(self) -> PyMysqlConnection:
-        return self._get_thread_connection()
-
-    def release(self, connection: PyMysqlConnection) -> None:
-        """Release connection back to the pool, sanitizing transactions."""
-        if bool(getattr(connection, "server_status", 0) & PyMysqlServerStatus.SERVER_STATUS_IN_TRANS):
-            try:
-                connection.rollback()
-            except Exception:
-                if getattr(self._thread_local, "connection", None) is connection:
-                    self._close_thread_connection()
-                else:
-                    self._retire_connection(connection)
-                raise
-
-    def size(self) -> int:
-        """Report total active connections managed by this pool."""
-        with self._registry_lock:
-            return len(self._connection_registry)
-
-    def checked_out(self) -> int:
-        return 0

@@ -427,30 +427,39 @@ class PsycopgSyncHybridEventsBackend:
     ) -> None:
         now = datetime.now(UTC)
         with self._config.provide_session() as driver:
-            driver.execute(
-                SQL(
-                    self._queue._insert_statement,
-                    {
-                        "event_id": event_id,
-                        "channel": channel,
-                        "payload_json": to_json(payload),
-                        "metadata_json": to_json(metadata) if metadata is not None else None,
-                        "status": "pending",
-                        "available_at": now,
-                        "lease_expires_at": None,
-                        "attempts": 0,
-                        "created_at": now,
-                    },
-                    statement_config=self._queue._statement_config,
+            was_autocommit = bool(getattr(driver.connection, "autocommit", False))
+            driver.begin()
+            try:
+                driver.execute(
+                    SQL(
+                        self._queue._insert_statement,
+                        {
+                            "event_id": event_id,
+                            "channel": channel,
+                            "payload_json": to_json(payload),
+                            "metadata_json": to_json(metadata) if metadata is not None else None,
+                            "status": "pending",
+                            "available_at": now,
+                            "lease_expires_at": None,
+                            "attempts": 0,
+                            "created_at": now,
+                        },
+                        statement_config=self._queue._statement_config,
+                    )
                 )
-            )
-            driver.execute(
-                SQL(
-                    "SELECT pg_notify(:channel, :payload)",
-                    {"channel": channel, "payload": to_json({"event_id": event_id})},
+                driver.execute(
+                    SQL(
+                        "SELECT pg_notify(:channel, :payload)",
+                        {"channel": channel, "payload": to_json({"event_id": event_id})},
+                    )
                 )
-            )
-            driver.commit()
+                driver.commit()
+            except BaseException:
+                driver.rollback()
+                raise
+            finally:
+                if was_autocommit:
+                    driver.connection.autocommit = True
 
 
 class PsycopgAsyncHybridEventsBackend:
@@ -589,30 +598,39 @@ class PsycopgAsyncHybridEventsBackend:
     ) -> None:
         now = datetime.now(UTC)
         async with self._config.provide_session() as driver:
-            await driver.execute(
-                SQL(
-                    self._queue._insert_statement,
-                    {
-                        "event_id": event_id,
-                        "channel": channel,
-                        "payload_json": to_json(payload),
-                        "metadata_json": to_json(metadata) if metadata is not None else None,
-                        "status": "pending",
-                        "available_at": now,
-                        "lease_expires_at": None,
-                        "attempts": 0,
-                        "created_at": now,
-                    },
-                    statement_config=self._queue._statement_config,
+            was_autocommit = bool(getattr(driver.connection, "autocommit", False))
+            await driver.begin()
+            try:
+                await driver.execute(
+                    SQL(
+                        self._queue._insert_statement,
+                        {
+                            "event_id": event_id,
+                            "channel": channel,
+                            "payload_json": to_json(payload),
+                            "metadata_json": to_json(metadata) if metadata is not None else None,
+                            "status": "pending",
+                            "available_at": now,
+                            "lease_expires_at": None,
+                            "attempts": 0,
+                            "created_at": now,
+                        },
+                        statement_config=self._queue._statement_config,
+                    )
                 )
-            )
-            await driver.execute(
-                SQL(
-                    "SELECT pg_notify(:channel, :payload)",
-                    {"channel": channel, "payload": to_json({"event_id": event_id})},
+                await driver.execute(
+                    SQL(
+                        "SELECT pg_notify(:channel, :payload)",
+                        {"channel": channel, "payload": to_json({"event_id": event_id})},
+                    )
                 )
-            )
-            await driver.commit()
+                await driver.commit()
+            except BaseException:
+                await driver.rollback()
+                raise
+            finally:
+                if was_autocommit:
+                    await driver.connection.set_autocommit(True)
 
 
 def create_event_backend(
@@ -661,7 +679,8 @@ def create_event_backend(
 
 def _validate_listener_pool_capacity(config: "PsycopgAsyncConfig | PsycopgSyncConfig") -> None:
     max_size = config.connection_config.get("max_size")
-    if max_size is not None and max_size < _MIN_LISTENER_POOL_SIZE:
+    effective_max = max_size if max_size is not None else config.connection_config.get("min_size")
+    if effective_max is not None and effective_max < _MIN_LISTENER_POOL_SIZE:
         msg = f"{type(config).__name__} native event listeners require pool max_size >= {_MIN_LISTENER_POOL_SIZE}"
         raise ImproperConfigurationError(msg)
 

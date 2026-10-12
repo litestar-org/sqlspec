@@ -27,7 +27,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.parameters._validator import ParameterValidator
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
-from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError
+from sqlspec.exceptions import DataError, ImproperConfigurationError, SQLSpecError
 from sqlspec.typing import import_optional
 from sqlspec.utils.module_loader import ensure_pyarrow
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -54,7 +54,7 @@ class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
     def _handle_exception(self, exc_type: "type[BaseException] | None", exc_val: "BaseException") -> bool:
         if exc_type is None:
             return False
-        if isinstance(exc_val, ArrowOdbcError):
+        if isinstance(exc_val, ArrowOdbcError) or (pa is not None and isinstance(exc_val, pa.ArrowException)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -63,7 +63,7 @@ class ArrowOdbcExceptionHandler(BaseSyncExceptionHandler):
 class ArrowOdbcStreamSource:
     """Native Arrow ODBC chunk source backed by Arrow record batches."""
 
-    __slots__ = ("_chunk_size", "_driver", "_parameters", "_reader", "_sql")
+    __slots__ = ("_chunk_size", "_driver", "_parameters", "_raw_reader", "_reader", "_sql")
 
     def __init__(
         self, driver: "ArrowOdbcDriver", sql: str, parameters: "list[str | None] | None", chunk_size: int
@@ -72,13 +72,15 @@ class ArrowOdbcStreamSource:
         self._sql = sql
         self._parameters = parameters
         self._chunk_size = chunk_size
+        self._raw_reader: Any = None
         self._reader: Any = None
 
     def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
         with handler:
-            reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
-            self._reader = iter(self._driver._normalize_reader(_to_pyarrow_reader(reader)))
+            raw_reader = self._driver._read_arrow_batches(self._sql, self._parameters, self._chunk_size)
+            self._raw_reader = raw_reader
+            self._reader = iter(self._driver._normalize_reader(_to_pyarrow_reader(raw_reader)))
         self._driver._check_pending_exception(handler)
 
     def fetch_chunk(self) -> "list[dict[str, Any]]":
@@ -86,9 +88,15 @@ class ArrowOdbcStreamSource:
         if reader is None:
             return []
         while True:
+            batch: Any = None
+            handler = self._driver.handle_database_exceptions()
             try:
-                batch = next(reader)
+                with handler:
+                    batch = next(reader)
             except StopIteration:
+                return []
+            self._driver._check_pending_exception(handler)
+            if batch is None:
                 return []
             rows = cast("list[dict[str, Any]]", batch.to_pylist())
             if rows:
@@ -96,11 +104,14 @@ class ArrowOdbcStreamSource:
 
     def close(self, error: bool = False) -> None:
         reader = self._reader
+        raw_reader = self._raw_reader
         self._reader = None
-        close = getattr(reader, "close", None)
-        if callable(close):
-            with contextlib.suppress(Exception):
-                close()
+        self._raw_reader = None
+        for target in (reader, raw_reader):
+            close = getattr(target, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
 
 
 class ArrowOdbcDriver(SyncDriverAdapterBase):
@@ -130,6 +141,16 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         driver_features: "dict[str, Any] | None" = None,
     ) -> None:
         features = dict(driver_features or {})
+        features.setdefault(
+            "storage_capabilities",
+            {
+                "arrow_export_enabled": True,
+                "arrow_import_enabled": True,
+                "parquet_export_enabled": False,
+                "parquet_import_enabled": False,
+                "partition_strategies": ["rows_per_chunk"],
+            },
+        )
         self._dbms_name = self._resolve_dbms_name(features)
         self._dialect = resolve_dialect_from_dbms_name(self._dbms_name)
         statement_dialect = _statement_dialect_for(self._dialect)
@@ -142,9 +163,15 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=features)
         self._chunk_size_val: int = int(features.get("chunk_size") or 65_536)
-        self._max_batch_bytes: int | None = features.get("max_bytes_per_batch")
-        self._max_binary_size_val: int | None = features.get("max_binary_size")
-        self._max_text_size_val: int | None = features.get("max_text_size")
+        self._max_batch_bytes: int = int(
+            features["max_bytes_per_batch"] if features.get("max_bytes_per_batch") is not None else 512 * 1024 * 1024
+        )
+        self._max_binary_size_val: int = int(
+            features["max_binary_size"] if features.get("max_binary_size") is not None else 1024 * 1024
+        )
+        self._max_text_size_val: int = int(
+            features["max_text_size"] if features.get("max_text_size") is not None else 1024 * 1024
+        )
         self._query_timeout_sec_val: int | None = features.get("query_timeout_sec")
         self._payload_text_encoding: Any = features.get("payload_text_encoding")
         self._use_concurrent_fetch: bool = bool(features.get("fetch_concurrently", True))
@@ -183,7 +210,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 row_format="dict",
             )
 
-        cursor.execute(query=sql, parameters=parameters)
+        self._execute_statement(cursor, sql, parameters)
         return self.create_execution_result(cursor, rowcount_override=0)
 
     def dispatch_execute_many(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
@@ -195,8 +222,8 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
                 sql, parameter_set = _inline_mssql_pagination_parameters(
                     sql, parameter_set, compiled_statement.parameter_profile, statement.statement_config
                 )
-            cursor.execute(
-                query=sql, parameters=_odbc_parameters(parameter_set, naive_utc_datetimes=self._dialect == "db2")
+            self._execute_statement(
+                cursor, sql, _odbc_parameters(parameter_set, naive_utc_datetimes=self._dialect == "db2")
             )
             executed = True
         return self.create_execution_result(cursor, rowcount_override=-1 if executed else 0, is_many_result=True)
@@ -204,15 +231,19 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     def dispatch_execute_script(self, cursor: "ArrowOdbcRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         if self._dialect == "mssql":
-            cursor.execute(query=sql, parameters=_odbc_parameters(prepared_parameters))
+            self._execute_statement(cursor, sql, _odbc_parameters(prepared_parameters))
             return self.create_execution_result(
                 cursor, rowcount_override=-1, statement_count=1, successful_statements=1, is_script_result=True
             )
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        parameters = _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
+        parameters = (
+            _odbc_parameters(prepared_parameters, naive_utc_datetimes=self._dialect == "db2")
+            if len(statements) == 1
+            else None
+        )
         successful_count = 0
         for stmt in statements:
-            cursor.execute(query=stmt, parameters=parameters)
+            self._execute_statement(cursor, stmt, parameters)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -243,23 +274,32 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     def begin(self) -> None:
         """Begin an explicit transaction.
 
-        SQL Server starts one with ``BEGIN TRANSACTION``. Db2 has no begin
-        statement: a connection opened with autocommit off is always inside a
-        unit of work, so only the boundary is recorded, and an autocommit
-        connection is refused because each statement would commit on its own.
+        Connections opened with ``autocommit=False`` are already in an ODBC unit
+        of work, so ``begin()`` records the active boundary without emitting SQL.
+        Under ``autocommit=True``, Db2 and Oracle connections are rejected because
+        neither supports a SQL ``BEGIN`` statement in autocommit mode, while SQL
+        Server issues ``BEGIN TRANSACTION`` and other dialects issue ``BEGIN``.
 
         Raises:
-            ImproperConfigurationError: If the Db2 connection was opened with autocommit on.
+            ImproperConfigurationError: If a Db2 or Oracle connection was opened
+                with autocommit on.
             SQLSpecError: If the begin statement fails.
         """
-        if self._dialect == "db2":
-            if self._connection_autocommit:
-                msg = "Db2 transactions through arrow-odbc require connection_config={'autocommit': False}"
-                raise ImproperConfigurationError(msg)
+        if not self._connection_autocommit:
             self._transaction_active = True
             return
+        if self._dialect == "db2":
+            msg = "Db2 transactions through arrow-odbc require connection_config={'autocommit': False}"
+            raise ImproperConfigurationError(msg)
+        if self._dialect == "oracle":
+            msg = "Oracle transactions through arrow-odbc require connection_config={'autocommit': False}"
+            raise ImproperConfigurationError(msg)
         try:
-            self.connection.execute("BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN")
+            self._execute_statement(self.connection, "BEGIN TRANSACTION" if self._dialect == "mssql" else "BEGIN", None)
+        except ArrowOdbcError as exc:
+            mapped = create_mapped_exception(exc)
+            msg = f"Failed to begin transaction: {mapped}"
+            raise type(mapped)(msg) from exc
         except Exception as exc:
             msg = f"Failed to begin transaction: {exc}"
             raise SQLSpecError(msg) from exc
@@ -267,24 +307,30 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
 
     def commit(self) -> None:
         try:
-            if self._dialect == "mssql" and self._transaction_active:
-                self.connection.execute("COMMIT TRANSACTION")
+            if self._connection_autocommit and self._transaction_active:
+                self._execute_statement(
+                    self.connection, "COMMIT TRANSACTION" if self._dialect == "mssql" else "COMMIT", None
+                )
             else:
                 self.connection.commit()
         except ArrowOdbcError as exc:
-            msg = f"Failed to commit transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc)
+            msg = f"Failed to commit transaction: {mapped}"
+            raise type(mapped)(msg) from exc
         self._transaction_active = False
 
     def rollback(self) -> None:
         try:
-            if self._dialect == "mssql" and self._transaction_active:
-                self.connection.execute("ROLLBACK TRANSACTION")
+            if self._connection_autocommit and self._transaction_active:
+                self._execute_statement(
+                    self.connection, "ROLLBACK TRANSACTION" if self._dialect == "mssql" else "ROLLBACK", None
+                )
             else:
                 self.connection.rollback()
         except ArrowOdbcError as exc:
-            msg = f"Failed to rollback transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc)
+            msg = f"Failed to rollback transaction: {mapped}"
+            raise type(mapped)(msg) from exc
         finally:
             self._transaction_active = False
 
@@ -376,9 +422,33 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             arrow_schema=arrow_schema,
         )
 
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and stream Arrow-compatible results to storage."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        sync_pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=sync_pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
     def bulk_insert_arrow(self, target_table: str, source: Any, *, chunk_size: int | None = None) -> None:
         """Insert an Arrow table or reader into a database table."""
         ensure_pyarrow()
+        if hasattr(source, "get_data") and callable(source.get_data):
+            source = source.get_data()
 
         resolved_chunk_size = chunk_size or self._chunk_size()
         exc_handler = self.handle_database_exceptions()
@@ -410,13 +480,24 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         """Load Arrow data into a table via arrow-odbc bulk insert."""
         self._require_capability("arrow_import_enabled")
-        arrow_table = self._coerce_arrow_table(source)
+        ensure_pyarrow()
+        raw_source = source.get_data() if hasattr(source, "get_data") and callable(source.get_data) else source
         if overwrite:
             target = _db2_table_reference(table) if self._dialect == "db2" else _quote_odbc_table(table)
             self.execute(f"DELETE FROM {target}")
-        self.bulk_insert_arrow(table, arrow_table)
-        telemetry_payload = self._ingest_telemetry(arrow_table)
-        telemetry_payload["destination"] = table
+        if isinstance(raw_source, pa.RecordBatchReader) and hasattr(self.connection, "insert_into_table"):
+            self.bulk_insert_arrow(table, raw_source)
+            telemetry_payload: StorageTelemetry = {
+                "rows_processed": 0,
+                "bytes_processed": 0,
+                "format": "arrow",
+                "destination": table,
+            }
+        else:
+            arrow_table = self._coerce_arrow_table(raw_source)
+            self.bulk_insert_arrow(table, arrow_table)
+            telemetry_payload = self._ingest_telemetry(arrow_table)
+            telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
 
@@ -442,7 +523,20 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
         """
         return self._transaction_active
 
-    def _read_arrow_batches(self, sql: str, parameters: "list[str | None] | None", batch_size: int) -> Any:
+    def _execute_statement(self, target: Any, sql: str, parameters: "list[str | None] | None") -> None:
+        if self._query_timeout_sec_val is not None:
+            target.execute(query=sql, parameters=parameters, query_timeout_sec=self._query_timeout_sec_val)
+            return
+        target.execute(query=sql, parameters=parameters)
+
+    def _read_arrow_batches(
+        self,
+        sql: str,
+        parameters: "list[str | None] | None",
+        batch_size: int,
+        *,
+        fetch_concurrently: bool | None = None,
+    ) -> Any:
         kwargs: dict[str, Any] = {
             "query": sql,
             "batch_size": batch_size,
@@ -450,7 +544,7 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
             "max_bytes_per_batch": self._max_batch_bytes,
             "max_text_size": self._max_text_size_val,
             "max_binary_size": self._max_binary_size_val,
-            "fetch_concurrently": self._use_concurrent_fetch,
+            "fetch_concurrently": self._use_concurrent_fetch if fetch_concurrently is None else fetch_concurrently,
         }
         if self._query_timeout_sec_val is not None:
             kwargs["query_timeout_sec"] = self._query_timeout_sec_val
@@ -484,11 +578,13 @@ class ArrowOdbcDriver(SyncDriverAdapterBase):
     @staticmethod
     def _resolve_dbms_name(features: "dict[str, Any]") -> str | None:
         dbms_name = features.get("dbms_name")
-        if dbms_name:
-            return str(dbms_name)
         connection_string = features.get("connection_string")
+        if dbms_name and (not connection_string or resolve_dialect_from_dbms_name(str(dbms_name)) != "sqlite"):
+            return str(dbms_name)
         if connection_string:
             return str(connection_string)
+        if dbms_name:
+            return str(dbms_name)
         return None
 
 
@@ -592,6 +688,9 @@ def _unwrap_parameter(value: Any, naive_utc_datetimes: bool = False) -> Any:
     wrapped = getattr(value, "value", value)
     if wrapped is None:
         return None
+    if isinstance(wrapped, (bytes, bytearray, memoryview)):
+        msg = "Binary parameter binding is not supported by arrow-odbc text parameter API; encode as hex or base64"
+        raise DataError(msg)
     if naive_utc_datetimes and isinstance(wrapped, datetime) and wrapped.tzinfo is not None:
         wrapped = wrapped.astimezone(UTC).replace(tzinfo=None)
     return str(wrapped)
@@ -628,8 +727,11 @@ def _reader_to_table(reader: Any) -> Any:
     into_reader = getattr(reader, "into_pyarrow_record_batch_reader", None)
     if callable(into_reader):
         return cast("Any", into_reader()).read_all()
+    schema = getattr(reader, "schema", None)
     batches = list(reader)
     if not batches:
+        if isinstance(schema, pa.Schema):
+            return pa.Table.from_batches([], schema=schema)
         return pa.table({})
     return pa.Table.from_batches(batches)
 

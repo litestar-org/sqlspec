@@ -99,6 +99,13 @@ class OracleSyncAQHub:
                 )
                 with contextlib.suppress(Exception):
                     driver.rollback()
+                session_cm = self._session_cm
+                self._queues.clear()
+                self._session_cm = None
+                self._session_driver = None
+                if session_cm is not None:
+                    with contextlib.suppress(Exception):
+                        session_cm.__exit__(None, None, None)
                 return None
             if message is None:
                 with contextlib.suppress(Exception):
@@ -226,6 +233,13 @@ class OracleAsyncAQHub:
                 )
                 with contextlib.suppress(Exception):
                     await driver.rollback()
+                session_cm = self._session_cm
+                self._queues.clear()
+                self._session_cm = None
+                self._session_driver = None
+                if session_cm is not None:
+                    with contextlib.suppress(Exception):
+                        await session_cm.__aexit__(None, None, None)
                 return None
             if message is None:
                 with contextlib.suppress(Exception):
@@ -278,7 +292,22 @@ class OracleAsyncAQHub:
         self._pool_destroying_registered = True
 
     def _pool_destroying_hook(self, _context: "dict[str, Any]") -> "Any":
-        return self.shutdown()
+        session_cm = self._session_cm
+        self._queues.clear()
+        self._session_cm = None
+        self._session_driver = None
+        if session_cm is not None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return None
+            return loop.create_task(self._close_session_cm(session_cm))
+        return None
+
+    @staticmethod
+    async def _close_session_cm(session_cm: Any) -> None:
+        with contextlib.suppress(Exception):
+            await session_cm.__aexit__(None, None, None)
 
 
 def _apply_deq_options(

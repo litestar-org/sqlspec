@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 from sqlspec.exceptions import OutOfOrderMigrationError, SquashValidationError
-from sqlspec.migrations.version import parse_version
+from sqlspec.migrations.version import VersionType, parse_version
 from sqlspec.utils.logging import get_logger, log_with_context
 
 if TYPE_CHECKING:
@@ -81,7 +81,6 @@ def detect_out_of_order_migrations(
 
     gaps: list[MigrationGap] = []
 
-    # Filter out None values, empty strings, and whitespace-only strings
     valid_applied = [v for v in applied_versions if v is not None and v.strip()]
     valid_pending = [v for v in pending_versions if v is not None and v.strip()]
 
@@ -210,22 +209,43 @@ def validate_squash_range(
         SquashValidationError: If validation fails (invalid range, missing versions, gaps).
     """
     try:
-        start_int = int(start_version)
-        end_int = int(end_version)
+        parsed_start = parse_version(start_version)
+        parsed_end = parse_version(end_version)
     except ValueError as exc:
         msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
         raise SquashValidationError(msg) from exc
+
+    if (
+        parsed_start.type != VersionType.SEQUENTIAL
+        or parsed_end.type != VersionType.SEQUENTIAL
+        or parsed_start.sequence is None
+        or parsed_end.sequence is None
+    ):
+        msg = f"Squash range versions must be numeric: {start_version} to {end_version}"
+        raise SquashValidationError(msg)
+
+    if parsed_start.extension != parsed_end.extension:
+        msg = f"Cannot squash migrations from different extensions: {start_version} to {end_version}"
+        raise SquashValidationError(msg)
+
+    start_int = parsed_start.sequence
+    end_int = parsed_end.sequence
 
     if start_int > end_int:
         msg = f"Invalid range: start version {start_version} is greater than end version {end_version}"
         raise SquashValidationError(msg)
 
-    version_map: dict[str, Path] = dict(migrations)
+    parsed_map: dict[MigrationVersion, str] = {}
+    for version, _ in migrations:
+        try:
+            parsed_map[parse_version(version)] = version
+        except ValueError:
+            continue
 
-    if start_version not in version_map:
+    if parsed_start not in parsed_map:
         msg = f"Start version {start_version} not found in migrations"
         raise SquashValidationError(msg)
-    if end_version not in version_map:
+    if parsed_end not in parsed_map:
         msg = f"End version {end_version} not found in migrations"
         raise SquashValidationError(msg)
 
@@ -233,20 +253,25 @@ def validate_squash_range(
 
     for version, path in migrations:
         try:
-            version_int = int(version)
+            parsed = parse_version(version)
         except ValueError:
             continue
-        if start_int <= version_int <= end_int:
+        if (
+            parsed.type == VersionType.SEQUENTIAL
+            and parsed.extension == parsed_start.extension
+            and parsed.sequence is not None
+            and start_int <= parsed.sequence <= end_int
+        ):
             result.append((version, path))
 
-    result.sort(key=lambda x: int(x[0]))
+    result.sort(key=lambda x: parse_version(x[0]))
 
     if not result:
         msg = f"No migrations found in range {start_version} to {end_version}"
         raise SquashValidationError(msg)
 
     if not allow_gaps and len(result) > 1:
-        sorted_versions = [int(v) for v, _ in result]
+        sorted_versions = [parse_version(v).sequence or 0 for v, _ in result]
         for i in range(1, len(sorted_versions)):
             if sorted_versions[i] - sorted_versions[i - 1] != 1:
                 msg = f"Gap detected in version sequence between {sorted_versions[i - 1]:04d} and {sorted_versions[i]:04d}"
@@ -307,6 +332,20 @@ def validate_squash_idempotency(source_files: "list[Path]", target_file: "Path")
 
     if not target_exists and any_source_exists:
         return "ready"
+
+    if target_file in source_files:
+        remaining_sources = [f for f in source_files if f != target_file]
+        if not remaining_sources:
+            if target_exists and "Squashed from:" in target_file.read_text(encoding="utf-8"):
+                return "already_squashed"
+            return "ready"
+        remaining_exist = [f.exists() for f in remaining_sources]
+        if target_exists and all(remaining_exist):
+            return "ready"
+        if target_exists and not any(remaining_exist):
+            return "already_squashed"
+        if target_exists and any(remaining_exist):
+            return "partial"
 
     if target_exists and not any_source_exists:
         return "already_squashed"

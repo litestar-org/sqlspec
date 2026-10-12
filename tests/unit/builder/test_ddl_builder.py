@@ -308,3 +308,62 @@ def test_oracle_mixed_table_quote_provenance(schema: str) -> None:
 
     assert f"FROM {table} tracker#log" in query.sql
     assert ddl.sql.startswith(f"CREATE TABLE {table} (")
+
+
+def test_create_table_partition_by_renders_valid_partition_clause() -> None:
+    stmt = sql.create_table("events", dialect="postgres").column("id", "INT").partition_by("RANGE (created_at)").build()
+    assert 'PARTITION BY RANGE("created_at")' in stmt.sql
+    assert "'RANGE (created_at)'" not in stmt.sql
+
+
+def test_create_table_composite_primary_key_columns_and_named_pk() -> None:
+    composite_sql = (
+        sql
+        .create_table("memberships", dialect="postgres")
+        .column("org_id", "INT", primary_key=True)
+        .column("user_id", "INT", primary_key=True)
+        .build()
+        .sql
+    )
+    assert 'PRIMARY KEY ("org_id", "user_id")' in composite_sql
+    assert '"org_id" INT PRIMARY KEY' not in composite_sql
+
+    named_pk_sql = (
+        sql
+        .create_table("users", dialect="postgres")
+        .column("id", "INT", primary_key=True)
+        .primary_key_constraint("id", name="pk_users")
+        .build()
+        .sql
+    )
+    assert 'CONSTRAINT "pk_users" PRIMARY KEY ("id")' in named_pk_sql
+    assert '"id" INT PRIMARY KEY' not in named_pk_sql
+
+
+def test_alter_table_add_column_position_and_truncate_restrict() -> None:
+    after_sql = sql.alter_table("users", dialect="mysql").add_column("email", "VARCHAR(255)", after="name").build().sql
+    assert "AFTER `name`" in after_sql
+
+    first_sql = sql.alter_table("users", dialect="mysql").add_column("id", "INT", first=True).build().sql
+    assert "FIRST" in first_sql
+
+    restrict_sql = sql.truncate("users", dialect="postgres").restrict().build().sql
+    assert "RESTRICT" in restrict_sql
+
+
+def test_ddl_rebuilds_after_mutation_and_resets_parameters() -> None:
+    builder = sql.create_table("users", dialect="postgres").column("id", "INT")
+    first_sql = builder.build().sql
+    builder.column("name", "TEXT").if_not_exists()
+    second_sql = builder.build().sql
+    assert '"name"' not in first_sql
+    assert '"name"' in second_sql
+    assert "IF NOT EXISTS" in second_sql
+
+    union_query = sql.select("id").from_("a").where_eq("x", 1).union(sql.select("id").from_("b").where_eq("y", 2))
+    view_builder = sql.create_view("v_ids", dialect="postgres").as_select(union_query)
+    first_built = view_builder.build()
+    second_built = view_builder.build(dialect="sqlite")
+    assert first_built.parameters == second_built.parameters
+    assert "UNION" in first_built.sql
+    assert not hasattr(union_query, "_with_ctes") or len(union_query.with_ctes) == 0

@@ -18,14 +18,6 @@ from sqlspec.adapters.pymssql.events import PymssqlEventQueueStore
 from sqlspec.adapters.pymssql.litestar import PymssqlStore
 
 
-def _normalized(sql: str) -> str:
-    return " ".join(sql.split())
-
-
-def _qmark(sql: str) -> str:
-    return sql.replace("%s", "?")
-
-
 def test_adk_session_and_event_ddl_match() -> None:
     """ADK session and event table DDL and indexes match across drivers."""
     mssql_cfg = MssqlPythonConfig(extension_config={"adk": {"native_json": False}})
@@ -95,3 +87,25 @@ def test_litestar_store_ddl_matches() -> None:
 
     assert _normalized(MssqlPythonStore(mssql_cfg)._table_ddl()) == _normalized(PymssqlStore(pymssql_cfg)._table_ddl())
     assert MssqlPythonStore(mssql_cfg)._drop_table_sql() == PymssqlStore(pymssql_cfg)._drop_table_sql()
+
+
+def test_create_mapped_exception_ast_parity() -> None:
+    """create_mapped_exception in mssql_python.core and pymssql.core must remain AST-equivalent."""
+    import ast
+    import inspect
+
+    from sqlspec.adapters.mssql_python import core as mssql_core
+    from sqlspec.adapters.pymssql import core as pymssql_core
+
+    mssql_ast = ast.dump(ast.parse(inspect.getsource(mssql_core.create_mapped_exception)))
+    pymssql_ast = ast.dump(ast.parse(inspect.getsource(pymssql_core.create_mapped_exception)))
+    assert mssql_ast == pymssql_ast
+    assert mssql_core._ERROR_CODE_MAPPING == pymssql_core._ERROR_CODE_MAPPING
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _qmark(sql: str) -> str:
+    return sql.replace("%s", "?")

@@ -30,6 +30,17 @@ class AWSLogFormatter:
         "CRITICAL": "FATAL",
     }
 
+    def __hash__(self) -> int:
+        return hash(self.__class__.__name__)
+
+    def __repr__(self) -> str:
+        return "AWSLogFormatter()"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AWSLogFormatter):
+            return NotImplemented
+        return True
+
     def format(
         self,
         level: str,
@@ -77,14 +88,3 @@ class AWSLogFormatter:
             entry.update(extra)
 
         return entry
-
-    def __hash__(self) -> int:
-        return hash(self.__class__.__name__)
-
-    def __repr__(self) -> str:
-        return "AWSLogFormatter()"
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, AWSLogFormatter):
-            return NotImplemented
-        return True

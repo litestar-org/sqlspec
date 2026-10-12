@@ -64,6 +64,7 @@ _CONNECTION_STRING_KEYS: Final[tuple[tuple[str, str], ...]] = (
     ("driver", "Driver"),
     ("server", "Server"),
     ("host", "Server"),
+    ("port", "Port"),
     ("database", "Database"),
     ("uid", "UID"),
     ("pwd", "PWD"),
@@ -95,10 +96,10 @@ _SQL_SERVER_ONLY_OPTIONS: Final[frozenset[str]] = frozenset({
     "encrypt",
 })
 _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
-    ("mssql", ("sql server", "sqlserver", "microsoft sql", "msodbcsql")),
+    ("mssql", ("sql server", "sqlserver", "microsoft sql", "msodbcsql", "freetds", "tdsodbc")),
     ("oracle", ("oracle",)),
     ("mysql", ("mysql", "mariadb")),
-    ("postgres", ("postgres", "postgresql")),
+    ("postgres", ("postgres", "postgresql", "psqlodbc")),
     ("sqlite", ("sqlite",)),
     ("duckdb", ("duckdb",)),
     ("snowflake", ("snowflake",)),
@@ -107,11 +108,14 @@ _DIALECT_PATTERNS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
 _ARROW_ODBC_ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"Native error:\s*(-?\d+)")
 _ODBC_PUNCTUATION: Final[str] = "[]{}(),;?*=!@"
 _SQL_SERVER_DIAGNOSTIC_MARKERS: Final[tuple[str, ...]] = ("sql server", "msodbcsql")
+_MSSQL_CONSTRAINT_ERROR_CODE: Final[int] = 547
 _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     2601: (UniqueViolationError, "unique constraint violation"),
     2627: (UniqueViolationError, "unique constraint violation"),
-    547: (ForeignKeyViolationError, "foreign key or check constraint violation"),
+    _MSSQL_CONSTRAINT_ERROR_CODE: (ForeignKeyViolationError, "foreign key or check constraint violation"),
     515: (NotNullViolationError, "not-null constraint violation"),
+    229: (PermissionDeniedError, "permission denied"),
+    230: (PermissionDeniedError, "permission denied"),
     18456: (PermissionDeniedError, "permission denied"),
     4060: (DatabaseConnectionError, "database connection error"),
     53: (DatabaseConnectionError, "database connection error"),
@@ -128,9 +132,13 @@ _SPECIFIC_SQLSTATE_MAPPING: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
     "23503": (ForeignKeyViolationError, "foreign key constraint violation"),
     "23502": (NotNullViolationError, "not-null constraint violation"),
     "23513": (CheckViolationError, "check constraint violation"),
+    "23514": (CheckViolationError, "check constraint violation"),
     "40001": (DeadlockError, "deadlock detected"),
+    "42501": (PermissionDeniedError, "insufficient privilege"),
     "57033": (DeadlockError, "statement rolled back due to deadlock or timeout"),
     "57014": (QueryTimeoutError, "query timeout or cancellation"),
+    "HYT00": (QueryTimeoutError, "timeout expired"),
+    "HYT01": (DatabaseConnectionError, "connection timeout expired"),
 }
 _LOCK_TIMEOUT_SQLSTATES: Final[frozenset[str]] = frozenset({"40001", "57033"})
 _DB2_REASON_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r'Reason code\s*"?(\d+)"?', re.IGNORECASE)
@@ -162,35 +170,21 @@ def resolve_dialect_from_dbms_name(dbms_name: str | None) -> str:
     Returns:
         The matched dialect name, or ``"sqlite"`` when nothing identifies the driver.
     """
-    if not dbms_name:
-        return "sqlite"
-    driver_name = _connection_string_driver_name(dbms_name) if "=" in dbms_name else dbms_name
-    if not driver_name:
-        return "sqlite"
-    lowered = driver_name.lower()
-    for dialect, patterns in _DIALECT_PATTERNS:
-        if any(pattern in lowered for pattern in patterns):
-            return dialect
-    return "sqlite"
+    matched = _match_dialect_from_dbms_name(dbms_name)
+    return matched if matched is not None else "sqlite"
 
 
-def _connection_string_driver_name(connection_string: str) -> "str | None":
-    """Return the unbraced Driver value of a connection string, falling back to its DSN value."""
-    options = parse_odbc_connection_string(connection_string)
-    for wanted in ("driver", "dsn"):
-        for key, value in options:
-            if key.lower() == wanted:
-                return value.strip().removeprefix("{").removesuffix("}").strip()
-    return None
-
-
-def create_mapped_exception(error: Exception, *, logger: Any | None = None) -> SQLSpecError:
+def create_mapped_exception(error: BaseException, *, logger: Any | None = None) -> SQLSpecError:
     """Map an arrow-odbc exception to SQLSpec's exception hierarchy."""
     del logger
     message = str(error)
     if _is_sql_server_diagnostic(message):
         error_number = extract_native_error_number(error)
         if error_number is not None:
+            if error_number == _MSSQL_CONSTRAINT_ERROR_CODE and "check constraint" in message.lower():
+                return CheckViolationError(
+                    f"ODBC SQL Server error {error_number}: check constraint violation. Original error: {error}"
+                )
             mapping = _ERROR_CODE_MAPPING.get(error_number)
             if mapping is not None:
                 error_class, description = mapping
@@ -229,6 +223,14 @@ def apply_driver_features(
         "json_deserializer": from_json,
     }
     defaults.update(driver_features or {})
+    serializer = defaults.get("json_serializer")
+    deserializer = defaults.get("json_deserializer")
+    if serializer is not to_json or deserializer is not from_json:
+        statement_config = statement_config.replace(
+            parameter_config=statement_config.parameter_config.with_json_serializers(
+                serializer or to_json, deserializer=deserializer
+            )
+        )
     return statement_config, defaults
 
 
@@ -239,6 +241,7 @@ _CANONICAL_KEY_LOOKUP: Final[dict[str, str]] = {
     "host": "Server",
     "address": "Server",
     "addr": "Server",
+    "port": "Port",
     "database": "Database",
     "db": "Database",
     "uid": "UID",
@@ -257,20 +260,7 @@ _CANONICAL_KEY_LOOKUP: Final[dict[str, str]] = {
 }
 
 
-def _append_port(server: str, port: Any) -> str:
-    """Append a port number to a server hostname for ODBC."""
-    if port is None:
-        return server
-    port_str = str(port).strip()
-    if not port_str:
-        return server
-    if "," in server:
-        host = server.split(",", 1)[0]
-        return f"{host},{port_str}"
-    return f"{server},{port_str}"
-
-
-def build_connection_config(params: dict[str, Any], *, dialect: str = "mssql") -> tuple[str, dict[str, Any]]:
+def build_connection_config(params: dict[str, Any], *, dialect: str | None = None) -> tuple[str, dict[str, Any]]:
     """Build arrow-odbc connection arguments with explicit-field precedence and key deduplication.
 
     When both ``connection_string`` and discrete connection fields are provided,
@@ -280,8 +270,9 @@ def build_connection_config(params: dict[str, Any], *, dialect: str = "mssql") -
 
     For the ``db2`` dialect, host and port render as the IBM CLI ``Hostname`` and
     ``Port`` keywords, ``Protocol=TCPIP`` is added when a host is present and no
-    protocol is configured, and SQL Server-only options are refused. Every other
-    dialect uses the SQL Server keyword set with ``Server=host,port``.
+    protocol is configured, and SQL Server-only options are refused. SQL Server
+    combines host and port as ``Server=host,port``; other dialects emit separate
+    ``Server`` and ``Port`` keywords.
 
     Args:
         params: Raw connection configuration.
@@ -309,50 +300,14 @@ def build_connection_config(params: dict[str, Any], *, dialect: str = "mssql") -
     if connection_string is not None and not config:
         return str(connection_string), connect_kwargs
 
-    if dialect == "db2":
+    resolved_dialect = _resolve_connection_dialect(config, connection_string, dialect)
+    if resolved_dialect == "db2":
         return _build_db2_connection_string(config, connection_string), connect_kwargs
 
     if connection_string is not None:
-        options: dict[str, tuple[str, str]] = {}
-        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
-            canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
-            options[canonical_key.lower()] = (canonical_key, raw_value)
+        return _merge_connection_string(config, str(connection_string), resolved_dialect), connect_kwargs
 
-        server = config.pop("server", None)
-        if server is None:
-            server = config.pop("host", None)
-        port = config.pop("port", None)
-        if server is not None:
-            options["server"] = ("Server", _format_connection_value("Server", _append_port(str(server), port)))
-        elif port is not None and "server" in options:
-            disp, val = options["server"]
-            options["server"] = (disp, _format_connection_value(disp, _append_port(val, port)))
-
-        consumed: set[str] = set()
-        for key, option_name in _CONNECTION_STRING_KEYS:
-            if key in ("server", "host"):
-                continue
-            value = config.get(key)
-            if value is not None:
-                canonical_name = _CANONICAL_KEY_LOOKUP.get(option_name.lower(), option_name)
-                options[canonical_name.lower()] = (canonical_name, _format_connection_value(canonical_name, value))
-            consumed.add(key)
-
-        for remaining_key, remaining_value in config.items():
-            if remaining_key in consumed or remaining_value is None:
-                continue
-            canonical_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
-            options[canonical_key.lower()] = (canonical_key, _format_connection_value(canonical_key, remaining_value))
-
-        merged_parts = [f"{name}={val}" for name, val in options.values()]
-        return ";".join(merged_parts) + ";", connect_kwargs
-
-    server = config.pop("server", None)
-    if server is None:
-        server = config.pop("host", None)
-    port = config.pop("port", None)
-    if server is not None:
-        config["server"] = _append_port(str(server), port)
+    _apply_standalone_host_port(config, resolved_dialect)
 
     parts: list[str] = []
     standalone_consumed: set[str] = set()
@@ -373,47 +328,6 @@ def build_connection_config(params: dict[str, Any], *, dialect: str = "mssql") -
         raise ImproperConfigurationError(msg)
 
     return ";".join(parts) + ";", connect_kwargs
-
-
-def _build_db2_connection_string(config: "dict[str, Any]", connection_string: Any) -> str:
-    """Render an IBM Db2 CLI connection string from a base string and discrete fields.
-
-    Args:
-        config: Discrete connection fields, which override matching options.
-        connection_string: Optional base connection string.
-
-    Returns:
-        The connection string with CLI keywords in canonical order, followed by
-        any other options in the order they were given.
-
-    Raises:
-        ImproperConfigurationError: If a SQL Server-only option is configured, or
-            no connection option is present.
-    """
-    for key, value in config.items():
-        if value is not None and key.lower() in _SQL_SERVER_ONLY_OPTIONS:
-            msg = f"{key!r} is a SQL Server option and is not supported for Db2."
-            raise ImproperConfigurationError(msg)
-
-    options: dict[str, tuple[str, str]] = {}
-    if connection_string is not None:
-        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
-            name = _DB2_CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
-            options[name.lower()] = (name, raw_value)
-    for key, value in config.items():
-        if value is None:
-            continue
-        name = _DB2_CANONICAL_KEY_LOOKUP.get(key.lower(), key)
-        options[name.lower()] = (name, _format_connection_value(name, value))
-    if "hostname" in options and "protocol" not in options:
-        options["protocol"] = ("Protocol", "TCPIP")
-    if not options:
-        msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
-        raise ImproperConfigurationError(msg)
-
-    ordered = [options[key] for key in _DB2_KEYWORD_ORDER if key in options]
-    ordered.extend(option for key, option in options.items() if key not in _DB2_KEYWORD_ORDER)
-    return ";".join(f"{name}={value}" for name, value in ordered) + ";"
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -442,30 +356,6 @@ def build_statement_config(*, dialect: str = "sqlite", json_serializer: "Any" = 
     )
 
 
-def _identity(value: Any) -> Any:
-    return value
-
-
-_CUSTOM_TYPE_COERCIONS: Final["dict[type, Callable[[Any], Any]]"] = {
-    bool: _identity,
-    int: _identity,
-    float: _identity,
-    str: _identity,
-    bytes: _identity,
-    **build_uuid_coercions(native=False),
-}
-
-
-def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
-    """Return custom type coercions for arrow-odbc."""
-    return dict(_CUSTOM_TYPE_COERCIONS)
-
-
-def _extract_sqlstate(message: str) -> "str | None":
-    match = _ARROW_ODBC_SQLSTATE_PATTERN.search(message)
-    return match.group(1) if match is not None else None
-
-
 def extract_native_error_number(error: BaseException) -> "int | None":
     """Return the ``Native error`` number an arrow-odbc diagnostic carries.
 
@@ -482,11 +372,6 @@ def extract_native_error_number(error: BaseException) -> "int | None":
         return int(match.group(1))
     except ValueError:
         return None
-
-
-def _is_db2_lock_timeout(message: str) -> bool:
-    match = _DB2_REASON_CODE_PATTERN.search(message)
-    return match is not None and match.group(1) == _DB2_LOCK_TIMEOUT_REASON_CODE
 
 
 def normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":
@@ -547,6 +432,185 @@ def db2_timestamp_text(value: "datetime | None") -> "str | None":
     return value.isoformat(sep=" ", timespec="microseconds")
 
 
+def _match_dialect_from_dbms_name(dbms_name: str | None) -> str | None:
+    if not dbms_name:
+        return None
+    driver_name = _connection_string_driver_name(dbms_name) if "=" in dbms_name else dbms_name
+    if not driver_name:
+        return None
+    lowered = driver_name.lower()
+    for dialect, patterns in _DIALECT_PATTERNS:
+        if any(pattern in lowered for pattern in patterns):
+            return dialect
+    return None
+
+
+def _resolve_connection_dialect(config: "dict[str, Any]", connection_string: Any, dialect: str | None) -> str:
+    if dialect is not None:
+        return dialect
+    for candidate in (config.get("driver"), config.get("dsn"), connection_string):
+        if candidate is None:
+            continue
+        matched = _match_dialect_from_dbms_name(str(candidate))
+        if matched is not None:
+            return matched
+    return "mssql"
+
+
+def _apply_standalone_host_port(config: "dict[str, Any]", resolved_dialect: str) -> None:
+    server = config.pop("server", None)
+    if server is None:
+        server = config.pop("host", None)
+    port = config.pop("port", None)
+    if resolved_dialect == "mssql":
+        if server is not None:
+            config["server"] = _append_port(str(server), port)
+        elif port is not None:
+            config["port"] = port
+        return
+    if server is not None:
+        config["server"] = str(server)
+    if port is not None:
+        config["port"] = port
+
+
+def _merge_connection_string(config: "dict[str, Any]", connection_string: str, resolved_dialect: str) -> str:
+    options: dict[str, tuple[str, str]] = {}
+    for raw_key, raw_value in parse_odbc_connection_string(connection_string):
+        canonical_key = _CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
+        options[canonical_key.lower()] = (canonical_key, raw_value)
+
+    server = config.pop("server", None)
+    if server is None:
+        server = config.pop("host", None)
+    port = config.pop("port", None)
+    if resolved_dialect == "mssql":
+        if server is not None:
+            options["server"] = ("Server", _format_connection_value("Server", _append_port(str(server), port)))
+        elif port is not None and "server" in options:
+            disp, val = options["server"]
+            options["server"] = (disp, _format_connection_value(disp, _append_port(val, port)))
+        elif port is not None:
+            options["port"] = ("Port", _format_connection_value("Port", port))
+    else:
+        if server is not None:
+            options["server"] = ("Server", _format_connection_value("Server", server))
+        if port is not None:
+            options["port"] = ("Port", _format_connection_value("Port", port))
+
+    consumed: set[str] = {"port"}
+    for key, option_name in _CONNECTION_STRING_KEYS:
+        if key in ("server", "host", "port"):
+            continue
+        value = config.get(key)
+        if value is not None:
+            canonical_name = _CANONICAL_KEY_LOOKUP.get(option_name.lower(), option_name)
+            options[canonical_name.lower()] = (canonical_name, _format_connection_value(canonical_name, value))
+        consumed.add(key)
+
+    for remaining_key, remaining_value in config.items():
+        if remaining_key in consumed or remaining_value is None:
+            continue
+        canonical_key = _CANONICAL_KEY_LOOKUP.get(remaining_key.lower(), remaining_key)
+        options[canonical_key.lower()] = (canonical_key, _format_connection_value(canonical_key, remaining_value))
+
+    merged_parts = [f"{name}={val}" for name, val in options.values()]
+    return ";".join(merged_parts) + ";"
+
+
+def _connection_string_driver_name(connection_string: str) -> "str | None":
+    """Return the unbraced Driver value of a connection string, falling back to its DSN value."""
+    options = parse_odbc_connection_string(connection_string)
+    for wanted in ("driver", "dsn"):
+        for key, value in options:
+            if key.lower() == wanted:
+                return value.strip().removeprefix("{").removesuffix("}").strip()
+    return None
+
+
+def _append_port(server: str, port: Any) -> str:
+    """Append a port number to a server hostname for ODBC."""
+    if port is None:
+        return server
+    port_str = str(port).strip()
+    if not port_str:
+        return server
+    if "," in server:
+        host = server.split(",", 1)[0]
+        return f"{host},{port_str}"
+    return f"{server},{port_str}"
+
+
+def _build_db2_connection_string(config: "dict[str, Any]", connection_string: Any) -> str:
+    """Render an IBM Db2 CLI connection string from a base string and discrete fields.
+
+    Args:
+        config: Discrete connection fields, which override matching options.
+        connection_string: Optional base connection string.
+
+    Returns:
+        The connection string with CLI keywords in canonical order, followed by
+        any other options in the order they were given.
+
+    Raises:
+        ImproperConfigurationError: If a SQL Server-only option is configured, or
+            no connection option is present.
+    """
+    for key, value in config.items():
+        if value is not None and key.lower() in _SQL_SERVER_ONLY_OPTIONS:
+            msg = f"{key!r} is a SQL Server option and is not supported for Db2."
+            raise ImproperConfigurationError(msg)
+
+    options: dict[str, tuple[str, str]] = {}
+    if connection_string is not None:
+        for raw_key, raw_value in parse_odbc_connection_string(str(connection_string)):
+            name = _DB2_CANONICAL_KEY_LOOKUP.get(raw_key.lower(), raw_key)
+            options[name.lower()] = (name, raw_value)
+    for key, value in config.items():
+        if value is None:
+            continue
+        name = _DB2_CANONICAL_KEY_LOOKUP.get(key.lower(), key)
+        options[name.lower()] = (name, _format_connection_value(name, value))
+    if "hostname" in options and "protocol" not in options:
+        options["protocol"] = ("Protocol", "TCPIP")
+    if not options:
+        msg = "arrow-odbc connection_config requires 'connection_string' or ODBC connection fields."
+        raise ImproperConfigurationError(msg)
+
+    ordered = [options[key] for key in _DB2_KEYWORD_ORDER if key in options]
+    ordered.extend(option for key, option in options.items() if key not in _DB2_KEYWORD_ORDER)
+    return ";".join(f"{name}={value}" for name, value in ordered) + ";"
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+_CUSTOM_TYPE_COERCIONS: Final["dict[type, Callable[[Any], Any]]"] = {
+    bool: _identity,
+    int: _identity,
+    float: _identity,
+    str: _identity,
+    bytes: _identity,
+    **build_uuid_coercions(native=False),
+}
+
+
+def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
+    """Return custom type coercions for arrow-odbc."""
+    return dict(_CUSTOM_TYPE_COERCIONS)
+
+
+def _extract_sqlstate(message: str) -> "str | None":
+    match = _ARROW_ODBC_SQLSTATE_PATTERN.search(message)
+    return match.group(1) if match is not None else None
+
+
+def _is_db2_lock_timeout(message: str) -> bool:
+    match = _DB2_REASON_CODE_PATTERN.search(message)
+    return match is not None and match.group(1) == _DB2_LOCK_TIMEOUT_REASON_CODE
+
+
 def _is_sql_server_diagnostic(message: str) -> bool:
     lowered = message.lower()
     return any(marker in lowered for marker in _SQL_SERVER_DIAGNOSTIC_MARKERS)
@@ -592,5 +656,4 @@ def _format_connection_value(option_name: str, value: Any) -> str:
 
 
 driver_profile = build_profile()
-
 default_statement_config = build_statement_config()

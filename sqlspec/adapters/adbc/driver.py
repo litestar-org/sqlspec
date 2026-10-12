@@ -9,16 +9,18 @@ from typing import TYPE_CHECKING, Any, Literal, cast, final
 
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
-    _prepare_batch_with_casts,
+    apply_driver_features,
     collect_rows,
     create_mapped_exception,
     detect_dialect,
     driver_profile,
+    enforce_strict_type_coercion,
     get_statement_config,
     handle_postgres_rollback,
     is_postgres_dialect,
     normalize_postgres_empty_parameters,
     normalize_script_rowcount,
+    prepare_batch_with_casts,
     prepare_postgres_parameters,
     prepare_postgres_uuid_bindings,
     resolve_column_names,
@@ -40,9 +42,9 @@ from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, Sync
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import to_json
-from sqlspec.utils.text import normalize_identifier, quote_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -57,9 +59,12 @@ if TYPE_CHECKING:
 __all__ = ("AdbcCursor", "AdbcDriver", "AdbcExceptionHandler", "AdbcSessionContext")
 
 logger = get_logger("sqlspec.adapters.adbc")
+_pa: Any = import_optional("pyarrow")
 _DIALECTS_WITHOUT_SAVEPOINTS = frozenset({"bigquery", "duckdb", "snowflake"})
 
 _MULTI_ROW_BIND_UNSUPPORTED = "Binding multiple rows at once is not supported"
+_SCHEMA_QUALIFIED_PARTS = 2
+_CATALOG_QUALIFIED_PARTS = 3
 
 
 @final
@@ -99,6 +104,7 @@ class AdbcSelectStreamSource:
 
     def start(self) -> None:
         cursor_manager = self._driver.with_cursor(self._driver.connection)
+        cursor: Any = None
         reader: Any = None
         try:
             cursor = cursor_manager.__enter__()
@@ -109,13 +115,12 @@ class AdbcSelectStreamSource:
                 reader = _fetch_record_batch(cursor)
             self._driver._check_pending_exception(handler)
         except BaseException:
+            if cursor is not None:
+                handle_postgres_rollback(self._driver._dialect_name, cursor, logger)
             with contextlib.suppress(Exception):
                 cursor_manager.__exit__(None, None, None)
             raise
 
-        if reader is None:
-            msg = "ADBC did not return a record batch reader."
-            raise SQLSpecError(msg)
         self._cursor_manager = cursor_manager
         self._reader = iter(reader)
 
@@ -174,14 +179,25 @@ class AdbcDriver(SyncDriverAdapterBase):
         *,
         dialect: "str | None" = None,
     ) -> None:
-        self._detected_dialect = detect_dialect(connection, logger, fallback_dialect=dialect)
+        configured_dialect = resolve_dialect_name(statement_config.dialect) if statement_config is not None else None
+        fallback_dialect = dialect or configured_dialect
+        self._detected_dialect = detect_dialect(connection, logger, fallback_dialect=fallback_dialect)
         self._is_flightsql = self._detect_flightsql_connection(connection)
 
         if statement_config is None:
             base_config = get_statement_config(self._detected_dialect)
             statement_config = base_config.replace(enable_caching=get_cache_config().compiled_cache_enabled)
+        elif (
+            dialect is None
+            and configured_dialect
+            and self._detected_dialect != configured_dialect
+            and not (self._detected_dialect == "postgres" and is_postgres_dialect(configured_dialect))
+        ):
+            base_config = get_statement_config(self._detected_dialect)
+            statement_config = base_config.replace(enable_caching=statement_config.enable_caching)
 
-        super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
+        statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
+        super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
         self.dialect = statement_config.dialect
         self._dialect_name = dialect or resolve_dialect_name(self.dialect)
         self._is_postgres = is_postgres_dialect(self._dialect_name)
@@ -190,15 +206,16 @@ class AdbcDriver(SyncDriverAdapterBase):
         self._column_name_cache: dict[int, tuple[Any, list[str]]] = {}
         self._transaction_active = False
 
-    def _compiled_sql(
-        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
-    ) -> "tuple[str, object]":
-        compiled_sql, prepared_parameters = super()._compiled_sql(
-            statement, statement_config, flatten_single_parameters=flatten_single_parameters
-        )
-        return prepare_postgres_uuid_bindings(
-            compiled_sql, prepared_parameters, is_many=statement.is_many, dialect=self._dialect_name
-        )
+    @property
+    def data_dictionary(self) -> "AdbcDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = AdbcDataDictionary()
+        return self._data_dictionary
 
     def dispatch_execute(self, cursor: "AdbcRawCursor", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
@@ -309,7 +326,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         last_rowcount = 0
         try:
             for stmt in statements:
-                if prepared_parameters:
+                if prepared_parameters and (
+                    len(statements) == 1 or any(marker in stmt for marker in ("?", "$", "%", "@", ":"))
+                ):
                     postgres_compatible_params = normalize_postgres_empty_parameters(
                         self._dialect_name, prepared_parameters
                     )
@@ -353,17 +372,16 @@ class AdbcDriver(SyncDriverAdapterBase):
         try:
             self.connection.commit()
         except AdbcNativeError as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
-        self._transaction_active = False
+            raise create_mapped_exception(e) from e
+        finally:
+            self._transaction_active = False
 
     def rollback(self) -> None:
         """Rollback database transaction."""
         try:
             self.connection.rollback()
         except AdbcNativeError as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
 
@@ -516,19 +534,30 @@ class AdbcDriver(SyncDriverAdapterBase):
                     raise
 
             if exc_handler.pending_exception is not None:
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        cursor_manager.__exit__(None, None, None)
                 raise exc_handler.pending_exception from None
             if arrow_result is not None:
                 return arrow_result
             if cursor is None or reader is None:
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        cursor_manager.__exit__(None, None, None)
                 msg = "ADBC did not return an Arrow reader."
                 raise SQLSpecError(msg)
-            return build_arrow_result_from_reader(
-                prepared_statement,
-                arrow_reader_with_deferred_close(reader, cursor.close),
-                return_format=return_format,
-                batch_size=batch_size,
-                arrow_schema=arrow_schema,
-            )
+            try:
+                return build_arrow_result_from_reader(
+                    prepared_statement,
+                    arrow_reader_with_deferred_close(reader, cursor.close),
+                    return_format=return_format,
+                    batch_size=batch_size,
+                    arrow_schema=arrow_schema,
+                )
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    cursor_manager.__exit__(None, None, None)
+                raise
 
         with self.with_cursor(self.connection) as cursor, exc_handler:
             if cursor is None:
@@ -597,16 +626,21 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         self._require_capability("arrow_import_enabled")
         ensure_pyarrow()
-        import pyarrow as pa
 
-        source_data = source.get_data() if hasattr(source, "get_data") else source
+        source_data: Any = source.get_data() if hasattr(source, "get_data") else source
         ingest_mode: Literal["append", "create", "replace", "create_append"]
         ingest_mode = "replace" if overwrite else "create_append"
-        if isinstance(source_data, pa.RecordBatchReader):
+        target_table, ingest_kwargs = _parse_adbc_ingest_target(table, mode=ingest_mode)
+
+        if isinstance(source_data, _pa.RecordBatchReader):
             row_count = 0
             exc_handler = self.handle_database_exceptions()
             with self.with_cursor(self.connection) as cursor, exc_handler:
-                ingest_result = cursor.adbc_ingest(table, source_data, mode=ingest_mode)
+                try:
+                    ingest_result = cursor.adbc_ingest(target_table, source_data, **ingest_kwargs)
+                except Exception:
+                    handle_postgres_rollback(self._dialect_name, cursor, logger)
+                    raise
                 if isinstance(ingest_result, int) and ingest_result > 0:
                     row_count = ingest_result
 
@@ -624,7 +658,11 @@ class AdbcDriver(SyncDriverAdapterBase):
         arrow_table = self._coerce_arrow_table(source_data)
         exc_handler = self.handle_database_exceptions()
         with self.with_cursor(self.connection) as cursor, exc_handler:
-            cursor.adbc_ingest(table, arrow_table, mode=ingest_mode)
+            try:
+                cursor.adbc_ingest(target_table, arrow_table, **ingest_kwargs)
+            except Exception:
+                handle_postgres_rollback(self._dialect_name, cursor, logger)
+                raise
 
         if exc_handler.pending_exception is not None:
             raise exc_handler.pending_exception from None
@@ -646,17 +684,6 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    @property
-    def data_dictionary(self) -> "AdbcDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = AdbcDataDictionary()
-        return self._data_dictionary
 
     def collect_rows(self, cursor: "AdbcRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect ADBC rows for the direct execution path."""
@@ -692,6 +719,9 @@ class AdbcDriver(SyncDriverAdapterBase):
         Returns:
             Parameters with cast-aware type coercion applied
         """
+        if self.driver_features.get("enable_strict_type_coercion", False):
+            enforce_strict_type_coercion(parameters, is_many=is_many)
+
         enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
         if enable_cast_detection and prepared_statement and self._is_postgres:
             prepared_parameters = super().prepare_driver_parameters(
@@ -701,7 +731,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             if is_many:
                 if not parameter_casts or not isinstance(prepared_parameters, (list, tuple)):
                     return prepared_parameters
-                return _prepare_batch_with_casts(
+                return prepare_batch_with_casts(
                     prepared_parameters,
                     parameter_casts,
                     statement_config,
@@ -717,6 +747,16 @@ class AdbcDriver(SyncDriverAdapterBase):
             )
 
         return super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+
+    def _compiled_sql(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
+    ) -> "tuple[str, object]":
+        compiled_sql, prepared_parameters = super()._compiled_sql(
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
+        )
+        return prepare_postgres_uuid_bindings(
+            compiled_sql, prepared_parameters, is_many=statement.is_many, dialect=self._dialect_name
+        )
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.
@@ -771,12 +811,33 @@ class AdbcDriver(SyncDriverAdapterBase):
         return fallback
 
 
+def _parse_adbc_ingest_target(
+    table: str, *, mode: Literal["append", "create", "replace", "create_append"]
+) -> "tuple[str, dict[str, Any]]":
+    kwargs: dict[str, Any] = {"mode": mode}
+    if "." not in table:
+        return table, kwargs
+    parts = split_qualified_identifier(table, quote_chars='"')
+    if len(parts) == _SCHEMA_QUALIFIED_PARTS:
+        kwargs["db_schema_name"] = parts[0]
+        return parts[1], kwargs
+    if len(parts) >= _CATALOG_QUALIFIED_PARTS:
+        kwargs["catalog_name"] = parts[0]
+        kwargs["db_schema_name"] = parts[1]
+        return parts[-1], kwargs
+    return table, kwargs
+
+
 def _fetch_record_batch(cursor: Any) -> Any:
     fetch_record_batch = getattr(cursor, "fetch_record_batch", None)
     if fetch_record_batch is None:
         msg = "ADBC cursor does not expose fetch_record_batch() for native row streaming."
         raise SQLSpecError(msg)
-    return fetch_record_batch()
+    reader = fetch_record_batch()
+    if reader is None:
+        msg = "ADBC did not return a record batch reader."
+        raise SQLSpecError(msg)
+    return reader
 
 
 register_driver_profile("adbc", driver_profile)

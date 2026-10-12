@@ -54,10 +54,16 @@ class PyMysqlADKConfig(ADKConfig):
 class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
     """MySQL/MariaDB ADK store using PyMySQL."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "PyMysqlConfig") -> None:
         super().__init__(config)
+        driver_features = getattr(config, "driver_features", None)
+        features = driver_features if isinstance(driver_features, Mapping) else {}
+        serializer = features.get("json_serializer")
+        deserializer = features.get("json_deserializer")
+        self._json_serializer = serializer if callable(serializer) else to_json
+        self._json_deserializer = deserializer if callable(deserializer) else from_json
 
     def create_tables(self) -> None:
         """Create all ADK session tables if they don't exist."""
@@ -66,6 +72,7 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
             return
 
         _create_tables(self)
+        self.reconcile_schema(assume_existing=True)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -221,10 +228,16 @@ class PyMysqlADKStore(BaseSyncADKStore["PyMysqlConfig"]):
 class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
     """MySQL/MariaDB ADK memory store using PyMySQL."""
 
-    __slots__ = ()
+    __slots__ = ("_json_deserializer", "_json_serializer")
 
     def __init__(self, config: "PyMysqlConfig") -> None:
         super().__init__(config)
+        driver_features = getattr(config, "driver_features", None)
+        features = driver_features if isinstance(driver_features, Mapping) else {}
+        serializer = features.get("json_serializer")
+        deserializer = features.get("json_deserializer")
+        self._json_serializer = serializer if callable(serializer) else to_json
+        self._json_deserializer = deserializer if callable(deserializer) else from_json
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -233,6 +246,8 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             return
 
         self._create_tables()
+        if self._enabled:
+            self.reconcile_schema(assume_existing=True)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with deduplication."""
@@ -329,6 +344,8 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
             """
 
         with self._config.provide_connection() as conn:
+            if hasattr(conn, "begin"):
+                conn.begin()
             cursor = conn.cursor()
             try:
                 for entry in entries:
@@ -344,9 +361,11 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
                             entry.get("author"),
                             owner_id,
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            self._json_serializer(entry["content_json"]),
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            self._json_serializer(entry["metadata_json"])
+                            if entry.get("metadata_json") is not None
+                            else None,
                             entry["inserted_at"],
                         )
                     else:
@@ -359,13 +378,19 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
                             entry["event_id"],
                             entry.get("author"),
                             entry["timestamp"],
-                            to_json(entry["content_json"]),
+                            self._json_serializer(entry["content_json"]),
                             entry["content_text"],
-                            to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                            self._json_serializer(entry["metadata_json"])
+                            if entry.get("metadata_json") is not None
+                            else None,
                             entry["inserted_at"],
                         )
                     cursor.execute(sql, params)
                     inserted_count += cursor.rowcount
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
             finally:
                 cursor.close()
             conn.commit()
@@ -418,9 +443,11 @@ class PyMysqlADKMemoryStore(BaseSyncADKMemoryStore["PyMysqlConfig"]):
         records: list[StoredMemory] = []
         for row in rows:
             record = cast("StoredMemory", dict(zip(columns, row, strict=False)))
-            record["content_json"] = _json_dict(record.get("content_json"))
+            record["content_json"] = _json_dict(record.get("content_json"), deserializer=self._json_deserializer)
             metadata_val = record.get("metadata_json")
-            record["metadata_json"] = _json_dict(metadata_val) if metadata_val is not None else None
+            record["metadata_json"] = (
+                _json_dict(metadata_val, deserializer=self._json_deserializer) if metadata_val is not None else None
+            )
             record["embedding"] = None
             records.append(record)
         return records
@@ -488,13 +515,13 @@ def _create_session(
         INSERT INTO {store._session_table} (id, app_name, user_id, {store._owner_id_column_name}, state, create_time, update_time)
         VALUES (%s, %s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
         """
-        params = (session_id, app_name, user_id, owner_id, to_json(state))
+        params = (session_id, app_name, user_id, owner_id, store._json_serializer(state))
     else:
         sql = f"""
         INSERT INTO {store._session_table} (id, app_name, user_id, state, create_time, update_time)
         VALUES (%s, %s, %s, %s, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
         """
-        params = (session_id, app_name, user_id, to_json(state))
+        params = (session_id, app_name, user_id, store._json_serializer(state))
 
     with store._config.provide_connection() as conn:
         cursor = conn.cursor()
@@ -540,7 +567,7 @@ def _select_session(
                 row = cursor.fetchone()
             finally:
                 cursor.close()
-        return _session_record_from_row(row) if row is not None else None
+        return _session_record_from_row(row, deserializer=store._json_deserializer) if row is not None else None
     except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return None
@@ -558,7 +585,7 @@ def _update_session_state(
     with store._config.provide_connection() as conn:
         cursor = conn.cursor()
         try:
-            cursor.execute(sql, (to_json(state), app_name, user_id, session_id))
+            cursor.execute(sql, (store._json_serializer(state), app_name, user_id, session_id))
         finally:
             cursor.close()
         conn.commit()
@@ -590,7 +617,7 @@ def _list_sessions(
                 rows = cursor.fetchall()
             finally:
                 cursor.close()
-        return [_session_record_from_row(row) for row in rows]
+        return [_session_record_from_row(row, deserializer=store._json_deserializer) for row in rows]
     except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return []
@@ -617,7 +644,7 @@ def _append_event(store: PyMysqlADKStore, event_record: StoredEvent) -> None:
     with store._config.provide_connection() as conn:
         cursor = conn.cursor()
         try:
-            cursor.execute(sql, _event_insert_params(event_record))
+            cursor.execute(sql, _event_insert_params(event_record, serializer=store._json_serializer))
         finally:
             cursor.close()
         conn.commit()
@@ -651,9 +678,11 @@ def _append_event_and_update_state(
     """
 
     with store._config.provide_connection() as conn:
+        if hasattr(conn, "begin"):
+            conn.begin()
         cursor = conn.cursor()
         try:
-            cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
+            cursor.execute(update_sql, (store._json_serializer(state), app_name, user_id, session_id))
             cursor.execute(select_sql, (app_name, user_id, session_id))
             row = cursor.fetchone()
             if row is None:
@@ -667,14 +696,17 @@ def _append_event_and_update_state(
                     session_id,
                     event_record["invocation_id"],
                     event_record["timestamp"],
-                    _json_for_storage(event_record["event_data"]),
+                    _json_for_storage(event_record["event_data"], serializer=store._json_serializer),
                 ),
             )
             if app_state is not None:
-                cursor.execute(_mysql_upsert_app_state_sql(store._app_state_table), (app_name, to_json(app_state)))
+                cursor.execute(
+                    _mysql_upsert_app_state_sql(store._app_state_table), (app_name, store._json_serializer(app_state))
+                )
             if user_state is not None:
                 cursor.execute(
-                    _mysql_upsert_user_state_sql(store._user_state_table), (app_name, user_id, to_json(user_state))
+                    _mysql_upsert_user_state_sql(store._user_state_table),
+                    (app_name, user_id, store._json_serializer(user_state)),
                 )
         except Exception:
             conn.rollback()
@@ -683,7 +715,7 @@ def _append_event_and_update_state(
             cursor.close()
         conn.commit()
 
-    return _session_record_from_row(row)
+    return _session_record_from_row(row, deserializer=store._json_deserializer)
 
 
 def _select_events(
@@ -722,7 +754,7 @@ def _select_events(
                 rows = cursor.fetchall()
             finally:
                 cursor.close()
-        return [_event_record_from_row(row) for row in rows]
+        return [_event_record_from_row(row, deserializer=store._json_deserializer) for row in rows]
     except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return []
@@ -784,7 +816,7 @@ def _state(
                 row = cursor.fetchone()
             finally:
                 cursor.close()
-        return _json_dict(row[0]) if row is not None else None
+        return _json_dict(row[0], deserializer=store._json_deserializer) if row is not None else None
     except PyMysqlMySQLError as exc:
         if _is_mysql_table_missing(exc):
             return None
@@ -792,11 +824,15 @@ def _state(
 
 
 def _upsert_app_state(store: PyMysqlADKStore, app_name: str, state: "dict[str, Any]") -> None:
-    _execute_commit(store, _mysql_upsert_app_state_sql(store._app_state_table), (app_name, to_json(state)))
+    _execute_commit(
+        store, _mysql_upsert_app_state_sql(store._app_state_table), (app_name, store._json_serializer(state))
+    )
 
 
 def _upsert_user_state(store: PyMysqlADKStore, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
-    _execute_commit(store, _mysql_upsert_user_state_sql(store._user_state_table), (app_name, user_id, to_json(state)))
+    _execute_commit(
+        store, _mysql_upsert_user_state_sql(store._user_state_table), (app_name, user_id, store._json_serializer(state))
+    )
 
 
 def _metadata(store: PyMysqlADKStore, key: str) -> "str | None":
@@ -872,25 +908,30 @@ def _is_mysql_table_missing(exc: BaseException) -> bool:
     )
 
 
-def _json_for_storage(value: Any) -> str:
-    return value if isinstance(value, str) else to_json(value)
+def _json_for_storage(value: Any, *, serializer: Any = to_json) -> str:
+    return value if isinstance(value, str) else cast("str", serializer(value))
 
 
-def _json_dict(value: Any) -> "dict[str, Any]":
+def _json_dict(value: Any, *, deserializer: Any = from_json) -> "dict[str, Any]":
     if isinstance(value, bytearray):
         value = bytes(value)
     if isinstance(value, (bytes, str)):
-        return cast("dict[str, Any]", from_json(value))
+        return cast("dict[str, Any]", deserializer(value))
     return cast("dict[str, Any]", value)
 
 
-def _session_record_from_row(row: Any) -> StoredSession:
+def _session_record_from_row(row: Any, *, deserializer: Any = from_json) -> StoredSession:
     return StoredSession(
-        id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
+        id=row[0],
+        app_name=row[1],
+        user_id=row[2],
+        state=_json_dict(row[3], deserializer=deserializer),
+        create_time=row[4],
+        update_time=row[5],
     )
 
 
-def _event_record_from_row(row: Any) -> StoredEvent:
+def _event_record_from_row(row: Any, *, deserializer: Any = from_json) -> StoredEvent:
     return StoredEvent(
         id=row[0],
         app_name=row[1],
@@ -898,11 +939,11 @@ def _event_record_from_row(row: Any) -> StoredEvent:
         session_id=row[3],
         invocation_id=row[4],
         timestamp=row[5],
-        event_data=_json_dict(row[6]),
+        event_data=_json_dict(row[6], deserializer=deserializer),
     )
 
 
-def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
+def _event_insert_params(event_record: StoredEvent, *, serializer: Any = to_json) -> "tuple[Any, ...]":
     return (
         event_record["id"],
         event_record["app_name"],
@@ -910,7 +951,7 @@ def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
         event_record["session_id"],
         event_record["invocation_id"],
         event_record["timestamp"],
-        _json_for_storage(event_record["event_data"]),
+        _json_for_storage(event_record["event_data"], serializer=serializer),
     )
 
 

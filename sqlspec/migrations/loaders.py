@@ -4,17 +4,18 @@ This module provides loader classes for different migration file formats.
 """
 
 import abc
+import ast
 import inspect
 import sys
 import types
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Final, cast
 
 from sqlspec.loader import SQLFileLoader as CoreSQLFileLoader
 from sqlspec.migrations.context import MigrationContext
-from sqlspec.migrations.version import _format_sequential_version, parse_extension_stem
+from sqlspec.migrations.version import extract_migration_version
 from sqlspec.utils.sync_tools import await_
 
 __all__ = ("BaseMigrationLoader", "MigrationLoadError", "PythonFileLoader", "SQLFileLoader", "get_migration_loader")
@@ -73,6 +74,17 @@ class BaseMigrationLoader:
             MigrationLoadError: If validation fails.
         """
         ...
+
+    def has_downgrade(self, path: Path) -> bool:
+        """Return whether the migration file defines a downgrade direction.
+
+        Args:
+            path: Path to the migration file.
+
+        Returns:
+            True when the migration defines a downgrade direction.
+        """
+        return False
 
 
 class SQLFileLoader(BaseMigrationLoader):
@@ -158,6 +170,11 @@ class SQLFileLoader(BaseMigrationLoader):
             msg = f"Migration {path} missing required 'up' query: {up_query}"
             raise MigrationLoadError(msg)
 
+    def has_downgrade(self, path: Path) -> bool:
+        """Return whether the SQL migration file defines a downgrade query."""
+        version = self._extract_version(path.name)
+        return bool(version) and self.sql_loader.has_query(f"migrate-{version}-down")
+
     def _extract_version(self, filename: str) -> str:
         """Extract version from filename.
 
@@ -170,28 +187,13 @@ class SQLFileLoader(BaseMigrationLoader):
         Returns:
             Version string or empty string if invalid.
         """
-        timestamp_min_length = 4
-
-        name_without_ext = filename.rsplit(".", 1)[0]
-
-        if name_without_ext.startswith("ext_"):
-            extension = parse_extension_stem(name_without_ext)
-            if extension is None:
-                return ""
-            ext_name, ext_version = extension
-            return f"ext_{ext_name}_{ext_version}"
-
-        parts = name_without_ext.split("_", 1)
-        if parts and parts[0].isdigit():
-            return parts[0] if len(parts[0]) > timestamp_min_length else _format_sequential_version(parts[0])
-
-        return ""
+        return extract_migration_version(filename) or ""
 
 
 class PythonFileLoader(BaseMigrationLoader):
     """Loader for Python migration files."""
 
-    __slots__ = ("context", "migrations_dir", "project_root")
+    __slots__ = ("_module_cache", "context", "migrations_dir", "project_root")
 
     def __init__(self, migrations_dir: Path, project_root: "Path | None" = None, context: "Any | None" = None) -> None:
         """Initialize Python file loader.
@@ -204,6 +206,7 @@ class PythonFileLoader(BaseMigrationLoader):
         self.migrations_dir = migrations_dir
         self.project_root = project_root if project_root is not None else self._find_project_root(migrations_dir)
         self.context = context
+        self._module_cache: dict[str, tuple[int, int, types.ModuleType]] = {}
 
     async def get_up_sql(self, path: Path) -> list[str]:
         """Load Python migration and execute upgrade function.
@@ -230,15 +233,12 @@ class PythonFileLoader(BaseMigrationLoader):
 
             if isinstance(self.context, MigrationContext):
                 self.context.validate_async_usage(upgrade_func)
-            sig = inspect.signature(upgrade_func)
-            accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
+            pass_context = _callable_accepts_context(upgrade_func, self.context)
 
             if inspect.iscoroutinefunction(upgrade_func):
-                sql_result = (
-                    await upgrade_func(self.context) if accepts_context and self.context else await upgrade_func()
-                )
+                sql_result = await upgrade_func(self.context) if pass_context else await upgrade_func()
             else:
-                sql_result = upgrade_func(self.context) if accepts_context and self.context else upgrade_func()
+                sql_result = upgrade_func(self.context) if pass_context else upgrade_func()
 
             return self._normalize_and_validate_sql(sql_result, path)
 
@@ -250,7 +250,7 @@ class PythonFileLoader(BaseMigrationLoader):
 
         Returns:
             List of SQL statements for downgrade, which may be empty. None when the
-            module defines no downgrade function.
+            module defines no downgrade function or returns None.
         """
         with self._temporary_project_path():
             module = self._load_module_from_path(path)
@@ -264,15 +264,15 @@ class PythonFileLoader(BaseMigrationLoader):
 
             if isinstance(self.context, MigrationContext):
                 self.context.validate_async_usage(downgrade_func)
-            sig = inspect.signature(downgrade_func)
-            accepts_context = "context" in sig.parameters or len(sig.parameters) > 0
+            pass_context = _callable_accepts_context(downgrade_func, self.context)
 
             if inspect.iscoroutinefunction(downgrade_func):
-                sql_result = (
-                    await downgrade_func(self.context) if accepts_context and self.context else await downgrade_func()
-                )
+                sql_result = await downgrade_func(self.context) if pass_context else await downgrade_func()
             else:
-                sql_result = downgrade_func(self.context) if accepts_context and self.context else downgrade_func()
+                sql_result = downgrade_func(self.context) if pass_context else downgrade_func()
+
+            if sql_result is None:
+                return None
 
             return self._normalize_and_validate_sql(sql_result, path)
 
@@ -295,6 +295,17 @@ class PythonFileLoader(BaseMigrationLoader):
             if upgrade_func is None:
                 msg = f"Migration {path} missing required upgrade function. Expected 'up()' or 'migrate_up()'"
                 raise MigrationLoadError(msg)
+
+    def has_downgrade(self, path: Path) -> bool:
+        """Return whether the Python migration defines a downgrade function without executing it."""
+        with self._temporary_project_path():
+            module = self._load_module_from_path(path)
+            func_name = "down" if _get_callable_attr(module, "down") is not None else None
+            if func_name is None and _get_callable_attr(module, "migrate_down") is not None:
+                func_name = "migrate_down"
+            if func_name is None:
+                return False
+            return not _is_literal_none_return_function(path, func_name)
 
     def _find_project_root(self, start_path: Path) -> Path:
         """Find project root by searching upwards for marker files.
@@ -327,7 +338,8 @@ class PythonFileLoader(BaseMigrationLoader):
         try:
             yield
         finally:
-            sys.path.remove(path_to_add)
+            with suppress(ValueError):
+                sys.path.remove(path_to_add)
 
     def _load_module_from_path(self, path: Path) -> Any:
         """Load a Python module from file path.
@@ -341,7 +353,18 @@ class PythonFileLoader(BaseMigrationLoader):
         Raises:
             MigrationLoadError: If module loading fails.
         """
+        cache_key = str(path)
         module_name = f"sqlspec_migration_{path.stem}"
+        try:
+            stat_result = path.stat()
+        except OSError as e:
+            msg = f"Failed to execute migration module {path}: {e}"
+            raise MigrationLoadError(msg) from e
+
+        cached = self._module_cache.get(cache_key)
+        if cached is not None and cached[0] == stat_result.st_mtime_ns and cached[1] == stat_result.st_size:
+            sys.modules[module_name] = cached[2]
+            return cached[2]
 
         if module_name in sys.modules:
             sys.modules.pop(module_name, None)
@@ -362,6 +385,7 @@ class PythonFileLoader(BaseMigrationLoader):
             msg = f"Failed to execute migration module {path}: {e}"
             raise MigrationLoadError(msg) from e
 
+        self._module_cache[cache_key] = (stat_result.st_mtime_ns, stat_result.st_size, module)
         return module
 
     def _normalize_and_validate_sql(self, sql: Any, migration_path: Path) -> list[str]:
@@ -380,7 +404,7 @@ class PythonFileLoader(BaseMigrationLoader):
         if isinstance(sql, str):
             stripped = sql.strip()
             return [stripped] if stripped else []
-        if isinstance(sql, list):
+        if isinstance(sql, Iterable) and not isinstance(sql, (str, bytes)):
             result = []
             for i, item in enumerate(sql):
                 if not isinstance(item, str):
@@ -450,6 +474,46 @@ def _get_callable_attr(module: types.ModuleType, name: str) -> "Callable[..., An
     if callable(attr):
         return cast("Callable[..., Any]", attr)
     return None
+
+
+def _callable_accepts_context(func: "Callable[..., Any]", context: Any) -> bool:
+    """Return whether the migration function should be invoked with ``context``."""
+    sig = inspect.signature(func)
+    positional_params = [
+        p
+        for p in sig.parameters.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values())
+    if not positional_params:
+        return bool(has_var_positional and context is not None)
+    first_param = positional_params[0]
+    if first_param.default is inspect.Parameter.empty:
+        return True
+    return context is not None
+
+
+def _is_literal_none_return_function(path: Path, func_name: str) -> bool:
+    """Return True when a top-level function body only returns None."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+            body = list(node.body)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]
+            if len(body) == 1 and isinstance(body[0], ast.Return):
+                ret_val = body[0].value
+                return ret_val is None or (isinstance(ret_val, ast.Constant) and ret_val.value is None)
+            return False
+    return False
 
 
 def _load_migration_sql(loader: BaseMigrationLoader, path: Path, direction: str) -> "list[str] | None":

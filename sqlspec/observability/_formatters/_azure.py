@@ -23,6 +23,17 @@ class AzureLogFormatter:
 
     SEVERITY_MAP: ClassVar[dict[str, int]] = {"DEBUG": 0, "INFO": 1, "WARNING": 2, "ERROR": 3, "CRITICAL": 4}
 
+    def __hash__(self) -> int:
+        return hash(self.__class__.__name__)
+
+    def __repr__(self) -> str:
+        return "AzureLogFormatter()"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AzureLogFormatter):
+            return NotImplemented
+        return True
+
     def format(
         self,
         level: str,
@@ -71,14 +82,3 @@ class AzureLogFormatter:
             entry["properties"] = properties
 
         return entry
-
-    def __hash__(self) -> int:
-        return hash(self.__class__.__name__)
-
-    def __repr__(self) -> str:
-        return "AzureLogFormatter()"
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, AzureLogFormatter):
-            return NotImplemented
-        return True

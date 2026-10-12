@@ -6,7 +6,7 @@ import asyncpg
 import pytest
 
 from sqlspec.adapters.asyncpg.config import register_json_codecs, register_pgvector_support
-from sqlspec.adapters.asyncpg.core import create_mapped_exception
+from sqlspec.adapters.asyncpg.core import create_mapped_exception, invoke_prepared_statement
 from sqlspec.exceptions import OperationCancelledError, PermissionDeniedError, QueryTimeoutError, UniqueViolationError
 from sqlspec.utils.serializers import from_json, to_json
 
@@ -41,10 +41,32 @@ async def test_register_json_codecs_success() -> None:
     }
 
     assert json_call.kwargs["encoder"]({"value": 1}) == b'{"value":1}'
+    assert json_call.kwargs["encoder"]("console") == b'"console"'
+    assert json_call.kwargs["encoder"]('{"pre":"serialized"}') == b'{"pre":"serialized"}'
+    assert json_call.kwargs["encoder"](b'\x01{"value":1}') == b'{"value":1}'
     assert json_call.kwargs["decoder"](b'{"value":1}') == {"value": 1}
     assert jsonb_call.kwargs["encoder"]({"value": 1}) == b'\x01{"value":1}'
+    assert jsonb_call.kwargs["encoder"]("console") == b'\x01"console"'
+    assert jsonb_call.kwargs["encoder"]('{"pre":"serialized"}') == b'\x01{"pre":"serialized"}'
     assert jsonb_call.kwargs["encoder"](b'\x01{"value":1}') == b'\x01{"value":1}'
     assert jsonb_call.kwargs["decoder"](b'\x01{"value":1}') == {"value": 1}
+
+
+@pytest.mark.anyio
+async def test_invoke_prepared_statement_unpacks_dict_parameters_positionally() -> None:
+    """Dict parameters passed to invoke_prepared_statement should unpack values positionally."""
+    prepared = MagicMock()
+    prepared.fetch = AsyncMock(return_value=[{"id": 1}])
+    prepared.get_statusmsg = MagicMock(return_value="UPDATE 2")
+
+    rows = await invoke_prepared_statement(prepared, {"p1": "alpha", "p2": 42}, fetch=True, timeout=1.5)
+    assert rows == [{"id": 1}]
+    prepared.fetch.assert_awaited_once_with("alpha", 42, timeout=1.5)
+
+    prepared.fetch.reset_mock()
+    status = await invoke_prepared_statement(prepared, {"p1": "beta"}, fetch=False, timeout=2.0)
+    assert status == "UPDATE 2"
+    prepared.fetch.assert_awaited_once_with("beta", timeout=2.0)
 
 
 @pytest.mark.anyio

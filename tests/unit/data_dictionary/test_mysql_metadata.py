@@ -205,3 +205,31 @@ def test_mariadb_columns_derive_primary_key_flag_from_column_key() -> None:
         if isinstance(projection, exp.Alias)
     }
     assert projections["is_primary"] == "column_key = 'PRI'"
+
+
+def test_mariadb_complete_query_pack_and_mysql_single_version_probe() -> None:
+    """MariaDB exposes full query pack and MySQL get_version uses a single cached VERSION() probe."""
+    loader = DataDictionaryLoader()
+    for domain, query_name in (
+        ("foreign_keys", "by_schema"),
+        ("foreign_keys", "by_table"),
+        ("version", "version"),
+        ("columns", "by_table"),
+        ("indexes", "by_table"),
+        ("tables", "by_schema"),
+    ):
+        query_text = loader.get_domain_query_text("mariadb", domain, query_name)
+        assert query_text is not None, f"mariadb/{domain}/{query_name} must exist"
+
+    mariadb_tables = loader.get_domain_query_text("mariadb", "tables", "by_schema")
+    assert mariadb_tables is not None and "dependency_levels" in mariadb_tables
+
+    driver = _SyncDDLDriver()
+    dictionary = PyMysqlDataDictionary()
+    version = dictionary.get_version(cast(Any, driver))
+    version_again = dictionary.get_version(cast(Any, driver))
+
+    assert version is not None
+    assert version.version_tuple == (8, 4, 0)
+    assert version_again == version
+    assert len(driver.statements) == 1

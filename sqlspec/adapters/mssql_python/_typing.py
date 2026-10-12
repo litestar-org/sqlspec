@@ -8,7 +8,10 @@ from mssql_python import Error as MssqlPythonError
 from mssql_python.connection import Connection, TokenProvider  # pyright: ignore
 from mssql_python.cursor import Cursor  # pyright: ignore
 
+from sqlspec.utils.module_loader import import_optional_attr
+
 MSSQL_PYTHON_MODULE: Any = _mssql_python
+_DRIVER_CLS: Any = None
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -85,21 +88,24 @@ class MssqlPythonSessionContext:
         self._driver: MssqlPythonDriver | None = None
 
     def __enter__(self) -> "MssqlPythonDriver":
-        from sqlspec.adapters.mssql_python.driver import MssqlPythonDriver
-
+        global _DRIVER_CLS
+        if _DRIVER_CLS is None:
+            _DRIVER_CLS = import_optional_attr("sqlspec.adapters.mssql_python.driver", "MssqlPythonDriver")
         self._connection = self._acquire_connection()
-        self._driver = MssqlPythonDriver(
+        self._driver = _DRIVER_CLS(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
+        assert self._driver is not None
         return self._prepare_driver(self._driver)
 
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if exc_type is not None and self._driver is not None:
+        if self._driver is not None and (exc_type is not None or self._driver._connection_in_transaction()):
             with contextlib.suppress(Exception):
                 self._driver.rollback()
         if self._connection is not None:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
+            self._driver = None
         return None

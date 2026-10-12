@@ -1,3 +1,5 @@
+"""MysqlConnector adapter for SQLSpec."""
+
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncConnection,
     MysqlConnectorAsyncCursor,

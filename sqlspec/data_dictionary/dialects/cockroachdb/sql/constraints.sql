@@ -20,24 +20,24 @@ SELECT
         ORDER BY kcu.ordinal_position
     )::text[] AS columns,
     rc.unique_constraint_schema::text AS referenced_schema,
-    ccu.table_name::text AS referenced_table,
+    pk_tc.table_name::text AS referenced_table,
     ARRAY(
-        SELECT ccu_inner.column_name::text
-        FROM information_schema.constraint_column_usage ccu_inner
-        WHERE ccu_inner.constraint_catalog = tc.constraint_catalog
-          AND ccu_inner.constraint_schema = tc.constraint_schema
-          AND ccu_inner.constraint_name = tc.constraint_name
-        ORDER BY ccu_inner.column_name
+        SELECT pk_kcu.column_name::text
+        FROM information_schema.key_column_usage pk_kcu
+        WHERE pk_kcu.constraint_catalog = rc.unique_constraint_catalog
+          AND pk_kcu.constraint_schema = rc.unique_constraint_schema
+          AND pk_kcu.constraint_name = rc.unique_constraint_name
+        ORDER BY pk_kcu.ordinal_position
     )::text[] AS referenced_columns
 FROM information_schema.table_constraints tc
 LEFT JOIN information_schema.referential_constraints rc
   ON rc.constraint_catalog = tc.constraint_catalog
  AND rc.constraint_schema = tc.constraint_schema
  AND rc.constraint_name = tc.constraint_name
-LEFT JOIN information_schema.constraint_column_usage ccu
-  ON ccu.constraint_catalog = tc.constraint_catalog
- AND ccu.constraint_schema = tc.constraint_schema
- AND ccu.constraint_name = tc.constraint_name
+LEFT JOIN information_schema.table_constraints pk_tc
+  ON pk_tc.constraint_catalog = rc.unique_constraint_catalog
+ AND pk_tc.constraint_schema = rc.unique_constraint_schema
+ AND pk_tc.constraint_name = rc.unique_constraint_name
 WHERE tc.table_schema = :schema_name
   AND (:table_name::text IS NULL OR tc.table_name = :table_name)
 ORDER BY tc.table_schema, tc.table_name, tc.constraint_name;

@@ -10,6 +10,7 @@ from sqlspec.data_dictionary import (
     MetadataRisk,
     MetadataSource,
     MetadataSupport,
+    SystemMetadataRedactionPolicy,
     get_data_dictionary_loader,
 )
 
@@ -166,3 +167,42 @@ def test_spanner_get_ddl_uses_admin_api_capability() -> None:
     assert driver.database.admin_api.requested == ["projects/p/instances/i/databases/d"]
     assert ddl_capability.source == MetadataSource.NATIVE_API
     assert MetadataRisk.PRIVILEGED in ddl_capability.risks
+
+
+def test_spanner_googlesql_queries_use_lowercase_aliases_and_safe_binds() -> None:
+    """Spanner GoogleSQL query packs must use lowercase aliases and :schema_name binds."""
+    loader = get_data_dictionary_loader()
+    objects_sql = loader.get_domain_query_text("spanner", "objects", "by_schema", mode="googlesql")
+    constraints_sql = loader.get_domain_query_text("spanner", "constraints", "by_schema", mode="googlesql")
+    sequences_sql = loader.get_domain_query_text("spanner", "sequences", "by_schema", mode="googlesql")
+    system_sql = loader.get_domain_query_text("spanner", "system", "query_stats_top", mode="googlesql")
+
+    assert objects_sql is not None
+    assert "@schema_name" not in objects_sql
+    assert "CAST(:schema_name AS STRING) IS NULL" in objects_sql
+    assert "AS table_name" in objects_sql
+    assert constraints_sql is not None and "AS constraint_name" in constraints_sql
+    assert sequences_sql is not None and "AS sequence_name" in sequences_sql
+    assert system_sql is not None and "AS query_text" in system_sql
+
+    redacted_row, redacted_fields = SystemMetadataRedactionPolicy(redact_sql_text=True).redact_row({
+        "text": "SELECT 1",
+        "query_text": "SELECT 2",
+    })
+    assert redacted_row["text"] == "[REDACTED]"
+    assert redacted_row["query_text"] == "[REDACTED]"
+    assert set(redacted_fields) == {"text", "query_text"}
+
+
+def test_bigquery_tables_and_constraints_avoid_self_fk_recursion_and_cartesian_joins() -> None:
+    """BigQuery tables and constraints SQL avoid self-FK infinite recursion and composite Cartesian joins."""
+    loader = get_data_dictionary_loader()
+    tables_sql = loader.get_domain_query_text("bigquery", "tables", "by_schema")
+    constraints_sql = loader.get_domain_query_text("bigquery", "constraints", "by_dataset")
+
+    assert tables_sql is not None
+    assert "pk_kcu.table_name <> kcu.table_name" in tables_sql
+    assert "LEFT JOIN dependency_levels" in tables_sql
+    assert constraints_sql is not None
+    assert "pk_kcu.ordinal_position" in constraints_sql
+    assert "ccu.column_name = kcu.column_name" in constraints_sql

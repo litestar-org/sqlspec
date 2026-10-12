@@ -4,7 +4,7 @@
 from collections.abc import Sequence
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from psqlpy import exceptions as psqlpy_exceptions
@@ -21,7 +21,14 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.core import SQL
 from sqlspec.driver import CachedQuery
-from sqlspec.exceptions import DataError, IntegrityError, OperationalError, PermissionDeniedError, SQLSpecError
+from sqlspec.exceptions import (
+    ConnectionTimeoutError,
+    DataError,
+    IntegrityError,
+    OperationalError,
+    PermissionDeniedError,
+    SQLSpecError,
+)
 
 
 @pytest.mark.parametrize(
@@ -96,26 +103,32 @@ def test_format_execute_many_parameters_with_coercion_converts_float_subclass() 
 
 def test_coerce_numeric_for_write_preserves_identity_when_unchanged() -> None:
     """Nested payloads without float values should keep their existing container identities."""
-    payload = {"items": [1, {"value": Decimal("1.5")}], "meta": ("a", None)}
+    payload = [[1, (Decimal("1.5"),)], ("a", None)]
     coerced = coerce_numeric_for_write(payload)
     assert coerced is payload
-    assert coerced["items"] is payload["items"]
-    assert coerced["items"][1] is payload["items"][1]
-    assert coerced["meta"] is payload["meta"]
+    assert coerced[0] is payload[0]
+    assert coerced[0][1] is payload[0][1]
+    assert coerced[1] is payload[1]
 
 
 def test_coerce_numeric_for_write_copies_only_changed_branch() -> None:
-    """Numeric write coercion should allocate only along branches containing float values."""
-    payload = {"changed": [1.5, {"value": 2.5}], "unchanged": ("a", {"value": Decimal("3.5")})}
+    """Numeric write coercion should allocate only along list/tuple branches containing float values."""
+    payload = [[1.5, (2.5,)], ("a", [Decimal("3.5")])]
     coerced = coerce_numeric_for_write(payload)
-    assert coerced == {
-        "changed": [Decimal("1.5"), {"value": Decimal("2.5")}],
-        "unchanged": ("a", {"value": Decimal("3.5")}),
-    }
+    assert coerced == [[Decimal("1.5"), (Decimal("2.5"),)], ("a", [Decimal("3.5")])]
     assert coerced is not payload
-    assert coerced["changed"] is not payload["changed"]
-    assert coerced["changed"][1] is not payload["changed"][1]
-    assert coerced["unchanged"] is payload["unchanged"]
+    assert coerced[0] is not payload[0]
+    assert coerced[0][1] is not payload[0][1]
+    assert coerced[1] is payload[1]
+
+
+def test_coerce_numeric_for_write_preserves_dict_floats() -> None:
+    """JSON dict payloads should retain float values untouched during numeric write coercion."""
+    payload: dict[str, Any] = {"score": 1.5, "nested": {"weight": 2.5}}
+    coerced = cast("dict[str, Any]", coerce_numeric_for_write(payload))
+    assert coerced is payload
+    assert type(coerced["score"]) is float
+    assert type(coerced["nested"]["weight"]) is float
 
 
 def test_decimal_is_not_registered_for_float_coercion() -> None:
@@ -262,10 +275,11 @@ def test_extract_rows_affected_parses_valid_tag() -> None:
         "INSERT INTO events (id, payload) VALUES ($1, $2)",
         "UPDATE events SET payload = $1 WHERE id = $2",
         "DELETE FROM events WHERE id = $1",
+        "WITH source AS (SELECT $2 AS id) UPDATE events SET payload = $1 FROM source WHERE events.id = source.id",
     ],
 )
 def test_dml_count_query_wraps_supported_statements(sql: str) -> None:
-    """Single DML should be wrapped in a one-row PostgreSQL count query."""
+    """Single DML (including top-level non-recursive WITH CTEs) should be wrapped in a one-row PostgreSQL count query."""
     rewritten = psqlpy_core._dml_count_query(sql)  # pyright: ignore[reportPrivateUsage]
 
     assert rewritten is not None
@@ -312,7 +326,7 @@ def test_dml_count_query_uses_collision_free_cte_alias() -> None:
         "MERGE INTO events USING source ON events.id = source.id WHEN MATCHED THEN DELETE",
         "CREATE TABLE events (id INT)",
         "UPDATE events SET payload = $1 WHERE id = $2 RETURNING id",
-        "WITH source AS (SELECT $2 AS id) UPDATE events SET payload = $1 FROM source WHERE events.id = source.id",
+        "WITH RECURSIVE source AS (SELECT 1 AS id UNION ALL SELECT id + 1 FROM source WHERE id < 2) UPDATE events SET payload = $1 FROM source WHERE events.id = source.id",
     ],
 )
 def test_dml_count_query_bypasses_unsupported_or_returning_statements(sql: str) -> None:
@@ -323,3 +337,12 @@ def test_dml_count_query_bypasses_unsupported_or_returning_statements(sql: str) 
 def test_dml_count_query_surfaces_parse_errors() -> None:
     """Invalid compiled SQL should return None rather than raising during count query rewrite."""
     assert psqlpy_core._dml_count_query("UPDATE events SET payload =") is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_create_mapped_exception_maps_connection_timeout_and_data_parse_errors() -> None:
+    """Connection timeouts should map to ConnectionTimeoutError and DataError with 'parse' should stay DataError."""
+    conn_err = psqlpy_exceptions.Error("connection timed out while connecting to server")
+    assert type(psqlpy_core.create_mapped_exception(conn_err)) is ConnectionTimeoutError
+
+    data_err = psqlpy_exceptions.DataError("invalid input syntax for type json: failed to parse value")
+    assert type(psqlpy_core.create_mapped_exception(data_err)) is DataError

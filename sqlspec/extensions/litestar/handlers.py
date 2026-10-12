@@ -48,6 +48,8 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
     Returns:
         The handler callable.
     """
+    ctx_scope_key = f"{connection_scope_key}_ctx"
+    provider_owned_key = f"{connection_scope_key}_provider_owned"
 
     async def handler(message: "Message", scope: "Scope") -> None:
         """Handle closing and cleaning up connections before sending the response.
@@ -58,7 +60,15 @@ def manual_handler_maker(connection_scope_key: str) -> "Callable[[Message, Scope
         """
         connection = get_sqlspec_scope_state(scope, connection_scope_key)
         if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-            await ensure_async_(connection.close)()
+            if get_sqlspec_scope_state(scope, provider_owned_key):
+                return
+            connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
+            if isinstance(connection_cm, AbstractAsyncContextManager):
+                await connection_cm.__aexit__(None, None, None)
+            elif isinstance(connection_cm, AbstractContextManager):
+                await with_ensure_async_(connection_cm).__aexit__(None, None, None)
+            else:
+                await ensure_async_(connection.close)()
             delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
@@ -95,6 +105,8 @@ def autocommit_handler_maker(
         raise ImproperConfigurationError(msg)
 
     commit_range = range(200, 400 if commit_on_redirect else 300)
+    ctx_scope_key = f"{connection_scope_key}_ctx"
+    provider_owned_key = f"{connection_scope_key}_provider_owned"
 
     async def handler(message: "Message", scope: "Scope") -> None:
         """Handle commit/rollback, closing and cleaning up connections before sending.
@@ -113,8 +125,18 @@ def autocommit_handler_maker(
                 else:
                     await ensure_async_(connection.rollback)()
         finally:
-            if connection and message["type"] in SESSION_TERMINUS_ASGI_EVENTS:
-                await ensure_async_(connection.close)()
+            if (
+                connection
+                and message["type"] in SESSION_TERMINUS_ASGI_EVENTS
+                and not get_sqlspec_scope_state(scope, provider_owned_key)
+            ):
+                connection_cm = get_sqlspec_scope_state(scope, ctx_scope_key, pop=True)
+                if isinstance(connection_cm, AbstractAsyncContextManager):
+                    await connection_cm.__aexit__(None, None, None)
+                elif isinstance(connection_cm, AbstractContextManager):
+                    await with_ensure_async_(connection_cm).__aexit__(None, None, None)
+                else:
+                    await ensure_async_(connection.close)()
                 delete_sqlspec_scope_state(scope, connection_scope_key)
 
     return handler
@@ -208,6 +230,7 @@ def connection_provider_maker(
     Returns:
         The connection provider function.
     """
+    provider_owned_key = f"{connection_key}_provider_owned"
 
     async def provide_connection(state: "State", scope: "Scope") -> "AsyncGenerator[ConnectionT, None]":
         if (db_pool := state.get(pool_key)) is None:
@@ -234,10 +257,12 @@ def connection_provider_maker(
 
         entered_connection = await context_manager.__aenter__()
         try:
+            set_sqlspec_scope_state(scope, provider_owned_key, True)
             set_sqlspec_scope_state(scope, connection_key, entered_connection)
             yield entered_connection
         finally:
             await context_manager.__aexit__(None, None, None)
+            delete_sqlspec_scope_state(scope, provider_owned_key)
             delete_sqlspec_scope_state(scope, connection_key)
 
     return provide_connection
@@ -248,6 +273,11 @@ def session_provider_maker(
 ) -> "Callable[[Any], AsyncGenerator[DriverT, None]]":
     """Create provider for database driver sessions.
 
+    Note:
+        This provider intentionally stays out of mypyc: it combines *args/**kwargs
+        with yield in async def, participates in Litestar's @contextlib.asynccontextmanager
+        dependency wrapping, and mutates __signature__/__annotations__ at runtime.
+
     Args:
         config: The database configuration object.
         connection_dependency_key: The key used for connection dependency injection.
@@ -256,9 +286,6 @@ def session_provider_maker(
         The session provider function.
     """
 
-    # This provider intentionally stays out of mypyc: it combines *args/**kwargs
-    # with yield in async def, participates in Litestar's @contextlib.asynccontextmanager
-    # dependency wrapping, and mutates __signature__/__annotations__ at runtime.
     async def provide_session(*args: Any, **kwargs: Any) -> "AsyncGenerator[DriverT, None]":
         connection_obj = args[0] if args else kwargs.get(connection_dependency_key)
         yield cast(

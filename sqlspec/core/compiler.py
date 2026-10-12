@@ -61,19 +61,16 @@ OperationType = Literal[
 ]
 
 OPERATION_TYPE_MAP: Final[dict[type[exp.Expr], OperationType]] = {
-    # Queries
     exp.Select: "SELECT",
     exp.Union: "SELECT",
     exp.Except: "SELECT",
     exp.Intersect: "SELECT",
-    exp.Summarize: "SELECT",  # DuckDB SUMMARIZE — returns rows
-    # DML
+    exp.Summarize: "SELECT",
     exp.Insert: "INSERT",
     exp.Update: "UPDATE",
     exp.Delete: "DELETE",
     exp.Merge: "MERGE",
-    exp.LoadData: "INSERT",  # Hive LOAD DATA — ingests data into a table
-    # DDL
+    exp.LoadData: "INSERT",
     exp.Create: "DDL",
     exp.Drop: "DDL",
     exp.Alter: "DDL",
@@ -81,21 +78,17 @@ OPERATION_TYPE_MAP: Final[dict[type[exp.Expr], OperationType]] = {
     exp.Grant: "DDL",
     exp.Revoke: "DDL",
     exp.Comment: "DDL",
-    # Procedure execution
-    exp.Execute: "EXECUTE",  # TSQL EXEC/EXECUTE
-    # Session / Admin
+    exp.Execute: "EXECUTE",
     exp.Pragma: "PRAGMA",
     exp.Command: "COMMAND",
     exp.Set: "COMMAND",
-    exp.Show: "COMMAND",  # MySQL dialect
+    exp.Show: "COMMAND",
     exp.Describe: "COMMAND",
     exp.Use: "COMMAND",
     exp.Kill: "COMMAND",
     exp.Analyze: "COMMAND",
-    exp.Install: "COMMAND",  # DuckDB
-    exp.Attach: "COMMAND",  # DuckDB / SQLite
-    # Transaction control — mapped to COMMAND for now; a dedicated "TRANSACTION"
-    # OperationType could be added if downstream code needs to distinguish these.
+    exp.Install: "COMMAND",
+    exp.Attach: "COMMAND",
     exp.Transaction: "COMMAND",
     exp.Commit: "COMMAND",
     exp.Rollback: "COMMAND",
@@ -165,12 +158,12 @@ class OperationProfile:
         self.returns_rows = returns_rows
         self.modifies_rows = modifies_rows
 
+    def __repr__(self) -> str:
+        return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
+
     @classmethod
     def empty(cls) -> "OperationProfile":
         return cls(returns_rows=False, modifies_rows=False)
-
-    def __repr__(self) -> str:
-        return f"OperationProfile(returns_rows={self.returns_rows!r}, modifies_rows={self.modifies_rows!r})"
 
 
 @final
@@ -355,6 +348,40 @@ class SQLProcessor:
         default_execution_style = parameter_config.default_execution_parameter_style
         self._exec_style = default_execution_style.value if default_execution_style else self._input_style
 
+    @property
+    def cache_stats(self) -> "dict[str, int]":
+        """Get cache statistics.
+
+        Returns:
+            Dictionary with cache statistics
+        """
+        total_requests = self._cache_hits + self._cache_misses
+        hit_rate_pct = int((self._cache_hits / total_requests) * 100) if total_requests > 0 else 0
+        parse_total = self._parse_cache_hits + self._parse_cache_misses
+        parse_hit_rate_pct = int((self._parse_cache_hits / parse_total) * 100) if parse_total > 0 else 0
+        parameter_stats = self._parameter_processor.cache_stats()
+
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "size": len(self._cache),
+            "max_size": self._max_cache_size,
+            "hit_rate_percent": hit_rate_pct,
+            "parse_hits": self._parse_cache_hits,
+            "parse_misses": self._parse_cache_misses,
+            "parse_size": len(self._parse_cache),
+            "parse_max_size": self._parse_cache_max_size,
+            "parse_hit_rate_percent": parse_hit_rate_pct,
+            "parameter_hits": parameter_stats["hits"],
+            "parameter_misses": parameter_stats["misses"],
+            "parameter_size": parameter_stats["size"],
+            "parameter_max_size": parameter_stats["max_size"],
+            "validator_hits": parameter_stats["validator_hits"],
+            "validator_misses": parameter_stats["validator_misses"],
+            "validator_size": parameter_stats["validator_size"],
+            "validator_max_size": parameter_stats["validator_max_size"],
+        }
+
     def compile(
         self,
         sql: str,
@@ -375,8 +402,6 @@ class SQLProcessor:
         Returns:
             CompiledSQL with execution information
         """
-        # Parameter AST transforms may remove or inline values. Their final SQL
-        # cannot be rebound from a structural parameter fingerprint alone.
         if not self._cache_enabled or self._parameter_config.ast_transformer is not None:
             return self._apply_dynamic_sqlcommenter(
                 self._compile_uncached(sql, parameters, is_many, expression, param_fingerprint=None)
@@ -384,9 +409,8 @@ class SQLProcessor:
 
         if param_fingerprint is None:
             param_fingerprint = self._parameter_fingerprint(parameters, is_many)
-        cache_key = self._make_cache_key(sql, param_fingerprint, is_many)
+        cache_key = self._make_cache_key(sql, param_fingerprint, is_many, expression=expression)
 
-        # MICRO-CACHE: Fast path for repeating statements
         if cache_key == self._last_cache_key and self._last_result is not None:
             self._cache_hits += 1
             return self._apply_dynamic_sqlcommenter(
@@ -408,10 +432,39 @@ class SQLProcessor:
         if len(self._cache) >= self._max_cache_size:
             self._cache.popitem(last=False)
 
-        self._cache[cache_key] = result
+        cached_entry = (
+            CompiledSQL(
+                compiled_sql=result.compiled_sql,
+                execution_parameters=result.execution_parameters,
+                operation_type=result.operation_type,
+                expression=result.expression.copy(),
+                parameter_style=result.parameter_style,
+                supports_many=result.supports_many,
+                parameter_casts=result.parameter_casts,
+                parameter_profile=result.parameter_profile,
+                operation_profile=result.operation_profile,
+                input_named_parameters=result.input_named_parameters,
+                applied_wrap_types=result.applied_wrap_types,
+            )
+            if result.expression is not None
+            else result
+        )
+        self._cache[cache_key] = cached_entry
         self._last_cache_key = cache_key
-        self._last_result = result
+        self._last_result = cached_entry
         return self._apply_dynamic_sqlcommenter(result)
+
+    def clear_cache(self) -> None:
+        """Clear compilation cache and reset statistics."""
+        self._cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._last_cache_key = None
+        self._last_result = None
+        self._parse_cache.clear()
+        self._parse_cache_hits = 0
+        self._parse_cache_misses = 0
+        self._parameter_processor.clear_cache()
 
     def _has_dynamic_sqlcommenter(self) -> bool:
         """Return whether SQLCommenter resolves per-call context during compilation."""
@@ -438,7 +491,7 @@ class SQLProcessor:
             compiled_sql=compiled_sql,
             execution_parameters=result.execution_parameters,
             operation_type=result.operation_type,
-            expression=result.expression,
+            expression=result.expression.copy() if result.expression is not None else None,
             parameter_style=result.parameter_style,
             supports_many=result.supports_many,
             parameter_casts=result.parameter_casts,
@@ -450,11 +503,24 @@ class SQLProcessor:
 
     def _materialize_cached_result(self, cached_result: CompiledSQL, parameters: Any, is_many: bool) -> CompiledSQL:
         """Return cached compilation metadata with parameters for the current call."""
+        cloned_expr = cached_result.expression.copy() if cached_result.expression is not None else None
         if self._parameter_config.needs_static_script_compilation:
-            return cached_result
+            if cloned_expr is None:
+                return cached_result
+            return CompiledSQL(
+                compiled_sql=cached_result.compiled_sql,
+                execution_parameters=cached_result.execution_parameters,
+                operation_type=cached_result.operation_type,
+                expression=cloned_expr,
+                parameter_style=cached_result.parameter_style,
+                supports_many=cached_result.supports_many,
+                parameter_casts=cached_result.parameter_casts,
+                parameter_profile=cached_result.parameter_profile,
+                operation_profile=cached_result.operation_profile,
+                input_named_parameters=cached_result.input_named_parameters,
+                applied_wrap_types=cached_result.applied_wrap_types,
+            )
 
-        # Structural fingerprinting means same SQL structure = same cache entry,
-        # but we must still process the caller's actual parameter values.
         processed_params = self._parameter_processor.transform_cached_parameters(
             parameters,
             cached_result.parameter_profile,
@@ -473,7 +539,7 @@ class SQLProcessor:
             compiled_sql=final_sql,
             execution_parameters=processed_params,
             operation_type=cached_result.operation_type,
-            expression=cached_result.expression,
+            expression=cloned_expr,
             parameter_style=cached_result.parameter_style,
             supports_many=cached_result.supports_many,
             parameter_casts=cached_result.parameter_casts,
@@ -552,9 +618,8 @@ class SQLProcessor:
         """
         if len(self._parse_cache) >= self._parse_cache_max_size:
             self._parse_cache.popitem(last=False)
-        # Store expression reference directly; _unpack_parse_cache_entry returns the same object.
         self._parse_cache[parse_cache_key] = (
-            expression,
+            expression.copy() if expression is not None else None,
             operation_type,
             (operation_profile.returns_rows, operation_profile.modifies_rows),
         )
@@ -572,11 +637,12 @@ class SQLProcessor:
             Parsed expression metadata.
         """
         cached_expression, cached_operation, cached_profile = parse_cache_entry
-        # Return expression reference without copying - _apply_ast_transformers will copy
-        # if transformers are configured and will modify it. This avoids unnecessary copies
-        # when no transformers are active (common case).
         operation_profile = OperationProfile(returns_rows=cached_profile[0], modifies_rows=cached_profile[1])
-        return cached_expression, cached_operation, operation_profile
+        return (
+            cached_expression.copy() if cached_expression is not None else None,
+            cached_operation,
+            operation_profile,
+        )
 
     def _resolve_expression(
         self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
@@ -593,7 +659,7 @@ class SQLProcessor:
         """
         parse_cache_key = None
         parse_cache_entry = None
-        if self._parse_cache_max_size > 0:
+        if self._parse_cache_max_size > 0 and expression_override is None:
             parse_cache_key = SQLProcessor._make_parse_cache_key(sqlglot_sql, dialect_str)
             parse_cache_entry = self._parse_cache.get(parse_cache_key)
             if parse_cache_entry is not None:
@@ -644,12 +710,8 @@ class SQLProcessor:
         if expression is None or (not statement_transformers and not ast_transformer):
             return expression, parameters, False, operation_type, operation_profile
 
-        # Must copy the expression before transformers modify it to avoid corrupting:
-        # 1. Cache entries (for both cache hits and misses that will be cached)
-        # 2. User-provided expression_override references
         should_copy = False
         if parse_cache_key is not None:
-            # Either cache miss (will be stored) or cache hit (reference from cache)
             should_copy = True
         if expression_override is not None and expression is expression_override:
             should_copy = True
@@ -711,7 +773,6 @@ class SQLProcessor:
         if self._parameter_config.needs_static_script_compilation and processed_params is None:
             return processed_sql, processed_params, parameter_profile, (), False
         if ast_was_transformed and expression is not None:
-            # Pass the transformed expression through the pipeline to avoid re-parsing
             transformed_result = self._parameter_processor.process_for_execution(
                 sql=expression.sql(dialect=dialect_str),
                 parameters=parameters,
@@ -891,19 +952,23 @@ class SQLProcessor:
             return value_fingerprint(parameters)
         return structural_fingerprint(parameters, is_many)
 
-    def _make_cache_key(self, sql: str, param_fingerprint: Any, is_many: bool = False) -> tuple[Any, ...]:
+    def _make_cache_key(
+        self, sql: str, param_fingerprint: Any, is_many: bool = False, expression: "exp.Expr | None" = None
+    ) -> tuple[Any, ...]:
         """Generate cache key.
 
         Args:
             sql: SQL string
             param_fingerprint: Precomputed parameter fingerprint
             is_many: Whether this is for execute_many operation
+            expression: Optional pre-parsed SQLGlot expression override
 
         Returns:
             Cache key tuple
         """
+        expr_key = hash(expression) if expression is not None else None
         return _make_cache_key_tuple(
-            sql, param_fingerprint, self._input_style, self._exec_style, self._dialect_str, is_many
+            sql, param_fingerprint, self._input_style, self._exec_style, self._dialect_str, is_many, extra_key=expr_key
         )
 
     @staticmethod
@@ -929,8 +994,6 @@ class SQLProcessor:
                 return "COPY_TO"
             return "COPY"
 
-        # COMMAND is the generic fallback for any database command
-        # that doesn't fit specific categories
         return "COMMAND"
 
     @staticmethod
@@ -958,14 +1021,12 @@ class SQLProcessor:
                 position = None
 
                 if isinstance(cast_target, exp.Parameter):
-                    # Handle $1, $2 style parameters
                     param_value = cast_target.this
                     if isinstance(param_value, exp.Literal):
                         position = int(param_value.this)
                 elif isinstance(cast_target, exp.Placeholder):
                     position = _placeholder_position(cast_target, placeholder_positions, placeholder_counter)
                 elif isinstance(cast_target, exp.Column):
-                    # Handle cases where $1 gets parsed as a column
                     column_name = str(cast_target.this) if cast_target.this else str(cast_target)
                     if column_name.startswith("$") and column_name[1:].isdigit():
                         position = int(column_name[1:])
@@ -1085,57 +1146,10 @@ class SQLProcessor:
 
         return parts[0].upper() in ROW_RETURNING_STATEMENT_KEYWORDS
 
-    def clear_cache(self) -> None:
-        """Clear compilation cache and reset statistics."""
-        self._cache.clear()
-        self._cache_hits = 0
-        self._cache_misses = 0
-        self._last_cache_key = None
-        self._last_result = None
-        self._parse_cache.clear()
-        self._parse_cache_hits = 0
-        self._parse_cache_misses = 0
-        self._parameter_processor.clear_cache()
-
     @staticmethod
     def _make_parse_cache_key(sql: str, dialect: "str | None") -> Any:
         dialect_marker = dialect or "default"
-        # Use tuple as cache key instead of hashing. Python handles tuple keys efficiently.
         return (dialect_marker, sql)
-
-    @property
-    def cache_stats(self) -> "dict[str, int]":
-        """Get cache statistics.
-
-        Returns:
-            Dictionary with cache statistics
-        """
-        total_requests = self._cache_hits + self._cache_misses
-        hit_rate_pct = int((self._cache_hits / total_requests) * 100) if total_requests > 0 else 0
-        parse_total = self._parse_cache_hits + self._parse_cache_misses
-        parse_hit_rate_pct = int((self._parse_cache_hits / parse_total) * 100) if parse_total > 0 else 0
-        parameter_stats = self._parameter_processor.cache_stats()
-
-        return {
-            "hits": self._cache_hits,
-            "misses": self._cache_misses,
-            "size": len(self._cache),
-            "max_size": self._max_cache_size,
-            "hit_rate_percent": hit_rate_pct,
-            "parse_hits": self._parse_cache_hits,
-            "parse_misses": self._parse_cache_misses,
-            "parse_size": len(self._parse_cache),
-            "parse_max_size": self._parse_cache_max_size,
-            "parse_hit_rate_percent": parse_hit_rate_pct,
-            "parameter_hits": parameter_stats["hits"],
-            "parameter_misses": parameter_stats["misses"],
-            "parameter_size": parameter_stats["size"],
-            "parameter_max_size": parameter_stats["max_size"],
-            "validator_hits": parameter_stats["validator_hits"],
-            "validator_misses": parameter_stats["validator_misses"],
-            "validator_size": parameter_stats["validator_size"],
-            "validator_max_size": parameter_stats["validator_max_size"],
-        }
 
 
 def _placeholder_position(
@@ -1161,13 +1175,11 @@ def _placeholder_position(
 def _parameters_empty(value: Any) -> bool:
     if value is None:
         return True
-    # Fast type dispatch: check concrete types first
     value_type = type(value)
     if value_type is dict or value_type is list or value_type is tuple:
         return len(value) == 0
     if value_type is set or value_type is frozenset:
         return len(value) == 0
-    # Fallback to ABC check for custom Mapping types
     if isinstance(value, Mapping):
         return len(value) == 0
     return False

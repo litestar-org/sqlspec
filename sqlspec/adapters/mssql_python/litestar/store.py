@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from sqlspec.adapters.mssql_python._typing import MssqlPythonCursor
+from sqlspec.adapters.mssql_python.core import escape_sql_literal, quote_bracket_identifier, split_schema_and_table
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -59,15 +60,18 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
 
     def _table_ddl(self) -> str:
         """Get SQL Server CREATE TABLE SQL with idempotent guards."""
+        schema_name, table_name = split_schema_and_table(self._table_name)
+        table_ref = _table_ref(self._table_name)
+        index_name = quote_bracket_identifier(f"IX_{table_name}_expires_at")
         return f"""
         IF NOT EXISTS (
             SELECT 1
             FROM sys.tables
-            WHERE name = N'{self._table_name}'
-              AND schema_id = SCHEMA_ID(N'dbo')
+            WHERE name = N'{escape_sql_literal(table_name)}'
+              AND schema_id = SCHEMA_ID(N'{escape_sql_literal(schema_name)}')
         )
         BEGIN
-            CREATE TABLE {self._table_name} (
+            CREATE TABLE {table_ref} (
                 session_id NVARCHAR(255) PRIMARY KEY,
                 data VARBINARY(MAX) NOT NULL,
                 expires_at DATETIME2(6) NULL,
@@ -75,15 +79,16 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                 updated_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME()
             );
 
-            CREATE INDEX IX_{self._table_name}_expires_at
-                ON {self._table_name}(expires_at)
+            CREATE INDEX {index_name}
+                ON {table_ref}(expires_at)
                 WHERE expires_at IS NOT NULL;
         END;
         """
 
     def _drop_table_sql(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
-        return [f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};"]
+        table_ref = _table_ref(self._table_name)
+        return [f"IF OBJECT_ID(N'{escape_sql_literal(table_ref)}', N'U') IS NOT NULL DROP TABLE {table_ref};"]
 
     def _create_table(self) -> None:
         with self._config.provide_session() as driver:
@@ -92,8 +97,9 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         self._log_table_created()
 
     def _get(self, key: str, renew_for: "int | timedelta | None" = None) -> "bytes | None":
+        table_ref = _table_ref(self._table_name)
         sql = f"""
-        SELECT data, expires_at FROM {self._table_name}
+        SELECT data, expires_at FROM {table_ref}
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
@@ -112,7 +118,7 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
                     with MssqlPythonCursor(conn) as update_cursor:
                         update_cursor.execute(
                             f"""
-                            UPDATE {self._table_name}
+                            UPDATE {table_ref}
                             SET expires_at = ?, updated_at = SYSUTCDATETIME()
                             WHERE session_id = ?
                             """,
@@ -125,8 +131,9 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
+        table_ref = _table_ref(self._table_name)
         sql = f"""
-        MERGE INTO {self._table_name} AS target
+        MERGE INTO {table_ref} AS target
         USING (SELECT ? AS session_id, CONVERT(VARBINARY(MAX), ?) AS data, ? AS expires_at) AS src
            ON target.session_id = src.session_id
         WHEN MATCHED THEN
@@ -143,20 +150,23 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             conn.commit()
 
     def _delete(self, key: str) -> None:
+        table_ref = _table_ref(self._table_name)
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
+            cursor.execute(f"DELETE FROM {table_ref} WHERE session_id = ?", (key,))
             conn.commit()
 
     def _delete_all(self) -> None:
+        table_ref = _table_ref(self._table_name)
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"TRUNCATE TABLE {self._table_name}")
+            cursor.execute(f"TRUNCATE TABLE {table_ref}")
             conn.commit()
         self._log_delete_all()
 
     def _exists(self, key: str) -> bool:
+        table_ref = _table_ref(self._table_name)
         sql = f"""
         SELECT 1
-        FROM {self._table_name}
+        FROM {table_ref}
         WHERE session_id = ?
           AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
         """
@@ -165,8 +175,9 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
             return cursor.fetchone() is not None
 
     def _expires_in(self, key: str) -> "int | None":
+        table_ref = _table_ref(self._table_name)
         with self._config.provide_connection() as conn, MssqlPythonCursor(conn) as cursor:
-            cursor.execute(f"SELECT expires_at FROM {self._table_name} WHERE session_id = ?", (key,))
+            cursor.execute(f"SELECT expires_at FROM {table_ref} WHERE session_id = ?", (key,))
             row = cursor.fetchone()
 
         if row is None:
@@ -178,8 +189,9 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         return max(0, int(remaining.total_seconds()))
 
     def _delete_expired(self) -> int:
+        table_ref = _table_ref(self._table_name)
         sql = f"""
-        DELETE FROM {self._table_name}
+        DELETE FROM {table_ref}
         WHERE expires_at IS NOT NULL
           AND expires_at < SYSUTCDATETIME()
         """
@@ -190,6 +202,11 @@ class MssqlPythonStore(BaseSQLSpecStore["MssqlPythonConfig"]):
         if count > 0:
             self._log_delete_expired(count)
         return count
+
+
+def _table_ref(table_name: str) -> str:
+    schema_name, bare_table_name = split_schema_and_table(table_name)
+    return f"{quote_bracket_identifier(schema_name)}.{quote_bracket_identifier(bare_table_name)}"
 
 
 def _row_value(row: object, key: str, index: int) -> Any:

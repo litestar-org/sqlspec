@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.adapters.adbc.core import (
     driver_kind_from_driver_name,
+    is_postgres_dialect,
     is_shared_object_driver,
     resolve_dialect_from_config,
 )
@@ -30,6 +31,7 @@ logger = get_logger("sqlspec.adapters.adbc.adk.store")
 DIALECT_POSTGRESQL: Final = "postgresql"
 DIALECT_SQLITE: Final = "sqlite"
 DIALECT_DUCKDB: Final = "duckdb"
+DIALECT_BIGQUERY: Final = "bigquery"
 DIALECT_SNOWFLAKE: Final = "snowflake"
 DIALECT_GENERIC: Final = "generic"
 
@@ -42,21 +44,6 @@ ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
 )
 
 
-@lru_cache(maxsize=256)
-def _postgresql_store_sql(sql: str) -> str:
-    """Cache positional SQL conversion without changing quoted or commented text."""
-    segments: list[str] = []
-    last_end = 0
-    index = 0
-    for match in PARAMETER_REGEX.finditer(sql):
-        if match.lastgroup == "qmark":
-            index += 1
-            segments.extend((sql[last_end : match.start()], f"${index}"))
-            last_end = match.end()
-    segments.append(sql[last_end:])
-    return "".join(segments)
-
-
 class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     """ADBC synchronous ADK store for Arrow Database Connectivity.
 
@@ -67,8 +54,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     Events use the clean-break contract: id, session_id, invocation_id,
     timestamp, and event_data. The full ADK Event payload is stored as a
     single JSON blob in event_data using a dialect-appropriate column type
-    (JSONB for PostgreSQL, JSON for DuckDB, VARIANT for Snowflake, TEXT for
-    SQLite and generic fallback).
+    (JSONB for PostgreSQL, JSON for DuckDB and BigQuery, VARIANT for Snowflake,
+    TEXT for SQLite and generic fallback).
 
     Provides:
         - Session state management with JSON serialization
@@ -228,12 +215,14 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return DIALECT_GENERIC
 
         resolved = resolve_dialect_from_config(self._config.connection_config)
-        if resolved == "postgres":
+        if is_postgres_dialect(resolved):
             return DIALECT_POSTGRESQL
         if resolved == "sqlite":
             return DIALECT_SQLITE
         if resolved == "duckdb":
             return DIALECT_DUCKDB
+        if resolved == "bigquery":
+            return DIALECT_BIGQUERY
         if resolved == "snowflake":
             return DIALECT_SNOWFLAKE
 
@@ -243,6 +232,22 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             driver_name,
         )
         return DIALECT_GENERIC
+
+    def _encode_timestamp(self, value: datetime) -> Any:
+        if self._dialect == DIALECT_SQLITE:
+            return value.timestamp()
+        return value
+
+    def _decode_timestamp(self, value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value)
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        parsed = datetime.fromisoformat(str(value))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
     def _serialize_state(self, state: "dict[str, Any]") -> str:
         """Serialize state dictionary to JSON string.
@@ -284,7 +289,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     def _json_storage_type(self) -> str:
         if self._dialect == DIALECT_POSTGRESQL:
             return "JSONB"
-        if self._dialect == DIALECT_DUCKDB:
+        if self._dialect in {DIALECT_DUCKDB, DIALECT_BIGQUERY}:
             return "JSON"
         if self._dialect == DIALECT_SNOWFLAKE:
             return "VARIANT"
@@ -295,6 +300,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return "TIMESTAMPTZ"
         if self._dialect == DIALECT_SNOWFLAKE:
             return "TIMESTAMP_TZ"
+        if self._dialect == DIALECT_SQLITE:
+            return "REAL"
         return "TIMESTAMP"
 
     def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
@@ -322,6 +329,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return self._sessions_ddl_sqlite()
         if self._dialect == DIALECT_DUCKDB:
             return self._sessions_ddl_duckdb()
+        if self._dialect == DIALECT_BIGQUERY:
+            return self._sessions_ddl_bigquery()
         if self._dialect == DIALECT_SNOWFLAKE:
             return self._sessions_ddl_snowflake()
         return self._sessions_ddl_generic()
@@ -380,6 +389,24 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
+    def _sessions_ddl_bigquery(self) -> str:
+        """BigQuery DDL with JSON and TIMESTAMP.
+
+        Returns:
+            SQL to create sessions table optimized for BigQuery.
+        """
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._session_table} (
+            id STRING NOT NULL,
+            app_name STRING NOT NULL,
+            user_id STRING NOT NULL{owner_id_ddl},
+            state JSON NOT NULL,
+            create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+            update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+        )
+        """
+
     def _sessions_ddl_snowflake(self) -> str:
         """Snowflake DDL with VARIANT type.
 
@@ -428,6 +455,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return self._events_ddl_sqlite()
         if self._dialect == DIALECT_DUCKDB:
             return self._events_ddl_duckdb()
+        if self._dialect == DIALECT_BIGQUERY:
+            return self._events_ddl_bigquery()
         if self._dialect == DIALECT_SNOWFLAKE:
             return self._events_ddl_snowflake()
         return self._events_ddl_generic()
@@ -489,6 +518,24 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
+    def _events_ddl_bigquery(self) -> str:
+        """BigQuery DDL for events table.
+
+        Returns:
+            SQL to create events table optimized for BigQuery.
+        """
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._events_table} (
+            id STRING NOT NULL,
+            app_name STRING NOT NULL,
+            user_id STRING NOT NULL,
+            session_id STRING NOT NULL,
+            invocation_id STRING,
+            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+            event_data JSON NOT NULL
+        )
+        """
+
     def _events_ddl_snowflake(self) -> str:
         """Snowflake DDL for events table.
 
@@ -528,32 +575,66 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
 
     def _app_states_table_ddl(self) -> str:
+        if self._dialect == DIALECT_BIGQUERY:
+            return f"""
+            CREATE TABLE IF NOT EXISTS {self._app_state_table} (
+                app_name STRING NOT NULL,
+                state JSON NOT NULL,
+                update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+            )
+            """
         json_type = self._json_storage_type()
         timestamp_type = self._timestamp_storage_type()
-        default = "DEFAULT CURRENT_TIMESTAMP()" if self._dialect == DIALECT_SNOWFLAKE else "DEFAULT CURRENT_TIMESTAMP"
+        if self._dialect == DIALECT_SQLITE:
+            default = ""
+        elif self._dialect == DIALECT_SNOWFLAKE:
+            default = " DEFAULT CURRENT_TIMESTAMP()"
+        else:
+            default = " DEFAULT CURRENT_TIMESTAMP"
         return f"""
         CREATE TABLE IF NOT EXISTS {self._app_state_table} (
             app_name VARCHAR(128) PRIMARY KEY,
             state {json_type} NOT NULL,
-            update_time {timestamp_type} NOT NULL {default}
+            update_time {timestamp_type} NOT NULL{default}
         )
         """
 
     def _user_states_table_ddl(self) -> str:
+        if self._dialect == DIALECT_BIGQUERY:
+            return f"""
+            CREATE TABLE IF NOT EXISTS {self._user_state_table} (
+                app_name STRING NOT NULL,
+                user_id STRING NOT NULL,
+                state JSON NOT NULL,
+                update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+            )
+            """
         json_type = self._json_storage_type()
         timestamp_type = self._timestamp_storage_type()
-        default = "DEFAULT CURRENT_TIMESTAMP()" if self._dialect == DIALECT_SNOWFLAKE else "DEFAULT CURRENT_TIMESTAMP"
+        if self._dialect == DIALECT_SQLITE:
+            default = ""
+        elif self._dialect == DIALECT_SNOWFLAKE:
+            default = " DEFAULT CURRENT_TIMESTAMP()"
+        else:
+            default = " DEFAULT CURRENT_TIMESTAMP"
         return f"""
         CREATE TABLE IF NOT EXISTS {self._user_state_table} (
             app_name VARCHAR(128) NOT NULL,
             user_id VARCHAR(128) NOT NULL,
             state {json_type} NOT NULL,
-            update_time {timestamp_type} NOT NULL {default},
+            update_time {timestamp_type} NOT NULL{default},
             PRIMARY KEY (app_name, user_id)
         )
         """
 
     def _metadata_table_ddl(self) -> str:
+        if self._dialect == DIALECT_BIGQUERY:
+            return f"""
+            CREATE TABLE IF NOT EXISTS {self._metadata_table} (
+                key STRING NOT NULL,
+                value STRING NOT NULL
+            )
+            """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
             key VARCHAR(128) PRIMARY KEY,
@@ -586,6 +667,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def _create_tables(self) -> None:
         """Create both sessions and events tables if they don't exist."""
+        skip_indexes = self._dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -594,20 +676,22 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.execute(self._sessions_table_ddl())
                 conn.commit()
 
-                sessions_idx_app_user = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id)"
-                cursor.execute(sessions_idx_app_user)
-                conn.commit()
+                if not skip_indexes:
+                    sessions_idx_app_user = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id)"
+                    cursor.execute(sessions_idx_app_user)
+                    conn.commit()
 
-                sessions_idx_update = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC)"
-                cursor.execute(sessions_idx_update)
-                conn.commit()
+                    sessions_idx_update = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC)"
+                    cursor.execute(sessions_idx_update)
+                    conn.commit()
 
                 cursor.execute(self._events_table_ddl())
                 conn.commit()
 
-                events_idx = f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC)"
-                cursor.execute(events_idx)
-                conn.commit()
+                if not skip_indexes:
+                    events_idx = f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC)"
+                    cursor.execute(events_idx)
+                    conn.commit()
 
                 cursor.execute(self._app_states_table_ddl())
                 conn.commit()
@@ -695,21 +779,22 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         state_json = self._serialize_state(state)
         state_placeholder = self._json_placeholder()
+        now_val = self._encode_timestamp(datetime.now(UTC))
 
         params: tuple[Any, ...]
         if self._owner_id_column_name:
             sql = f"""
             INSERT INTO {self._session_table}
             (id, app_name, user_id, {self._owner_id_column_name}, state, create_time, update_time)
-            VALUES (?, ?, ?, ?, {state_placeholder}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, {state_placeholder}, ?, ?)
             """
-            params = (session_id, app_name, user_id, owner_id, state_json)
+            params = (session_id, app_name, user_id, owner_id, state_json, now_val, now_val)
         else:
             sql = f"""
             INSERT INTO {self._session_table} (id, app_name, user_id, state, create_time, update_time)
-            VALUES (?, ?, ?, {state_placeholder}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, {state_placeholder}, ?, ?)
             """
-            params = (session_id, app_name, user_id, state_json)
+            params = (session_id, app_name, user_id, state_json, now_val, now_val)
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -740,12 +825,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             Session record or None if not found.
         """
         if renew_for is not None and self._calculate_expires_at(renew_for) is not None:
+            now_val = self._encode_timestamp(datetime.now(UTC))
             sql = f"""
             UPDATE {self._session_table}
-            SET update_time = CURRENT_TIMESTAMP
+            SET update_time = ?
             WHERE app_name = ? AND user_id = ? AND id = ?
             """
-            params: tuple[Any, ...] = (app_name, user_id, session_id)
+            params: tuple[Any, ...] = (now_val, app_name, user_id, session_id)
             select_after_update = True
         else:
             sql = f"""
@@ -770,7 +856,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                             FROM {self._session_table}
                             WHERE app_name = ? AND user_id = ? AND id = ?
                             """,
-                            params,
+                            (app_name, user_id, session_id),
                         )
                     row = cursor.fetchone()
 
@@ -782,8 +868,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         app_name=row[1],
                         user_id=row[2],
                         state=self._deserialize_state(row[3]),
-                        create_time=row[4],
-                        update_time=row[5],
+                        create_time=self._decode_timestamp(row[4]),
+                        update_time=self._decode_timestamp(row[5]),
                     )
                 finally:
                     cursor.close()
@@ -803,16 +889,17 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             state: New state dictionary (replaces existing state).
         """
         state_json = self._serialize_state(state)
+        now_val = self._encode_timestamp(datetime.now(UTC))
         sql = f"""
         UPDATE {self._session_table}
-        SET state = {self._json_placeholder()}, update_time = CURRENT_TIMESTAMP
+        SET state = {self._json_placeholder()}, update_time = ?
         WHERE app_name = ? AND user_id = ? AND id = ?
         """
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                self._execute(cursor, sql, (state_json, app_name, user_id, session_id))
+                self._execute(cursor, sql, (state_json, now_val, app_name, user_id, session_id))
                 conn.commit()
             finally:
                 cursor.close()
@@ -882,8 +969,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                             app_name=row[1],
                             user_id=row[2],
                             state=self._deserialize_state(row[3]),
-                            create_time=row[4],
-                            update_time=row[5],
+                            create_time=self._decode_timestamp(row[4]),
+                            update_time=self._decode_timestamp(row[5]),
                         )
                         for row in rows
                     ]
@@ -920,7 +1007,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                         event_record["user_id"],
                         event_record["session_id"],
                         event_record["invocation_id"],
-                        event_record["timestamp"],
+                        self._encode_timestamp(event_record["timestamp"]),
                         event_data,
                     ),
                 )
@@ -964,7 +1051,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         update_sql = f"""
         UPDATE {self._session_table}
-        SET state = {self._json_placeholder()}, update_time = CURRENT_TIMESTAMP
+        SET state = {self._json_placeholder()}, update_time = ?
         WHERE app_name = ? AND user_id = ? AND id = ?
         """
         select_sql = f"""
@@ -984,11 +1071,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         state_json = self._serialize_state(state)
         event_data = self._serialize_json_field(event_record["event_data"])
+        now_val = self._encode_timestamp(datetime.now(UTC))
 
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                self._execute(cursor, update_sql, (state_json, app_name, user_id, session_id))
+                self._execute(cursor, update_sql, (state_json, now_val, app_name, user_id, session_id))
                 self._execute(cursor, select_sql, (app_name, user_id, session_id))
                 row = cursor.fetchone()
                 if row is not None:
@@ -1001,23 +1089,21 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                             event_record["user_id"],
                             event_record["session_id"],
                             event_record["invocation_id"],
-                            event_record["timestamp"],
+                            self._encode_timestamp(event_record["timestamp"]),
                             event_data,
                         ),
                     )
                     if app_state is not None:
                         self._execute(cursor, delete_app_state_sql, (app_name,))
                         self._execute(
-                            cursor,
-                            insert_app_state_sql,
-                            (app_name, self._serialize_state(app_state), datetime.now(UTC)),
+                            cursor, insert_app_state_sql, (app_name, self._serialize_state(app_state), now_val)
                         )
                     if user_state is not None:
                         self._execute(cursor, delete_user_state_sql, (app_name, user_id))
                         self._execute(
                             cursor,
                             insert_user_state_sql,
-                            (app_name, user_id, self._serialize_state(user_state), datetime.now(UTC)),
+                            (app_name, user_id, self._serialize_state(user_state), now_val),
                         )
                     conn.commit()
                 else:
@@ -1039,8 +1125,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             app_name=row[1],
             user_id=row[2],
             state=self._deserialize_state(row[3]),
-            create_time=row[4],
-            update_time=row[5],
+            create_time=self._decode_timestamp(row[4]),
+            update_time=self._decode_timestamp(row[5]),
         )
 
     def _get_events(
@@ -1071,10 +1157,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
         if after_timestamp is not None:
             where_clauses.append("e.timestamp > ?")
-            params.append(after_timestamp)
+            params.append(self._encode_timestamp(after_timestamp))
 
         where_clause = " AND ".join(where_clauses)
-        limit_clause = f" LIMIT {limit}" if limit is not None else ""
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
         FROM {self._events_table} e
@@ -1095,7 +1184,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                             id=row[0],
                             session_id=row[1],
                             invocation_id=row[2] or "",
-                            timestamp=row[3],
+                            timestamp=self._decode_timestamp(row[3]),
                             event_data=self._deserialize_json_field(row[4]) or {},
                             app_name=row[5],
                             user_id=row[6],
@@ -1111,11 +1200,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
     def _delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
+        encoded_before = self._encode_timestamp(before)
         where = "WHERE timestamp < ?"
-        params: tuple[Any, ...] = (before,)
+        params: tuple[Any, ...] = (encoded_before,)
         if app_name is not None:
             where += " AND app_name = ?"
-            params = (before, app_name)
+            params = (encoded_before, app_name)
         count_sql = f"SELECT COUNT(*) FROM {self._events_table} {where}"
         delete_sql = f"DELETE FROM {self._events_table} {where}"
 
@@ -1138,11 +1228,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
     def _delete_idle_sessions(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        encoded_updated_before = self._encode_timestamp(updated_before)
         where = "WHERE update_time < ?"
-        params: tuple[Any, ...] = (updated_before,)
+        params: tuple[Any, ...] = (encoded_updated_before,)
         if app_name is not None:
             where += " AND app_name = ?"
-            params = (updated_before, app_name)
+            params = (encoded_updated_before, app_name)
         count_sql = f"SELECT COUNT(*) FROM {self._session_table} {where}"
         delete_events_sql = f"""
         DELETE FROM {self._events_table}
@@ -1170,11 +1261,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
     def _delete_idle_user_states(self, updated_before: datetime, app_name: "str | None" = None) -> int:
+        encoded_updated_before = self._encode_timestamp(updated_before)
         where = "WHERE update_time < ?"
-        params: tuple[Any, ...] = (updated_before,)
+        params: tuple[Any, ...] = (encoded_updated_before,)
         if app_name is not None:
             where += " AND app_name = ?"
-            params = (updated_before, app_name)
+            params = (encoded_updated_before, app_name)
         count_sql = f"SELECT COUNT(*) FROM {self._user_state_table} {where}"
         delete_sql = f"DELETE FROM {self._user_state_table} {where}"
 
@@ -1233,11 +1325,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
     def _upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         delete_sql = f"DELETE FROM {self._app_state_table} WHERE app_name = ?"
         insert_sql = f"INSERT INTO {self._app_state_table} (app_name, state, update_time) VALUES (?, {self._json_placeholder()}, ?)"
+        now_val = self._encode_timestamp(datetime.now(UTC))
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name,))
-                self._execute(cursor, insert_sql, (app_name, self._serialize_state(state), datetime.now(UTC)))
+                self._execute(cursor, insert_sql, (app_name, self._serialize_state(state), now_val))
                 conn.commit()
             finally:
                 cursor.close()
@@ -1248,11 +1341,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         INSERT INTO {self._user_state_table} (app_name, user_id, state, update_time)
         VALUES (?, ?, {self._json_placeholder()}, ?)
         """
+        now_val = self._encode_timestamp(datetime.now(UTC))
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
                 self._execute(cursor, delete_sql, (app_name, user_id))
-                self._execute(cursor, insert_sql, (app_name, user_id, self._serialize_state(state), datetime.now(UTC)))
+                self._execute(cursor, insert_sql, (app_name, user_id, self._serialize_state(state), now_val))
                 conn.commit()
             finally:
                 cursor.close()
@@ -1351,12 +1445,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return DIALECT_GENERIC
 
         resolved = resolve_dialect_from_config(self._config.connection_config)
-        if resolved == "postgres":
+        if is_postgres_dialect(resolved):
             return DIALECT_POSTGRESQL
         if resolved == "sqlite":
             return DIALECT_SQLITE
         if resolved == "duckdb":
             return DIALECT_DUCKDB
+        if resolved == "bigquery":
+            return DIALECT_BIGQUERY
         if resolved == "snowflake":
             return DIALECT_SNOWFLAKE
         logger.warning("Unknown ADBC driver: %s. Using generic SQL dialect.", driver_name)
@@ -1389,12 +1485,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     def _decode_timestamp(self, value: Any) -> datetime:
         if isinstance(value, datetime):
-            return value
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         if isinstance(value, (int, float)):
             return datetime.fromtimestamp(float(value), tz=UTC)
         if isinstance(value, str):
-            return datetime.fromisoformat(value)
-        return datetime.fromisoformat(str(value))
+            parsed = datetime.fromisoformat(value)
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        parsed = datetime.fromisoformat(str(value))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
     def _memory_table_ddl(self) -> str:
         if self._dialect == DIALECT_POSTGRESQL:
@@ -1403,6 +1501,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return self._memory_ddl_sqlite()
         if self._dialect == DIALECT_DUCKDB:
             return self._memory_ddl_duckdb()
+        if self._dialect == DIALECT_BIGQUERY:
+            return self._memory_ddl_bigquery()
         if self._dialect == DIALECT_SNOWFLAKE:
             return self._memory_ddl_snowflake()
         return self._memory_ddl_generic()
@@ -1464,6 +1564,25 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
+    def _memory_ddl_bigquery(self) -> str:
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        CREATE TABLE IF NOT EXISTS {self._memory_table} (
+            id STRING NOT NULL,
+            session_id STRING NOT NULL,
+            app_name STRING NOT NULL,
+            user_id STRING NOT NULL,
+            scope STRING NOT NULL DEFAULT 'user',
+            event_id STRING NOT NULL,
+            author STRING{owner_id_ddl},
+            timestamp TIMESTAMP NOT NULL,
+            content_json JSON NOT NULL,
+            content_text STRING NOT NULL,
+            metadata_json JSON,
+            inserted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+        )
+        """
+
     def _memory_ddl_snowflake(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
@@ -1509,25 +1628,25 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         if not self._enabled:
             return
 
+        skip_indexes = self._dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
                 cursor.execute(self._memory_table_ddl())
                 conn.commit()
 
-                idx_app_scope_user = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)"
-                cursor.execute(idx_app_scope_user)
-                conn.commit()
+                if not skip_indexes:
+                    idx_app_scope_user = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)"
+                    cursor.execute(idx_app_scope_user)
+                    conn.commit()
 
-                idx_scope = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)"
-                cursor.execute(idx_scope)
-                conn.commit()
+                    idx_scope = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)"
+                    cursor.execute(idx_scope)
+                    conn.commit()
 
-                idx_session = (
-                    f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session ON {self._memory_table}(session_id)"
-                )
-                cursor.execute(idx_session)
-                conn.commit()
+                    idx_session = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session ON {self._memory_table}(session_id)"
+                    cursor.execute(idx_session)
+                    conn.commit()
             finally:
                 cursor.close()
 
@@ -1635,6 +1754,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                                 continue
                             raise
                 conn.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise
             finally:
                 cursor.close()
 
@@ -1779,6 +1902,21 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 "embedding": None,
             })
         return records
+
+
+@lru_cache(maxsize=256)
+def _postgresql_store_sql(sql: str) -> str:
+    """Cache positional SQL conversion without changing quoted or commented text."""
+    segments: list[str] = []
+    last_end = 0
+    index = 0
+    for match in PARAMETER_REGEX.finditer(sql):
+        if match.lastgroup == "qmark":
+            index += 1
+            segments.extend((sql[last_end : match.start()], f"${index}"))
+            last_end = match.end()
+    segments.append(sql[last_end:])
+    return "".join(segments)
 
 
 def _build_adbc_scope_where(

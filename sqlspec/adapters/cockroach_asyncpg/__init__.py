@@ -1,3 +1,5 @@
+"""CockroachDB AsyncPG adapter for SQLSpec."""
+
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
     CockroachAsyncpgPool,

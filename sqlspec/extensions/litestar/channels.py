@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.events import AsyncEventChannel
 
+__all__ = ("SQLSpecChannelsBackend",)
+
 logger = get_logger("sqlspec.extensions.litestar.channels")
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -57,24 +59,6 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         self._to_db_channel: dict[str, str] = {}
         self._to_litestar_channel: dict[str, str] = {}
 
-    async def on_startup(self) -> None:
-        self._shutdown.clear()
-        if self._output_queue is None:
-            self._output_queue = asyncio.Queue()
-
-    async def on_shutdown(self) -> None:
-        self._shutdown.set()
-        tasks = list(self._tasks.values())
-        self._tasks.clear()
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._to_db_channel.clear()
-        self._to_litestar_channel.clear()
-        self._output_queue = None
-        await self._event_channel.shutdown()
-
     @property
     def output_queue_depth(self) -> int:
         """Return the number of buffered channel messages."""
@@ -93,6 +77,24 @@ class SQLSpecChannelsBackend(ChannelsBackend):
         notification; every other backend kind returns None.
         """
         return MAX_NOTIFY_BYTES if self._event_channel.backend_name == "notify" else None
+
+    async def on_startup(self) -> None:
+        self._shutdown.clear()
+        if self._output_queue is None:
+            self._output_queue = asyncio.Queue()
+
+    async def on_shutdown(self) -> None:
+        self._shutdown.set()
+        tasks = list(self._tasks.values())
+        self._tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._to_db_channel.clear()
+        self._to_litestar_channel.clear()
+        self._output_queue = None
+        await self._event_channel.shutdown()
 
     def measure(self, data: bytes) -> int:
         """Return the encoded size of the PostgreSQL ``notify`` envelope that wraps ``data``.
@@ -224,6 +226,10 @@ class SQLSpecChannelsBackend(ChannelsBackend):
             raise
         except Exception as error:  # pragma: no cover
             logger.warning("litestar channel %s stream worker error: %s", channel, error)
+        finally:
+            current_task = asyncio.current_task()
+            if self._tasks.get(channel) is current_task:
+                self._tasks.pop(channel, None)
 
     @staticmethod
     def _wrap_payload(data: bytes) -> "dict[str, Any]":

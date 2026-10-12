@@ -1,5 +1,6 @@
 """Spanner metadata queries using INFORMATION_SCHEMA."""
 
+import re
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mypy_extensions import mypyc_attr
@@ -194,11 +195,6 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
-    def _build_domain_result(self, domain: str, rows: list[Any]) -> MetadataResult:
-        """Wrap domain query rows into a standard MetadataResult envelope."""
-        capability = _spanner_capability_for_domain(domain, mode=self.mode)
-        return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
-
     def get_constraints(
         self, driver: "SpannerSyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> MetadataResult:
@@ -311,7 +307,7 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
         )
         if not ddl_statements:
             return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
-        ddl = _select_spanner_ddl_for_object(ddl_statements, object_name)
+        ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -320,6 +316,11 @@ class SpannerSyncDataDictionary(SyncDataDictionaryBase):
             ddl=ddl,
             warnings=_SPANNER_DDL_WARNINGS,
         )
+
+    def _build_domain_result(self, domain: str, rows: list[Any]) -> MetadataResult:
+        """Wrap domain query rows into a standard MetadataResult envelope."""
+        capability = _spanner_capability_for_domain(domain, mode=self.mode)
+        return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -445,11 +446,6 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
-    def _build_domain_result(self, domain: str, rows: list[Any]) -> MetadataResult:
-        """Wrap domain query rows into a standard MetadataResult envelope."""
-        capability = _spanner_capability_for_domain(domain, mode=self.mode)
-        return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
-
     async def get_constraints(
         self, driver: "SpannerAsyncDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> MetadataResult:
@@ -562,7 +558,7 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
         )
         if not ddl_statements:
             return DDLResult.unsupported(identity, source=MetadataSource.NATIVE_API, warnings=_SPANNER_DDL_WARNINGS)
-        ddl = _select_spanner_ddl_for_object(ddl_statements, object_name)
+        ddl = _select_spanner_ddl_for_object(ddl_statements, object_name, object_type=object_type)
         return DDLResult(
             identity=identity,
             status=MetadataSupport.SUPPORTED,
@@ -571,6 +567,11 @@ class SpannerAsyncDataDictionary(AsyncDataDictionaryBase):
             ddl=ddl,
             warnings=_SPANNER_DDL_WARNINGS,
         )
+
+    def _build_domain_result(self, domain: str, rows: list[Any]) -> MetadataResult:
+        """Wrap domain query rows into a standard MetadataResult envelope."""
+        capability = _spanner_capability_for_domain(domain, mode=self.mode)
+        return MetadataResult(domain, capability=capability, items=tuple(rows), warnings=capability.warnings)
 
 
 def _spanner_capability_for_domain(domain: str, *, mode: str) -> MetadataCapability:
@@ -664,9 +665,25 @@ def _get_spanner_database_admin_api(database: Any) -> Any:
     return getattr(client, "database_admin_api", None)
 
 
-def _select_spanner_ddl_for_object(statements: "tuple[str, ...]", object_name: str) -> str:
-    normalized_name = object_name.lower()
+def _select_spanner_ddl_for_object(
+    statements: "tuple[str, ...]", object_name: str, *, object_type: str = "table"
+) -> str:
+    escaped_name = re.escape(object_name.strip('`"'))
+    normalized_type = object_type.strip().replace("_", r"\s+")
+    typed_pattern = re.compile(
+        rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:UNIQUE|NULL_FILTERED|SEARCH|VECTOR|PROPERTY)\s+)*"
+        rf"{normalized_type}\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[`\"]?\w+[`\"]?\.)?[`\"]?{escaped_name}[`\"]?(?=\s|\(|;|$)",
+        re.IGNORECASE,
+    )
     for statement in statements:
-        if normalized_name in statement.lower():
+        if typed_pattern.search(statement):
+            return statement
+    any_object_pattern = re.compile(
+        rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:[A-Z_]+\s+)+?(?:IF\s+NOT\s+EXISTS\s+)?"
+        rf"(?:[`\"]?\w+[`\"]?\.)?[`\"]?{escaped_name}[`\"]?(?=\s|\(|;|$)",
+        re.IGNORECASE,
+    )
+    for statement in statements:
+        if any_object_pattern.search(statement):
             return statement
     return "\n".join(statements)

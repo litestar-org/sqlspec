@@ -23,7 +23,16 @@ from sqlspec.adapters.cockroach_psycopg import (
     CockroachPsycopgSyncSessionContext,
     build_connection_config,
 )
+from sqlspec.adapters.cockroach_psycopg.adk.store import (
+    CockroachPsycopgAsyncADKMemoryStore,
+    CockroachPsycopgAsyncADKStore,
+    CockroachPsycopgSyncADKMemoryStore,
+    CockroachPsycopgSyncADKStore,
+)
 from sqlspec.adapters.cockroach_psycopg.config import default_statement_config
+from sqlspec.adapters.cockroach_psycopg.core import build_native_export
+from sqlspec.adapters.cockroach_psycopg.litestar.store import CockroachPsycopgSyncStore
+from sqlspec.core import SQL
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -666,3 +675,138 @@ def test_cockroach_async_config_normalizes_aliases() -> None:
     assert config.connection_config["dbname"] == "override"
     assert "connection_string" not in config.connection_config
     assert "db" not in config.connection_config
+
+
+def test_cockroach_psycopg_create_pool_merges_extra_and_preserves_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CockroachPsycopgSyncConfig should merge extra into pool kwargs and keep on_connection_create in driver_features."""
+    captured: dict[str, Any] = {}
+
+    def _fake_pool(_conninfo: str, **kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    def _hook(_conn: Any) -> None:
+        return None
+
+    monkeypatch.setattr("sqlspec.adapters.cockroach_psycopg.config.ConnectionPool", _fake_pool)
+    config = CockroachPsycopgSyncConfig(
+        connection_config={"host": "localhost", "extra": {"application_name": "sqlspec"}},
+        driver_features={"on_connection_create": _hook},
+    )
+    assert config.driver_features["on_connection_create"] is _hook
+    config.create_pool()
+    assert captured["kwargs"]["application_name"] == "sqlspec"
+    assert "extra" not in captured["kwargs"]
+
+
+def test_cockroach_psycopg_native_export_escapes_literal_percent() -> None:
+    """build_native_export must escape literal % when parameters are bound."""
+    cmd, bound = build_native_export(
+        "SELECT id FROM items WHERE code LIKE 'A%' AND tenant = %s", ["t1"], "s3://bucket/export", "parquet", {}
+    )
+    assert "LIKE 'A%%'" in cmd
+    assert "tenant = %s" in cmd
+    assert bound == ["s3://bucket/export", "t1"]
+
+
+def test_cockroach_psycopg_follower_read_auto_transaction_commits_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto-started follower-read transactions in CockroachPsycopgSyncDriver must commit or rollback."""
+    in_tx = False
+
+    def _in_tx(_self: Any) -> bool:
+        return in_tx
+
+    def _begin(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = True
+
+    def _commit(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = False
+
+    def _rollback(_self: Any) -> None:
+        nonlocal in_tx
+        in_tx = False
+
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "_connection_in_transaction", _in_tx)
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "begin", _begin)
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "commit", _commit)
+    monkeypatch.setattr(CockroachPsycopgSyncDriver, "rollback", _rollback)
+
+    conn = MagicMock()
+    cursor = MagicMock()
+    col = MagicMock()
+    col.name = "val"
+    col.type_code = 23
+    cursor.description = [col]
+    cursor.fetchall.return_value = [{"val": 1}]
+    driver = CockroachPsycopgSyncDriver(
+        connection=conn, driver_features={"enable_follower_reads": True, "default_staleness": "'-10s'"}
+    )
+    stmt = SQL("SELECT 1")
+    driver.dispatch_execute(cursor, stmt)
+    assert in_tx is False
+
+    cursor.execute.side_effect = RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"):
+        driver.dispatch_execute(cursor, stmt)
+    assert in_tx is False
+
+
+async def test_cockroach_psycopg_adk_stores_commit_ddl_and_validate_locality() -> None:
+    """CockroachPsycopg ADK and memory stores must commit DDL and validate LOCALITY clauses."""
+    commits: list[str] = []
+
+    class _FakeSyncDriver:
+        def execute_script(self, _sql: str) -> None:
+            return None
+
+        def commit(self) -> None:
+            commits.append("sync")
+
+    class _FakeSyncSession:
+        def __enter__(self) -> _FakeSyncDriver:
+            return _FakeSyncDriver()
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    class _FakeAsyncDriver:
+        async def execute_script(self, _sql: str) -> None:
+            return None
+
+        async def commit(self) -> None:
+            commits.append("async")
+
+    class _FakeAsyncSession:
+        async def __aenter__(self) -> _FakeAsyncDriver:
+            return _FakeAsyncDriver()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    sync_cfg = CockroachPsycopgSyncConfig(extension_config={"adk": {"enable_memory": True}})
+    object.__setattr__(sync_cfg, "provide_session", lambda *_a, **_kw: _FakeSyncSession())
+    CockroachPsycopgSyncADKStore(sync_cfg).create_tables()
+    CockroachPsycopgSyncADKMemoryStore(sync_cfg).create_tables()
+
+    async_cfg = CockroachPsycopgAsyncConfig(extension_config={"adk": {"enable_memory": True}})
+    object.__setattr__(async_cfg, "provide_session", lambda *_a, **_kw: _FakeAsyncSession())
+    await CockroachPsycopgAsyncADKStore(async_cfg).create_tables()
+    await CockroachPsycopgAsyncADKMemoryStore(async_cfg).create_tables()
+
+    assert commits == ["sync", "sync", "async", "async"]
+
+    bad_cfg = CockroachPsycopgSyncConfig(extension_config={"adk": {"table_locality": "GLOBAL; DROP TABLE x"}})
+    with pytest.raises(ImproperConfigurationError, match="LOCALITY"):
+        CockroachPsycopgSyncADKStore(bad_cfg)._sessions_table_ddl()
+
+    good_cfg = CockroachPsycopgSyncConfig(extension_config={"adk": {"table_locality": "GLOBAL"}})
+    adk_store = CockroachPsycopgSyncADKStore(good_cfg)
+    adk_store._session_table = "tenant_a.adk_sessions"
+    assert "idx_tenant_a_adk_sessions_app_user" in adk_store._sessions_table_ddl()
+    litestar_store = CockroachPsycopgSyncStore(good_cfg)
+    litestar_store._table_name = "tenant_a.litestar_sessions"
+    assert "idx_tenant_a_litestar_sessions_expires_at" in litestar_store._table_ddl()

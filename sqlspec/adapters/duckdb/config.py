@@ -303,42 +303,6 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             **kwargs,
         )
 
-    def _create_pool(self) -> DuckDBConnectionPool:
-        """Create connection pool from configuration."""
-        connection_config = build_connection_config(self.connection_config)
-
-        extensions = cast("list[dict[str, Any]] | None", self.driver_features.get("extensions", None))
-        secrets = cast("list[dict[str, Any]] | None", self.driver_features.get("secrets", None))
-        extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
-        secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
-
-        pool_recycle_seconds = self.connection_config.get("pool_recycle_seconds")
-        health_check_interval = self.connection_config.get("health_check_interval")
-        pool_kwargs: dict[str, Any] = {}
-        if pool_recycle_seconds is not None:
-            pool_kwargs["pool_recycle_seconds"] = pool_recycle_seconds
-        if health_check_interval is not None:
-            pool_kwargs["health_check_interval"] = health_check_interval
-
-        return DuckDBConnectionPool(
-            connection_config=connection_config,
-            extensions=extensions_dicts,
-            secrets=secrets_dicts,
-            on_connection_create=self._user_connection_hook,
-            **pool_kwargs,
-        )
-
-    def _close_pool(self) -> None:
-        """Close the connection pool."""
-        if self.connection_instance:
-            self.connection_instance.close()
-
-    def _prepare_driver(self, driver: DuckDBDriver) -> DuckDBDriver:
-        driver = super()._prepare_driver(driver)
-        if self.connection_instance is not None:
-            driver.driver_features.update(self.connection_instance._storage_settings(driver.connection))
-        return driver
-
     def create_connection(self) -> DuckDBConnection:
         """Open a standalone connection owned by the caller.
 
@@ -382,3 +346,39 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
         """Return polling defaults optimized for DuckDB."""
 
         return EventRuntimeHints(poll_interval=0.15, lease_seconds=15)
+
+    def _create_pool(self) -> DuckDBConnectionPool:
+        """Create connection pool from configuration."""
+        connection_config = build_connection_config(self.connection_config)
+
+        extensions = cast("list[dict[str, Any]] | None", self.driver_features.get("extensions", None))
+        secrets = cast("list[dict[str, Any]] | None", self.driver_features.get("secrets", None))
+        extensions_dicts = [dict(ext) for ext in extensions] if extensions else None
+        secrets_dicts = [dict(secret) for secret in secrets] if secrets else None
+
+        pool_recycle_seconds = self.connection_config.get("pool_recycle_seconds")
+        health_check_interval = self.connection_config.get("health_check_interval")
+        pool_kwargs: dict[str, Any] = {}
+        if pool_recycle_seconds is not None:
+            pool_kwargs["pool_recycle_seconds"] = pool_recycle_seconds
+        if health_check_interval is not None:
+            pool_kwargs["health_check_interval"] = health_check_interval
+
+        return DuckDBConnectionPool(
+            connection_config=connection_config,
+            extensions=extensions_dicts,
+            secrets=secrets_dicts,
+            on_connection_create=self._user_connection_hook,
+            **pool_kwargs,
+        )
+
+    def _close_pool(self) -> None:
+        """Close the connection pool."""
+        if self.connection_instance:
+            self.connection_instance.close()
+
+    def _prepare_driver(self, driver: DuckDBDriver) -> DuckDBDriver:
+        driver = super()._prepare_driver(driver)
+        if self.connection_instance is not None:
+            driver.driver_features.update(self.connection_instance._storage_settings(driver.connection))
+        return driver

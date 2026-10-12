@@ -4,18 +4,23 @@ Tests all protocol type guards, validation functions, edge cases, and performanc
 Uses function-based pytest approach as per AGENTS.md requirements.
 """
 
+import logging
 import typing
 from collections import UserDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
+from uuid import UUID
 
 import msgspec
 import pytest
 from sqlglot import exp
 from typing_extensions import TypedDict
 
-from sqlspec.typing import PYARROW_INSTALLED
+from sqlspec.typing import PYARROW_INSTALLED, SupportedSchemaModel
+from sqlspec.utils.config_tools import parse_mysql_dsn
+from sqlspec.utils.correlation import CorrelationContext, get_correlation_adapter
+from sqlspec.utils.deprecation import deprecated
 from sqlspec.utils.serializers import (
     get_collection_serializer,
     get_serializer_metrics,
@@ -23,6 +28,8 @@ from sqlspec.utils.serializers import (
     schema_dump,
     serialize_collection,
 )
+from sqlspec.utils.serializers._json import StandardLibSerializer
+from sqlspec.utils.text import normalize_identifier
 from sqlspec.utils.type_guards import (
     dataclass_to_dict,
     expression_has_limit,
@@ -74,6 +81,7 @@ from sqlspec.utils.type_guards import (
     resolve_row_format,
     supports_arrow_results,
 )
+from sqlspec.utils.uuids import uuid_from_string
 from tests.conftest import is_compiled
 
 _UNSET = object()
@@ -391,7 +399,7 @@ def test_is_schema_or_dict(value: Any, expected: bool) -> None:
 
 @pytest.mark.parametrize(
     ("field_name", "expected_with", "expected_without"),
-    [pytest.param("name", False, True, id="existing_name"), pytest.param("nonexistent", False, True, id="nonexistent")],
+    [pytest.param("name", True, False, id="existing_name"), pytest.param("nonexistent", False, True, id="nonexistent")],
 )
 def test_is_schema_field_guards_with_dataclass(field_name: str, expected_with: bool, expected_without: bool) -> None:
     """Validate schema field guards on dataclass instances."""
@@ -403,7 +411,7 @@ def test_is_schema_field_guards_with_dataclass(field_name: str, expected_with: b
 @pytest.mark.parametrize(
     ("target", "field_name", "expected_with", "expected_without"),
     [
-        pytest.param(SampleDataclass(name="test", age=25), "name", False, True, id="dataclass_existing_field"),
+        pytest.param(SampleDataclass(name="test", age=25), "name", True, False, id="dataclass_existing_field"),
         pytest.param({"name": "test", "age": 25}, "name", True, False, id="dict_existing_field"),
         pytest.param(SampleDataclass(name="test", age=25), "nonexistent", False, True, id="dataclass_missing_field"),
         pytest.param({"name": "test", "age": 25}, "nonexistent", False, True, id="dict_missing_field"),
@@ -1013,7 +1021,92 @@ def test_supports_arrow_results(target: Any, expected: bool) -> None:
 
 def test_typing_module_supported_schema_model_includes_mapping() -> None:
     """SupportedSchemaModel should include Mapping[str, Any]."""
-    from sqlspec.typing import SupportedSchemaModel
-
     args = typing.get_args(SupportedSchemaModel)
     assert any(getattr(arg, "__origin__", None) is Mapping for arg in args)
+
+
+def test_schema_dump_recursive_msgspec_struct_and_unset_filtering() -> None:
+    """schema_dump recursively dumps nested msgspec.Struct fields and filters UNSET."""
+
+    class Child(msgspec.Struct):
+        label: str
+        note: str | msgspec.UnsetType = msgspec.UNSET
+
+    class Parent(msgspec.Struct):
+        name: str
+        child: Child
+        children: list[Child]
+        tag: str | msgspec.UnsetType = msgspec.UNSET
+
+    payload = Parent(name="root", child=Child(label="one"), children=[Child(label="two", note="present")])
+    dumped = schema_dump(payload, exclude_unset=True)
+    assert dumped == {"name": "root", "child": {"label": "one"}, "children": [{"label": "two", "note": "present"}]}
+
+    encoded = StandardLibSerializer().encode(Child(label="std"))
+    assert encoded == '{"label": "std"}'
+
+
+def test_uuid_from_string_accepts_braced_and_urn_formats() -> None:
+    """uuid_from_string accepts stdlib braced and URN UUID strings even when uuid_utils is present."""
+    expected = UUID("550e8400-e29b-41d4-a716-446655440000")
+    assert uuid_from_string("{550e8400-e29b-41d4-a716-446655440000}") == expected
+    assert uuid_from_string("urn:uuid:550e8400-e29b-41d4-a716-446655440000") == expected
+
+
+def test_parse_mysql_dsn_coerces_semicolon_values_and_preserves_non_ascii_digits() -> None:
+    """parse_mysql_dsn coerces booleans/ints in semicolon DSNs and does not crash on non-ASCII superscript digits."""
+    semi = parse_mysql_dsn("host=localhost;port=3306;ssl=true;autocommit=false;label=²")
+    assert semi == {"host": "localhost", "port": 3306, "ssl": True, "autocommit": False, "label": "²"}
+
+    url = parse_mysql_dsn("mysql://user:pass@localhost:3306/db?connect_timeout=10&ssl=true&tag=%C2%B2")
+    assert url["connect_timeout"] == 10
+    assert url["ssl"] is True
+    assert url["tag"] == "²"
+
+
+def test_normalize_identifier_strips_bracket_quotes() -> None:
+    """normalize_identifier strips T-SQL [...] bracket quotes and unescapes ]]."""
+    assert normalize_identifier("[Users]", "tsql") == "Users"
+    assert normalize_identifier("[My]]Table]", "mssql") == "My]Table"
+
+
+def test_correlation_context_token_reset_and_adapter_extra_copy() -> None:
+    """CorrelationContext.context resets via token and _CorrelationAdapter does not mutate caller extra dict."""
+    CorrelationContext.clear()
+    with CorrelationContext.context("outer-id"):
+        assert CorrelationContext.get() == "outer-id"
+        with CorrelationContext.context("inner-id"):
+            assert CorrelationContext.get() == "inner-id"
+        assert CorrelationContext.get() == "outer-id"
+    assert CorrelationContext.get() is None
+
+    adapter = get_correlation_adapter(logging.getLogger("sqlspec.test"))
+    caller_extra: dict[str, Any] = {"request_id": "req-1"}
+    with CorrelationContext.context("cid-123"):
+        _, kwargs = adapter.process("hello", {"extra": caller_extra})
+    assert kwargs["extra"] == {"request_id": "req-1", "correlation_id": "cid-123"}
+    assert "correlation_id" not in caller_extra
+
+
+def test_deprecated_supports_property_and_classmethod() -> None:
+    """@deprecated supports @property and @classmethod descriptors without raising TypeError."""
+    decorator_prop: Any = deprecated("0.1.0", alternative="new_prop")
+    decorator_cls: Any = deprecated("0.1.0", alternative="new_cls_method")
+
+    class LegacyService:
+        @property
+        def _old_prop(self) -> str:
+            return "prop-val"
+
+        @classmethod
+        def _old_cls_method(cls) -> str:
+            return "cls-val"
+
+        old_prop = decorator_prop(_old_prop)
+        old_cls_method = decorator_cls(_old_cls_method)
+
+    svc = LegacyService()
+    with pytest.deprecated_call(match="old_prop"):
+        assert svc.old_prop == "prop-val"
+    with pytest.deprecated_call(match="old_cls_method"):
+        assert LegacyService.old_cls_method() == "cls-val"

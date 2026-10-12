@@ -106,3 +106,31 @@ def test_cockroach_crdb_internal_query_is_feature_gated_by_default() -> None:
     assert query.capability.support == MetadataSupport.UNSUPPORTED
     assert query.capability.risks == (MetadataRisk.VERSION_GATED,)
     assert query.capability.warnings == ("cockroachdb/crdb_internal/ranges requires supports_crdb_internal_metadata",)
+
+
+def test_postgres_and_cockroach_foreign_keys_and_indexes_contracts() -> None:
+    """PostgreSQL and CockroachDB foreign_keys, tables, and indexes avoid Cartesian joins and project required columns."""
+    loader = DataDictionaryLoader()
+
+    pg_tables = loader.get_domain_query_text("postgres", "tables", "by_schema")
+    pg_fks = loader.get_domain_query_text("postgres", "foreign_keys", "by_schema")
+    crdb_fks = loader.get_domain_query_text("cockroachdb", "foreign_keys", "by_schema")
+    crdb_indexes = loader.get_domain_query_text("cockroachdb", "indexes", "by_schema")
+    crdb_indexes_by_table = loader.get_domain_query_text("cockroachdb", "indexes", "by_table")
+
+    assert pg_tables is not None
+    assert "DISTINCT ON (t.oid)" not in pg_tables
+    assert "fk.confrelid <> fk.conrelid" in pg_tables
+    assert "LEFT JOIN dependency_levels" in pg_tables
+    assert pg_fks is not None
+    assert "pg_catalog.pg_constraint" in pg_fks
+    assert "unnest(con.conkey, con.confkey) WITH ORDINALITY" in pg_fks
+    assert crdb_fks is not None
+    assert "information_schema.referential_constraints" in crdb_fks
+    assert "pk_kcu.ordinal_position" in crdb_fks
+    assert crdb_indexes is not None and "AS columns" in crdb_indexes and "AS is_unique" in crdb_indexes
+    assert (
+        crdb_indexes_by_table is not None
+        and "AS columns" in crdb_indexes_by_table
+        and "AS is_unique" in crdb_indexes_by_table
+    )

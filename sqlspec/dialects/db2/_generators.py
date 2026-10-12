@@ -49,6 +49,7 @@ __all__ = (
     "set_operation_sql",
     "str_position_sql",
     "time_to_str_sql",
+    "version_sql",
 )
 
 DB2_TYPE_MAPPING: dict[exp.DType, str] = {
@@ -79,6 +80,7 @@ DB2_TYPE_MAPPING: dict[exp.DType, str] = {
     exp.DType.DECFLOAT: "DECFLOAT",
     exp.DType.BINARY: "BINARY",
     exp.DType.VARBINARY: "VARBINARY",
+    exp.DType.XML: "XML",
 }
 
 DB2_DEFAULT_TYPE_LENGTHS: Final[dict[exp.DType, str]] = {
@@ -88,18 +90,7 @@ DB2_DEFAULT_TYPE_LENGTHS: Final[dict[exp.DType, str]] = {
 }
 
 _ZONED_TIMESTAMP_TYPES: Final[frozenset[exp.DType]] = frozenset({exp.DType.TIMESTAMPTZ, exp.DType.TIMESTAMPLTZ})
-
-
-def _detach_statement_tail(expression: "exp.Query") -> "tuple[exp.Query, list[exp.Lock], dict[str, object]]":
-    if not expression.args.get("locks") and not any(key in expression.args for key in DB2_TAIL_ARG_KEYS):
-        return expression, [], {}
-    expression = expression.copy()
-    locks = list(expression.args.get("locks") or [])
-    tail_args: dict[str, object] = {key: expression.args.get(key) for key in DB2_TAIL_ARG_KEYS}
-    expression.set("locks", None)
-    for key in DB2_TAIL_ARG_KEYS:
-        expression.set(key, None)
-    return expression, locks, tail_args
+_TEMPORAL_RANGE_ARITY: Final[int] = 2
 
 
 def render_statement_tail(
@@ -151,20 +142,6 @@ def render_statement_tail(
     if tail_args.get("sqlspec_db2_skip_locked") or any(candidate.args.get("wait") is False for candidate in locks):
         parts.append("SKIP LOCKED DATA")
     return " ".join(parts)
-
-
-def _with_statement_tail(sql: str, tail: str) -> str:
-    return f"{sql} {tail}" if tail else sql
-
-
-def _convert_limit_to_fetch(query: exp.Expr) -> exp.Expr:
-    """Convert an exp.Limit clause to an exp.Fetch clause for Db2."""
-    limit = query.args.get("limit")
-    if isinstance(limit, exp.Limit):
-        direction = "NEXT" if query.args.get("offset") else "FIRST"
-        fetch = exp.Fetch(direction=direction, count=limit.expression)
-        query.set("limit", fetch)
-    return query
 
 
 def select_sql(generator: "generator.Generator", expression: exp.Select) -> str:
@@ -298,6 +275,26 @@ def ilike_sql(generator: "generator.Generator", expression: exp.ILike) -> str:
     return render_ilike(generator, expression)
 
 
+def version_sql(generator: "generator.Generator", expression: exp.Version) -> str:
+    """Render a Db2 temporal table period specification (FOR SYSTEM_TIME / FOR BUSINESS_TIME)."""
+    raw_period = str(expression.this).upper()
+    if raw_period in {"TIMESTAMP", "SYSTEM_TIME"}:
+        period = "SYSTEM_TIME"
+    elif raw_period in {"VERSION", "BUSINESS_TIME"}:
+        period = "BUSINESS_TIME"
+    else:
+        period = raw_period
+    kind = expression.text("kind").upper()
+    expr = expression.expression
+    if kind in {"FROM", "BETWEEN"} and isinstance(expr, exp.Tuple) and len(expr.expressions) == _TEMPORAL_RANGE_ARITY:
+        separator = "TO" if kind == "FROM" else "AND"
+        start_sql = generator.sql(expr.expressions[0])
+        end_sql = generator.sql(expr.expressions[1])
+        return f"FOR {period} {kind} {start_sql} {separator} {end_sql}"
+    expr_sql = generator.sql(expr) if expr is not None else ""
+    return f"FOR {period} {kind} {expr_sql}".rstrip()
+
+
 DB2_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
     exp.Select: select_sql,
     exp.Union: set_operation_sql,
@@ -324,6 +321,7 @@ DB2_TRANSFORMS: Final[dict[type[exp.Expr], Callable[[Any, Any], str]]] = {
     exp.CurrentUser: current_user_sql,
     exp.CurrentSchema: current_schema_sql,
     exp.Column: column_sql,
+    exp.Version: version_sql,
 }
 
 _overlay_cache: "tuple[dict[type[exp.Expr], Callable[..., str]], dict[type[exp.Expr], Callable[..., str]]] | None" = (
@@ -350,3 +348,29 @@ def db2_dispatch(base: "dict[type[exp.Expr], Callable[..., str]]") -> "dict[type
     overlay = {**base, **DB2_TRANSFORMS}
     _overlay_cache = (base, overlay)
     return overlay
+
+
+def _detach_statement_tail(expression: "exp.Query") -> "tuple[exp.Query, list[exp.Lock], dict[str, object]]":
+    if not expression.args.get("locks") and not any(key in expression.args for key in DB2_TAIL_ARG_KEYS):
+        return expression, [], {}
+    expression = expression.copy()
+    locks = list(expression.args.get("locks") or [])
+    tail_args: dict[str, object] = {key: expression.args.get(key) for key in DB2_TAIL_ARG_KEYS}
+    expression.set("locks", None)
+    for key in DB2_TAIL_ARG_KEYS:
+        expression.set(key, None)
+    return expression, locks, tail_args
+
+
+def _with_statement_tail(sql: str, tail: str) -> str:
+    return f"{sql} {tail}" if tail else sql
+
+
+def _convert_limit_to_fetch(query: exp.Expr) -> exp.Expr:
+    """Convert an exp.Limit clause to an exp.Fetch clause for Db2."""
+    limit = query.args.get("limit")
+    if isinstance(limit, exp.Limit):
+        direction = "NEXT" if query.args.get("offset") else "FIRST"
+        fetch = exp.Fetch(direction=direction, count=limit.expression)
+        query.set("limit", fetch)
+    return query

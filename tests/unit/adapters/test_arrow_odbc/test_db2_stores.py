@@ -315,8 +315,8 @@ def test_db2_adk_session_roundtrip() -> None:
         "UPDATE adk_session SET state = ?, update_time = ? WHERE app_name = ? AND user_id = ? AND id = ?",
         ['{"a":2}', DB2_TIMESTAMP, "app", "u", "s1"],
     )
-    assert calls[4][0].endswith("ORDER BY update_time DESC, id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY")
-    assert calls[4][1] == ["app", "u", "10", "5"]
+    assert calls[4][0].endswith("ORDER BY update_time DESC, id DESC OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY")
+    assert calls[4][1] == ["app", "u"]
 
 
 def test_db2_adk_state_upsert_uses_merge_without_holdlock() -> None:

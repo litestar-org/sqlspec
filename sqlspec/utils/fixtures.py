@@ -6,6 +6,7 @@ fixture files against a database driver. Supports both sync and async operations
 """
 
 import base64
+import contextlib
 import gzip
 import os
 import re
@@ -50,7 +51,9 @@ __all__ = (
 _TABLE_FIXTURE_EXTENSIONS: Final["tuple[str, ...]"] = (".json", ".json.gz", ".jsonl", ".jsonl.gz")
 _COLUMN_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _TABLE_NAME_PATTERN: Final["re.Pattern[str]"] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?")
-_POSTGRES_DIALECTS: Final["frozenset[str]"] = frozenset({"postgres", "postgresql"})
+_INSERT_VALUES_CLAUSE_PATTERN: Final["re.Pattern[str]"] = re.compile(r"\)\s+VALUES\s+\(")
+_POSTGRES_DIALECTS: Final["frozenset[str]"] = frozenset({"cockroach", "cockroachdb", "postgres", "postgresql"})
+_PG_SEQUENCE_DIALECTS: Final["frozenset[str]"] = frozenset({"postgres", "postgresql"})
 _MYSQL_DIALECTS: Final["frozenset[str]"] = frozenset({"mariadb", "mysql"})
 _ON_CONFLICT_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "postgres", "sqlite"})
 _JSON_VALUE_FAMILIES: Final["frozenset[str]"] = frozenset({"duckdb", "mysql", "postgres", "sqlite"})
@@ -83,6 +86,7 @@ _ISO_DURATION_PATTERN: Final["re.Pattern[str]"] = re.compile(
 _DUCKDB_INTERVAL_PARTS: Final[int] = 3
 _NANOSECONDS_PER_MICROSECOND: Final[int] = 1000
 _TEMPORARY_FILE_MODE: Final[int] = 0o666
+_MAX_ZIP_FIXTURE_BYTES: Final[int] = 256 * 1024 * 1024
 
 logger = get_logger("sqlspec.utils.fixtures")
 
@@ -160,8 +164,9 @@ def write_fixture_sync(
         **storage_kwargs: Additional arguments for the storage backend
 
     Raises:
-        ValueError: If storage backend is not found
+        ValueError: If storage backend is not found or table_name is invalid
     """
+    _validated_fixture_name(table_name)
     if storage_backend == "local":
         uri = "file://"
         storage_kwargs["base_path"] = _resolve_path_str(fixtures_path)
@@ -204,8 +209,9 @@ async def write_fixture_async(
         **storage_kwargs: Additional arguments for the storage backend
 
     Raises:
-        ValueError: If storage backend is not found
+        ValueError: If storage backend is not found or table_name is invalid
     """
+    _validated_fixture_name(table_name)
     if storage_backend == "local":
         uri = "file://"
         storage_kwargs["base_path"] = _resolve_path_str(fixtures_path)
@@ -561,6 +567,20 @@ def _compress_text(content: str) -> bytes:
     return gzip.compress(content.encode("utf-8"))
 
 
+def _read_zip_member(zf: zipfile.ZipFile, member_name: str) -> str:
+    """Read and decode a single JSON member from a ZIP archive with size bounds checking."""
+    info = zf.getinfo(member_name)
+    if info.file_size > _MAX_ZIP_FIXTURE_BYTES:
+        msg = f"ZIP fixture member {member_name!r} exceeds maximum allowed size ({_MAX_ZIP_FIXTURE_BYTES} bytes)"
+        raise ValueError(msg)
+    with zf.open(member_name) as member_file:
+        data = member_file.read(_MAX_ZIP_FIXTURE_BYTES + 1)
+    if len(data) > _MAX_ZIP_FIXTURE_BYTES:
+        msg = f"ZIP fixture member {member_name!r} exceeds maximum allowed size ({_MAX_ZIP_FIXTURE_BYTES} bytes)"
+        raise ValueError(msg)
+    return data.decode("utf-8")
+
+
 def _read_compressed_file(file_path: Path) -> str:
     """Read and decompress a file based on its extension.
 
@@ -580,12 +600,10 @@ def _read_compressed_file(file_path: Path) -> str:
         with zipfile.ZipFile(file_path, "r") as zf:
             json_name = file_path.stem + ".json"
             if json_name in zf.namelist():
-                with zf.open(json_name) as f:
-                    return f.read().decode("utf-8")
+                return _read_zip_member(zf, json_name)
             json_files = [name for name in zf.namelist() if name.endswith(".json")]
             if json_files:
-                with zf.open(json_files[0]) as f:
-                    return f.read().decode("utf-8")
+                return _read_zip_member(zf, json_files[0])
             msg = f"No JSON file found in ZIP archive: {file_path}"
             raise ValueError(msg)
     else:
@@ -605,11 +623,16 @@ def _find_fixture_file(fixtures_path: Any, fixture_name: str) -> Path:
 
     Raises:
         FileNotFoundError: If no fixture file is found
+        ValueError: If fixture_name contains path traversal segments
     """
-    base_path = Path(fixtures_path)
+    validated_name = _validated_fixture_name(fixture_name)
+    base_path = Path(fixtures_path).resolve()
 
     for extension in [".json", ".json.gz", ".json.zip"]:
-        fixture_path = base_path / f"{fixture_name}{extension}"
+        fixture_path = (base_path / f"{validated_name}{extension}").resolve()
+        if not fixture_path.is_relative_to(base_path):
+            msg = f"Invalid fixture name: {fixture_name!r}"
+            raise ValueError(msg)
         if fixture_path.exists():
             return fixture_path
 
@@ -640,6 +663,26 @@ def _serialize_data(data: Any) -> str:
         return encode_json(data)
 
     return encode_json(schema_dump(data))
+
+
+def _validated_fixture_name(name: str) -> str:
+    """Return the fixture name when it is a safe single-segment file stem.
+
+    Raises:
+        ValueError: If the name is empty or contains path separators or traversal segments.
+    """
+    candidate = Path(name)
+    if (
+        not name
+        or candidate.is_absolute()
+        or len(candidate.parts) != 1
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+    ):
+        msg = f"Invalid fixture name: {name!r}"
+        raise ValueError(msg)
+    return name
 
 
 def _validated_table_name(name: str) -> str:
@@ -931,6 +974,13 @@ def _table_columns_sync(driver: "SyncDriverAdapterBase", family: str, table: str
         return []
     table_name, schema_name = _column_lookup_names(family, table)
     rows = driver.data_dictionary.get_columns(driver, table=table_name, schema=schema_name)
+    if not rows and family == "postgres" and schema_name is None:
+        with contextlib.suppress(Exception):
+            active_schema = driver.select_value_or_none("SELECT current_schema()")
+            if isinstance(active_schema, str) and active_schema:
+                rows = driver.data_dictionary.get_columns(
+                    driver, table=table_name, schema=_quoted_identifier_sql(active_schema)
+                )
     return [_table_column(row) for row in rows]
 
 
@@ -940,6 +990,13 @@ async def _table_columns_async(driver: "AsyncDriverAdapterBase", family: str, ta
         return []
     table_name, schema_name = _column_lookup_names(family, table)
     rows = await driver.data_dictionary.get_columns(driver, table=table_name, schema=schema_name)
+    if not rows and family == "postgres" and schema_name is None:
+        with contextlib.suppress(Exception):
+            active_schema = await driver.select_value_or_none("SELECT current_schema()")
+            if isinstance(active_schema, str) and active_schema:
+                rows = await driver.data_dictionary.get_columns(
+                    driver, table=table_name, schema=_quoted_identifier_sql(active_schema)
+                )
     return [_table_column(row) for row in rows]
 
 
@@ -1182,9 +1239,8 @@ def _table_insert_statement(
         )
     if family != "postgres" or always_identity.isdisjoint(columns):
         return statement
-    return insert_expression.sql(dialect=dialect, copy=False).replace(
-        ") VALUES (", ") OVERRIDING SYSTEM VALUE VALUES (", 1
-    )
+    rendered_sql = insert_expression.sql(dialect=dialect, copy=False)
+    return _INSERT_VALUES_CLAUSE_PATTERN.sub(") OVERRIDING SYSTEM VALUE VALUES (", rendered_sql, count=1)
 
 
 def _insert_table_rows_sync(
@@ -1255,7 +1311,6 @@ def _table_export_query(dialect: "DialectType", table: str, table_columns: "list
         for column in table_columns:
             expression = exp.Column(this=_quoted_identifier(column.name))
             if column.data_type in _JSON_TYPE_NAMES:
-                # Normalize native JSON decoding across drivers before reading scalar strings.
                 projections.append(
                     exp.Alias(
                         this=exp.Cast(this=expression, to=exp.DataType(this=exp.DataType.Type.TEXT)),
@@ -1276,7 +1331,7 @@ def _sequence_resync_enabled(resync_sequences: bool, dialect_name: str, family: 
     """Return whether sequence resync applies, logging when it is skipped for the dialect."""
     if not resync_sequences:
         return False
-    if family == "postgres":
+    if dialect_name in _PG_SEQUENCE_DIALECTS:
         return True
     logger.debug("Skipping table fixture sequence resync for non-PostgreSQL dialect %r", dialect_name or None)
     return False

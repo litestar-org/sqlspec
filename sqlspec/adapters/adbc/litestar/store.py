@@ -16,6 +16,7 @@ Supports:
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from sqlspec.adapters.adbc.core import is_postgres_dialect
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
 
@@ -155,7 +156,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """
         dialect = self._get_dialect()
 
-        if dialect in {"postgres", "postgresql"}:
+        if is_postgres_dialect(dialect):
             return f"""
             CREATE TABLE IF NOT EXISTS {self._table_name} (
                 session_id TEXT PRIMARY KEY,
@@ -205,9 +206,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 session_id STRING NOT NULL,
                 data BYTES NOT NULL,
                 expires_at TIMESTAMP
-            );
-            CREATE INDEX idx_{self._table_name}_expires_at
-            ON {self._table_name}(expires_at);
+            )
             """
 
         if dialect == "snowflake":
@@ -216,9 +215,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 session_id VARCHAR(255) PRIMARY KEY,
                 data BINARY NOT NULL,
                 expires_at TIMESTAMP WITH TIME ZONE
-            );
-            CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
-            ON {self._table_name}(expires_at);
+            )
             """
 
         return f"""
@@ -242,7 +239,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """
         dialect = self._get_dialect()
 
-        if dialect in {"postgres", "postgresql"}:
+        if is_postgres_dialect(dialect):
             return f"${position}"
         if dialect in {"mysql", "mariadb"}:
             return "%s"
@@ -258,7 +255,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """
         dialect = self._get_dialect()
 
-        if dialect in {"postgres", "postgresql"}:
+        if is_postgres_dialect(dialect):
             return "CURRENT_TIMESTAMP AT TIME ZONE 'UTC'"
         if dialect in {"mysql", "mariadb"}:
             return "UTC_TIMESTAMP()"
@@ -283,6 +280,9 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             List of SQL statements to drop indexes and table.
         """
         dialect = self._get_dialect()
+
+        if dialect in {"bigquery", "snowflake"}:
+            return [f"DROP TABLE IF EXISTS {self._table_name}"]
 
         if dialect in {"mysql", "mariadb"}:
             return [
@@ -327,7 +327,12 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             return bytes(data)
 
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
-        """Synchronous implementation of set using ADBC driver with dialect-specific UPSERT."""
+        """Synchronous implementation of set using ADBC driver with dialect-specific UPSERT.
+
+        Uses separate SQL statements for ``NULL`` vs non-``NULL`` ``expires_at``
+        on PostgreSQL, DuckDB, BigQuery, and Snowflake so ADBC Arrow parameter
+        binding does not infer an untyped ``na`` Arrow array from ``None``.
+        """
         data = self._value_to_bytes(value)
         expires_at = self._calculate_expires_at(expires_in)
         dialect = self._get_dialect()
@@ -336,15 +341,13 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         p2 = self._get_param_placeholder(2)
         p3 = self._get_param_placeholder(3)
 
-        if dialect in {"postgres", "postgresql", "sqlite", "duckdb"}:
+        if is_postgres_dialect(dialect) or dialect in {"sqlite", "duckdb"}:
             if dialect == "sqlite":
                 sql = f"""
                 INSERT OR REPLACE INTO {self._table_name} (session_id, data, expires_at)
                 VALUES ({p1}, {p2}, {p3})
                 """
-            elif dialect in {"postgres", "postgresql"}:
-                # ADBC Arrow driver cannot infer type from Python None, causing 'na' type error.
-                # Use separate SQL statements for NULL vs non-NULL expires_at to avoid the issue.
+            elif is_postgres_dialect(dialect):
                 if expires_at is None:
                     sql = f"""
                     INSERT INTO {self._table_name} (session_id, data, expires_at)
@@ -363,7 +366,6 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at
                 """
             else:
-                # DuckDB: Same issue with Arrow 'na' type for None values
                 if expires_at is None:
                     sql = f"""
                     INSERT INTO {self._table_name} (session_id, data, expires_at)
@@ -394,12 +396,26 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
                 exists = result and result.get("count", 0) > 0
 
                 if exists:
+                    if expires_at is None:
+                        sql = f"""
+                        UPDATE {self._table_name}
+                        SET data = {p1}, expires_at = NULL
+                        WHERE session_id = {p2}
+                        """
+                        driver.execute(sql, data, key)
+                    else:
+                        sql = f"""
+                        UPDATE {self._table_name}
+                        SET data = {p1}, expires_at = {p2}
+                        WHERE session_id = {p3}
+                        """
+                        driver.execute(sql, data, expires_at, key)
+                elif expires_at is None:
                     sql = f"""
-                    UPDATE {self._table_name}
-                    SET data = {p1}, expires_at = {p2}
-                    WHERE session_id = {p3}
+                    INSERT INTO {self._table_name} (session_id, data, expires_at)
+                    VALUES ({p1}, {p2}, NULL)
                     """
-                    driver.execute(sql, data, expires_at, key)
+                    driver.execute(sql, key, data)
                 else:
                     sql = f"""
                     INSERT INTO {self._table_name} (session_id, data, expires_at)
@@ -462,7 +478,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         """
 
         with self._config.provide_session() as driver:
-            result = driver.select_one(sql, key)
+            result = driver.select_one_or_none(sql, key)
 
             if result is None or result.get("expires_at") is None:
                 return None
@@ -488,7 +504,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
         current_ts = self._get_current_timestamp_expr()
         dialect = self._get_dialect()
 
-        if dialect in {"postgres", "postgresql"}:
+        if is_postgres_dialect(dialect):
             sql = f"DELETE FROM {self._table_name} WHERE expires_at <= {current_ts} RETURNING session_id"
         else:
             count_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE expires_at <= {current_ts}"

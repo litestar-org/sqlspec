@@ -204,7 +204,7 @@ def ensure_schema_sync(
         changed = True
 
     if changed:
-        driver.commit()
+        _commit_schema_sync(driver)
     return result
 
 
@@ -291,8 +291,34 @@ async def ensure_schema_async(
         changed = True
 
     if changed:
-        await driver.commit()
+        await _commit_schema_async(driver)
     return result
+
+
+def _commit_schema_sync(driver: Any) -> None:
+    """Commit schema changes on a sync driver unless autocommit is enabled."""
+    driver_features = getattr(driver, "driver_features", None)
+    if isinstance(driver_features, Mapping) and driver_features.get("autocommit", False):
+        return
+    try:
+        driver.commit()
+    except Exception as exc:
+        exc_str = str(exc).lower()
+        if "autocommit" not in exc_str and "cannot commit" not in exc_str:
+            raise
+
+
+async def _commit_schema_async(driver: Any) -> None:
+    """Commit schema changes on an async driver unless autocommit is enabled."""
+    driver_features = getattr(driver, "driver_features", None)
+    if isinstance(driver_features, Mapping) and driver_features.get("autocommit", False):
+        return
+    try:
+        await driver.commit()
+    except Exception as exc:
+        exc_str = str(exc).lower()
+        if "autocommit" not in exc_str and "cannot commit" not in exc_str:
+            raise
 
 
 def _execute_create_sync(driver: Any, target: SchemaTarget) -> None:

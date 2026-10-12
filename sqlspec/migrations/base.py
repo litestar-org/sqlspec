@@ -1,5 +1,6 @@
 """Base classes for SQLSpec migrations."""
 
+import importlib
 import os
 from abc import abstractmethod
 from pathlib import Path
@@ -78,8 +79,6 @@ class AppliedMigrationRecord(TypedDict):
 class BaseMigrationTracker(Generic[DriverT]):
     """Base class for migration version tracking."""
 
-    __slots__ = ("_output_policy", "version_table", "version_table_name", "version_table_schema")
-
     def __init__(self, version_table_name: str = "ddl_migrations", version_table_schema: str | None = None) -> None:
         """Initialize the migration tracker.
 
@@ -150,13 +149,20 @@ class BaseMigrationTracker(Generic[DriverT]):
 
     @abstractmethod
     def record_migration(
-        self, driver: DriverT, version: str, description: str, execution_time_ms: int, checksum: str
+        self,
+        driver: DriverT,
+        version: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        *,
+        commit: bool = True,
     ) -> "Awaitable[None] | None":
         """Record a successfully applied migration."""
         ...
 
     @abstractmethod
-    def remove_migration(self, driver: DriverT, version: str) -> "Awaitable[None] | None":
+    def remove_migration(self, driver: DriverT, version: str, *, commit: bool = True) -> "Awaitable[None] | None":
         """Remove a migration record."""
         ...
 
@@ -461,9 +467,7 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
             directory: Directory to initialize migrations in.
             package: Whether to create __init__.py file.
         """
-        from rich.console import Console
-
-        console = Console()
+        console = importlib.import_module("rich.console").Console()
 
         migrations_dir = Path(directory)
         migrations_dir.mkdir(parents=True, exist_ok=True)
@@ -706,16 +710,24 @@ out-of-order migrations gracefully.
         self, all_migrations: "list[tuple[str, Path]]", applied_set: set[str], revision: str
     ) -> "list[tuple[str, Path]]":
         """Collect pending migrations that need to be applied."""
+        applied_parsed = set()
+        for applied_version in applied_set:
+            try:
+                applied_parsed.add(parse_version(applied_version))
+            except ValueError:
+                continue
         pending = []
+        parsed_revision = parse_version(revision) if revision != "head" else None
         for version, file_path in all_migrations:
-            if version not in applied_set:
-                if revision == "head":
-                    pending.append((version, file_path))
-                else:
-                    parsed_version = parse_version(version)
-                    parsed_revision = parse_version(revision)
-                    if parsed_version <= parsed_revision:
-                        pending.append((version, file_path))
+            if version in applied_set:
+                continue
+            parsed_version = parse_version(version)
+            if parsed_version in applied_parsed:
+                continue
+            if parsed_revision is None or (
+                parsed_version.extension == parsed_revision.extension and parsed_version <= parsed_revision
+            ):
+                pending.append((version, file_path))
         return pending
 
     def _collect_revert_migrations(
@@ -730,7 +742,10 @@ out-of-order migrations gracefully.
         to_revert = []
         for migration in applied[::-1]:
             parsed_migration_version = parse_version(migration["version_num"])
-            if parsed_migration_version > parsed_revision:
+            if (
+                parsed_migration_version.extension == parsed_revision.extension
+                and parsed_migration_version > parsed_revision
+            ):
                 to_revert.append(migration)
         return to_revert
 

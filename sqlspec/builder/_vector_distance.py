@@ -91,6 +91,8 @@ def render_vector_distance_postgres(left: str, right: str, metric: str) -> str:
     """Render PostgreSQL pgvector operator syntax."""
     operator = _POSTGRES_OPERATOR_MAP.get(metric)
     if operator:
+        if right.startswith("ARRAY["):
+            right = f"CAST({right} AS VECTOR)"
         return f"{left} {operator} {right}"
 
     return render_vector_distance_generic(left, right, metric)
@@ -100,8 +102,14 @@ def render_vector_distance_mysql(left: str, right: str, metric: str) -> str:
     """Render MySQL DISTANCE function syntax."""
     mysql_metric = _MYSQL_METRIC_MAP.get(metric, "EUCLIDEAN")
 
-    if ("ARRAY" in right or "[" in right) and "STRING_TO_VECTOR" not in right:
-        right = f"STRING_TO_VECTOR({right})"
+    if "STRING_TO_VECTOR" not in right:
+        if right.startswith("ARRAY[") and right.endswith("]"):
+            inner = right[len("ARRAY[") : -1]
+            right = f"STRING_TO_VECTOR('[{inner}]')"
+        elif right.startswith("[") and right.endswith("]"):
+            right = f"STRING_TO_VECTOR('{right}')"
+        elif right.startswith("'[") and right.endswith("]'"):
+            right = f"STRING_TO_VECTOR({right})"
 
     return f"DISTANCE({left}, {right}, '{mysql_metric}')"
 
@@ -110,8 +118,14 @@ def render_vector_distance_oracle(left: str, right: str, metric: str) -> str:
     """Render Oracle VECTOR_DISTANCE function syntax."""
     oracle_metric = _ORACLE_METRIC_MAP.get(metric, "EUCLIDEAN")
 
-    if ("[" in right or "ARRAY" in right) and "TO_VECTOR" not in right:
-        right = f"TO_VECTOR({right})"
+    if "TO_VECTOR" not in right:
+        if right.startswith("ARRAY[") and right.endswith("]"):
+            inner = right[len("ARRAY[") : -1]
+            right = f"TO_VECTOR('[{inner}]')"
+        elif right.startswith("[") and right.endswith("]"):
+            right = f"TO_VECTOR('{right}')"
+        elif right.startswith("'[") and right.endswith("]'"):
+            right = f"TO_VECTOR({right})"
 
     return f"VECTOR_DISTANCE({left}, {right}, {oracle_metric})"
 
@@ -145,9 +159,19 @@ def _render_with_metric(generator: "Generator", expression: exp.Operator, dialec
     right_sql = generator.sql(expression, "expression")
     metric = vector_distance_metric(expression)
 
+    dialect_class = getattr(generator.dialect, "__class__", None)
+    if dialect_class is not None and dialect_class.__name__ == "Spangres":
+        dialect = "bigquery"
+
     if dialect == "postgres":
         return render_vector_distance_postgres(left_sql, right_sql, metric)
     if dialect == "mysql":
+        if isinstance(expression.expression, exp.Array):
+            values = [
+                str(item.this) if isinstance(item, exp.Literal) else generator.sql(item)
+                for item in expression.expression.expressions
+            ]
+            right_sql = f"STRING_TO_VECTOR('[{', '.join(values)}]')"
         return render_vector_distance_mysql(left_sql, right_sql, metric)
     if dialect == "oracle":
         if isinstance(expression.expression, exp.Array):
@@ -238,8 +262,6 @@ def _register_with_sqlglot() -> None:
     from sqlglot.dialects.postgres import Postgres
     from sqlglot.generator import Generator
 
-    # The sqlspec Spanner and Spangres dialects alias the BigQuery and Postgres
-    # generator classes, so registering on the base TRANSFORMS dicts covers them.
     _BASE_OPERATOR_TRANSFORM = cast("_OperatorTransform", Generator.TRANSFORMS[exp.Operator])
     _POSTGRES_OPERATOR_TRANSFORM = cast("_OperatorTransform", Postgres.Generator.TRANSFORMS[exp.Operator])
     _MYSQL_OPERATOR_TRANSFORM = cast("_OperatorTransform", MySQL.Generator.TRANSFORMS[exp.Operator])

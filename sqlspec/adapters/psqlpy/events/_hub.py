@@ -207,15 +207,17 @@ class PsqlpyListenerHub:
         self._callbacks[channel] = callback
         try:
             await listener.add_callback(channel=channel, callback=callback.__call__)
-        except Exception:
+            if self._listener_started:
+                listener.abort_listen()
+            listener.listen()
+            self._listener_started = True
+            await self._wait_until_ready(channel, timeout=ready_timeout)
+        except BaseException:
             self._queues.pop(channel, None)
             self._callbacks.pop(channel, None)
+            with contextlib.suppress(Exception):
+                await listener.clear_channel_callbacks(channel=channel)
             raise
-        if self._listener_started:
-            listener.abort_listen()
-        listener.listen()
-        self._listener_started = True
-        await self._wait_until_ready(channel, timeout=ready_timeout)
         return consumer_queue
 
     async def _ensure_listener_locked(self) -> "PsqlpyListener":

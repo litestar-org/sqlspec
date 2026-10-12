@@ -1,7 +1,7 @@
 """AsyncPG adapter compiled helpers."""
 
 import contextlib
-import datetime
+import datetime as dt
 import re
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, NamedTuple
@@ -190,9 +190,10 @@ async def invoke_prepared_statement(
         return prepared.get_statusmsg()
 
     if isinstance(parameters, dict):
+        values = tuple(parameters.values())
         if fetch:
-            return await prepared.fetch(**parameters, **kwargs)
-        await prepared.fetch(**parameters, **kwargs)
+            return await prepared.fetch(*values, **kwargs)
+        await prepared.fetch(*values, **kwargs)
         return prepared.get_statusmsg()
 
     if fetch:
@@ -277,6 +278,8 @@ def apply_driver_features(
     processed_features.setdefault("enable_pg_textsearch", True)
     processed_features.setdefault("enable_cloud_sql", False)
     processed_features.setdefault("enable_alloydb", False)
+    processed_features.setdefault("enable_events", True)
+    processed_features.setdefault("events_backend", "notify")
 
     parameter_config = configure_parameter_serializers(
         statement_config.parameter_config, serializer, deserializer=deserializer
@@ -394,7 +397,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             return _create_postgres_error(error, error_code, termination_class, description)
         return _create_postgres_error(error, error_code, error_class, description)
 
-    # Priority 2: Fall back to SQLSTATE code mapping using centralized utility
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     sqlstate_code: str | None = sqlstate_attr if sqlstate_attr is not None else None
     if sqlstate_code:
@@ -405,7 +407,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         if exc_class:
             return _create_postgres_error(error, sqlstate_code, exc_class, "database error")
 
-    # Priority 3: Default fallback
     return _create_postgres_error(error, sqlstate_code, SQLSpecError, "database error")
 
 
@@ -453,17 +454,6 @@ class AsyncpgStreamSource:
         await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    async def _start(self) -> None:
-        transaction = self._driver.connection.transaction()
-        await transaction.start()
-        self._transaction = transaction
-        try:
-            self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, **self._timeout_args)
-        except BaseException:
-            await transaction.rollback()
-            self._transaction = None
-            raise
-
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         records = await self._driver._run_with_exception_handler(
@@ -487,12 +477,29 @@ class AsyncpgStreamSource:
                 with contextlib.suppress(Exception):
                     await transaction.rollback()
 
+    async def _start(self) -> None:
+        in_tx_fn = getattr(self._driver, "_connection_in_transaction", None)
+        already_in_tx = bool(in_tx_fn()) if callable(in_tx_fn) else False
+        if not already_in_tx:
+            transaction = self._driver.connection.transaction()
+            await transaction.start()
+            self._transaction = transaction
+        try:
+            self._cursor = await self._driver.connection.cursor(self._sql, *self._parameters, **self._timeout_args)
+        except BaseException:
+            transaction = self._transaction
+            self._transaction = None
+            if transaction is not None:
+                with contextlib.suppress(Exception):
+                    await transaction.rollback()
+            raise
+
 
 def _convert_datetime_param(value: Any) -> Any:
     """Convert datetime parameter, handling ISO strings."""
 
     if isinstance(value, str):
-        return datetime.datetime.fromisoformat(value)
+        return dt.datetime.fromisoformat(value)
     return value
 
 
@@ -500,7 +507,7 @@ def _convert_date_param(value: Any) -> Any:
     """Convert date parameter, handling ISO strings."""
 
     if isinstance(value, str):
-        return datetime.date.fromisoformat(value)
+        return dt.date.fromisoformat(value)
     return value
 
 
@@ -508,7 +515,7 @@ def _convert_time_param(value: Any) -> Any:
     """Convert time parameter, handling ISO strings."""
 
     if isinstance(value, str):
-        return datetime.time.fromisoformat(value)
+        return dt.time.fromisoformat(value)
     return value
 
 
@@ -516,30 +523,45 @@ def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for AsyncPG."""
 
     return {
-        datetime.datetime: _convert_datetime_param,
-        datetime.date: _convert_date_param,
-        datetime.time: _convert_time_param,
+        dt.datetime: _convert_datetime_param,
+        dt.date: _convert_date_param,
+        dt.time: _convert_time_param,
         **build_uuid_coercions(native=True),
     }
 
 
+def _is_pre_serialized_json(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    first = stripped[0]
+    if first not in '{["-0123456789tfn':
+        return False
+    try:
+        from_json(stripped)
+    except Exception:
+        return False
+    return True
+
+
 def _encode_json_payload(value: Any, encoder: "Callable[[Any], str]") -> bytes:
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, bytearray):
-        return bytes(value)
-    if isinstance(value, memoryview):
-        return value.tobytes()
-    if isinstance(value, str):
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw_bytes = value.tobytes() if isinstance(value, memoryview) else bytes(value)
+        if raw_bytes.startswith(_JSONB_BINARY_VERSION):
+            return raw_bytes[1:]
+        return raw_bytes
+    if isinstance(value, str) and _is_pre_serialized_json(value):
         return value.encode("utf-8")
 
-    encoded = encoder(value)
+    encoded: Any = encoder(value)
     if isinstance(encoded, bytes):
-        return encoded
+        return encoded[1:] if encoded.startswith(_JSONB_BINARY_VERSION) else encoded
     if isinstance(encoded, bytearray):
-        return bytes(encoded)
+        raw_encoded = bytes(encoded)
+        return raw_encoded[1:] if raw_encoded.startswith(_JSONB_BINARY_VERSION) else raw_encoded
     if isinstance(encoded, memoryview):
-        return encoded.tobytes()
+        raw_encoded = encoded.tobytes()
+        return raw_encoded[1:] if raw_encoded.startswith(_JSONB_BINARY_VERSION) else raw_encoded
     return str(encoded).encode("utf-8")
 
 

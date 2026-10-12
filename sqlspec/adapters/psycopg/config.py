@@ -1,5 +1,6 @@
 """Psycopg database configuration with direct field-based configuration."""
 
+from collections.abc import Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
 
@@ -50,7 +51,7 @@ from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable
     from types import TracebackType
 
     from sqlspec.adapters.psycopg._typing import PsycopgAdaptContext as AdaptContext
@@ -250,7 +251,10 @@ class PsycopgSyncConnectionContext(SyncPoolConnectionContext):
     ) -> bool | None:
         if self._ctx is None:
             return None
-        return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
+        try:
+            return cast("bool | None", self._ctx.__exit__(exc_type, exc_val, exc_tb))
+        finally:
+            self._ctx = None
 
 
 class _PsycopgSyncSessionConnectionHandler(SyncPoolSessionFactory):
@@ -319,8 +323,8 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.pop(
-            "on_connection_create", None
+        self._user_connection_hook: Callable[[PsycopgSyncConnection], None] | None = features_dict.get(
+            "on_connection_create"
         )
         features_dict.setdefault("enable_alloydb", False)
         features_dict.setdefault("enable_alloydb_iam_auth", False)
@@ -343,6 +347,94 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         )
 
         self._validate_alloydb_config()
+
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
+
+    def create_connection(self) -> "PsycopgSyncConnection":
+        """Open a standalone connection owned by the caller.
+
+        The connection is not bound to the pool, so closing it actually closes
+        it and consumes no pool slot.
+
+        Returns:
+            A psycopg Connection instance.
+        """
+        connection_class, conninfo, connection_kwargs = self._connection_kwargs()
+        connection = connection_class.connect(conninfo, **connection_kwargs)
+        user_configure = self.connection_config.get("configure")
+        try:
+            self._configure_connection(cast("PsycopgSyncConnection", connection))
+            if user_configure is not None and user_configure is not self._configure_connection:
+                user_configure(cast("PsycopgSyncConnection", connection))
+        except BaseException:
+            with suppress(Exception):
+                connection.close()
+            raise
+        return cast("PsycopgSyncConnection", connection)
+
+    def provide_session(
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "PsycopgSyncSessionContext":
+        """Provide a driver session context manager.
+
+        Args:
+            *_args: Additional arguments.
+            statement_config: Optional statement configuration override.
+            **_kwargs: Additional keyword arguments.
+
+        Returns:
+            A PsycopgSyncDriver session context manager.
+        """
+        handler = _PsycopgSyncSessionConnectionHandler(self)
+
+        return PsycopgSyncSessionContext(
+            acquire_connection=handler.acquire_connection,
+            release_connection=handler.release_connection,
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
+
+    def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
+        """Provide pool instance.
+
+        Returns:
+            The connection pool.
+        """
+        if not self.connection_instance:
+            self.connection_instance = self.create_pool()
+        return self.connection_instance
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for Psycopg types.
+
+        This provides all Psycopg-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "PsycopgConnectionParams": PsycopgConnectionParams,
+            "PsycopgPoolParams": PsycopgPoolParams,
+            "PsycopgSyncConnectionContext": PsycopgSyncConnectionContext,
+            "PsycopgSyncConnection": PsycopgSyncConnection,
+            "PsycopgSyncCursor": PsycopgSyncCursor,
+            "PsycopgSyncDriver": PsycopgSyncDriver,
+            "PsycopgSyncExceptionHandler": PsycopgSyncExceptionHandler,
+            "PsycopgSyncSessionContext": PsycopgSyncSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for PostgreSQL queue fallback."""
+
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
     def _validate_alloydb_config(self) -> None:
         """Validate sync-only AlloyDB connector configuration."""
@@ -415,7 +507,16 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             "close_returns": all_config.pop("close_returns", False),
         }
 
-        pool_parameters["configure"] = all_config.pop("configure", self._configure_connection)
+        user_configure = all_config.pop("configure", None)
+        if user_configure is not None and user_configure is not self._configure_connection:
+
+            def _chained_configure(conn: "PsycopgSyncConnection") -> None:
+                self._configure_connection(conn)
+                user_configure(conn)
+
+            pool_parameters["configure"] = _chained_configure
+        else:
+            pool_parameters["configure"] = self._configure_connection
 
         pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
 
@@ -455,34 +556,36 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         if self._pgvector_available is None:
             detected_extensions: set[str] = set()
             extensions = build_postgres_extension_probe_names(self.driver_features)
+            probe_succeeded = True
             if extensions:
                 try:
                     cursor = conn.execute(
                         "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
                     )
                     results = cursor.fetchall()
-                    detected_extensions = {r[0] for r in results}  # type: ignore[index]
+                    detected_extensions = {
+                        cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
+                    }
                 except Exception as exc:
-                    detected_extensions = set()
+                    probe_succeeded = False
                     self._pg_textsearch_probe_error = exc
-            self.statement_config, self._pgvector_available, self._paradedb_available = (
-                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-            )
-            self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+                    if not conn.autocommit:
+                        with suppress(Exception):
+                            conn.rollback()
+            if probe_succeeded:
+                self.statement_config, self._pgvector_available, self._paradedb_available = (
+                    resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
+                )
+                self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
 
         if self._pgvector_available:
             register_pgvector_sync(conn)
 
-        if not conn.autocommit:
-            conn.rollback()
-
         if self._user_connection_hook is not None:
             self._user_connection_hook(conn)
 
-    @property
-    def pg_textsearch_available(self) -> bool:
-        """Return True if the pg_textsearch extension is available."""
-        return bool(self._pg_textsearch_available)
+        if not conn.autocommit:
+            conn.rollback()
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:
@@ -520,87 +623,6 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
             conninfo = None
         return cast("type[Any]", connection_class), str(conninfo or ""), all_config
 
-    def create_connection(self) -> "PsycopgSyncConnection":
-        """Open a standalone connection owned by the caller.
-
-        The connection is not bound to the pool, so closing it actually closes
-        it and consumes no pool slot.
-
-        Returns:
-            A psycopg Connection instance.
-        """
-        connection_class, conninfo, connection_kwargs = self._connection_kwargs()
-        connection = connection_class.connect(conninfo, **connection_kwargs)
-        configure = self.connection_config.get("configure", self._configure_connection)
-        try:
-            configure(cast("PsycopgSyncConnection", connection))
-        except BaseException:
-            with suppress(Exception):
-                connection.close()
-            raise
-        return cast("PsycopgSyncConnection", connection)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "PsycopgSyncSessionContext":
-        """Provide a driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            A PsycopgSyncDriver session context manager.
-        """
-        handler = _PsycopgSyncSessionConnectionHandler(self)
-
-        return PsycopgSyncSessionContext(
-            acquire_connection=handler.acquire_connection,
-            release_connection=handler.release_connection,
-            statement_config=statement_config
-            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
-
-    def provide_pool(self, *args: Any, **kwargs: Any) -> "ConnectionPool":
-        """Provide pool instance.
-
-        Returns:
-            The connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = self.create_pool()
-        return self.connection_instance
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for Psycopg types.
-
-        This provides all Psycopg-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "PsycopgConnectionParams": PsycopgConnectionParams,
-            "PsycopgPoolParams": PsycopgPoolParams,
-            "PsycopgSyncConnectionContext": PsycopgSyncConnectionContext,
-            "PsycopgSyncConnection": PsycopgSyncConnection,
-            "PsycopgSyncCursor": PsycopgSyncCursor,
-            "PsycopgSyncDriver": PsycopgSyncDriver,
-            "PsycopgSyncExceptionHandler": PsycopgSyncExceptionHandler,
-            "PsycopgSyncSessionContext": PsycopgSyncSessionContext,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return polling defaults for PostgreSQL queue fallback."""
-
-        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
-
 
 class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
     """Async context manager for Psycopg connections."""
@@ -612,19 +634,18 @@ class PsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
         self._ctx: Any = None
 
     async def __aenter__(self) -> "PsycopgAsyncConnection":
-        if self._config.connection_instance is None:
-            self._config.connection_instance = await self._config.create_pool()
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
-        msg = "Connection pool not initialized"
-        raise ImproperConfigurationError(msg)
+        pool = await self._config.provide_pool()
+        self._ctx = pool.connection()
+        return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
-            return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
+            try:
+                return cast("bool | None", await self._ctx.__aexit__(exc_type, exc_val, exc_tb))
+            finally:
+                self._ctx = None
         return None
 
 
@@ -636,16 +657,17 @@ class _PsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
         self._ctx: Any = None
 
     async def acquire_connection(self) -> "PsycopgAsyncConnection":
-        if self._config.connection_instance is None:
-            self._config.connection_instance = await self._config.create_pool()
-        self._ctx = self._config.connection_instance.connection()
+        pool = await self._config.provide_pool()
+        self._ctx = pool.connection()
         return cast("PsycopgAsyncConnection", await self._ctx.__aenter__())
 
     async def release_connection(self, _conn: "PsycopgAsyncConnection", **kwargs: Any) -> None:
         if self._ctx is None:
             return
-        await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
-        self._ctx = None
+        try:
+            await self._ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
+        finally:
+            self._ctx = None
 
 
 @mypyc_attr(native_class=False)
@@ -701,8 +723,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.pop(
-            "on_connection_create", None
+        if features_dict.get("enable_alloydb", False):
+            msg = "Google AlloyDB connector integration (enable_alloydb) is only supported on PsycopgSyncConfig"
+            raise ImproperConfigurationError(msg)
+        self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.get(
+            "on_connection_create"
         )
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
@@ -720,124 +745,10 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             **kwargs,
         )
 
-    async def _create_pool(self) -> "AsyncConnectionPool":
-        """Create the actual async connection pool."""
-
-        all_config = dict(self.connection_config)
-        all_config.pop("null_pool", None)
-
-        pool_parameters = {
-            "connection_class": all_config.pop("connection_class", None),
-            "min_size": all_config.pop("min_size", 4),
-            "max_size": all_config.pop("max_size", None),
-            "name": all_config.pop("name", None),
-            "timeout": all_config.pop("timeout", 30.0),
-            "max_waiting": all_config.pop("max_waiting", 0),
-            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
-            "max_idle": all_config.pop("max_idle", 600.0),
-            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
-            "reconnect_failed": all_config.pop("reconnect_failed", None),
-            "num_workers": all_config.pop("num_workers", 3),
-            "check": all_config.pop("check", None),
-            "reset": all_config.pop("reset", None),
-            "close_returns": all_config.pop("close_returns", False),
-        }
-        open_pool = all_config.pop("open", True)
-        pool_parameters["open"] = False if open_pool is True else open_pool
-
-        pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
-
-        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
-
-        conninfo = all_config.pop("conninfo", None)
-        kwargs = all_config.pop("kwargs", {})
-        all_config.update(kwargs)
-
-        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
-        pool_cls = AsyncNullConnectionPool if is_null_pool else AsyncConnectionPool
-        if is_null_pool:
-            pool_parameters.pop("min_size", None)
-
-        if conninfo:
-            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
-        else:
-            pool = pool_cls("", kwargs=all_config, **pool_parameters)
-
-        if open_pool is True:
-            await pool.open()
-
-        return pool
-
-    async def _configure_async_connection(self, conn: "PsycopgAsyncConnection") -> None:
-        autocommit_setting = self.connection_config.get("autocommit")
-        if autocommit_setting is not None:
-            await conn.set_autocommit(autocommit_setting)
-
-        serializer = self.driver_features.get("json_serializer", to_json)
-        deserializer = self.driver_features.get("json_deserializer", from_json)
-        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
-            set_json_dumps(serializer, conn)
-            set_json_loads(deserializer, conn)
-
-        if self._pgvector_available is None:
-            detected_extensions: set[str] = set()
-            extensions = build_postgres_extension_probe_names(self.driver_features)
-            if extensions:
-                try:
-                    cursor = await conn.execute(
-                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
-                    )
-                    results = await cursor.fetchall()
-                    detected_extensions = {r[0] for r in results}  # type: ignore[index]
-                except Exception as exc:
-                    detected_extensions = set()
-                    self._pg_textsearch_probe_error = exc
-            self.statement_config, self._pgvector_available, self._paradedb_available = (
-                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-            )
-            self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
-
-        if self._pgvector_available:
-            await register_pgvector_async(conn)
-
-        if not conn.autocommit:
-            await conn.rollback()
-
-        if self._user_connection_hook is not None:
-            await self._user_connection_hook(conn)
-
     @property
     def pg_textsearch_available(self) -> bool:
         """Return True if the pg_textsearch extension is available."""
         return bool(self._pg_textsearch_available)
-
-    def _ensure_pg_textsearch_available(self) -> None:
-        if self._pg_textsearch_available:
-            return
-        msg = "ADK memory enable_bm25 requires the pg_textsearch PostgreSQL extension"
-        raise ImproperConfigurationError(msg) from self._pg_textsearch_probe_error
-
-    async def _close_pool(self) -> None:
-        """Close the actual async connection pool."""
-        if not self.connection_instance:
-            return
-
-        try:
-            await self.connection_instance.close()
-        finally:
-            self.connection_instance = None
-
-    def _connection_kwargs(self) -> "tuple[type[Any], str, dict[str, Any]]":
-        """Split the pooled configuration into standalone connect arguments.
-
-        Returns:
-            The connection class, the conninfo string, and the connect kwargs.
-        """
-        all_config = {k: v for k, v in self.connection_config.items() if k not in _POOL_ONLY_CONFIG_KEYS}
-        connection_class = all_config.pop("connection_class", None) or PsycopgAsyncConnection
-        conninfo = all_config.pop("conninfo", None)
-        all_config.update(all_config.pop("kwargs", {}))
-        return cast("type[Any]", connection_class), str(conninfo or ""), all_config
 
     async def create_connection(self) -> "PsycopgAsyncConnection":  # pyright: ignore
         """Open a standalone connection owned by the caller.
@@ -850,9 +761,11 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         """
         connection_class, conninfo, connection_kwargs = self._connection_kwargs()
         connection = await connection_class.connect(conninfo, **connection_kwargs)
-        configure = self.connection_config.get("configure", self._configure_async_connection)
+        user_configure = self.connection_config.get("configure")
         try:
-            await configure(cast("PsycopgAsyncConnection", connection))
+            await self._configure_async_connection(cast("PsycopgAsyncConnection", connection))
+            if user_configure is not None and user_configure is not self._configure_async_connection:
+                await user_configure(cast("PsycopgAsyncConnection", connection))
         except BaseException:
             with suppress(Exception):
                 await connection.close()
@@ -917,6 +830,136 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
+    async def _create_pool(self) -> "AsyncConnectionPool":
+        """Create the actual async connection pool."""
+
+        all_config = dict(self.connection_config)
+        all_config.pop("null_pool", None)
+
+        pool_parameters = {
+            "connection_class": all_config.pop("connection_class", None),
+            "min_size": all_config.pop("min_size", 4),
+            "max_size": all_config.pop("max_size", None),
+            "name": all_config.pop("name", None),
+            "timeout": all_config.pop("timeout", 30.0),
+            "max_waiting": all_config.pop("max_waiting", 0),
+            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_idle": all_config.pop("max_idle", 600.0),
+            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "reconnect_failed": all_config.pop("reconnect_failed", None),
+            "num_workers": all_config.pop("num_workers", 3),
+            "check": all_config.pop("check", None),
+            "reset": all_config.pop("reset", None),
+            "close_returns": all_config.pop("close_returns", False),
+        }
+        open_pool = all_config.pop("open", True)
+        pool_parameters["open"] = False if open_pool is True else open_pool
+
+        user_configure = all_config.pop("configure", None)
+        if user_configure is not None and user_configure is not self._configure_async_connection:
+
+            async def _chained_async_configure(conn: "PsycopgAsyncConnection") -> None:
+                await self._configure_async_connection(conn)
+                await user_configure(conn)
+
+            pool_parameters["configure"] = _chained_async_configure
+        else:
+            pool_parameters["configure"] = self._configure_async_connection
+
+        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
+
+        conninfo = all_config.pop("conninfo", None)
+        kwargs = all_config.pop("kwargs", {})
+        all_config.update(kwargs)
+
+        is_null_pool = bool(self.connection_config.get("null_pool") or self.driver_features.get("null_pool"))
+        pool_cls = AsyncNullConnectionPool if is_null_pool else AsyncConnectionPool
+        if is_null_pool:
+            pool_parameters.pop("min_size", None)
+
+        if conninfo:
+            pool = pool_cls(conninfo, kwargs=all_config, **pool_parameters)
+        else:
+            pool = pool_cls("", kwargs=all_config, **pool_parameters)
+
+        if open_pool is True:
+            await pool.open()
+
+        return pool
+
+    async def _configure_async_connection(self, conn: "PsycopgAsyncConnection") -> None:
+        autocommit_setting = self.connection_config.get("autocommit")
+        if autocommit_setting is not None:
+            await conn.set_autocommit(autocommit_setting)
+
+        serializer = self.driver_features.get("json_serializer", to_json)
+        deserializer = self.driver_features.get("json_deserializer", from_json)
+        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
+            set_json_dumps(serializer, conn)
+            set_json_loads(deserializer, conn)
+
+        if self._pgvector_available is None:
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
+            probe_succeeded = True
+            if extensions:
+                try:
+                    cursor = await conn.execute(
+                        "SELECT extname FROM pg_extension WHERE extname = ANY(%s::text[])", (extensions,)
+                    )
+                    results = await cursor.fetchall()
+                    detected_extensions = {
+                        cast("str", r["extname"] if isinstance(r, Mapping) else r[0]) for r in results
+                    }
+                except Exception as exc:
+                    probe_succeeded = False
+                    self._pg_textsearch_probe_error = exc
+                    if not conn.autocommit:
+                        with suppress(Exception):
+                            await conn.rollback()
+            if probe_succeeded:
+                self.statement_config, self._pgvector_available, self._paradedb_available = (
+                    resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
+                )
+                self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+
+        if self._pgvector_available:
+            await register_pgvector_async(conn)
+
+        if self._user_connection_hook is not None:
+            await self._user_connection_hook(conn)
+
+        if not conn.autocommit:
+            await conn.rollback()
+
+    def _ensure_pg_textsearch_available(self) -> None:
+        if self._pg_textsearch_available:
+            return
+        msg = "ADK memory enable_bm25 requires the pg_textsearch PostgreSQL extension"
+        raise ImproperConfigurationError(msg) from self._pg_textsearch_probe_error
+
+    async def _close_pool(self) -> None:
+        """Close the actual async connection pool."""
+        if not self.connection_instance:
+            return
+
+        try:
+            await self.connection_instance.close()
+        finally:
+            self.connection_instance = None
+
+    def _connection_kwargs(self) -> "tuple[type[Any], str, dict[str, Any]]":
+        """Split the pooled configuration into standalone connect arguments.
+
+        Returns:
+            The connection class, the conninfo string, and the connect kwargs.
+        """
+        all_config = {k: v for k, v in self.connection_config.items() if k not in _POOL_ONLY_CONFIG_KEYS}
+        connection_class = all_config.pop("connection_class", None) or PsycopgAsyncConnection
+        conninfo = all_config.pop("conninfo", None)
+        all_config.update(all_config.pop("kwargs", {}))
+        return cast("type[Any]", connection_class), str(conninfo or ""), all_config
+
 
 def _make_alloydb_connection_class(
     *,
@@ -930,6 +973,8 @@ def _make_alloydb_connection_class(
 ) -> "type[PsycopgConnection[Any]]":
     """Build a psycopg connection class backed by the AlloyDB connector."""
 
+    default_prepare_threshold = 5
+
     class _AlloyDBPsycopgConnection(PsycopgConnection[Any]):
         @classmethod
         def connect(
@@ -937,13 +982,13 @@ def _make_alloydb_connection_class(
             conninfo: str = "",
             *,
             autocommit: bool = False,
-            prepare_threshold: int | None = 5,
+            prepare_threshold: int | None = default_prepare_threshold,
             context: "AdaptContext | None" = None,
             row_factory: "RowFactory[Any] | None" = None,
             cursor_factory: "type[Cursor[Any]] | None" = None,
             **kwargs: str | int | None,
         ) -> Self:
-            _ = (cls, conninfo, autocommit, prepare_threshold, context, row_factory, cursor_factory)
+            _ = (cls, conninfo, context)
             connector_kwargs = dict(kwargs)
             connector_kwargs["enable_iam_auth"] = enable_iam_auth
             connector_kwargs["ip_type"] = ip_type
@@ -953,6 +998,15 @@ def _make_alloydb_connection_class(
                 connector_kwargs["password"] = password
             if database is not None:
                 connector_kwargs["db"] = database
-            return cast("Self", connector.connect(instance_uri, "psycopg", **connector_kwargs))
+            conn = connector.connect(instance_uri, "psycopg", **connector_kwargs)
+            if autocommit:
+                conn.autocommit = autocommit
+            if prepare_threshold != default_prepare_threshold:
+                conn.prepare_threshold = prepare_threshold
+            if row_factory is not None:
+                conn.row_factory = row_factory
+            if cursor_factory is not None:
+                conn.cursor_factory = cursor_factory
+            return cast("Self", conn)
 
     return _AlloyDBPsycopgConnection

@@ -1,11 +1,15 @@
 """Statement observer primitives for SQL execution events."""
 
 import logging
+from collections.abc import Mapping, Sequence
 from time import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlspec.observability._config import LoggingConfig, StatementObserver
 from sqlspec.utils.logging import SQL_LOGGER_NAME, get_logger
+
+if TYPE_CHECKING:
+    from sqlspec.observability._formatters._base import CloudLogFormatter
 
 __all__ = (
     "SQL_LOGGER_NAME",
@@ -108,35 +112,6 @@ class StatementEvent:
         msg = "StatementEvent objects are mutable and unhashable"
         raise TypeError(msg)
 
-    def as_dict(self) -> "dict[str, Any]":
-        """Return event payload as a dictionary."""
-
-        return {
-            "sql": self.sql,
-            "parameters": self.parameters,
-            "driver": self.driver,
-            "adapter": self.adapter,
-            "bind_key": self.bind_key,
-            "db_system": self.db_system,
-            "operation": self.operation,
-            "execution_mode": self.execution_mode,
-            "is_many": self.is_many,
-            "is_script": self.is_script,
-            "rows_affected": self.rows_affected,
-            "duration_s": self.duration_s,
-            "started_at": self.started_at,
-            "correlation_id": self.correlation_id,
-            "storage_backend": self.storage_backend,
-            "sql_hash": self.sql_hash,
-            "sql_truncated": self.sql_truncated,
-            "sql_original_length": self.sql_original_length,
-            "transaction_state": self.transaction_state,
-            "prepared_statement": self.prepared_statement,
-            "trace_id": self.trace_id,
-            "span_id": self.span_id,
-            "sampled": self.sampled,
-        }
-
     def __repr__(self) -> str:
         return (
             f"StatementEvent(sql={self.sql!r}, parameters={self.parameters!r}, driver={self.driver!r}, adapter={self.adapter!r}, bind_key={self.bind_key!r}, db_system={self.db_system!r}, "
@@ -174,6 +149,35 @@ class StatementEvent:
             and self.sampled == other.sampled
         )
 
+    def as_dict(self) -> "dict[str, Any]":
+        """Return event payload as a dictionary."""
+
+        return {
+            "sql": self.sql,
+            "parameters": self.parameters,
+            "driver": self.driver,
+            "adapter": self.adapter,
+            "bind_key": self.bind_key,
+            "db_system": self.db_system,
+            "operation": self.operation,
+            "execution_mode": self.execution_mode,
+            "is_many": self.is_many,
+            "is_script": self.is_script,
+            "rows_affected": self.rows_affected,
+            "duration_s": self.duration_s,
+            "started_at": self.started_at,
+            "correlation_id": self.correlation_id,
+            "storage_backend": self.storage_backend,
+            "sql_hash": self.sql_hash,
+            "sql_truncated": self.sql_truncated,
+            "sql_original_length": self.sql_original_length,
+            "transaction_state": self.transaction_state,
+            "prepared_statement": self.prepared_statement,
+            "trace_id": self.trace_id,
+            "span_id": self.span_id,
+            "sampled": self.sampled,
+        }
+
 
 def format_statement_event(event: StatementEvent) -> str:
     """Create a concise human-readable representation of a statement event."""
@@ -192,11 +196,13 @@ def format_statement_event(event: StatementEvent) -> str:
     )
 
 
-def create_statement_observer(logging_config: "LoggingConfig") -> StatementObserver:
+def create_statement_observer(
+    logging_config: "LoggingConfig", cloud_formatter: "CloudLogFormatter | None" = None
+) -> StatementObserver:
     """Create a statement observer bound to the provided logging config."""
 
     def observer(event: StatementEvent) -> None:
-        _emit_otel_statement_log(event, logging_config)
+        _emit_otel_statement_log(event, logging_config, cloud_formatter=cloud_formatter)
 
     return observer
 
@@ -262,7 +268,9 @@ def create_event(
     )
 
 
-def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConfig") -> None:
+def _emit_otel_statement_log(
+    event: StatementEvent, logging_config: "LoggingConfig", *, cloud_formatter: "CloudLogFormatter | None" = None
+) -> None:
     sql_preview, sql_truncated, sql_length = _truncate_text(event.sql, max_chars=logging_config.sql_truncation_length)
     if event.sql_original_length is not None:
         sql_length = event.sql_original_length
@@ -315,6 +323,18 @@ def _emit_otel_statement_log(event: StatementEvent, logging_config: "LoggingConf
             extra["parameters_truncated"] = True
         extra["parameters"] = params
 
+    if cloud_formatter is not None:
+        formatted = cloud_formatter.format(
+            "INFO",
+            event.operation,
+            correlation_id=event.correlation_id,
+            trace_id=event.trace_id,
+            span_id=event.span_id,
+            duration_ms=event.duration_s * 1000,
+            extra={k: v for k, v in extra.items() if v is not None},
+        )
+        extra.update({key: val for key, val in formatted.items() if key not in {"message", "asctime"}})
+
     sql_logger.info(event.operation, extra=extra)
 
 
@@ -330,25 +350,56 @@ def _summarize_parameters(parameters: Any) -> "dict[str, str | int | None]":
         return {"parameters_type": None, "parameters_size": None}
     if isinstance(parameters, dict):
         return {"parameters_type": "dict", "parameters_size": len(parameters)}
+    if isinstance(parameters, Mapping):
+        return {"parameters_type": type(parameters).__name__, "parameters_size": len(parameters)}
     if isinstance(parameters, list):
         return {"parameters_type": "list", "parameters_size": len(parameters)}
     if isinstance(parameters, tuple):
         return {"parameters_type": "tuple", "parameters_size": len(parameters)}
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+        return {"parameters_type": type(parameters).__name__, "parameters_size": len(parameters)}
     return {"parameters_type": type(parameters).__name__, "parameters_size": None}
 
 
 def _maybe_truncate_parameters(parameters: Any, *, max_items: int) -> tuple[Any, bool]:
-    if isinstance(parameters, dict):
-        if len(parameters) <= max_items:
-            return parameters, False
-        truncated = dict(list(parameters.items())[:max_items])
-        return truncated, True
+    if isinstance(parameters, Mapping):
+        truncated_flag = len(parameters) > max_items
+        items = list(parameters.items())[:max_items] if truncated_flag else list(parameters.items())
+        result_dict: dict[Any, Any] = {}
+        for key, val in items:
+            sub_val, sub_trunc = _maybe_truncate_parameters(val, max_items=max_items)
+            result_dict[key] = sub_val
+            if sub_trunc:
+                truncated_flag = True
+        return result_dict, truncated_flag
     if isinstance(parameters, list):
-        if len(parameters) <= max_items:
-            return parameters, False
-        return parameters[:max_items], True
+        truncated_flag = len(parameters) > max_items
+        sliced = parameters[:max_items] if truncated_flag else parameters
+        result_list: list[Any] = []
+        for item in sliced:
+            sub_val, sub_trunc = _maybe_truncate_parameters(item, max_items=max_items)
+            result_list.append(sub_val)
+            if sub_trunc:
+                truncated_flag = True
+        return result_list, truncated_flag
     if isinstance(parameters, tuple):
-        if len(parameters) <= max_items:
-            return parameters, False
-        return parameters[:max_items], True
+        truncated_flag = len(parameters) > max_items
+        sliced_tuple = parameters[:max_items] if truncated_flag else parameters
+        result_items: list[Any] = []
+        for item in sliced_tuple:
+            sub_val, sub_trunc = _maybe_truncate_parameters(item, max_items=max_items)
+            result_items.append(sub_val)
+            if sub_trunc:
+                truncated_flag = True
+        return tuple(result_items), truncated_flag
+    if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes, bytearray)):
+        truncated_flag = len(parameters) > max_items
+        sliced_seq = list(parameters[:max_items]) if truncated_flag else list(parameters)
+        result_seq: list[Any] = []
+        for item in sliced_seq:
+            sub_val, sub_trunc = _maybe_truncate_parameters(item, max_items=max_items)
+            result_seq.append(sub_val)
+            if sub_trunc:
+                truncated_flag = True
+        return result_seq, truncated_flag
     return parameters, False

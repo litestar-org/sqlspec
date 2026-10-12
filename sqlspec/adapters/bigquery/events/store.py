@@ -58,6 +58,9 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
             self.settings.get("partition_expiration_days"), "partition_expiration_days"
         )
         self._require_partition_filter = bool(self.settings.get("require_partition_filter", False))
+        dataset_id = _resolve_events_dataset_id(config)
+        if dataset_id and "." not in self._table_name:
+            self._table_name = f"{dataset_id}.{self._table_name}"
 
     def create_statements(self) -> "list[str]":
         """Return DDL statement for table creation.
@@ -130,6 +133,26 @@ class BigQueryEventQueueStore(BaseEventQueueStore[BigQueryConfig]):
             None, as BigQuery does not support traditional indexes.
         """
         return None
+
+
+def _resolve_events_dataset_id(config: BigQueryConfig) -> "str | None":
+    dataset_id = config.connection_config.get("dataset_id")
+    if isinstance(dataset_id, str) and dataset_id:
+        return dataset_id
+    default_job_config = config.connection_config.get("default_query_job_config") or config.driver_features.get(
+        "default_query_job_config"
+    )
+    if default_job_config is None:
+        return None
+    default_dataset = getattr(default_job_config, "default_dataset", None)
+    if default_dataset is None:
+        return None
+    if isinstance(default_dataset, str):
+        return default_dataset or None
+    resolved_id = getattr(default_dataset, "dataset_id", None)
+    if resolved_id:
+        return str(resolved_id)
+    return str(default_dataset)
 
 
 def _positive_int_or_none(value: object, key: str) -> "int | None":

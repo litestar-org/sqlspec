@@ -1,5 +1,6 @@
 """AsyncPG database configuration with direct field-based configuration."""
 
+import asyncio
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 
@@ -75,6 +76,8 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "reset",
     "setup",
 })
+_CLOUD_SQL_INSTANCE_PARTS: Final[int] = 3
+_ALLOYDB_URI_PARTS: Final[int] = 8
 
 logger = get_logger(__name__)
 
@@ -192,6 +195,8 @@ class AsyncpgDriverFeatures(TypedDict):
      - "notify_queue": Durable queue plus a PostgreSQL notification wakeup hint
      - "poll_queue": Durable queue discovered by polling
      Defaults to "notify".
+    on_connection_create: Async callback executed when a connection is initialized.
+     Receives the raw asyncpg connection after internal codec registration.
     pgbouncer: Enable PgBouncer transaction-pooling compatibility mode.
      Disables server-side prepared statement caching (statement_cache_size=0).
     type_codecs: Optional list of custom type codec specifications to register.
@@ -213,7 +218,6 @@ class AsyncpgDriverFeatures(TypedDict):
     alloydb_ip_type: NotRequired[str]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["notify", "notify_queue", "poll_queue"]]
-    connection_instance: NotRequired["AsyncpgPool"]
     on_connection_create: NotRequired["Callable[[AsyncpgConnection], Awaitable[None]]"]
     pgbouncer: NotRequired[bool]
     type_codecs: NotRequired["list[dict[str, Any]]"]
@@ -337,12 +341,14 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features)
-        self._user_connection_hook: Callable[[AsyncpgConnection], Awaitable[None]] | None = features_dict.pop(
-            "on_connection_create", None
+        if connection_instance is None and "connection_instance" in features_dict:
+            connection_instance = features_dict.pop("connection_instance")
+        self._user_connection_hook: Callable[[AsyncpgConnection], Awaitable[None]] | None = features_dict.get(
+            "on_connection_create"
         )
         if connection_config and connection_config.get("pgbouncer"):
             features_dict["pgbouncer"] = True
-        self._custom_type_codecs: list[dict[str, Any]] = list(features_dict.pop("type_codecs", None) or [])
+        self._custom_type_codecs: list[dict[str, Any]] = list(features_dict.get("type_codecs") or [])
 
         super().__init__(
             connection_config=build_connection_config(normalize_connection_config(connection_config)),
@@ -355,6 +361,8 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
             observability_config=observability_config,
             **kwargs,
         )
+        if self._user_connection_hook is not None:
+            self.driver_features["on_connection_create"] = self._user_connection_hook
 
         self._cloud_sql_connector: Any | None = None
         self._alloydb_connector: Any | None = None
@@ -362,8 +370,109 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
         self._pg_textsearch_probe_error: Exception | None = None
+        self._extension_probe_lock = asyncio.Lock()
 
         self._validate_connector_config()
+
+    @property
+    def pg_textsearch_available(self) -> bool:
+        """Return True if the pg_textsearch extension is available."""
+        return bool(self._pg_textsearch_available)
+
+    async def create_connection(self) -> "AsyncpgConnection":
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection parameters and init hook the
+        pool applies, consumes no pool slot, and must be closed by the caller.
+
+        Returns:
+            An AsyncPG connection instance.
+        """
+        config = {
+            key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
+        }
+        for key in _POOL_ONLY_CONFIG_KEYS:
+            config.pop(key, None)
+
+        if self.driver_features.get("pgbouncer"):
+            config["statement_cache_size"] = 0
+
+        if self.driver_features.get("enable_cloud_sql", False):
+            self._setup_cloud_sql_connector(config)
+        elif self.driver_features.get("enable_alloydb", False):
+            self._setup_alloydb_connector(config)
+
+        connect = config.pop("connect", None)
+        connection = await connect() if connect is not None else await asyncpg_connect(**config)
+        user_init = self.connection_config.get("init")
+        try:
+            await self._init_connection(connection)
+            if user_init is not None and user_init != self._init_connection:
+                await user_init(connection)
+        except BaseException:
+            with suppress(Exception):
+                await connection.close()
+            raise
+        return cast("AsyncpgConnection", connection)
+
+    def provide_session(
+        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
+    ) -> "AsyncpgSessionContext":
+        """Provide an async driver session context manager.
+
+        Args:
+            *_args: Additional arguments.
+            statement_config: Optional statement configuration override.
+            **_kwargs: Additional keyword arguments.
+
+        Returns:
+            An AsyncPG driver session context manager.
+        """
+        factory = _AsyncpgSessionFactory(self)
+        return AsyncpgSessionContext(
+            acquire_connection=factory.acquire_connection,
+            release_connection=factory.release_connection,
+            statement_config=statement_config
+            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
+            driver_features=self.driver_features,
+            prepare_driver=self._prepare_driver,
+        )
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for AsyncPG types.
+
+        This provides all AsyncPG-specific types that Litestar needs to recognize
+        to avoid serialization attempts.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "Connection": Connection,
+            "Pool": Pool,
+            "PoolConnectionProxy": PoolConnectionProxy,
+            "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
+            "ConnectionMeta": ConnectionMeta,
+            "Record": Record,
+            "AsyncpgConnection": AsyncpgConnection,
+            "AsyncpgConnectionConfig": AsyncpgConnectionConfig,
+            "AsyncpgConnectionContext": AsyncpgConnectionContext,
+            "AsyncpgCursor": AsyncpgCursor,
+            "AsyncpgDriver": AsyncpgDriver,
+            "AsyncpgExceptionHandler": AsyncpgExceptionHandler,
+            "AsyncpgPool": AsyncpgPool,
+            "AsyncpgPoolConfig": AsyncpgPoolConfig,
+            "AsyncpgPreparedStatement": AsyncpgPreparedStatement,
+            "AsyncpgSessionContext": AsyncpgSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return polling defaults for PostgreSQL queue fallback."""
+
+        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
 
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
@@ -397,12 +506,12 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     raise MissingDependencyError(package="cloud-sql-python-connector", install_package="cloud-sql")
 
                 instance = self.driver_features.get("cloud_sql_instance")
-                if not instance:
+                if not instance or not isinstance(instance, str):
                     msg = "cloud_sql_instance required when enable_cloud_sql is True. Format: 'project:region:instance'"
                     raise ImproperConfigurationError(msg)
 
-                cloud_sql_instance_parts_expected = 2
-                if instance.count(":") != cloud_sql_instance_parts_expected:
+                parts = instance.split(":")
+                if len(parts) != _CLOUD_SQL_INSTANCE_PARTS or not all(part.strip() for part in parts):
                     msg = f"Invalid Cloud SQL instance format: {instance}. Expected format: 'project:region:instance'"
                     raise ImproperConfigurationError(msg)
             case (False, True):
@@ -412,11 +521,19 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                     )
 
                 instance_uri = self.driver_features.get("alloydb_instance_uri")
-                if not instance_uri:
+                if not instance_uri or not isinstance(instance_uri, str):
                     msg = "alloydb_instance_uri required when enable_alloydb is True. Format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
                     raise ImproperConfigurationError(msg)
 
-                if not instance_uri.startswith("projects/"):
+                uri_parts = instance_uri.split("/")
+                if (
+                    len(uri_parts) != _ALLOYDB_URI_PARTS
+                    or uri_parts[0] != "projects"
+                    or uri_parts[2] != "locations"
+                    or uri_parts[4] != "clusters"
+                    or uri_parts[6] != "instances"
+                    or not all(part.strip() for part in uri_parts)
+                ):
                     msg = f"Invalid AlloyDB instance URI format: {instance_uri}. Expected format: 'projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE'"
                     raise ImproperConfigurationError(msg)
 
@@ -456,6 +573,15 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         config["connect"] = _AsyncpgAlloydbConnector(self, user, password, database)
 
+    def _build_chained_init(
+        self, user_init: "Callable[[AsyncpgConnection], Awaitable[None]]"
+    ) -> "Callable[[AsyncpgConnection], Awaitable[None]]":
+        async def _chained_init(connection: "AsyncpgConnection") -> None:
+            await self._init_connection(connection)
+            await user_init(connection)
+
+        return _chained_init
+
     async def _create_pool(self) -> "Pool[Record]":
         """Create the actual async connection pool."""
         config = {
@@ -470,9 +596,24 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         elif self.driver_features.get("enable_alloydb", False):
             self._setup_alloydb_connector(config)
 
-        config.setdefault("init", self._init_connection)
+        user_init = config.pop("init", None)
+        if user_init is not None and user_init != self._init_connection:
+            config["init"] = self._build_chained_init(user_init)
+        else:
+            config["init"] = self._init_connection
 
-        return await asyncpg_create_pool(**config)
+        try:
+            return await asyncpg_create_pool(**config)
+        except BaseException:
+            if self._cloud_sql_connector is not None:
+                with suppress(Exception):
+                    await self._cloud_sql_connector.close_async()
+                self._cloud_sql_connector = None
+            if self._alloydb_connector is not None:
+                with suppress(Exception):
+                    await self._alloydb_connector.close()
+                self._alloydb_connector = None
+            raise
 
     async def _init_connection(self, connection: "AsyncpgConnection") -> None:
         """Initialize connection with JSON codecs, pgvector support, custom codecs, and user callback.
@@ -487,22 +628,29 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
                 decoder=self.driver_features.get("json_deserializer", from_json),
             )
 
-        if self._pgvector_available is None:
-            detected_extensions: set[str] = set()
-            extensions = build_postgres_extension_probe_names(self.driver_features)
-            if extensions:
-                try:
-                    results = await connection.fetch(
-                        "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", extensions
+        async with self._extension_probe_lock:
+            if self._pgvector_available is None:
+                detected_extensions: set[str] = set()
+                probe_failed = False
+                extensions = build_postgres_extension_probe_names(self.driver_features)
+                if extensions:
+                    try:
+                        results = await connection.fetch(
+                            "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", extensions
+                        )
+                        detected_extensions = {r["extname"] for r in results}
+                    except Exception as exc:
+                        probe_failed = True
+                        self._pg_textsearch_probe_error = exc
+                        self._pg_textsearch_available = False
+                if not probe_failed:
+                    self._pg_textsearch_probe_error = None
+                    self.statement_config, self._pgvector_available, self._paradedb_available = (
+                        resolve_postgres_extension_state(
+                            self.statement_config, self.driver_features, detected_extensions
+                        )
                     )
-                    detected_extensions = {r["extname"] for r in results}
-                except Exception as exc:
-                    detected_extensions = set()
-                    self._pg_textsearch_probe_error = exc
-            self.statement_config, self._pgvector_available, self._paradedb_available = (
-                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-            )
-            self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+                    self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
 
         if self._pgvector_available:
             await register_pgvector_support(connection)
@@ -518,11 +666,6 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
 
         if self._user_connection_hook is not None:
             await self._user_connection_hook(connection)
-
-    @property
-    def pg_textsearch_available(self) -> bool:
-        """Return True if the pg_textsearch extension is available."""
-        return bool(self._pg_textsearch_available)
 
     def _ensure_pg_textsearch_available(self) -> None:
         if self._pg_textsearch_available:
@@ -543,106 +686,3 @@ class AsyncpgConfig(AsyncDatabaseConfig[AsyncpgConnection, "Pool[Record]", Async
         if self._alloydb_connector is not None:
             await self._alloydb_connector.close()
             self._alloydb_connector = None
-
-    async def create_connection(self) -> "AsyncpgConnection":
-        """Open a standalone connection owned by the caller.
-
-        The connection carries the same connection parameters and init hook the
-        pool applies, consumes no pool slot, and must be closed by the caller.
-
-        Returns:
-            An AsyncPG connection instance.
-        """
-        config = {
-            key: value for key, value in build_connection_config(self.connection_config).items() if value is not None
-        }
-        for key in _POOL_ONLY_CONFIG_KEYS:
-            config.pop(key, None)
-
-        if self.driver_features.get("pgbouncer"):
-            config["statement_cache_size"] = 0
-
-        if self.driver_features.get("enable_cloud_sql", False):
-            self._setup_cloud_sql_connector(config)
-        elif self.driver_features.get("enable_alloydb", False):
-            self._setup_alloydb_connector(config)
-
-        connect = config.pop("connect", None)
-        connection = await connect() if connect is not None else await asyncpg_connect(**config)
-        init = self.connection_config.get("init", self._init_connection)
-        try:
-            await init(connection)
-        except BaseException:
-            with suppress(Exception):
-                await connection.close()
-            raise
-        return cast("AsyncpgConnection", connection)
-
-    def provide_session(
-        self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
-    ) -> "AsyncpgSessionContext":
-        """Provide an async driver session context manager.
-
-        Args:
-            *_args: Additional arguments.
-            statement_config: Optional statement configuration override.
-            **_kwargs: Additional keyword arguments.
-
-        Returns:
-            An AsyncPG driver session context manager.
-        """
-        factory = _AsyncpgSessionFactory(self)
-        return AsyncpgSessionContext(
-            acquire_connection=factory.acquire_connection,
-            release_connection=factory.release_connection,
-            statement_config=statement_config
-            or (lambda: resolve_runtime_statement_config(None, self.statement_config, default_statement_config)),
-            driver_features=self.driver_features,
-            prepare_driver=self._prepare_driver,
-        )
-
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> "Pool[Record]":
-        """Provide async pool instance.
-
-        Returns:
-            The async connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = await self.create_pool()
-        return self.connection_instance
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for AsyncPG types.
-
-        This provides all AsyncPG-specific types that Litestar needs to recognize
-        to avoid serialization attempts.
-
-        Returns:
-            Dictionary mapping type names to types.
-        """
-
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "Connection": Connection,
-            "Pool": Pool,
-            "PoolConnectionProxy": PoolConnectionProxy,
-            "PoolConnectionProxyMeta": PoolConnectionProxyMeta,
-            "ConnectionMeta": ConnectionMeta,
-            "Record": Record,
-            "AsyncpgConnection": AsyncpgConnection,
-            "AsyncpgConnectionConfig": AsyncpgConnectionConfig,
-            "AsyncpgConnectionContext": AsyncpgConnectionContext,
-            "AsyncpgCursor": AsyncpgCursor,
-            "AsyncpgDriver": AsyncpgDriver,
-            "AsyncpgExceptionHandler": AsyncpgExceptionHandler,
-            "AsyncpgPool": AsyncpgPool,
-            "AsyncpgPoolConfig": AsyncpgPoolConfig,
-            "AsyncpgPreparedStatement": AsyncpgPreparedStatement,
-            "AsyncpgSessionContext": AsyncpgSessionContext,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return polling defaults for PostgreSQL queue fallback."""
-
-        return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)

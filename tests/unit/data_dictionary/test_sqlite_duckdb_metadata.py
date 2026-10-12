@@ -344,3 +344,48 @@ def test_duckdb_columns_ignore_generated_text_in_string_literals(tmp_path: Path)
         if column["table_name"] in expected
     } == {(table, name): flag for table, flags in expected.items() for name, flag in flags.items()}
     config.close_pool()
+
+
+def test_sqlite_and_duckdb_self_referential_fk_tables_and_constraints() -> None:
+    """Self-referential foreign keys do not cause infinite recursion in get_tables."""
+    loader = DataDictionaryLoader()
+    assert loader.has_domain_queries("sqlite", "constraints") is True
+    assert loader.has_domain_queries("sqlite", "comments") is False
+
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    driver = SqliteDriver(connection)
+    try:
+        driver.execute_script("""
+            CREATE TABLE categories (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER REFERENCES categories(id)
+            );
+            CREATE TABLE items (
+                id INTEGER PRIMARY KEY,
+                category_id INTEGER REFERENCES categories(id)
+            );
+        """)
+        tables = driver.data_dictionary.get_tables(driver)
+        assert [t["table_name"] for t in tables] == ["categories", "items"]
+    finally:
+        connection.close()
+
+    duckdb = pytest.importorskip("duckdb")
+    duck_conn = duckdb.connect(":memory:")
+    duck_driver = DuckDBDriver(duck_conn)
+    try:
+        duck_driver.execute_script("""
+            CREATE TABLE categories (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER REFERENCES categories(id)
+            );
+            CREATE TABLE items (
+                id INTEGER PRIMARY KEY,
+                category_id INTEGER REFERENCES categories(id)
+            );
+        """)
+        duck_tables = duck_driver.data_dictionary.get_tables(duck_driver)
+        assert [t["table_name"] for t in duck_tables] == ["categories", "items"]
+    finally:
+        duck_conn.close()

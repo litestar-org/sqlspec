@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.adapters.oracledb._json_handlers import chain_input_handler, chain_output_handler
 from sqlspec.adapters.oracledb._typing import DB_TYPE_VECTOR, OracleSparseVector
+from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import import_optional
 
 if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleAsyncConnection as AsyncConnection
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     from sqlspec.adapters.oracledb._typing import OracleSyncRawCursor as Cursor
 
 SPARSE_VECTOR_TYPE = OracleSparseVector
+np: Any = import_optional("numpy")
 
 __all__ = (
     "DTYPE_TO_ARRAY_CODE",
@@ -49,6 +52,7 @@ _TYPECODE_INT32 = "i"
 
 _INT8_MIN = -128
 _INT8_MAX = 127
+_ORACLE_VECTOR_MIN_MAJOR = 23
 
 _VECTOR_RETURN_NUMPY = "numpy"
 _VECTOR_RETURN_LIST = "list"
@@ -111,8 +115,6 @@ def numpy_converter_out(value: "array.array[Any]") -> Any:
     if not NUMPY_INSTALLED:
         return value
 
-    import numpy as np
-
     return np.array(value, copy=True, dtype=value.typecode)
 
 
@@ -162,16 +164,10 @@ def _is_vector_payload(value: Any) -> bool:
         return False
     if isinstance(value, array.array):
         return True
-    if NUMPY_INSTALLED:
-        import numpy as np
-
-        if isinstance(value, np.ndarray):
-            return True
+    if NUMPY_INSTALLED and isinstance(value, np.ndarray):
+        return True
     if isinstance(value, (list, tuple)) and value:
-        first = value[0]
-        if isinstance(first, bool):
-            return False
-        return isinstance(first, (int, float))
+        return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
     return False
 
 
@@ -206,11 +202,15 @@ def _input_type_handler(cursor: "Cursor | AsyncCursor", value: Any, arraysize: i
     if not _is_vector_payload(value):
         return None
 
-    if NUMPY_INSTALLED:
-        import numpy as np
+    connection = getattr(cursor, "connection", None)
+    if getattr(connection, "_sqlspec_enable_numpy_vectors", True) is False:
+        return None
+    server_major = resolve_oracle_connection_major(connection)
+    if server_major is not None and server_major < _ORACLE_VECTOR_MIN_MAJOR:
+        return None
 
-        if isinstance(value, np.ndarray):
-            return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize, inconverter=numpy_converter_in)
+    if NUMPY_INSTALLED and isinstance(value, np.ndarray):
+        return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize, inconverter=numpy_converter_in)
 
     if isinstance(value, array.array):
         return cursor.var(DB_TYPE_VECTOR, arraysize=arraysize)

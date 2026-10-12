@@ -84,6 +84,10 @@ def create_migration_file(
     extension = "py" if file_format == "py" else "sql"
     filename = f"{version}_{safe_message or 'migration'}.{extension}"
     file_path = migrations_dir / filename
+    migrations_dir.mkdir(parents=True, exist_ok=True)
+    if file_path.exists() or any(migrations_dir.glob(f"{version}_*")):
+        msg = f"Migration file already exists for version {version}: {file_path}"
+        raise MigrationError(msg)
     context = _build_template_context(
         settings=settings,
         version=version,

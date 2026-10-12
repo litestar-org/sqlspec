@@ -47,6 +47,21 @@ class PsqlpyADKConfig(ADKConfig):
     autovacuum_analyze_scale_factor: NotRequired[float]
     """Optional event-table autovacuum analyze scale factor."""
 
+    enable_bm25: NotRequired[bool]
+    """Create BM25 index on content_text using pg_textsearch extension."""
+
+    vector_dimensions: NotRequired[int]
+    """Vector embedding dimension size. Defaults to 1536."""
+
+    vector_index_type: NotRequired[Literal["hnsw", "ivfflat", "scann", "none"]]
+    """Type of vector index to create. Defaults to 'hnsw'."""
+
+    scann_num_leaves: NotRequired[int]
+    """Number of leaves for AlloyDB ScaNN index. Defaults to 500."""
+
+    scann_quantizer: NotRequired[Literal["SQ8", "FP32"]]
+    """Quantizer for AlloyDB ScaNN index. Defaults to 'SQ8'."""
+
 
 class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
     """PostgreSQL ADK store using Psqlpy driver.
@@ -383,21 +398,25 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def delete_expired_events(self, before: "datetime", app_name: "str | None" = None) -> int:
         if app_name is not None:
-            count_sql = f"SELECT COUNT(*) AS count FROM {self._events_table} WHERE timestamp < $1 AND app_name = $2"
-            delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1 AND app_name = $2"
+            sql = (
+                f"WITH deleted AS (DELETE FROM {self._events_table} "
+                f"WHERE timestamp < $1 AND app_name = $2 RETURNING 1) "
+                "SELECT COUNT(*) AS count FROM deleted"
+            )
             params: list[Any] = [before, app_name]
         else:
-            count_sql = f"SELECT COUNT(*) AS count FROM {self._events_table} WHERE timestamp < $1"
-            delete_sql = f"DELETE FROM {self._events_table} WHERE timestamp < $1"
+            sql = (
+                f"WITH deleted AS (DELETE FROM {self._events_table} "
+                f"WHERE timestamp < $1 RETURNING 1) "
+                "SELECT COUNT(*) AS count FROM deleted"
+            )
             params = [before]
 
         try:
             async with self._config.provide_connection() as conn:
-                count_result = await conn.fetch(count_sql, params)
-                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
-                count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, params)
-                return count
+                result = await conn.fetch(sql, params)
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return int(rows[0]["count"]) if rows else 0
         except Exception as e:
             if _is_table_missing_error(e):
                 return 0
@@ -405,21 +424,25 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def delete_idle_sessions(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         if app_name is not None:
-            count_sql = f"SELECT COUNT(*) AS count FROM {self._session_table} WHERE update_time < $1 AND app_name = $2"
-            delete_sql = f"DELETE FROM {self._session_table} WHERE update_time < $1 AND app_name = $2"
+            sql = (
+                f"WITH deleted AS (DELETE FROM {self._session_table} "
+                f"WHERE update_time < $1 AND app_name = $2 RETURNING 1) "
+                "SELECT COUNT(*) AS count FROM deleted"
+            )
             params: list[Any] = [updated_before, app_name]
         else:
-            count_sql = f"SELECT COUNT(*) AS count FROM {self._session_table} WHERE update_time < $1"
-            delete_sql = f"DELETE FROM {self._session_table} WHERE update_time < $1"
+            sql = (
+                f"WITH deleted AS (DELETE FROM {self._session_table} "
+                f"WHERE update_time < $1 RETURNING 1) "
+                "SELECT COUNT(*) AS count FROM deleted"
+            )
             params = [updated_before]
 
         try:
             async with self._config.provide_connection() as conn:
-                count_result = await conn.fetch(count_sql, params)
-                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
-                count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, params)
-                return count
+                result = await conn.fetch(sql, params)
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return int(rows[0]["count"]) if rows else 0
         except Exception as e:
             if _is_table_missing_error(e):
                 return 0
@@ -427,23 +450,25 @@ class PsqlpyADKStore(BaseAsyncADKStore["PsqlpyConfig"]):
 
     async def delete_idle_user_states(self, updated_before: "datetime", app_name: "str | None" = None) -> int:
         if app_name is not None:
-            count_sql = (
-                f"SELECT COUNT(*) AS count FROM {self._user_state_table} WHERE update_time < $1 AND app_name = $2"
+            sql = (
+                f"WITH deleted AS (DELETE FROM {self._user_state_table} "
+                f"WHERE update_time < $1 AND app_name = $2 RETURNING 1) "
+                "SELECT COUNT(*) AS count FROM deleted"
             )
-            delete_sql = f"DELETE FROM {self._user_state_table} WHERE update_time < $1 AND app_name = $2"
             params: list[Any] = [updated_before, app_name]
         else:
-            count_sql = f"SELECT COUNT(*) AS count FROM {self._user_state_table} WHERE update_time < $1"
-            delete_sql = f"DELETE FROM {self._user_state_table} WHERE update_time < $1"
+            sql = (
+                f"WITH deleted AS (DELETE FROM {self._user_state_table} "
+                f"WHERE update_time < $1 RETURNING 1) "
+                "SELECT COUNT(*) AS count FROM deleted"
+            )
             params = [updated_before]
 
         try:
             async with self._config.provide_connection() as conn:
-                count_result = await conn.fetch(count_sql, params)
-                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
-                count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, params)
-                return count
+                result = await conn.fetch(sql, params)
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return int(rows[0]["count"]) if rows else 0
         except Exception as e:
             if _is_table_missing_error(e):
                 return 0
@@ -638,14 +663,16 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
     async def create_tables(self) -> None:
         """Create the memory table and indexes if they don't exist."""
+        if not self._enabled:
+            return
+
         if not self.create_schema_enabled:
             await self.reconcile_schema()
             return
 
-        if not self._enabled:
-            return
-
         async with self._config.provide_session() as driver:
+            if self._enable_bm25:
+                self._config._ensure_pg_textsearch_available()
             await driver.execute_script(await self._memory_table_ddl())
 
     async def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
@@ -662,10 +689,10 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             sql = f"""
             INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                {self._owner_id_column_name}, timestamp, content_json,
+                {self._owner_id_column_name}, timestamp, embedding, content_json,
                 content_text, metadata_json, inserted_at
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::float8[]::vector, $11, $12, $13, $14
             )
             ON CONFLICT (event_id) DO NOTHING
             """
@@ -673,9 +700,9 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             sql = f"""
             INSERT INTO {self._memory_table} (
                 id, session_id, app_name, user_id, scope, event_id, author,
-                timestamp, content_json, content_text, metadata_json, inserted_at
+                timestamp, embedding, content_json, content_text, metadata_json, inserted_at
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+                $1, $2, $3, $4, $5, $6, $7, $8, $9::float8[]::vector, $10, $11, $12, $13
             )
             ON CONFLICT (event_id) DO NOTHING
             """
@@ -690,12 +717,13 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                         entry["user_id"],
                         entry.get("scope", "user"),
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         owner_id,
                         entry["timestamp"],
+                        entry.get("embedding"),
                         entry["content_json"],
                         entry["content_text"],
-                        entry["metadata_json"],
+                        entry.get("metadata_json"),
                         entry["inserted_at"],
                     ]
                 else:
@@ -706,11 +734,12 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                         entry["user_id"],
                         entry.get("scope", "user"),
                         entry["event_id"],
-                        entry["author"],
+                        entry.get("author"),
                         entry["timestamp"],
+                        entry.get("embedding"),
                         entry["content_json"],
                         entry["content_text"],
-                        entry["metadata_json"],
+                        entry.get("metadata_json"),
                         entry["inserted_at"],
                     ]
 
@@ -730,57 +759,71 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
+        """Search memory entries by text query or vector embedding."""
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query or not query.strip():
+        has_query = bool(query and query.strip())
+        if not has_query and embedding is None:
             return []
 
         effective_limit = limit if limit is not None else self._max_results
 
         try:
+            if embedding is not None and self._enable_bm25 and has_query:
+                return await self._search_entries_hybrid(
+                    query, app_name, user_id, effective_limit, scope_filter, embedding
+                )
+            if embedding is not None:
+                return await self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
             if self._use_fts:
                 try:
                     return await self._search_entries_fts(
                         query, app_name, user_id, effective_limit, scope_filter=scope_filter
                     )
                 except Exception as exc:
+                    if _is_table_missing_error(exc):
+                        raise
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(
                 query, app_name, user_id, effective_limit, scope_filter=scope_filter
             )
         except Exception as e:
-            if _is_psqlpy_database_error(e):
-                error_msg = str(e).lower()
-                if "does not exist" in error_msg or "relation" in error_msg:
-                    return []
+            if _is_table_missing_error(e):
+                return []
             raise
 
     async def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
-        count_sql = f"SELECT COUNT(*) AS count FROM {self._memory_table} WHERE session_id = $1"
-        delete_sql = f"DELETE FROM {self._memory_table} WHERE session_id = $1"
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
+        sql = (
+            f"WITH deleted AS (DELETE FROM {self._memory_table} "
+            f"WHERE session_id = $1 RETURNING 1) "
+            "SELECT COUNT(*) AS count FROM deleted"
+        )
 
         try:
             async with self._config.provide_connection() as conn:
-                count_result = await conn.fetch(count_sql, [session_id])
-                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
-                count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, [session_id])
-                return count
+                result = await conn.fetch(sql, [session_id])
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return int(rows[0]["count"]) if rows else 0
         except Exception as e:
-            if _is_psqlpy_database_error(e):
-                error_msg = str(e).lower()
-                if "does not exist" in error_msg or "relation" in error_msg:
-                    return 0
+            if _is_table_missing_error(e):
+                return 0
             raise
 
     async def delete_entries_older_than(
         self, days: int, app_name: "str | None" = None, scope: "str | None" = None
     ) -> int:
         """Delete memory entries older than specified days."""
+        if not self._enabled:
+            msg = "Memory store is disabled"
+            raise RuntimeError(msg)
+
         clauses = ["inserted_at < (CURRENT_TIMESTAMP - ($1::int * INTERVAL '1 day'))"]
         params: list[Any] = [days]
         if app_name is not None:
@@ -791,27 +834,20 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             clauses.append(f"scope = ${len(params)}")
         where_clause = " AND ".join(clauses)
 
-        count_sql = f"""
-        SELECT COUNT(*) AS count FROM {self._memory_table}
-        WHERE {where_clause}
-        """
-        delete_sql = f"""
-        DELETE FROM {self._memory_table}
-        WHERE {where_clause}
-        """
+        sql = (
+            f"WITH deleted AS (DELETE FROM {self._memory_table} "
+            f"WHERE {where_clause} RETURNING 1) "
+            "SELECT COUNT(*) AS count FROM deleted"
+        )
 
         try:
             async with self._config.provide_connection() as conn:
-                count_result = await conn.fetch(count_sql, params)
-                count_rows: list[dict[str, Any]] = count_result.result() if count_result else []
-                count = int(count_rows[0]["count"]) if count_rows else 0
-                await conn.execute(delete_sql, params)
-                return count
+                result = await conn.fetch(sql, params)
+                rows: list[dict[str, Any]] = result.result() if result else []
+                return int(rows[0]["count"]) if rows else 0
         except Exception as e:
-            if _is_psqlpy_database_error(e):
-                error_msg = str(e).lower()
-                if "does not exist" in error_msg or "relation" in error_msg:
-                    return 0
+            if _is_table_missing_error(e):
+                return 0
             raise
 
     async def _memory_table_ddl(self) -> str:
@@ -820,12 +856,14 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         if self._owner_id_column_ddl:
             owner_id_line = f",\n            {self._owner_id_column_ddl}"
 
-        fts_index = ""
-        if self._use_fts:
-            fts_index = f"""
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts
-            ON {self._memory_table} USING GIN (to_tsvector('english', content_text));
-            """
+        indexes_sql = _postgres_memory_indexes(
+            self._memory_table,
+            self._use_fts,
+            self._enable_bm25,
+            self._vector_index_type,
+            self._scann_num_leaves,
+            self._scann_quantizer,
+        )
 
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
@@ -837,23 +875,103 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_line},
             timestamp TIMESTAMPTZ NOT NULL,
+            embedding VECTOR({self._vector_dimensions}),
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
             inserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_user_time
-            ON {self._memory_table}(app_name, user_id, timestamp DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session
-            ON {self._memory_table}(session_id);
-        {fts_index}
+        {indexes_sql}
         """
 
     def _drop_memory_table_sql(self) -> "list[str]":
         """Get PostgreSQL DROP TABLE SQL statements."""
         return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+
+    async def _search_entries_hybrid(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        if scope_filter == "all":
+            where_scope = "app_name = $3 AND ((scope = 'user' AND user_id = $4) OR scope = 'app')"
+            scope_params: list[Any] = [list(embedding), query, app_name, user_id]
+            p_cand = "$5"
+            p_lim = "$6"
+        elif scope_filter == "user":
+            where_scope = "app_name = $3 AND scope = 'user' AND user_id = $4"
+            scope_params = [list(embedding), query, app_name, user_id]
+            p_cand = "$5"
+            p_lim = "$6"
+        else:
+            where_scope = "app_name = $3 AND scope = 'app'"
+            scope_params = [list(embedding), query, app_name]
+            p_cand = "$4"
+            p_lim = "$5"
+
+        candidate_limit = max(limit * 2, 50)
+        sql = f"""
+        WITH vector_matches AS (
+            SELECT id, RANK() OVER (ORDER BY embedding <=> $1::float8[]::vector) AS rank_vec
+            FROM {self._memory_table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            LIMIT {p_cand}
+        ),
+        text_matches AS (
+            SELECT id, RANK() OVER (ORDER BY content_text <@> $2) AS rank_txt
+            FROM {self._memory_table}
+            WHERE {where_scope}
+            LIMIT {p_cand}
+        )
+        SELECT m.*, (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+        FROM {self._memory_table} m
+        LEFT JOIN vector_matches v ON m.id = v.id
+        LEFT JOIN text_matches t ON m.id = t.id
+        WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+        ORDER BY rrf_score DESC, m.timestamp DESC
+        LIMIT {p_lim}
+        """
+        async with self._config.provide_connection() as conn:
+            self._config._ensure_pg_textsearch_available()
+            result = await conn.fetch(sql, [*scope_params, candidate_limit, limit])
+            rows: list[dict[str, Any]] = result.result() if result else []
+        return _rows_to_records(rows)
+
+    async def _search_entries_vector(
+        self,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        if scope_filter == "all":
+            where_scope = "app_name = $2 AND ((scope = 'user' AND user_id = $3) OR scope = 'app')"
+            scope_params: list[Any] = [list(embedding), app_name, user_id]
+            p_lim = "$4"
+        elif scope_filter == "user":
+            where_scope = "app_name = $2 AND scope = 'user' AND user_id = $3"
+            scope_params = [list(embedding), app_name, user_id]
+            p_lim = "$4"
+        else:
+            where_scope = "app_name = $2 AND scope = 'app'"
+            scope_params = [list(embedding), app_name]
+            p_lim = "$3"
+
+        sql = f"""
+        SELECT * FROM {self._memory_table}
+        WHERE {where_scope} AND embedding IS NOT NULL
+        ORDER BY embedding <=> $1::float8[]::vector ASC, timestamp DESC
+        LIMIT {p_lim}
+        """
+        async with self._config.provide_connection() as conn:
+            result = await conn.fetch(sql, [*scope_params, limit])
+            rows: list[dict[str, Any]] = result.result() if result else []
+        return _rows_to_records(rows)
 
     async def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
@@ -964,7 +1082,7 @@ def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[StoredMemory]":
             "content_text": row["content_text"],
             "metadata_json": row["metadata_json"],
             "inserted_at": row["inserted_at"],
-            "embedding": None,
+            "embedding": row.get("embedding"),
         }
         for row in rows
     ]
@@ -978,7 +1096,7 @@ def _is_table_missing_error(exc: Exception) -> bool:
     if not isinstance(exc, (PsqlpyDatabaseError, PsqlpyConnectionExecuteError)):
         return False
     error_msg = str(exc).lower()
-    return "does not exist" in error_msg or "relation" in error_msg
+    return ("does not exist" in error_msg and "relation" in error_msg) or "42p01" in error_msg
 
 
 def _adk_config(config: Any) -> PsqlpyADKConfig:
@@ -1018,6 +1136,54 @@ def _postgres_autovacuum_options(adk_config: PsqlpyADKConfig) -> "list[str]":
                 raise ValueError(msg)
             options.append(f"{key} = {float(value):g}")
     return options
+
+
+def _postgres_memory_indexes(
+    memory_table: str,
+    use_fts: bool,
+    enable_bm25: bool,
+    vector_index_type: str,
+    scann_num_leaves: int,
+    scann_quantizer: str,
+) -> str:
+    """Return the index DDL statements for the ADK memory table."""
+
+    indexes: list[str] = [
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_app_scope_user_time ON {memory_table}(app_name, scope, user_id, timestamp DESC);",
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scope ON {memory_table}(app_name, scope);",
+        f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_session ON {memory_table}(session_id);",
+    ]
+
+    if use_fts:
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_fts ON {memory_table} USING GIN (to_tsvector('english', content_text));"
+        )
+
+    if enable_bm25:
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_bm25 ON {memory_table} USING bm25 (content_text) WITH (text_config='english');"
+        )
+
+    if vector_index_type == "scann":
+        if not isinstance(scann_num_leaves, int) or isinstance(scann_num_leaves, bool) or scann_num_leaves <= 0:
+            msg = "extension_config['adk']['scann_num_leaves'] must be a positive integer"
+            raise ValueError(msg)
+        if scann_quantizer not in {"SQ8", "FP32"}:
+            msg = "extension_config['adk']['scann_quantizer'] must be 'SQ8' or 'FP32'"
+            raise ValueError(msg)
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_scann ON {memory_table} USING scann (embedding) WITH (num_leaves = {scann_num_leaves}, quantizer = '{scann_quantizer}');"
+        )
+    elif vector_index_type == "ivfflat":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_ivfflat ON {memory_table} USING ivfflat (embedding vector_cosine_ops);"
+        )
+    elif vector_index_type == "hnsw":
+        indexes.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{memory_table}_hnsw ON {memory_table} USING hnsw (embedding vector_cosine_ops);"
+        )
+
+    return "\n        ".join(indexes)
 
 
 def _postgres_event_ddl_options(adk_config: PsqlpyADKConfig, events_table: str) -> "tuple[str, str, str]":

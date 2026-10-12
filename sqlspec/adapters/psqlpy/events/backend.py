@@ -257,6 +257,23 @@ class PsqlpyHybridEventsBackend:
                     return event
             return await self._dequeue_hinted(channel)
 
+    async def ack(self, event_id: str) -> None:
+        await self._queue.ack(event_id)
+        self._runtime.increment_metric("events.ack")
+
+    async def nack(self, event_id: str) -> None:
+        await self._queue.nack(event_id)
+        self._runtime.increment_metric("events.nack")
+
+    async def shutdown(self) -> None:
+        hub = self._hub
+        try:
+            if hub is not None:
+                self._hub = None
+                await hub.shutdown()
+        finally:
+            self._marker_state.reset()
+
     async def _dequeue_hinted(self, channel: str) -> EventMessage | None:
         event = await self._queue.dequeue(channel)
         if event is None:
@@ -278,23 +295,6 @@ class PsqlpyHybridEventsBackend:
         _record_dequeue_result(self._runtime, event)
         return event
 
-    async def ack(self, event_id: str) -> None:
-        await self._queue.ack(event_id)
-        self._runtime.increment_metric("events.ack")
-
-    async def nack(self, event_id: str) -> None:
-        await self._queue.nack(event_id)
-        self._runtime.increment_metric("events.nack")
-
-    async def shutdown(self) -> None:
-        hub = self._hub
-        try:
-            if hub is not None:
-                self._hub = None
-                await hub.shutdown()
-        finally:
-            self._marker_state.reset()
-
     def _ensure_hub(self) -> PsqlpyListenerHub:
         if self._hub is None:
             self._hub = PsqlpyListenerHub(self._config, self.backend_name)
@@ -305,25 +305,30 @@ class PsqlpyHybridEventsBackend:
     ) -> None:
         now = datetime.now(UTC)
         async with self._config.provide_session() as driver:
-            await driver.execute(
-                SQL(
-                    self._queue._insert_statement,  # pyright: ignore[reportPrivateUsage]
-                    {
-                        "event_id": event_id,
-                        "channel": channel,
-                        "payload_json": payload,
-                        "metadata_json": metadata,
-                        "status": "pending",
-                        "available_at": now,
-                        "lease_expires_at": None,
-                        "attempts": 0,
-                        "created_at": now,
-                    },
-                    statement_config=self._queue._statement_config,  # pyright: ignore[reportPrivateUsage]
+            await driver.begin()
+            try:
+                await driver.execute(
+                    SQL(
+                        self._queue._insert_statement,  # pyright: ignore[reportPrivateUsage]
+                        {
+                            "event_id": event_id,
+                            "channel": channel,
+                            "payload_json": payload,
+                            "metadata_json": metadata,
+                            "status": "pending",
+                            "available_at": now,
+                            "lease_expires_at": None,
+                            "attempts": 0,
+                            "created_at": now,
+                        },
+                        statement_config=self._queue._statement_config,  # pyright: ignore[reportPrivateUsage]
+                    )
                 )
-            )
-            await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
-            await driver.commit()
+                await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
+                await driver.commit()
+            except BaseException:
+                await driver.rollback()
+                raise
 
 
 def create_event_backend(

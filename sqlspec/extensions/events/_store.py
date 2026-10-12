@@ -37,6 +37,7 @@ class BaseEventQueueStore(ABC, Generic[ConfigT]):
 
     extension_config_options: ClassVar[frozenset[str]] = frozenset({
         "backend",
+        "cleanup_on_ack",
         "create_schema",
         "event_poll_interval",
         "lease_seconds",

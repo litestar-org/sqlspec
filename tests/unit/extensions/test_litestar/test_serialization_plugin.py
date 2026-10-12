@@ -7,7 +7,7 @@ route/controller/router-level encoders on top — no bidirectional thread
 into sqlspec's serializer is needed.
 """
 
-import datetime
+import datetime as dt
 from typing import Any
 
 import pytest
@@ -40,16 +40,16 @@ def test_plugin_registers_default_encoders_into_app_config() -> None:
 def test_user_encoder_overrides_sqlspec_default() -> None:
     """User encoder for an existing default key wins on conflict."""
 
-    def user_dt(_v: datetime.datetime) -> str:
+    def user_dt(_v: dt.datetime) -> str:
         return "USER"
 
     plugin = _build_plugin()
-    app_config = AppConfig(type_encoders={datetime.datetime: user_dt})
+    app_config = AppConfig(type_encoders={dt.datetime: user_dt})
 
     plugin.on_app_init(app_config)
 
     assert app_config.type_encoders is not None
-    assert app_config.type_encoders[datetime.datetime] is user_dt
+    assert app_config.type_encoders[dt.datetime] is user_dt
 
 
 def test_user_decoders_take_precedence_in_list_order() -> None:

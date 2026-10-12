@@ -45,6 +45,7 @@ from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
 from sqlspec.exceptions import OperationalError, SQLFileNotFoundError
 from sqlspec.utils.logging import get_logger
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.text import normalize_identifier
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
 __all__ = ("AdbcDataDictionary",)
 
 logger = get_logger("sqlspec.adapters.adbc")
+_pa: Any = import_optional("pyarrow")
 
 _NATIVE_TABLE_TYPES: Final = frozenset({"table", "base table"})
 _NATIVE_FALLBACK_ERRORS: Final = (AdbcNotSupportedError, AdbcOperationalError)
@@ -109,13 +111,16 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
         super().__init__()
 
     def get_version(self, driver: "AdbcDriver") -> "VersionInfo | None":
-        """Get database version information based on detected dialect."""
+        """Get database version information based on detected dialect.
+
+        Inlines the version cache check to avoid cross-module method calls
+        across MyPyC compilation boundaries.
+        """
         dialect = self._normalize_dialect(driver)
         if dialect == "bigquery":
             return None
 
         driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -958,9 +963,8 @@ def _normalize_native_constraints(
 
 
 def _arrow_type_to_sql(data_type: Any) -> str:
-    import pyarrow as pa
-
-    types = pa.types
+    ensure_pyarrow()
+    types = _pa.types
     if types.is_boolean(data_type):
         return "BOOLEAN"
     if types.is_int8(data_type) or types.is_int16(data_type) or types.is_uint8(data_type) or types.is_uint16(data_type):

@@ -11,6 +11,17 @@ from mypy_extensions import mypyc_attr
 from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
+from sqlspec.data_dictionary import (
+    DEFAULT_SYSTEM_METADATA_DOMAINS,
+    DDLResult,
+    MetadataCapabilityProfile,
+    MetadataResult,
+    ObjectIdentity,
+    ensure_system_metadata_request,
+    system_metadata_capabilities_from_domains,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
+)
 from sqlspec.driver._common import (
     AsyncExceptionHandler,
     CommonDriverAttributesMixin,
@@ -47,11 +58,8 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.data_dictionary import (
         ColumnMetadata,
-        DDLResult,
         ForeignKeyMetadata,
         IndexMetadata,
-        MetadataCapabilityProfile,
-        MetadataResult,
         SystemMetadataCapability,
         SystemMetadataRequest,
         SystemMetadataResult,
@@ -78,17 +86,22 @@ class AsyncPoolConnectionContext:
     adapter-specific pool acquisition and release logic.
     """
 
-    __slots__ = ("_config", "_connection")
+    __slots__ = ("_config", "_connection", "_pool")
 
     def __init__(self, config: Any) -> None:
         self._config = config
         self._connection: Any = None
+        self._pool: Any = None
 
     async def __aenter__(self) -> Any:
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        if hasattr(self._config, "provide_pool"):
+            pool = await self._config.provide_pool()
+        else:
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+        self._pool = pool
         self._connection = await pool.acquire()
         return self._connection
 
@@ -96,9 +109,11 @@ class AsyncPoolConnectionContext:
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: Any
     ) -> "bool | None":
         if self._connection is not None:
-            if self._config.connection_instance:
-                await self._config.connection_instance.release(self._connection)
+            pool = self._pool or getattr(self._config, "connection_instance", None)
+            if pool is not None:
+                await pool.release(self._connection)
             self._connection = None
+            self._pool = None
         return None
 
 
@@ -110,24 +125,32 @@ class AsyncPoolSessionFactory:
     for adapter-specific pool acquisition and release logic.
     """
 
-    __slots__ = ("_config", "_connection")
+    __slots__ = ("_config", "_connection", "_pool")
 
     def __init__(self, config: Any) -> None:
         self._config = config
         self._connection: Any = None
+        self._pool: Any = None
 
     async def acquire_connection(self) -> Any:
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        if hasattr(self._config, "provide_pool"):
+            pool = await self._config.provide_pool()
+        else:
+            pool = self._config.connection_instance
+            if pool is None:
+                pool = await self._config.create_pool()
+                self._config.connection_instance = pool
+        self._pool = pool
         self._connection = await pool.acquire()
         return self._connection
 
     async def release_connection(self, _conn: Any, **kwargs: Any) -> None:
-        if self._connection is not None and self._config.connection_instance is not None:
-            await self._config.connection_instance.release(self._connection)
+        if self._connection is not None:
+            pool = self._pool or getattr(self._config, "connection_instance", None)
+            if pool is not None:
+                await pool.release(self._connection)
             self._connection = None
+            self._pool = None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -206,22 +229,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         return True
 
-    @staticmethod
-    def _check_pending_exception(exc_handler: AsyncExceptionHandler) -> None:
-        """Raise any pending mapped exception after context manager exit."""
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
-
-    async def _run_with_exception_handler(
-        self,
-        exc_handler: AsyncExceptionHandler,
-        operation: "Callable[..., Awaitable[_AsyncResultT]]",
-        *args: Any,
-        **kwargs: Any,
-    ) -> "_AsyncResultT | None":
-        """Run an async operation without inheriting the caller's active exception state."""
-        return await _run_with_async_exception_handler(exc_handler, operation, *args, **kwargs)
-
     @final
     async def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -238,7 +245,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             compiled_sql, execution_parameters = statement.compile()
             result: SQLResult | None = None
 
-            # FAST PATH: Skip all instrumentation if runtime is absent or idle.
             if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
                 result = await self._run_with_exception_handler(
@@ -297,7 +303,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 await runtime.emit_error_async(mapped_exc, **query_context)
                 _raise_database_exception(exc_handler, None)
 
-            assert result is not None  # Guaranteed: no exception means result was assigned
+            assert result is not None
 
             runtime.span_manager.end_span(span)
             duration = perf_counter() - started
@@ -369,7 +375,10 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         for stmt in statements:
             single_stmt = self._sub_statement(stmt, prepared_parameters)
-            await self.dispatch_execute(cursor, single_stmt)
+            try:
+                await self.dispatch_execute(cursor, single_stmt)
+            finally:
+                self._release_pooled_statement(single_stmt)
             successful_count += 1
 
         return self.create_execution_result(
@@ -429,69 +438,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
-
-    async def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
-    ) -> "SQLResult":
-        """Execute pre-compiled query via ultra-fast path (async).
-
-        Uses DBAPI-style async cursor methods when available. Async adapters with
-        connection-level execution APIs fall back to dispatch_execute so they can
-        preserve adapter-specific parameter binding semantics. For DML operations,
-        returns DMLResult to bypass full SQLResult construction.
-
-        Args:
-            sql: Raw SQL string (original, not compiled).
-            params: Query parameters.
-            cached: Cached query metadata.
-
-        Returns:
-            SQLResult or DMLResult.
-        """
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        result = await self._run_with_exception_handler(
-            exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
-        )
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
-
-    async def _cached_execution(
-        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
-    ) -> "SQLResult | None":
-        """Attempt fast-path execution for cached query (async).
-
-        Args:
-            statement: Raw SQL string.
-            params: Query parameters.
-
-        Returns:
-            SQLResult if cache hit and execution succeeds, None otherwise.
-        """
-        result = super()._cached_execution(statement, params)
-        if result is None:
-            return None
-        return await cast("Awaitable[SQLResult | None]", result)
-
-    async def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
-        """Execute pre-compiled query via fast path (async).
-
-        The statement is already compiled by _cached_execution, so dispatch_execute
-        will hit the fast path in _compiled_statement (is_processed check).
-        """
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        try:
-            result = await self._run_with_exception_handler(
-                exc_handler, self._execute_cached_statement_with_cursor, statement
-            )
-
-            self._check_pending_exception(exc_handler)
-            assert result is not None
-            return result
-        finally:
-            self._release_pooled_statement(statement)
 
     @abstractmethod
     async def begin(self) -> None:
@@ -570,39 +516,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
-        exc_handler = self.handle_database_exceptions()
-        result = await self._run_with_exception_handler(
-            exc_handler, self._execute, statement, parameters, statement_config, kwargs
-        )
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
-
-    async def _execute(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        parameters: "tuple[StatementParameters | StatementFilter, ...]",
-        statement_config: "StatementConfig | None",
-        kwargs: "dict[str, Any]",
-    ) -> "SQLResult":
-        fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
-        if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
-            fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
-        elif not parameters and kwargs:
-            fast_params = kwargs
-        if (
-            self._stmt_cache_enabled
-            and (statement_config is None or statement_config is self.statement_config)
-            and isinstance(statement, str)
-            and fast_params is not None
-        ):
-            fast_result = await self._cached_execution(statement, fast_params)
-            if fast_result is not None:
-                return fast_result
-        sql_statement = self.prepare_statement(
-            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-        )
-        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        return await self._execute(statement, parameters, statement_config, kwargs)
 
     async def execute_many(
         self,
@@ -617,33 +531,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Parameters passed will be used as the batch execution sequence.
         """
-        exc_handler = self.handle_database_exceptions()
-        result = await self._run_with_exception_handler(
-            exc_handler, self._execute_many, statement, parameters, filters, statement_config, kwargs
-        )
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
-
-    async def _execute_many(
-        self,
-        statement: "SQL | Statement | QueryBuilder",
-        parameters: "Sequence[StatementParameters]",
-        filters: "tuple[StatementParameters | StatementFilter, ...]",
-        statement_config: "StatementConfig | None",
-        kwargs: "dict[str, Any]",
-    ) -> "SQLResult":
-        config = statement_config or self.statement_config
-        if isinstance(statement, str) and not filters and not kwargs:
-            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
-        elif isinstance(statement, SQL):
-            statement_seed = statement.raw_expression or statement.raw_sql
-            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-        else:
-            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-            statement_seed = base_statement.raw_expression or base_statement.raw_sql
-            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+        return await self._execute_many(statement, parameters, filters, statement_config, kwargs)
 
     async def execute_script(
         self,
@@ -658,24 +546,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        exc_handler = self.handle_database_exceptions()
-        result = await self._run_with_exception_handler(
-            exc_handler, self._execute_script, statement, parameters, statement_config, kwargs
-        )
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
-
-    async def _execute_script(
-        self,
-        statement: "str | SQL",
-        parameters: "tuple[StatementParameters | StatementFilter, ...]",
-        statement_config: "StatementConfig | None",
-        kwargs: "dict[str, Any]",
-    ) -> "SQLResult":
-        config = statement_config or self.statement_config
-        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-        return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
+        return await self._execute_script(statement, parameters, statement_config, kwargs)
 
     @overload
     async def select(
@@ -687,7 +558,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[SchemaT]": ...
-
     @overload
     async def select(
         self,
@@ -698,7 +568,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[dict[str, Any]]": ...
-
     async def select(
         self,
         statement: "Statement | QueryBuilder",
@@ -722,7 +591,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[SchemaT]": ...
-
     @overload
     async def fetch(
         self,
@@ -733,7 +601,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[dict[str, Any]]": ...
-
     async def fetch(
         self,
         statement: "Statement | QueryBuilder",
@@ -765,7 +632,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT": ...
-
     @overload
     async def select_one(
         self,
@@ -776,7 +642,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
-
     async def select_one(
         self,
         statement: "Statement | QueryBuilder",
@@ -806,7 +671,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT": ...
-
     @overload
     async def fetch_one(
         self,
@@ -817,7 +681,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
-
     async def fetch_one(
         self,
         statement: "Statement | QueryBuilder",
@@ -851,7 +714,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT | None": ...
-
     @overload
     async def select_one_or_none(
         self,
@@ -862,7 +724,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any] | None": ...
-
     async def select_one_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -892,7 +753,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT | None": ...
-
     @overload
     async def fetch_one_or_none(
         self,
@@ -903,7 +763,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any] | None": ...
-
     async def fetch_one_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -938,7 +797,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT": ...
-
     @overload
     async def select_value(
         self,
@@ -949,7 +807,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     async def select_value(
         self,
         statement: "Statement | QueryBuilder",
@@ -997,7 +854,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT": ...
-
     @overload
     async def fetch_value(
         self,
@@ -1008,7 +864,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     async def fetch_value(
         self,
         statement: "Statement | QueryBuilder",
@@ -1043,7 +898,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT | None": ...
-
     @overload
     async def select_value_or_none(
         self,
@@ -1054,7 +908,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     async def select_value_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -1102,7 +955,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT | None": ...
-
     @overload
     async def fetch_value_or_none(
         self,
@@ -1113,7 +965,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     async def fetch_value_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -1150,7 +1001,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
-
     @overload
     async def select_with_total(
         self,
@@ -1162,7 +1012,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
-
     async def select_with_total(
         self,
         statement: "Statement | QueryBuilder",
@@ -1199,7 +1048,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         if count_with_window:
             modified_sql = self._with_total_count(sql_statement)
-            result = await self.dispatch_statement_execution(modified_sql, self.connection)
+            result = await self.execute(modified_sql)
             rows = result.all()
             data, total = self._extract_total_from_rows(rows)
 
@@ -1207,8 +1056,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 return (cast("list[SchemaT]", self.to_schema(data, schema_type=schema_type)), total)
             return (data, total)
 
-        count_result = await self.dispatch_statement_execution(self._count_query(sql_statement), self.connection)
-        select_result = await self.dispatch_statement_execution(sql_statement, self.connection)
+        count_result = await self.execute(self._count_query(sql_statement))
+        select_result = await self.execute(sql_statement)
 
         return (select_result.get_data(schema_type=schema_type), count_result.scalar())
 
@@ -1223,7 +1072,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
-
     @overload
     async def fetch_with_total(
         self,
@@ -1235,7 +1083,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
-
     async def fetch_with_total(
         self,
         statement: "Statement | QueryBuilder",
@@ -1370,7 +1217,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "AsyncRowStream[SchemaT]": ...
-
     @overload
     def select_stream(
         self,
@@ -1383,7 +1229,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "AsyncRowStream[dict[str, Any]]": ...
-
     def select_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
@@ -1426,7 +1271,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "AsyncRowStream[SchemaT]": ...
-
     @overload
     def fetch_stream(
         self,
@@ -1439,7 +1283,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "AsyncRowStream[dict[str, Any]]": ...
-
     def fetch_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
@@ -1490,9 +1333,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
             started_transaction = False
+            try:
+                caller_in_transaction = self._connection_in_transaction()
+            except NotImplementedError:
+                caller_in_transaction = False
 
             try:
-                if single_transaction and not self._connection_in_transaction():
+                if single_transaction and not caller_in_transaction:
                     await self.begin()
                     started_transaction = True
 
@@ -1516,7 +1363,8 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                             started_transaction = False
 
                         if continue_on_error:
-                            await self._rollback_failed_stack()
+                            if not caller_in_transaction:
+                                await self._rollback_failed_stack()
                             observer.record_operation_error(stack_error)
                             results.append(StackResult.from_error(stack_error))
                             continue
@@ -1525,7 +1373,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
                     results.append(StackResult(result=result))
 
-                    if continue_on_error:
+                    if continue_on_error and not caller_in_transaction:
                         await self._commit_stack_success()
 
                 if started_transaction:
@@ -1566,7 +1414,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageBridgeJob with execution telemetry.
         """
         self._raise_storage_not_implemented("select_to_storage")
-        raise NotImplementedError
 
     async def load_from_arrow(
         self,
@@ -1591,7 +1438,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             NotImplementedError: If not implemented.
         """
         self._raise_storage_not_implemented("load_from_arrow")
-        raise NotImplementedError
 
     async def load_from_storage(
         self,
@@ -1615,7 +1461,6 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageBridgeJob with execution telemetry.
         """
         self._raise_storage_not_implemented("load_from_storage")
-        raise NotImplementedError
 
     async def load_from_records(
         self,
@@ -1659,6 +1504,145 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQL string in target dialect.
         """
         return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
+
+    @staticmethod
+    def _check_pending_exception(exc_handler: AsyncExceptionHandler) -> None:
+        """Raise any pending mapped exception after context manager exit."""
+        pending = exc_handler.pending_exception
+        if pending is not None:
+            if pending.__cause__ is not None:
+                raise pending
+            raise pending from None
+
+    async def _run_with_exception_handler(
+        self,
+        exc_handler: AsyncExceptionHandler,
+        operation: "Callable[..., Awaitable[_AsyncResultT]]",
+        *args: Any,
+        **kwargs: Any,
+    ) -> "_AsyncResultT | None":
+        """Run an async operation without inheriting the caller's active exception state."""
+        return await _run_with_async_exception_handler(exc_handler, operation, *args, **kwargs)
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
+    ) -> "SQLResult":
+        """Execute pre-compiled query via ultra-fast path (async).
+
+        Uses DBAPI-style async cursor methods when available. Async adapters with
+        connection-level execution APIs fall back to dispatch_execute so they can
+        preserve adapter-specific parameter binding semantics. For DML operations,
+        returns DMLResult to bypass full SQLResult construction.
+
+        Args:
+            sql: Raw SQL string (original, not compiled).
+            params: Query parameters.
+            cached: Cached query metadata.
+
+        Returns:
+            SQLResult or DMLResult.
+        """
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        result = await self._run_with_exception_handler(
+            exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
+        )
+        self._check_pending_exception(exc_handler)
+        assert result is not None
+        return result
+
+    async def _cached_execution(
+        self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
+    ) -> "SQLResult | None":
+        """Attempt fast-path execution for cached query (async).
+
+        Args:
+            statement: Raw SQL string.
+            params: Query parameters.
+
+        Returns:
+            SQLResult if cache hit and execution succeeds, None otherwise.
+        """
+        result = super()._cached_execution(statement, params)
+        if result is None:
+            return None
+        return await cast("Awaitable[SQLResult | None]", result)
+
+    async def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
+        """Execute pre-compiled query via fast path (async).
+
+        The statement is already compiled by _cached_execution, so dispatch_execute
+        will hit the fast path in _compiled_statement (is_processed check).
+        """
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        try:
+            result = await self._run_with_exception_handler(
+                exc_handler, self._execute_cached_statement_with_cursor, statement
+            )
+
+            self._check_pending_exception(exc_handler)
+            assert result is not None
+            return result
+        finally:
+            self._release_pooled_statement(statement)
+
+    async def _execute(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        parameters: "tuple[StatementParameters | StatementFilter, ...]",
+        statement_config: "StatementConfig | None",
+        kwargs: "dict[str, Any]",
+    ) -> "SQLResult":
+        fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
+        if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
+            fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
+        elif not parameters and kwargs:
+            fast_params = kwargs
+        if (
+            self._stmt_cache_enabled
+            and (statement_config is None or statement_config is self.statement_config)
+            and isinstance(statement, str)
+            and fast_params is not None
+        ):
+            fast_result = await self._cached_execution(statement, fast_params)
+            if fast_result is not None:
+                return fast_result
+        sql_statement = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+        )
+        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+
+    async def _execute_many(
+        self,
+        statement: "SQL | Statement | QueryBuilder",
+        parameters: "Sequence[StatementParameters]",
+        filters: "tuple[StatementParameters | StatementFilter, ...]",
+        statement_config: "StatementConfig | None",
+        kwargs: "dict[str, Any]",
+    ) -> "SQLResult":
+        config = statement_config or self.statement_config
+        if isinstance(statement, str) and not filters and not kwargs:
+            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+        elif isinstance(statement, SQL):
+            statement_seed = statement.raw_expression or statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+        else:
+            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+            statement_seed = base_statement.raw_expression or base_statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+        return await self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
+
+    async def _execute_script(
+        self,
+        statement: "str | SQL",
+        parameters: "tuple[StatementParameters | StatementFilter, ...]",
+        statement_config: "StatementConfig | None",
+        kwargs: "dict[str, Any]",
+    ) -> "SQLResult":
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        return await self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
     def _connection_in_transaction(self) -> bool:
         """Check if the connection is inside a transaction.
@@ -1925,8 +1909,6 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns:
             Capability profile. Base implementations report requested domains as unsupported.
         """
-        from sqlspec.data_dictionary import MetadataCapabilityProfile
-
         requested_domains: tuple[str, ...] = (
             "schemas",
             "objects",
@@ -1956,8 +1938,6 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns:
             System metadata capabilities. Base implementations report requested domains as unsupported.
         """
-        from sqlspec.data_dictionary import DEFAULT_SYSTEM_METADATA_DOMAINS, system_metadata_capabilities_from_domains
-
         requested_domains = DEFAULT_SYSTEM_METADATA_DOMAINS if domains is None else tuple(domains)
         return system_metadata_capabilities_from_domains(requested_domains)
 
@@ -2053,12 +2033,6 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         self, driver: Any, request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
     ) -> "SystemMetadataResult":
         """Get opt-in system metadata or a gated/unsupported result."""
-        from sqlspec.data_dictionary import (
-            ensure_system_metadata_request,
-            system_metadata_gated_result,
-            unsupported_system_metadata_capability,
-        )
-
         metadata_request = ensure_system_metadata_request(request, **kwargs)
         capability = unsupported_system_metadata_capability(metadata_request.domain)
         return system_metadata_gated_result(metadata_request, capability)
@@ -2156,19 +2130,16 @@ class AsyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """
 
     def _unsupported_metadata(self, domain: str) -> "MetadataResult":
-        from sqlspec.data_dictionary import MetadataResult
-
         return MetadataResult.unsupported(domain)
 
     def _unsupported_ddl(self, object_name: str, *, schema: "str | None", object_type: str) -> "DDLResult":
-        from sqlspec.data_dictionary import DDLResult, ObjectIdentity
-
         return DDLResult.unsupported(
             ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect),
             warnings=(f"{self.dialect} DDL extraction is not implemented",),
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _AsyncDriverTransaction(Generic[_AsyncDriverT]):
     """Context manager that commits on success and rolls back on error.
 

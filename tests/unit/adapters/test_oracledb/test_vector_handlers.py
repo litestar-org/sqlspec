@@ -14,6 +14,10 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
+from sqlspec.adapters.oracledb._vector_handlers import (
+    _input_type_handler,  # pyright: ignore[reportPrivateUsage]
+    _pack_sequence_converter,  # pyright: ignore[reportPrivateUsage]
+)
 from sqlspec.typing import NUMPY_INSTALLED
 
 
@@ -379,10 +383,22 @@ def test_pack_sequence_converter_float_list() -> None:
 
 def test_pack_sequence_converter_int8_range() -> None:
     """_pack_sequence_converter packs small int lists as int8."""
-    from sqlspec.adapters.oracledb._vector_handlers import _pack_sequence_converter  # pyright: ignore[reportPrivateUsage]
-
     result = _pack_sequence_converter([-128, 0, 127])
 
     assert isinstance(result, array.array)
     assert result.typecode == "b"
     assert list(result) == [-128, 0, 127]
+
+
+def test_input_handler_rejects_heterogeneous_list_and_pre_23ai_and_disabled_flag() -> None:
+    """Reject mixed lists, pre-23ai servers, and connections with enable_numpy_vectors=False."""
+    cursor = _mock_cursor()
+    assert _input_type_handler(cursor, [1.0, "two"], 1) is None
+
+    pre_23_cursor = _mock_cursor()
+    pre_23_cursor.connection._sqlspec_oracle_major = 19
+    assert _input_type_handler(pre_23_cursor, [1.0, 2.0], 1) is None
+
+    disabled_cursor = _mock_cursor()
+    disabled_cursor.connection._sqlspec_enable_numpy_vectors = False
+    assert _input_type_handler(disabled_cursor, [1.0, 2.0], 1) is None

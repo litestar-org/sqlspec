@@ -86,6 +86,17 @@ class CorrelationExtractor:
         self._headers = tuple(dict.fromkeys(headers))
         self._max_length = max_length if max_length is not None else self.DEFAULT_MAX_LENGTH
 
+    def __repr__(self) -> str:
+        return f"CorrelationExtractor(headers={self._headers!r}, max_length={self._max_length!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CorrelationExtractor):
+            return NotImplemented
+        return self._headers == other._headers and self._max_length == other._max_length
+
+    def __hash__(self) -> int:
+        return hash((self._headers, self._max_length))
+
     @property
     def headers(self) -> tuple[str, ...]:
         """Get the ordered list of headers to check."""
@@ -132,14 +143,3 @@ class CorrelationExtractor:
         """
         sanitized = value.strip()[: self._max_length]
         return sanitized or CorrelationContext.generate()
-
-    def __repr__(self) -> str:
-        return f"CorrelationExtractor(headers={self._headers!r}, max_length={self._max_length!r})"
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, CorrelationExtractor):
-            return NotImplemented
-        return self._headers == other._headers and self._max_length == other._max_length
-
-    def __hash__(self) -> int:
-        return hash((self._headers, self._max_length))

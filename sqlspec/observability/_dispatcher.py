@@ -240,6 +240,9 @@ class LifecycleDispatcher:
     def register_hook(self, event: LifecycleEvent, callback: LifecycleHook) -> None:
         """Append a hook at runtime."""
 
+        if event not in EVENT_ATTRS:
+            msg = f"Unsupported lifecycle event: {event!r}"
+            raise ValueError(msg)
         callbacks = self._hooks.setdefault(event, [])
         callbacks.append(callback)
         self._enable_event_guard(event)
@@ -307,6 +310,11 @@ class LifecycleDispatcher:
     @staticmethod
     def _invoke_callback(callback: LifecycleHook, context: LifecycleContext, event: LifecycleEvent) -> None:
         try:
-            callback(context)
+            result = callback(context)
         except Exception as exc:  # pragma: no cover
             logger.warning("Lifecycle hook failed: event=%s error=%s", event, exc)
+            return
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()
+            logger.warning("Async lifecycle hook invoked on sync path: event=%s", event)

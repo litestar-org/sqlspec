@@ -14,6 +14,7 @@ For unsupported databases (Oracle, Spanner, MySQL), use their native adapters in
 import logging
 from typing import TYPE_CHECKING, Final
 
+from sqlspec.adapters.adbc.core import is_postgres_dialect, resolve_dialect_from_config
 from sqlspec.extensions.events import BaseEventQueueStore
 from sqlspec.utils.logging import get_logger, log_with_context
 
@@ -72,6 +73,28 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
             self._dialect = self._detect_dialect_from_config()
         return self._dialect
 
+    def create_statements(self) -> "list[str]":
+        """Return DDL statements for table creation.
+
+        Returns separate statements for table and index to support
+        databases that require separate execution.
+        """
+        statements = [self._table_ddl()]
+        index_sql = self._index_ddl()
+        if index_sql:
+            statements.append(index_sql)
+        return statements
+
+    def drop_statements(self) -> "list[str]":
+        """Return drop statements in reverse dependency order."""
+        dialect = self.dialect
+
+        if dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
+            return [f"DROP TABLE IF EXISTS {self.table_name}"]
+
+        index_name = self._index_name()
+        return [f"DROP INDEX IF EXISTS {index_name}", f"DROP TABLE IF EXISTS {self.table_name}"]
+
     def _detect_dialect_from_config(self) -> str:
         """Detect ADBC driver dialect from connection config.
 
@@ -85,29 +108,27 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
         driver_lower = str(driver_name).lower() if driver_name else ""
         uri_lower = str(uri).lower() if uri else ""
 
-        if "postgres" in driver_lower or uri_lower.startswith(("postgres://", "postgresql://")):
-            return DIALECT_POSTGRESQL
-        if "duckdb" in driver_lower or uri_lower.startswith("duckdb://"):
-            return DIALECT_DUCKDB
-        if (
-            "gizmosql" in driver_lower
-            or "gizmo" in driver_lower
-            or uri_lower.startswith(("gizmosql://", "gizmo://", "grpc+tls://"))
-        ):
-            return DIALECT_DUCKDB
-        if "bigquery" in driver_lower or uri_lower.startswith("bigquery://"):
-            return DIALECT_BIGQUERY
-        if "snowflake" in driver_lower or uri_lower.startswith("snowflake://"):
-            return DIALECT_SNOWFLAKE
         if "flightsql" in driver_lower or "grpc" in driver_lower or uri_lower.startswith("grpc://"):
             return DIALECT_FLIGHTSQL
-        if "sqlite" in driver_lower or uri_lower.startswith("sqlite://"):
+
+        resolved = resolve_dialect_from_config(connection_config)
+        if is_postgres_dialect(resolved):
+            return DIALECT_POSTGRESQL
+        if resolved in {DIALECT_DUCKDB, DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
+            return resolved
+        if resolved == DIALECT_SQLITE and (
+            "sqlite" in driver_lower
+            or uri_lower.startswith("sqlite://")
+            or str(connection_config.get("gizmosql_backend", "")).lower() == DIALECT_SQLITE
+        ):
             return DIALECT_SQLITE
 
         statement_config = self._config.statement_config
         if statement_config and statement_config.dialect is not None:
             dialect_str = str(statement_config.dialect).lower()
-            if dialect_str in {DIALECT_POSTGRESQL, DIALECT_SQLITE, DIALECT_DUCKDB, DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
+            if is_postgres_dialect(dialect_str):
+                return DIALECT_POSTGRESQL
+            if dialect_str in {DIALECT_SQLITE, DIALECT_DUCKDB, DIALECT_BIGQUERY, DIALECT_SNOWFLAKE, DIALECT_FLIGHTSQL}:
                 return dialect_str
 
         log_with_context(
@@ -184,25 +205,3 @@ class AdbcEventQueueStore(BaseEventQueueStore["AdbcConfig"]):
     def _wrap_drop_statement(self, statement: str) -> str:
         """Return statement unchanged since ADBC dialects support IF EXISTS."""
         return statement
-
-    def create_statements(self) -> "list[str]":
-        """Return DDL statements for table creation.
-
-        Returns separate statements for table and index to support
-        databases that require separate execution.
-        """
-        statements = [self._table_ddl()]
-        index_sql = self._index_ddl()
-        if index_sql:
-            statements.append(index_sql)
-        return statements
-
-    def drop_statements(self) -> "list[str]":
-        """Return drop statements in reverse dependency order."""
-        dialect = self.dialect
-
-        if dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}:
-            return [f"DROP TABLE IF EXISTS {self.table_name}"]
-
-        index_name = self._index_name()
-        return [f"DROP INDEX IF EXISTS {index_name}", f"DROP TABLE IF EXISTS {self.table_name}"]
