@@ -28,7 +28,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from sqlspec import SQLSpec
+from sqlspec import ObservabilityConfig, SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.schema import _convert_numpy_recursive, to_schema, transform_dict_keys
@@ -38,36 +38,77 @@ __all__ = (
     "main",
     "print_benchmark_table",
     "raw_adbc_rows",
+    "raw_aiosqlite_complex_query",
+    "raw_aiosqlite_no_param_select",
+    "raw_aiosqlite_observability_select",
+    "raw_aiosqlite_scalar_param_select",
+    "raw_aiosqlite_session_per_request",
     "raw_aiosqlite_worker_hops",
+    "raw_asyncpg_complex_query",
     "raw_asyncpg_initialization",
     "raw_asyncpg_iterative_inserts",
+    "raw_asyncpg_no_param_select",
+    "raw_asyncpg_observability_select",
     "raw_asyncpg_read_heavy",
     "raw_asyncpg_repeated_queries",
     "raw_asyncpg_rows",
+    "raw_asyncpg_scalar_param_select",
+    "raw_asyncpg_session_per_request",
     "raw_asyncpg_write_heavy",
     "raw_cockroach_asyncpg_rows",
     "raw_cockroach_psycopg_async_rows",
     "raw_cockroach_psycopg_sync_rows",
     "raw_duckdb_bulk",
+    "raw_duckdb_complex_query",
     "raw_duckdb_initialization",
     "raw_duckdb_iterative_inserts",
+    "raw_duckdb_no_param_select",
+    "raw_duckdb_observability_select",
     "raw_duckdb_read_heavy",
     "raw_duckdb_repeated_queries",
+    "raw_duckdb_scalar_param_select",
+    "raw_duckdb_session_per_request",
     "raw_duckdb_write_heavy",
     "raw_mysqlconnector_json_rows",
+    "raw_oracle_complex_query",
     "raw_oracle_lob_fetch_1k",
     "raw_oracle_lob_fetch_100k",
+    "raw_oracle_no_param_select",
+    "raw_oracle_observability_select",
+    "raw_oracle_scalar_param_select",
+    "raw_oracle_session_per_request",
+    "raw_psqlpy_complex_query",
+    "raw_psqlpy_no_param_select",
+    "raw_psqlpy_observability_select",
+    "raw_psqlpy_rows",
+    "raw_psqlpy_scalar_param_select",
+    "raw_psqlpy_session_per_request",
+    "raw_psycopg_async_complex_query",
+    "raw_psycopg_async_no_param_select",
+    "raw_psycopg_async_observability_select",
     "raw_psycopg_async_rows",
+    "raw_psycopg_async_scalar_param_select",
+    "raw_psycopg_async_session_per_request",
+    "raw_psycopg_sync_complex_query",
+    "raw_psycopg_sync_no_param_select",
+    "raw_psycopg_sync_observability_select",
     "raw_psycopg_sync_rows",
+    "raw_psycopg_sync_scalar_param_select",
+    "raw_psycopg_sync_session_per_request",
     "raw_spanner_strings",
     "raw_sqlite_complex_parameters",
+    "raw_sqlite_complex_query",
     "raw_sqlite_dict_key_transform",
     "raw_sqlite_initialization",
     "raw_sqlite_iterative_inserts",
+    "raw_sqlite_no_param_select",
+    "raw_sqlite_observability_select",
     "raw_sqlite_read_heavy",
     "raw_sqlite_repeated_queries",
+    "raw_sqlite_scalar_param_select",
     "raw_sqlite_schema_mapping",
     "raw_sqlite_schema_type_numpy",
+    "raw_sqlite_session_per_request",
     "raw_sqlite_thin_path_stress",
     "raw_sqlite_write_heavy",
     "run_benchmark",
@@ -88,23 +129,44 @@ __all__ = (
     "sqlalchemy_sqlite_repeated_queries",
     "sqlalchemy_sqlite_write_heavy",
     "sqlspec_adbc_rows",
+    "sqlspec_aiosqlite_complex_query",
+    "sqlspec_aiosqlite_no_param_select",
+    "sqlspec_aiosqlite_observability_select",
+    "sqlspec_aiosqlite_scalar_param_select",
+    "sqlspec_aiosqlite_session_per_request",
     "sqlspec_aiosqlite_worker_hops",
+    "sqlspec_asyncpg_complex_query",
     "sqlspec_asyncpg_initialization",
     "sqlspec_asyncpg_iterative_inserts",
+    "sqlspec_asyncpg_no_param_select",
+    "sqlspec_asyncpg_observability_select",
     "sqlspec_asyncpg_read_heavy",
     "sqlspec_asyncpg_repeated_queries",
     "sqlspec_asyncpg_rows",
+    "sqlspec_asyncpg_scalar_param_select",
+    "sqlspec_asyncpg_session_per_request",
     "sqlspec_asyncpg_write_heavy",
     "sqlspec_cockroach_asyncpg_rows",
     "sqlspec_cockroach_psycopg_async_rows",
     "sqlspec_cockroach_psycopg_sync_rows",
     "sqlspec_duckdb_bulk",
+    "sqlspec_duckdb_complex_query",
     "sqlspec_duckdb_initialization",
     "sqlspec_duckdb_iterative_inserts",
+    "sqlspec_duckdb_no_param_select",
+    "sqlspec_duckdb_observability_select",
     "sqlspec_duckdb_read_heavy",
     "sqlspec_duckdb_repeated_queries",
+    "sqlspec_duckdb_scalar_param_select",
+    "sqlspec_duckdb_session_per_request",
     "sqlspec_duckdb_write_heavy",
     "sqlspec_mysqlconnector_json_rows",
+    "sqlspec_oracle_async_complex_query",
+    "sqlspec_oracle_async_no_param_select",
+    "sqlspec_oracle_async_observability_select",
+    "sqlspec_oracle_async_scalar_param_select",
+    "sqlspec_oracle_async_session_per_request",
+    "sqlspec_oracle_complex_query",
     "sqlspec_oracle_json_read",
     "sqlspec_oracle_lob_fetch_1k",
     "sqlspec_oracle_lob_fetch_100k",
@@ -115,18 +177,43 @@ __all__ = (
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_1k",
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_100k",
     "sqlspec_oracle_native_json_write",
+    "sqlspec_oracle_no_param_select",
+    "sqlspec_oracle_observability_select",
+    "sqlspec_oracle_scalar_param_select",
     "sqlspec_oracle_serialized_json_write",
+    "sqlspec_oracle_session_per_request",
+    "sqlspec_psqlpy_complex_query",
+    "sqlspec_psqlpy_no_param_select",
+    "sqlspec_psqlpy_observability_select",
+    "sqlspec_psqlpy_rows",
+    "sqlspec_psqlpy_scalar_param_select",
+    "sqlspec_psqlpy_session_per_request",
+    "sqlspec_psycopg_async_complex_query",
+    "sqlspec_psycopg_async_no_param_select",
+    "sqlspec_psycopg_async_observability_select",
     "sqlspec_psycopg_async_rows",
+    "sqlspec_psycopg_async_scalar_param_select",
+    "sqlspec_psycopg_async_session_per_request",
+    "sqlspec_psycopg_sync_complex_query",
+    "sqlspec_psycopg_sync_no_param_select",
+    "sqlspec_psycopg_sync_observability_select",
     "sqlspec_psycopg_sync_rows",
+    "sqlspec_psycopg_sync_scalar_param_select",
+    "sqlspec_psycopg_sync_session_per_request",
     "sqlspec_spanner_strings",
     "sqlspec_sqlite_complex_parameters",
+    "sqlspec_sqlite_complex_query",
     "sqlspec_sqlite_dict_key_transform",
     "sqlspec_sqlite_initialization",
     "sqlspec_sqlite_iterative_inserts",
+    "sqlspec_sqlite_no_param_select",
+    "sqlspec_sqlite_observability_select",
     "sqlspec_sqlite_read_heavy",
     "sqlspec_sqlite_repeated_queries",
+    "sqlspec_sqlite_scalar_param_select",
     "sqlspec_sqlite_schema_mapping",
     "sqlspec_sqlite_schema_type_numpy",
+    "sqlspec_sqlite_session_per_request",
     "sqlspec_sqlite_thin_path_stress",
     "sqlspec_sqlite_write_heavy",
 )
@@ -171,6 +258,19 @@ POSTGRES_DSN_ENV = "SQLSPEC_BENCH_POSTGRES_DSN"
 
 COCKROACH_DSN_ENV = "SQLSPEC_BENCH_COCKROACH_DSN"
 
+HOT_PATH_EXTENDED_SCENARIOS = (
+    ("raw", "scalar_param_select"),
+    ("sqlspec", "scalar_param_select"),
+    ("raw", "no_param_select"),
+    ("sqlspec", "no_param_select"),
+    ("raw", "complex_query"),
+    ("sqlspec", "complex_query"),
+    ("raw", "session_per_request"),
+    ("sqlspec", "session_per_request"),
+    ("raw", "observability_select"),
+    ("sqlspec", "observability_select"),
+)
+
 SQLITE_EXTENDED_SCENARIOS = (
     ("raw", "dict_key_transform"),
     ("sqlspec", "dict_key_transform"),
@@ -182,6 +282,7 @@ SQLITE_EXTENDED_SCENARIOS = (
     ("sqlspec", "thin_path_stress"),
     ("raw", "schema_type_numpy"),
     ("sqlspec", "schema_type_numpy"),
+    *HOT_PATH_EXTENDED_SCENARIOS,
 )
 
 ORACLE_EXTENDED_SCENARIOS = (
@@ -198,9 +299,24 @@ ORACLE_EXTENDED_SCENARIOS = (
     ("sqlspec_fetch_lobs_true", "lob_fetch_100k"),
     ("sqlspec_async", "lob_fetch_100k"),
     ("sqlspec_async_fetch_lobs_true", "lob_fetch_100k"),
+    ("raw", "scalar_param_select"),
+    ("sqlspec", "scalar_param_select"),
+    ("sqlspec_async", "scalar_param_select"),
+    ("raw", "no_param_select"),
+    ("sqlspec", "no_param_select"),
+    ("sqlspec_async", "no_param_select"),
+    ("raw", "complex_query"),
+    ("sqlspec", "complex_query"),
+    ("sqlspec_async", "complex_query"),
+    ("raw", "session_per_request"),
+    ("sqlspec", "session_per_request"),
+    ("sqlspec_async", "session_per_request"),
+    ("raw", "observability_select"),
+    ("sqlspec", "observability_select"),
+    ("sqlspec_async", "observability_select"),
 )
 
-AIOSQLITE_EXTENDED_SCENARIOS = (("raw", "worker_hops"), ("sqlspec", "worker_hops"))
+AIOSQLITE_EXTENDED_SCENARIOS = (("raw", "worker_hops"), ("sqlspec", "worker_hops"), *HOT_PATH_EXTENDED_SCENARIOS)
 
 SPANNER_EXTENDED_SCENARIOS = (("raw", "strings"), ("sqlspec", "strings"))
 
@@ -208,9 +324,11 @@ MYSQLCONNECTOR_EXTENDED_SCENARIOS = (("raw", "json_rows"), ("sqlspec", "json_row
 
 ADBC_EXTENDED_SCENARIOS = (("raw", "rows"), ("sqlspec", "rows"))
 
-DUCKDB_EXTENDED_SCENARIOS = (("raw", "bulk"), ("sqlspec", "bulk"))
+DUCKDB_EXTENDED_SCENARIOS = (("raw", "bulk"), ("sqlspec", "bulk"), *HOT_PATH_EXTENDED_SCENARIOS)
 
 SERVICE_ROWS_SCENARIOS = (("raw", "rows"), ("sqlspec", "rows"))
+
+POSTGRES_EXTENDED_SCENARIOS = (*SERVICE_ROWS_SCENARIOS, *HOT_PATH_EXTENDED_SCENARIOS)
 
 EXTENDED_SCENARIOS_BY_DRIVER = {
     "sqlite": SQLITE_EXTENDED_SCENARIOS,
@@ -220,13 +338,130 @@ EXTENDED_SCENARIOS_BY_DRIVER = {
     "adbc": ADBC_EXTENDED_SCENARIOS,
     "duckdb": DUCKDB_EXTENDED_SCENARIOS,
     "oracle": ORACLE_EXTENDED_SCENARIOS,
-    "psycopg_sync": SERVICE_ROWS_SCENARIOS,
-    "psycopg_async": SERVICE_ROWS_SCENARIOS,
-    "asyncpg": SERVICE_ROWS_SCENARIOS,
+    "psycopg_sync": POSTGRES_EXTENDED_SCENARIOS,
+    "psycopg_async": POSTGRES_EXTENDED_SCENARIOS,
+    "asyncpg": POSTGRES_EXTENDED_SCENARIOS,
+    "psqlpy": POSTGRES_EXTENDED_SCENARIOS,
     "cockroach_psycopg_sync": SERVICE_ROWS_SCENARIOS,
     "cockroach_psycopg_async": SERVICE_ROWS_SCENARIOS,
     "cockroach_asyncpg": SERVICE_ROWS_SCENARIOS,
 }
+
+SCALAR_PARAM_SELECT_SQL = "SELECT ?;"
+
+SCALAR_PARAM_SELECT_ASYNCPG_SQL = "SELECT $1::int;"
+
+SCALAR_PARAM_SELECT_PG_SQL = "SELECT %s::int;"
+
+SCALAR_PARAM_SELECT_ORACLE_SQL = "SELECT :1 FROM DUAL"
+
+NO_PARAM_SELECT_SQL = "SELECT 1;"
+
+NO_PARAM_SELECT_ORACLE_SQL = "SELECT 1 FROM DUAL"
+
+COMPLEX_SCHEMA_DDL = (
+    "CREATE TABLE users (id INTEGER, org_id INTEGER, status TEXT, name TEXT);",
+    "CREATE TABLE orgs (id INTEGER, tier TEXT, region TEXT);",
+    "CREATE TABLE events (id INTEGER, user_id INTEGER, kind TEXT, ts INTEGER, amount FLOAT);",
+)
+
+COMPLEX_QUERY_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM events
+    WHERE ts >= ?
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM users u
+JOIN orgs o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+LIMIT 25
+"""
+
+POSTGRES_COMPLEX_DROP_DDL = (
+    "DROP TABLE IF EXISTS sqlspec_bench_events",
+    "DROP TABLE IF EXISTS sqlspec_bench_users",
+    "DROP TABLE IF EXISTS sqlspec_bench_orgs",
+)
+
+POSTGRES_COMPLEX_SCHEMA_DDL = (
+    "CREATE TABLE sqlspec_bench_users (id INTEGER, org_id INTEGER, status TEXT, name TEXT)",
+    "CREATE TABLE sqlspec_bench_orgs (id INTEGER, tier TEXT, region TEXT)",
+    "CREATE TABLE sqlspec_bench_events (id INTEGER, user_id INTEGER, kind TEXT, ts INTEGER, amount DOUBLE PRECISION)",
+)
+
+POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM sqlspec_bench_events
+    WHERE ts >= $1::int
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM sqlspec_bench_users u
+JOIN sqlspec_bench_orgs o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+LIMIT 25
+"""
+
+POSTGRES_COMPLEX_QUERY_PG_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM sqlspec_bench_events
+    WHERE ts >= %s::int
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM sqlspec_bench_users u
+JOIN sqlspec_bench_orgs o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+LIMIT 25
+"""
+
+ORACLE_COMPLEX_TABLES = ("SQLSPEC_BENCH_EVENTS", "SQLSPEC_BENCH_USERS", "SQLSPEC_BENCH_ORGS")
+
+ORACLE_COMPLEX_SCHEMA_DDL = (
+    "CREATE TABLE SQLSPEC_BENCH_USERS (id NUMBER, org_id NUMBER, status VARCHAR2(32), name VARCHAR2(64))",
+    "CREATE TABLE SQLSPEC_BENCH_ORGS (id NUMBER, tier VARCHAR2(32), region VARCHAR2(32))",
+    "CREATE TABLE SQLSPEC_BENCH_EVENTS (id NUMBER, user_id NUMBER, kind VARCHAR2(32), ts NUMBER, amount BINARY_DOUBLE)",
+)
+
+ORACLE_COMPLEX_QUERY_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM SQLSPEC_BENCH_EVENTS
+    WHERE ts >= :1
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM SQLSPEC_BENCH_USERS u
+JOIN SQLSPEC_BENCH_ORGS o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+FETCH FIRST 25 ROWS ONLY
+"""
+
+ORACLE_KV_TABLE = "SQLSPEC_BENCH_KV"
+
+ORACLE_KV_CREATE_SQL = f"CREATE TABLE {ORACLE_KV_TABLE} (value VARCHAR2(64))"
+
+ORACLE_KV_INSERT_SQL = f"INSERT INTO {ORACLE_KV_TABLE} (value) VALUES (:1)"
+
+ORACLE_KV_SELECT_BY_VALUE_SQL = f"SELECT value FROM {ORACLE_KV_TABLE} WHERE value = :1"
+
+SERVICE_ROWS_SELECT_BY_PAYLOAD_PG = "SELECT id, payload FROM sqlspec_bench_rows WHERE payload = %s"
+
+SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG = "SELECT id, payload FROM sqlspec_bench_rows WHERE payload = $1"
+
+HOT_PATH_COMPLEX_ITERATIONS_CAP = 500
 
 CREATE_TEST_TABLE = "CREATE TABLE test (value TEXT);"
 
@@ -2035,6 +2270,770 @@ def sqlspec_oracle_json_read() -> None:
     _run_sqlspec_oracle_json_read()
 
 
+def raw_sqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw sqlite3."""
+    with sqlite3.connect(":memory:") as conn:
+        for i in range(ROWS_TO_INSERT):
+            row = conn.execute(SCALAR_PARAM_SELECT_SQL, (i,)).fetchone()
+            assert row is not None
+            assert row[0] == i
+
+
+def sqlspec_sqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec SqliteConfig."""
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for i in range(ROWS_TO_INSERT):
+                val = session.select_value(SCALAR_PARAM_SELECT_SQL, i)
+                assert val == i
+    finally:
+        config.close_pool()
+
+
+def raw_sqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw sqlite3."""
+    with sqlite3.connect(":memory:") as conn:
+        for _ in range(ROWS_TO_INSERT):
+            rows = conn.execute(NO_PARAM_SELECT_SQL).fetchall()
+            assert len(rows) == 1
+
+
+def sqlspec_sqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec SqliteConfig."""
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for _ in range(ROWS_TO_INSERT):
+                res = session.execute(NO_PARAM_SELECT_SQL)
+                assert res is not None
+    finally:
+        config.close_pool()
+
+
+def raw_sqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw sqlite3."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with sqlite3.connect(":memory:") as conn:
+        for ddl in COMPLEX_SCHEMA_DDL:
+            conn.execute(ddl)
+        for i in range(iterations):
+            conn.execute(COMPLEX_QUERY_SQL, (i,)).fetchall()
+
+
+def sqlspec_sqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query with scalar positional param through SQLSpec SqliteConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for ddl in COMPLEX_SCHEMA_DDL:
+                session.execute(ddl)
+            for i in range(iterations):
+                session.execute(COMPLEX_QUERY_SQL, i)
+    finally:
+        config.close_pool()
+
+
+def raw_sqlite_session_per_request() -> None:
+    """Execute one query per request on a reused raw sqlite3 connection."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        conn.commit()
+        for i in range(iterations):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+        conn.close()
+
+
+def sqlspec_sqlite_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec SqliteConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        try:
+            with spec.provide_session(config) as session:
+                session.execute(CREATE_TEST_TABLE)
+                session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                with spec.provide_session(config) as session:
+                    session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+        finally:
+            config.close_pool()
+
+
+def raw_sqlite_observability_select() -> None:
+    """Baseline raw sqlite3 repeated SELECT for observability comparison."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        conn.commit()
+        for i in range(ROWS_TO_INSERT):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+        conn.close()
+
+
+def sqlspec_sqlite_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on SqliteConfig."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(
+            connection_config={"database": tmp.name},
+            observability_config=ObservabilityConfig(statement_observers=(_noop_statement_observer,)),
+        )
+        try:
+            with spec.provide_session(config) as session:
+                session.execute(CREATE_TEST_TABLE)
+                session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+                for i in range(ROWS_TO_INSERT):
+                    session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+        finally:
+            config.close_pool()
+
+
+async def raw_aiosqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw aiosqlite."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    async with aiosqlite.connect(":memory:") as conn:
+        for i in range(ROWS_TO_INSERT):
+            cursor = await conn.execute(SCALAR_PARAM_SELECT_SQL, (i,))
+            row = await cursor.fetchone()
+            assert row is not None
+            assert row[0] == i
+
+
+async def sqlspec_aiosqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    spec = SQLSpec()
+    config = aiosqlite_config_type(connection_config={"database": ":memory:", "pool_size": POOL_SIZE})
+    try:
+        async with spec.provide_session(config) as session:
+            for i in range(ROWS_TO_INSERT):
+                val = await session.select_value(SCALAR_PARAM_SELECT_SQL, i)
+                assert val == i
+        _check_pool_leak(config.connection_instance, "aiosqlite/scalar_param_select")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+async def raw_aiosqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw aiosqlite."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    async with aiosqlite.connect(":memory:") as conn:
+        for _ in range(ROWS_TO_INSERT):
+            cursor = await conn.execute(NO_PARAM_SELECT_SQL)
+            rows = await cursor.fetchall()
+            assert len(rows) == 1
+
+
+async def sqlspec_aiosqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    spec = SQLSpec()
+    config = aiosqlite_config_type(connection_config={"database": ":memory:", "pool_size": POOL_SIZE})
+    try:
+        async with spec.provide_session(config) as session:
+            for _ in range(ROWS_TO_INSERT):
+                res = await session.execute(NO_PARAM_SELECT_SQL)
+                assert res is not None
+        _check_pool_leak(config.connection_instance, "aiosqlite/no_param_select")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+async def raw_aiosqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw aiosqlite."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    async with aiosqlite.connect(":memory:") as conn:
+        for ddl in COMPLEX_SCHEMA_DDL:
+            await conn.execute(ddl)
+        await conn.commit()
+        for i in range(iterations):
+            cursor = await conn.execute(COMPLEX_QUERY_SQL, (i,))
+            await cursor.fetchall()
+
+
+async def sqlspec_aiosqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query with scalar positional param through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = aiosqlite_config_type(connection_config={"database": ":memory:", "pool_size": POOL_SIZE})
+    try:
+        async with spec.provide_session(config) as session:
+            for ddl in COMPLEX_SCHEMA_DDL:
+                await session.execute(ddl)
+            for i in range(iterations):
+                await session.execute(COMPLEX_QUERY_SQL, i)
+        _check_pool_leak(config.connection_instance, "aiosqlite/complex_query")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+async def raw_aiosqlite_session_per_request() -> None:
+    """Execute one query per request on a reused raw aiosqlite connection."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            await conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            await conn.commit()
+            for i in range(iterations):
+                cursor = await conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+async def sqlspec_aiosqlite_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        spec = SQLSpec()
+        config = aiosqlite_config_type(connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE})
+        try:
+            async with spec.provide_session(config) as session:
+                await session.execute(DROP_TEST_TABLE)
+                await session.execute(CREATE_TEST_TABLE)
+                await session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+            _check_pool_leak(config.connection_instance, "aiosqlite/session_per_request")
+            await config.close_pool()
+        finally:
+            if config.connection_instance is not None:
+                await config.close_pool()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+async def raw_aiosqlite_observability_select() -> None:
+    """Baseline raw aiosqlite repeated SELECT for observability comparison."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            await conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            await conn.commit()
+            for i in range(ROWS_TO_INSERT):
+                cursor = await conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+async def sqlspec_aiosqlite_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        spec = SQLSpec()
+        config = aiosqlite_config_type(
+            connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE},
+            observability_config=ObservabilityConfig(statement_observers=(_noop_statement_observer,)),
+        )
+        try:
+            async with spec.provide_session(config) as session:
+                await session.execute(DROP_TEST_TABLE)
+                await session.execute(CREATE_TEST_TABLE)
+                await session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+                for i in range(ROWS_TO_INSERT):
+                    await session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+            _check_pool_leak(config.connection_instance, "aiosqlite/observability_select")
+            await config.close_pool()
+        finally:
+            if config.connection_instance is not None:
+                await config.close_pool()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+def raw_duckdb_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw duckdb."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    conn = duckdb.connect(":memory:")
+    try:
+        for i in range(ROWS_TO_INSERT):
+            row = conn.execute(SCALAR_PARAM_SELECT_SQL, (i,)).fetchone()
+            assert row is not None
+            assert row[0] == i
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec DuckDBConfig."""
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for i in range(ROWS_TO_INSERT):
+                val = session.select_value(SCALAR_PARAM_SELECT_SQL, i)
+                assert val == i
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw duckdb."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    conn = duckdb.connect(":memory:")
+    try:
+        for _ in range(ROWS_TO_INSERT):
+            rows = conn.execute(NO_PARAM_SELECT_SQL).fetchall()
+            assert len(rows) == 1
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec DuckDBConfig."""
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for _ in range(ROWS_TO_INSERT):
+                res = session.execute(NO_PARAM_SELECT_SQL)
+                assert res is not None
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw duckdb."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    conn = duckdb.connect(":memory:")
+    try:
+        for ddl in COMPLEX_SCHEMA_DDL:
+            conn.execute(ddl)
+        for i in range(iterations):
+            conn.execute(COMPLEX_QUERY_SQL, (i,)).fetchall()
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_complex_query() -> None:
+    """Execute a CTE + 2-join query with scalar positional param through SQLSpec DuckDBConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for ddl in COMPLEX_SCHEMA_DDL:
+                session.execute(ddl)
+            for i in range(iterations):
+                session.execute(COMPLEX_QUERY_SQL, i)
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_session_per_request() -> None:
+    """Execute one query per request on a reused raw duckdb connection."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        for i in range(iterations):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec DuckDBConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        for i in range(iterations):
+            with spec.provide_session(config) as session:
+                session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_observability_select() -> None:
+    """Baseline raw duckdb repeated SELECT for observability comparison."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        for i in range(ROWS_TO_INSERT):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on DuckDBConfig."""
+    spec = SQLSpec()
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:"},
+        observability_config=ObservabilityConfig(statement_observers=(_noop_statement_observer,)),
+    )
+    try:
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            for i in range(ROWS_TO_INSERT):
+                session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+    finally:
+        config.close_pool()
+
+
+async def raw_asyncpg_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw asyncpg."""
+    await _run_raw_asyncpg_hot_path("scalar_param_select")
+
+
+async def sqlspec_asyncpg_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("scalar_param_select")
+
+
+async def raw_asyncpg_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw asyncpg."""
+    await _run_raw_asyncpg_hot_path("no_param_select")
+
+
+async def sqlspec_asyncpg_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("no_param_select")
+
+
+async def raw_asyncpg_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw asyncpg."""
+    await _run_raw_asyncpg_hot_path("complex_query")
+
+
+async def sqlspec_asyncpg_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("complex_query")
+
+
+async def raw_asyncpg_session_per_request() -> None:
+    """Execute one query per request on a reused raw asyncpg connection."""
+    await _run_raw_asyncpg_hot_path("session_per_request")
+
+
+async def sqlspec_asyncpg_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("session_per_request")
+
+
+async def raw_asyncpg_observability_select() -> None:
+    """Baseline raw asyncpg repeated SELECT for observability comparison."""
+    await _run_raw_asyncpg_hot_path("observability_select")
+
+
+async def sqlspec_asyncpg_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("observability_select")
+
+
+def raw_psycopg_sync_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw psycopg sync."""
+    _run_raw_psycopg_sync_hot_path("scalar_param_select")
+
+
+def sqlspec_psycopg_sync_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("scalar_param_select")
+
+
+def raw_psycopg_sync_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw psycopg sync."""
+    _run_raw_psycopg_sync_hot_path("no_param_select")
+
+
+def sqlspec_psycopg_sync_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("no_param_select")
+
+
+def raw_psycopg_sync_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw psycopg sync."""
+    _run_raw_psycopg_sync_hot_path("complex_query")
+
+
+def sqlspec_psycopg_sync_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("complex_query")
+
+
+def raw_psycopg_sync_session_per_request() -> None:
+    """Execute one query per request on a reused raw psycopg sync connection."""
+    _run_raw_psycopg_sync_hot_path("session_per_request")
+
+
+def sqlspec_psycopg_sync_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("session_per_request")
+
+
+def raw_psycopg_sync_observability_select() -> None:
+    """Baseline raw psycopg sync repeated SELECT for observability comparison."""
+    _run_raw_psycopg_sync_hot_path("observability_select")
+
+
+def sqlspec_psycopg_sync_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("observability_select")
+
+
+async def raw_psycopg_async_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw psycopg async."""
+    await _run_raw_psycopg_async_hot_path("scalar_param_select")
+
+
+async def sqlspec_psycopg_async_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("scalar_param_select")
+
+
+async def raw_psycopg_async_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw psycopg async."""
+    await _run_raw_psycopg_async_hot_path("no_param_select")
+
+
+async def sqlspec_psycopg_async_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("no_param_select")
+
+
+async def raw_psycopg_async_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw psycopg async."""
+    await _run_raw_psycopg_async_hot_path("complex_query")
+
+
+async def sqlspec_psycopg_async_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("complex_query")
+
+
+async def raw_psycopg_async_session_per_request() -> None:
+    """Execute one query per request on a reused raw psycopg async connection."""
+    await _run_raw_psycopg_async_hot_path("session_per_request")
+
+
+async def sqlspec_psycopg_async_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("session_per_request")
+
+
+async def raw_psycopg_async_observability_select() -> None:
+    """Baseline raw psycopg async repeated SELECT for observability comparison."""
+    await _run_raw_psycopg_async_hot_path("observability_select")
+
+
+async def sqlspec_psycopg_async_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("observability_select")
+
+
+async def raw_psqlpy_rows() -> None:
+    """Fetch rows through the native psqlpy connection pool."""
+    await _run_raw_psqlpy_rows(_postgres_benchmark_dsn())
+
+
+async def sqlspec_psqlpy_rows() -> None:
+    """Fetch rows through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_rows(_postgres_benchmark_dsn())
+
+
+async def raw_psqlpy_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw psqlpy."""
+    await _run_raw_psqlpy_hot_path("scalar_param_select")
+
+
+async def sqlspec_psqlpy_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("scalar_param_select")
+
+
+async def raw_psqlpy_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw psqlpy."""
+    await _run_raw_psqlpy_hot_path("no_param_select")
+
+
+async def sqlspec_psqlpy_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("no_param_select")
+
+
+async def raw_psqlpy_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw psqlpy."""
+    await _run_raw_psqlpy_hot_path("complex_query")
+
+
+async def sqlspec_psqlpy_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("complex_query")
+
+
+async def raw_psqlpy_session_per_request() -> None:
+    """Execute one query per request on a reused raw psqlpy connection."""
+    await _run_raw_psqlpy_hot_path("session_per_request")
+
+
+async def sqlspec_psqlpy_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("session_per_request")
+
+
+async def raw_psqlpy_observability_select() -> None:
+    """Baseline raw psqlpy repeated SELECT for observability comparison."""
+    await _run_raw_psqlpy_hot_path("observability_select")
+
+
+async def sqlspec_psqlpy_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("observability_select")
+
+
+def raw_oracle_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw python-oracledb."""
+    _run_raw_oracle_hot_path("scalar_param_select")
+
+
+def sqlspec_oracle_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("scalar_param_select")
+
+
+async def sqlspec_oracle_async_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("scalar_param_select")
+
+
+def raw_oracle_no_param_select() -> None:
+    """Execute parameterless SELECT 1 FROM DUAL queries through raw python-oracledb."""
+    _run_raw_oracle_hot_path("no_param_select")
+
+
+def sqlspec_oracle_no_param_select() -> None:
+    """Execute parameterless SELECT 1 FROM DUAL queries through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("no_param_select")
+
+
+async def sqlspec_oracle_async_no_param_select() -> None:
+    """Execute parameterless SELECT 1 FROM DUAL queries through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("no_param_select")
+
+
+def raw_oracle_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw python-oracledb."""
+    _run_raw_oracle_hot_path("complex_query")
+
+
+def sqlspec_oracle_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("complex_query")
+
+
+async def sqlspec_oracle_async_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("complex_query")
+
+
+def raw_oracle_session_per_request() -> None:
+    """Execute one query per request on a reused raw python-oracledb connection."""
+    _run_raw_oracle_hot_path("session_per_request")
+
+
+def sqlspec_oracle_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("session_per_request")
+
+
+async def sqlspec_oracle_async_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("session_per_request")
+
+
+def raw_oracle_observability_select() -> None:
+    """Baseline raw python-oracledb repeated SELECT for observability comparison."""
+    _run_raw_oracle_hot_path("observability_select")
+
+
+def sqlspec_oracle_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("observability_select")
+
+
+async def sqlspec_oracle_async_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("observability_select")
+
+
 def print_benchmark_table(results: list[dict[str, Any]]) -> None:
     console = Console()
     table = Table(title="Benchmark Results")
@@ -2913,6 +3912,575 @@ def _run_sqlspec_oracle_json_read() -> None:
             config.close_pool()
 
 
+def _noop_statement_observer(_event: Any) -> None:
+    """No-op statement observer used for observability benchmark scenarios."""
+    return
+
+
+def _service_loop_iterations() -> int:
+    """Return bounded iteration count for network-backed hot-path scenarios."""
+    return min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+
+
+async def _run_raw_asyncpg_hot_path(scenario: str) -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    conn = await connect(**_asyncpg_connect_kwargs(dsn))
+    try:
+        if scenario == "scalar_param_select":
+            for i in range(iterations):
+                val = await conn.fetchval(SCALAR_PARAM_SELECT_ASYNCPG_SQL, i)
+                assert val == i
+        elif scenario == "no_param_select":
+            for _ in range(iterations):
+                rows = await conn.fetch(NO_PARAM_SELECT_SQL)
+                assert len(rows) == 1
+        elif scenario == "complex_query":
+            for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                await conn.execute(ddl)
+            for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                await conn.execute(ddl)
+            for i in range(iterations):
+                await conn.fetch(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, i)
+        elif scenario in {"session_per_request", "observability_select"}:
+            await conn.execute(SERVICE_ROWS_DROP)
+            await conn.execute(SERVICE_ROWS_CREATE)
+            await conn.executemany(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                await conn.fetchrow(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, f"value_{i % 100}")
+    finally:
+        await conn.close()
+
+
+async def _run_sqlspec_asyncpg_hot_path(scenario: str) -> None:
+    asyncpg_config_type = _get_asyncpg_config()
+    if asyncpg_config_type is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = asyncpg_config_type(
+        connection_config={"dsn": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_ASYNCPG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+    finally:
+        await config.close_pool()
+
+
+def _run_raw_psycopg_sync_hot_path(scenario: str) -> None:
+    psycopg = _get_psycopg()
+    if psycopg is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    with psycopg.connect(dsn) as conn, conn.cursor() as cursor:
+        if scenario == "scalar_param_select":
+            for i in range(iterations):
+                cursor.execute(SCALAR_PARAM_SELECT_PG_SQL, (i,))
+                row = cursor.fetchone()
+                assert row is not None
+                assert row[0] == i
+        elif scenario == "no_param_select":
+            for _ in range(iterations):
+                cursor.execute(NO_PARAM_SELECT_SQL)
+                rows = cursor.fetchall()
+                assert len(rows) == 1
+        elif scenario == "complex_query":
+            for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                cursor.execute(ddl)
+            for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                cursor.execute(ddl)
+            conn.commit()
+            for i in range(iterations):
+                cursor.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, (i,))
+                cursor.fetchall()
+        elif scenario in {"session_per_request", "observability_select"}:
+            cursor.execute(SERVICE_ROWS_DROP)
+            cursor.execute(SERVICE_ROWS_CREATE)
+            cursor.executemany(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+            conn.commit()
+            for i in range(iterations):
+                cursor.execute(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+                cursor.fetchone()
+
+
+def _run_sqlspec_psycopg_sync_hot_path(scenario: str) -> None:
+    config_class = _get_sync_service_config("psycopg_sync")
+    if config_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = config_class(
+        connection_config={"conninfo": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = session.select_value(SCALAR_PARAM_SELECT_PG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    session.execute(ddl)
+                for i in range(iterations):
+                    session.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, i)
+        elif scenario == "session_per_request":
+            with spec.provide_session(config) as session:
+                session.execute(SERVICE_ROWS_DROP)
+                session.execute(SERVICE_ROWS_CREATE)
+                session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                with spec.provide_session(config) as session:
+                    session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            with spec.provide_session(config) as session:
+                session.execute(SERVICE_ROWS_DROP)
+                session.execute(SERVICE_ROWS_CREATE)
+                session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+    finally:
+        config.close_pool()
+
+
+async def _run_raw_psycopg_async_hot_path(scenario: str) -> None:
+    psycopg = _get_psycopg()
+    if psycopg is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    conn = await psycopg.AsyncConnection.connect(dsn)
+    try:
+        async with conn.cursor() as cursor:
+            if scenario == "scalar_param_select":
+                for i in range(iterations):
+                    await cursor.execute(SCALAR_PARAM_SELECT_PG_SQL, (i,))
+                    row = await cursor.fetchone()
+                    assert row is not None
+                    assert row[0] == i
+            elif scenario == "no_param_select":
+                for _ in range(iterations):
+                    await cursor.execute(NO_PARAM_SELECT_SQL)
+                    rows = await cursor.fetchall()
+                    assert len(rows) == 1
+            elif scenario == "complex_query":
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await cursor.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await cursor.execute(ddl)
+                await conn.commit()
+                for i in range(iterations):
+                    await cursor.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, (i,))
+                    await cursor.fetchall()
+            elif scenario in {"session_per_request", "observability_select"}:
+                await cursor.execute(SERVICE_ROWS_DROP)
+                await cursor.execute(SERVICE_ROWS_CREATE)
+                await cursor.executemany(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+                await conn.commit()
+                for i in range(iterations):
+                    await cursor.execute(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+                    await cursor.fetchone()
+    finally:
+        await conn.close()
+
+
+async def _run_sqlspec_psycopg_async_hot_path(scenario: str) -> None:
+    config_class = _get_async_service_config("psycopg_async")
+    if config_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = config_class(
+        connection_config={"conninfo": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_PG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+    finally:
+        await config.close_pool()
+
+
+def _get_psqlpy_pool_class() -> Any:
+    """Import psqlpy ConnectionPool lazily."""
+    try:
+        from psqlpy import ConnectionPool
+    except ImportError:
+        return None
+    else:
+        return ConnectionPool
+
+
+def _get_psqlpy_config() -> Any:
+    """Import PsqlpyConfig lazily."""
+    try:
+        from sqlspec.adapters.psqlpy import PsqlpyConfig
+    except ImportError:
+        return None
+    else:
+        return PsqlpyConfig
+
+
+async def _run_raw_psqlpy_rows(dsn: str) -> None:
+    pool_class = _get_psqlpy_pool_class()
+    if pool_class is None:
+        _benchmark_unavailable()
+    pool = pool_class(dsn=dsn, max_db_pool_size=max(1, POOL_SIZE))
+    try:
+        conn = await pool.connection()
+        await conn.execute(SERVICE_ROWS_DROP)
+        await conn.execute(SERVICE_ROWS_CREATE)
+        await conn.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [[idx, val] for idx, val in _service_benchmark_rows()])
+        res = await conn.fetch(SERVICE_ROWS_SELECT)
+        rows = res.result()
+        assert len(rows) == BENCHMARK_ROWS
+    finally:
+        pool.close()
+
+
+async def _run_sqlspec_psqlpy_rows(dsn: str) -> None:
+    config_class = _get_psqlpy_config()
+    if config_class is None:
+        _benchmark_unavailable()
+    config = config_class(connection_config={"dsn": dsn, "max_db_pool_size": max(1, POOL_SIZE)})
+    try:
+        spec = SQLSpec()
+        async with spec.provide_session(config) as session:
+            await session.execute(SERVICE_ROWS_DROP)
+            await session.execute(SERVICE_ROWS_CREATE)
+            await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, _service_benchmark_rows())
+            rows = await session.fetch(SERVICE_ROWS_SELECT)
+        assert len(rows) == BENCHMARK_ROWS
+    finally:
+        await config.close_pool()
+
+
+async def _run_raw_psqlpy_hot_path(scenario: str) -> None:
+    pool_class = _get_psqlpy_pool_class()
+    if pool_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    pool = pool_class(dsn=dsn, max_db_pool_size=max(1, POOL_SIZE))
+    try:
+        conn = await pool.connection()
+        if scenario == "scalar_param_select":
+            for i in range(iterations):
+                res = await conn.fetch(SCALAR_PARAM_SELECT_ASYNCPG_SQL, [i])
+                rows = res.result()
+                assert len(rows) == 1
+        elif scenario == "no_param_select":
+            for _ in range(iterations):
+                res = await conn.fetch(NO_PARAM_SELECT_SQL)
+                rows = res.result()
+                assert len(rows) == 1
+        elif scenario == "complex_query":
+            for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                await conn.execute(ddl)
+            for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                await conn.execute(ddl)
+            for i in range(iterations):
+                res = await conn.fetch(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, [i])
+                res.result()
+        elif scenario in {"session_per_request", "observability_select"}:
+            await conn.execute(SERVICE_ROWS_DROP)
+            await conn.execute(SERVICE_ROWS_CREATE)
+            await conn.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [[i, f"value_{i}"] for i in range(100)])
+            for i in range(iterations):
+                res = await conn.fetch(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, [f"value_{i % 100}"])
+                res.result()
+    finally:
+        pool.close()
+
+
+async def _run_sqlspec_psqlpy_hot_path(scenario: str) -> None:
+    config_class = _get_psqlpy_config()
+    if config_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = config_class(
+        connection_config={"dsn": dsn, "max_db_pool_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_ASYNCPG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+    finally:
+        await config.close_pool()
+
+
+def _run_raw_oracle_hot_path(scenario: str) -> None:
+    oracledb = _get_oracledb()
+    if oracledb is None:
+        _benchmark_unavailable()
+    iterations = _service_loop_iterations()
+    conn = oracledb.connect(**_oracle_connect_config_from_env())
+    try:
+        with conn.cursor() as cursor:
+            if scenario == "scalar_param_select":
+                for i in range(iterations):
+                    cursor.execute(SCALAR_PARAM_SELECT_ORACLE_SQL, (i,))
+                    row = cursor.fetchone()
+                    assert row is not None
+                    assert row[0] == i
+            elif scenario == "no_param_select":
+                for _ in range(iterations):
+                    cursor.execute(NO_PARAM_SELECT_ORACLE_SQL)
+                    rows = cursor.fetchall()
+                    assert len(rows) == 1
+            elif scenario == "complex_query":
+                for tbl in ORACLE_COMPLEX_TABLES:
+                    cursor.execute(_oracle_drop_table_sql(tbl))
+                for ddl in ORACLE_COMPLEX_SCHEMA_DDL:
+                    cursor.execute(ddl)
+                conn.commit()
+                for i in range(iterations):
+                    cursor.execute(ORACLE_COMPLEX_QUERY_SQL, (i,))
+                    cursor.fetchall()
+            elif scenario in {"session_per_request", "observability_select"}:
+                cursor.execute(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                cursor.execute(ORACLE_KV_CREATE_SQL)
+                cursor.executemany(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+                conn.commit()
+                for i in range(iterations):
+                    cursor.execute(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+                    cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def _run_sqlspec_oracle_hot_path(scenario: str) -> None:
+    from sqlspec.adapters.oracledb import OracleSyncConfig
+
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = OracleSyncConfig(connection_config=_oracle_connection_config_from_env(), observability_config=obs_cfg)
+    try:
+        if scenario == "scalar_param_select":
+            with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = session.select_value(SCALAR_PARAM_SELECT_ORACLE_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = session.execute(NO_PARAM_SELECT_ORACLE_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            with spec.provide_session(config) as session:
+                for tbl in ORACLE_COMPLEX_TABLES:
+                    session.execute_script(_oracle_drop_table_sql(tbl))
+                for ddl in ORACLE_COMPLEX_SCHEMA_DDL:
+                    session.execute(ddl)
+                for i in range(iterations):
+                    session.execute(ORACLE_COMPLEX_QUERY_SQL, i)
+        elif scenario == "session_per_request":
+            with spec.provide_session(config) as session:
+                session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                session.execute(ORACLE_KV_CREATE_SQL)
+                session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                with spec.provide_session(config) as session:
+                    session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            with spec.provide_session(config) as session:
+                session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                session.execute(ORACLE_KV_CREATE_SQL)
+                session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+                for i in range(iterations):
+                    session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        _check_pool_leak(config.connection_instance, f"oracle/{scenario}")
+        config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            config.close_pool()
+
+
+async def _run_sqlspec_oracle_async_hot_path(scenario: str) -> None:
+    from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = OracleAsyncConfig(connection_config=_oracle_connection_config_from_env(), observability_config=obs_cfg)
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_ORACLE_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_ORACLE_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for tbl in ORACLE_COMPLEX_TABLES:
+                    await session.execute_script(_oracle_drop_table_sql(tbl))
+                for ddl in ORACLE_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(ORACLE_COMPLEX_QUERY_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                await session.execute(ORACLE_KV_CREATE_SQL)
+                await session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                await session.execute(ORACLE_KV_CREATE_SQL)
+                await session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        _check_pool_leak(config.connection_instance, f"oracle_async/{scenario}")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
 SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
 
 SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
@@ -2977,6 +4545,8 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec", "psycopg_async", "rows"): sqlspec_psycopg_async_rows,
     ("raw", "asyncpg", "rows"): raw_asyncpg_rows,
     ("sqlspec", "asyncpg", "rows"): sqlspec_asyncpg_rows,
+    ("raw", "psqlpy", "rows"): raw_psqlpy_rows,
+    ("sqlspec", "psqlpy", "rows"): sqlspec_psqlpy_rows,
     ("raw", "cockroach_psycopg_sync", "rows"): raw_cockroach_psycopg_sync_rows,
     ("sqlspec", "cockroach_psycopg_sync", "rows"): sqlspec_cockroach_psycopg_sync_rows,
     ("raw", "cockroach_psycopg_async", "rows"): raw_cockroach_psycopg_async_rows,
@@ -3008,6 +4578,76 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec", "sqlite", "complex_parameters"): sqlspec_sqlite_complex_parameters,
     ("raw", "sqlite", "thin_path_stress"): raw_sqlite_thin_path_stress,
     ("sqlspec", "sqlite", "thin_path_stress"): sqlspec_sqlite_thin_path_stress,
+    ("raw", "sqlite", "scalar_param_select"): raw_sqlite_scalar_param_select,
+    ("sqlspec", "sqlite", "scalar_param_select"): sqlspec_sqlite_scalar_param_select,
+    ("raw", "sqlite", "no_param_select"): raw_sqlite_no_param_select,
+    ("sqlspec", "sqlite", "no_param_select"): sqlspec_sqlite_no_param_select,
+    ("raw", "sqlite", "complex_query"): raw_sqlite_complex_query,
+    ("sqlspec", "sqlite", "complex_query"): sqlspec_sqlite_complex_query,
+    ("raw", "sqlite", "session_per_request"): raw_sqlite_session_per_request,
+    ("sqlspec", "sqlite", "session_per_request"): sqlspec_sqlite_session_per_request,
+    ("raw", "sqlite", "observability_select"): raw_sqlite_observability_select,
+    ("sqlspec", "sqlite", "observability_select"): sqlspec_sqlite_observability_select,
+    ("raw", "aiosqlite", "scalar_param_select"): raw_aiosqlite_scalar_param_select,
+    ("sqlspec", "aiosqlite", "scalar_param_select"): sqlspec_aiosqlite_scalar_param_select,
+    ("raw", "aiosqlite", "no_param_select"): raw_aiosqlite_no_param_select,
+    ("sqlspec", "aiosqlite", "no_param_select"): sqlspec_aiosqlite_no_param_select,
+    ("raw", "aiosqlite", "complex_query"): raw_aiosqlite_complex_query,
+    ("sqlspec", "aiosqlite", "complex_query"): sqlspec_aiosqlite_complex_query,
+    ("raw", "aiosqlite", "session_per_request"): raw_aiosqlite_session_per_request,
+    ("sqlspec", "aiosqlite", "session_per_request"): sqlspec_aiosqlite_session_per_request,
+    ("raw", "aiosqlite", "observability_select"): raw_aiosqlite_observability_select,
+    ("sqlspec", "aiosqlite", "observability_select"): sqlspec_aiosqlite_observability_select,
+    ("raw", "duckdb", "scalar_param_select"): raw_duckdb_scalar_param_select,
+    ("sqlspec", "duckdb", "scalar_param_select"): sqlspec_duckdb_scalar_param_select,
+    ("raw", "duckdb", "no_param_select"): raw_duckdb_no_param_select,
+    ("sqlspec", "duckdb", "no_param_select"): sqlspec_duckdb_no_param_select,
+    ("raw", "duckdb", "complex_query"): raw_duckdb_complex_query,
+    ("sqlspec", "duckdb", "complex_query"): sqlspec_duckdb_complex_query,
+    ("raw", "duckdb", "session_per_request"): raw_duckdb_session_per_request,
+    ("sqlspec", "duckdb", "session_per_request"): sqlspec_duckdb_session_per_request,
+    ("raw", "duckdb", "observability_select"): raw_duckdb_observability_select,
+    ("sqlspec", "duckdb", "observability_select"): sqlspec_duckdb_observability_select,
+    ("raw", "asyncpg", "scalar_param_select"): raw_asyncpg_scalar_param_select,
+    ("sqlspec", "asyncpg", "scalar_param_select"): sqlspec_asyncpg_scalar_param_select,
+    ("raw", "asyncpg", "no_param_select"): raw_asyncpg_no_param_select,
+    ("sqlspec", "asyncpg", "no_param_select"): sqlspec_asyncpg_no_param_select,
+    ("raw", "asyncpg", "complex_query"): raw_asyncpg_complex_query,
+    ("sqlspec", "asyncpg", "complex_query"): sqlspec_asyncpg_complex_query,
+    ("raw", "asyncpg", "session_per_request"): raw_asyncpg_session_per_request,
+    ("sqlspec", "asyncpg", "session_per_request"): sqlspec_asyncpg_session_per_request,
+    ("raw", "asyncpg", "observability_select"): raw_asyncpg_observability_select,
+    ("sqlspec", "asyncpg", "observability_select"): sqlspec_asyncpg_observability_select,
+    ("raw", "psycopg_sync", "scalar_param_select"): raw_psycopg_sync_scalar_param_select,
+    ("sqlspec", "psycopg_sync", "scalar_param_select"): sqlspec_psycopg_sync_scalar_param_select,
+    ("raw", "psycopg_sync", "no_param_select"): raw_psycopg_sync_no_param_select,
+    ("sqlspec", "psycopg_sync", "no_param_select"): sqlspec_psycopg_sync_no_param_select,
+    ("raw", "psycopg_sync", "complex_query"): raw_psycopg_sync_complex_query,
+    ("sqlspec", "psycopg_sync", "complex_query"): sqlspec_psycopg_sync_complex_query,
+    ("raw", "psycopg_sync", "session_per_request"): raw_psycopg_sync_session_per_request,
+    ("sqlspec", "psycopg_sync", "session_per_request"): sqlspec_psycopg_sync_session_per_request,
+    ("raw", "psycopg_sync", "observability_select"): raw_psycopg_sync_observability_select,
+    ("sqlspec", "psycopg_sync", "observability_select"): sqlspec_psycopg_sync_observability_select,
+    ("raw", "psycopg_async", "scalar_param_select"): raw_psycopg_async_scalar_param_select,
+    ("sqlspec", "psycopg_async", "scalar_param_select"): sqlspec_psycopg_async_scalar_param_select,
+    ("raw", "psycopg_async", "no_param_select"): raw_psycopg_async_no_param_select,
+    ("sqlspec", "psycopg_async", "no_param_select"): sqlspec_psycopg_async_no_param_select,
+    ("raw", "psycopg_async", "complex_query"): raw_psycopg_async_complex_query,
+    ("sqlspec", "psycopg_async", "complex_query"): sqlspec_psycopg_async_complex_query,
+    ("raw", "psycopg_async", "session_per_request"): raw_psycopg_async_session_per_request,
+    ("sqlspec", "psycopg_async", "session_per_request"): sqlspec_psycopg_async_session_per_request,
+    ("raw", "psycopg_async", "observability_select"): raw_psycopg_async_observability_select,
+    ("sqlspec", "psycopg_async", "observability_select"): sqlspec_psycopg_async_observability_select,
+    ("raw", "psqlpy", "scalar_param_select"): raw_psqlpy_scalar_param_select,
+    ("sqlspec", "psqlpy", "scalar_param_select"): sqlspec_psqlpy_scalar_param_select,
+    ("raw", "psqlpy", "no_param_select"): raw_psqlpy_no_param_select,
+    ("sqlspec", "psqlpy", "no_param_select"): sqlspec_psqlpy_no_param_select,
+    ("raw", "psqlpy", "complex_query"): raw_psqlpy_complex_query,
+    ("sqlspec", "psqlpy", "complex_query"): sqlspec_psqlpy_complex_query,
+    ("raw", "psqlpy", "session_per_request"): raw_psqlpy_session_per_request,
+    ("sqlspec", "psqlpy", "session_per_request"): sqlspec_psqlpy_session_per_request,
+    ("raw", "psqlpy", "observability_select"): raw_psqlpy_observability_select,
+    ("sqlspec", "psqlpy", "observability_select"): sqlspec_psqlpy_observability_select,
     ("raw", "oracle", "lob_fetch_1k"): raw_oracle_lob_fetch_1k,
     ("raw", "oracle", "lob_fetch_100k"): raw_oracle_lob_fetch_100k,
     ("sqlspec", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_1k,
@@ -3021,6 +4661,21 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec_native_json", "oracle", "json_write"): sqlspec_oracle_native_json_write,
     ("sqlspec_serialized_json", "oracle", "json_write"): sqlspec_oracle_serialized_json_write,
     ("sqlspec", "oracle", "json_read"): sqlspec_oracle_json_read,
+    ("raw", "oracle", "scalar_param_select"): raw_oracle_scalar_param_select,
+    ("sqlspec", "oracle", "scalar_param_select"): sqlspec_oracle_scalar_param_select,
+    ("sqlspec_async", "oracle", "scalar_param_select"): sqlspec_oracle_async_scalar_param_select,
+    ("raw", "oracle", "no_param_select"): raw_oracle_no_param_select,
+    ("sqlspec", "oracle", "no_param_select"): sqlspec_oracle_no_param_select,
+    ("sqlspec_async", "oracle", "no_param_select"): sqlspec_oracle_async_no_param_select,
+    ("raw", "oracle", "complex_query"): raw_oracle_complex_query,
+    ("sqlspec", "oracle", "complex_query"): sqlspec_oracle_complex_query,
+    ("sqlspec_async", "oracle", "complex_query"): sqlspec_oracle_async_complex_query,
+    ("raw", "oracle", "session_per_request"): raw_oracle_session_per_request,
+    ("sqlspec", "oracle", "session_per_request"): sqlspec_oracle_session_per_request,
+    ("sqlspec_async", "oracle", "session_per_request"): sqlspec_oracle_async_session_per_request,
+    ("raw", "oracle", "observability_select"): raw_oracle_observability_select,
+    ("sqlspec", "oracle", "observability_select"): sqlspec_oracle_observability_select,
+    ("sqlspec_async", "oracle", "observability_select"): sqlspec_oracle_async_observability_select,
 }
 
 if __name__ == "__main__":

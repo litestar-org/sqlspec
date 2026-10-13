@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from click.testing import CliRunner
-from tools.scripts.bench import _collect_environment_metadata, _write_json_results
+from tools.scripts.bench import (
+    EXTENDED_SCENARIOS_BY_DRIVER,
+    SCENARIO_REGISTRY,
+    _collect_environment_metadata,
+    _write_json_results,
+)
 from tools.scripts.bench_compare import compute_comparison_rows, format_run_args, validate_metadata_parity
 from tools.scripts.bench_compare import main as bench_compare_main
 
@@ -13,9 +18,32 @@ __all__ = (
     "test_bench_compare_cli_exits_2_on_hard_metadata_mismatch",
     "test_collect_environment_metadata_and_write_json_results",
     "test_compute_comparison_rows_ratio_mode_and_fallback",
+    "test_extended_scenarios_registered_for_all_benchmarked_drivers",
     "test_format_run_args_and_cli_print_run_args",
     "test_validate_metadata_parity_detects_hard_and_soft_mismatches",
 )
+
+
+def test_extended_scenarios_registered_for_all_benchmarked_drivers() -> None:
+    """All hot-path extended scenarios should be registered for local, Postgres, and Oracle drivers."""
+    expected_scenarios = (
+        "scalar_param_select",
+        "no_param_select",
+        "complex_query",
+        "session_per_request",
+        "observability_select",
+    )
+    target_drivers = ("sqlite", "aiosqlite", "duckdb", "asyncpg", "psycopg_sync", "psycopg_async", "psqlpy", "oracle")
+    for drv in target_drivers:
+        assert drv in EXTENDED_SCENARIOS_BY_DRIVER
+        driver_scenarios = set(EXTENDED_SCENARIOS_BY_DRIVER[drv])
+        for scenario in expected_scenarios:
+            assert ("raw", scenario) in driver_scenarios
+            assert ("sqlspec", scenario) in driver_scenarios
+            assert callable(SCENARIO_REGISTRY["raw", drv, scenario])
+            assert callable(SCENARIO_REGISTRY["sqlspec", drv, scenario])
+    assert ("raw", "rows") in set(EXTENDED_SCENARIOS_BY_DRIVER["psqlpy"])
+    assert ("sqlspec", "rows") in set(EXTENDED_SCENARIOS_BY_DRIVER["psqlpy"])
 
 
 def test_validate_metadata_parity_detects_hard_and_soft_mismatches() -> None:
