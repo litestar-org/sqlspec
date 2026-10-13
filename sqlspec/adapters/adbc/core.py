@@ -958,21 +958,20 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
 
 
 def apply_driver_features(
-    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None", *, dialect: "str | None" = None
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply ADBC driver feature defaults to the statement config.
 
     Args:
         statement_config: Base statement configuration.
         driver_features: Optional driver feature overrides.
-        dialect: Optional resolved dialect name.
 
     Returns:
         Updated statement configuration and normalized driver features.
     """
     processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
     processed_features = _normalize_adbc_driver_features(processed_features)
-    resolved_dialect = (dialect or resolve_dialect_name(statement_config.dialect)).lower()
+    resolved_dialect = resolve_dialect_name(statement_config.dialect).lower()
 
     json_serializer = cast("Callable[[Any], str] | None", processed_features.setdefault("json_serializer", to_json))
     processed_features.setdefault("enable_cast_detection", True)

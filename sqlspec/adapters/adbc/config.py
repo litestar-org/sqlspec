@@ -267,10 +267,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if statement_config is None:
             statement_config = get_statement_config(self._resolved_dialect)
 
-        statement_config, driver_features = apply_driver_features(
-            statement_config, driver_features, dialect=self._resolved_dialect
-        )
+        explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
+        statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
+        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2"}:
+            features_dict["enable_lowercase_column_names"] = True
         self._user_connection_hook = cast(
             "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)
         )

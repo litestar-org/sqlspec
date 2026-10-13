@@ -571,12 +571,10 @@ def test_create_mapped_exception_mssql_diagnostics(
 
 
 def test_apply_driver_features_defaults_lowercase_columns_for_oracle_and_db2() -> None:
-    oracle_cfg, oracle_features = adbc_core.apply_driver_features(
-        get_statement_config("oracle"), None, dialect="oracle"
-    )
-    db2_cfg, db2_features = adbc_core.apply_driver_features(get_statement_config("db2"), None, dialect="db2")
-    _pg_cfg, pg_features = adbc_core.apply_driver_features(get_statement_config("postgres"), None, dialect="postgres")
-    _mssql_cfg, mssql_features = adbc_core.apply_driver_features(get_statement_config("mssql"), None, dialect="mssql")
+    oracle_cfg, oracle_features = adbc_core.apply_driver_features(get_statement_config("oracle"), None)
+    db2_cfg, db2_features = adbc_core.apply_driver_features(get_statement_config("db2"), None)
+    _pg_cfg, pg_features = adbc_core.apply_driver_features(get_statement_config("postgres"), None)
+    _mssql_cfg, mssql_features = adbc_core.apply_driver_features(get_statement_config("mssql"), None)
 
     assert oracle_cfg.dialect == "oracle"
     assert oracle_features["enable_lowercase_column_names"] is True

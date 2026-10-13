@@ -204,9 +204,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             base_config = get_statement_config(self._detected_dialect)
             statement_config = base_config.replace(enable_caching=statement_config.enable_caching)
 
-        statement_config, normalized_features = apply_driver_features(
-            statement_config, driver_features, dialect=dialect or self._detected_dialect
-        )
+        explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
+        statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
+        if not explicit_lowercase and (dialect or self._detected_dialect) in {"oracle", "db2"}:
+            normalized_features["enable_lowercase_column_names"] = True
         super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
         self.dialect = statement_config.dialect
         self._dialect_name = dialect or resolve_dialect_name(self.dialect)
