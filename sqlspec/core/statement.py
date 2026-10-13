@@ -117,6 +117,7 @@ _PUBLIC_CONFIG_FIELDS: Final = frozenset(slot for slot in SQL_CONFIG_SLOTS if no
 PROCESSED_STATE_SLOTS: Final = (
     "compiled_sql",
     "execution_parameters",
+    "expression_is_shared",
     "parsed_expression",
     "operation_type",
     "input_named_parameters",
@@ -178,6 +179,7 @@ class ProcessedState:
         parameter_profile: "ParameterProfile | None" = None,
         operation_profile: "OperationProfile | None" = None,
         is_many: bool = False,
+        expression_is_shared: bool = False,
     ) -> None:
         self.compiled_sql = compiled_sql
         self.execution_parameters = execution_parameters
@@ -192,6 +194,7 @@ class ProcessedState:
         self.parameter_profile = parameter_profile or ParameterProfile.empty()
         self.operation_profile = operation_profile or OperationProfile.empty()
         self.is_many = is_many
+        self.expression_is_shared = expression_is_shared
 
     def __hash__(self) -> int:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
@@ -214,8 +217,18 @@ class ProcessedState:
                 self.parameter_profile,
                 self.operation_profile,
                 self.is_many,
+                self.expression_is_shared,
             ),
         )
+
+    def ensure_owned_expression(self) -> "exp.Expr | None":
+        """Return an owned SQLGlot expression, copying once if currently shared with a cache."""
+        expr = self.parsed_expression
+        if expr is not None and self.expression_is_shared:
+            expr = expr.copy()
+            self.parsed_expression = expr
+            self.expression_is_shared = False
+        return expr
 
     def reset(self) -> None:
         """Reset processing state for reuse."""
@@ -232,6 +245,7 @@ class ProcessedState:
         self.parameter_profile = ParameterProfile.empty()
         self.operation_profile = OperationProfile.empty()
         self.is_many = False
+        self.expression_is_shared = False
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -431,7 +445,7 @@ class SQL:
         """
         state = self._processed_state
         if state is not Empty:
-            return state.parsed_expression
+            return state.ensure_owned_expression()
         return self._raw_expression
 
     @property
@@ -466,7 +480,7 @@ class SQL:
         """
         state = self._processed_state
         if state is not Empty:
-            return state.parsed_expression
+            return state.ensure_owned_expression()
         return self._raw_expression
 
     @property
@@ -629,6 +643,7 @@ class SQL:
                 operation_profile=compiled_result.operation_profile,
                 validation_errors=[],
                 is_many=self._is_many,
+                expression_is_shared=compiled_result.expression is not None,
             )
         except sqlspec.exceptions.SQLSpecError:
             raise
@@ -1378,10 +1393,12 @@ class SQL:
         output_transformer = self._statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        if state.parsed_expression is not None:
+            state.expression_is_shared = True
         self._processed_state = self._build_processed_state(
             compiled_sql=compiled_sql,
             execution_parameters=rebound_params,
-            parsed_expression=state.parsed_expression.copy() if state.parsed_expression is not None else None,
+            parsed_expression=state.parsed_expression,
             operation_type=state.operation_type,
             input_named_parameters=state.input_named_parameters,
             applied_wrap_types=state.applied_wrap_types,
@@ -1392,6 +1409,7 @@ class SQL:
             operation_profile=state.operation_profile,
             validation_errors=state.validation_errors.copy(),
             is_many=state.is_many,
+            expression_is_shared=state.parsed_expression is not None,
         )
         self._compiled_from_cache = False
         return compiled_sql, rebound_params
@@ -1423,9 +1441,14 @@ class SQL:
         new_sql._pooled = True
 
         source_state = self._processed_state
-        is_processed = source_state is not Empty
-        new_sql._compiled_from_cache = is_processed
-        new_sql._processed_state = source_state if is_processed else Empty
+        if source_state is not Empty:
+            if source_state.parsed_expression is not None:
+                source_state.expression_is_shared = True
+            new_sql._compiled_from_cache = True
+            new_sql._processed_state = source_state
+        else:
+            new_sql._compiled_from_cache = False
+            new_sql._processed_state = Empty
         new_sql._hash = None
         new_sql._filters = self._filters.copy()
         new_sql._named_parameters = {}
@@ -1451,6 +1474,7 @@ class SQL:
         operation_profile: "OperationProfile | None",
         validation_errors: "list[str] | None",
         is_many: bool,
+        expression_is_shared: bool = False,
     ) -> "ProcessedState":
         state = get_processed_state_pool().acquire()
         ProcessedState.__init__(
@@ -1468,6 +1492,7 @@ class SQL:
             parameter_profile=parameter_profile,
             operation_profile=operation_profile,
             is_many=is_many,
+            expression_is_shared=expression_is_shared,
         )
         return state
 
@@ -1521,6 +1546,13 @@ class SQL:
 
         self._sql_param_counters[prefixed_base] = next_index
         return candidate
+
+    def _peek_expression(self) -> "exp.Expr | None":
+        """Return the parsed or raw SQLGlot expression for read-only inspection without copying."""
+        state = self._processed_state
+        if state is not Empty:
+            return state.parsed_expression
+        return self._raw_expression
 
     def _current_expression(self) -> exp.Expr:
         """Get the current expression or parse the raw SQL.

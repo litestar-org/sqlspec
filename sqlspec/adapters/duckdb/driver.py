@@ -179,7 +179,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql = cached_statement.compiled_sql
 
         if prepared_parameters:
-            parsed_expression = cached_statement.expression or statement.expression
+            parsed_expression = cached_statement.expression or statement._peek_expression()
             if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
                 bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
                 if bulk_result is not None:

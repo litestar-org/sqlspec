@@ -146,7 +146,7 @@ class SqliteDriver(SyncDriverAdapterBase):
                 cursor,
                 statement.operation_type,
                 effective_rowcount,
-                statement.expression,
+                statement._peek_expression(),
                 self._rowid_target_cache,
             )
 
@@ -166,7 +166,7 @@ class SqliteDriver(SyncDriverAdapterBase):
             cursor,
             statement.operation_type,
             affected_rows,
-            statement.expression,
+            statement._peek_expression(),
             self._rowid_target_cache,
         )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)

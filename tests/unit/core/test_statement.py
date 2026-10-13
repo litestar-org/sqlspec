@@ -1785,3 +1785,72 @@ def test_statement_config_equality_checks_all_parameter_config_fields() -> None:
         )
     )
     assert cfg1 != cfg2
+
+
+@requires_interpreted
+def test_shared_expression_skips_ast_copy_on_cache_hit_and_rebind() -> None:
+    """Warm compiler cache hits and parameter rebinds must not deep-copy the sqlglot AST."""
+    reset_statement_pipeline_cache()
+    config = StatementConfig(dialect="sqlite", parameter_config=DEFAULT_PARAMETER_CONFIG)
+    cte_sql = (
+        "WITH filtered AS (SELECT id, name FROM users WHERE id >= ?) "
+        "SELECT f.id, f.name FROM filtered f WHERE f.id <= ?"
+    )
+    warm_stmt = SQL(cte_sql, 1, 10, statement_config=config)
+    warm_stmt.compile()
+
+    copy_calls = 0
+    original_copy = exp.Expression.copy
+
+    def counting_copy(self: "exp.Expression") -> "exp.Expression":
+        nonlocal copy_calls
+        copy_calls += 1
+        return original_copy(self)
+
+    with patch.object(exp.Expression, "copy", counting_copy):
+        for i in range(5):
+            hit_stmt = SQL(cte_sql, i, i + 10, statement_config=config)
+            hit_stmt.compile()
+            assert hit_stmt._peek_expression() is not None
+        assert copy_calls == 0
+
+        for i in range(5):
+            rebound = warm_stmt.copy(parameters=(i, i + 20))
+            rebound.compile()
+            assert rebound._peek_expression() is not None
+        assert copy_calls == 0
+
+
+def test_copy_on_access_expression_isolates_cached_and_rebound_statements() -> None:
+    """Public expression accessors must copy once on first access and isolate mutations."""
+    reset_statement_pipeline_cache()
+    config = StatementConfig(dialect="sqlite", parameter_config=DEFAULT_PARAMETER_CONFIG)
+    sql = "SELECT id, name FROM users WHERE id = ?"
+
+    SQL(sql, 0, statement_config=config).compile()
+    stmt1 = SQL(sql, 1, statement_config=config)
+    stmt1.compile()
+    stmt2 = SQL(sql, 2, statement_config=config)
+    stmt2.compile()
+    rebound = stmt1.copy(parameters=(3,))
+    rebound.compile()
+
+    assert stmt1._peek_expression() is stmt2._peek_expression()
+    assert stmt1._peek_expression() is rebound._peek_expression()
+
+    owned1 = stmt1.expression
+    assert owned1 is not None
+    assert stmt1.expression is owned1
+    assert stmt1.statement_expression is owned1
+    assert owned1 is not stmt2._peek_expression()
+
+    owned1.set("limit", exp.Limit(expression=exp.Literal.number(1)))
+
+    owned2 = stmt2.expression
+    assert owned2 is not None
+    assert owned2.args.get("limit") is None
+
+    rebound_expr = rebound.statement_expression
+    assert rebound_expr is not None
+    assert rebound_expr is rebound.expression
+    assert rebound_expr.args.get("limit") is None

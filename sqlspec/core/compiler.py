@@ -503,23 +503,8 @@ class SQLProcessor:
 
     def _materialize_cached_result(self, cached_result: CompiledSQL, parameters: Any, is_many: bool) -> CompiledSQL:
         """Return cached compilation metadata with parameters for the current call."""
-        cloned_expr = cached_result.expression.copy() if cached_result.expression is not None else None
         if self._parameter_config.needs_static_script_compilation:
-            if cloned_expr is None:
-                return cached_result
-            return CompiledSQL(
-                compiled_sql=cached_result.compiled_sql,
-                execution_parameters=cached_result.execution_parameters,
-                operation_type=cached_result.operation_type,
-                expression=cloned_expr,
-                parameter_style=cached_result.parameter_style,
-                supports_many=cached_result.supports_many,
-                parameter_casts=cached_result.parameter_casts,
-                parameter_profile=cached_result.parameter_profile,
-                operation_profile=cached_result.operation_profile,
-                input_named_parameters=cached_result.input_named_parameters,
-                applied_wrap_types=cached_result.applied_wrap_types,
-            )
+            return cached_result
 
         processed_params = self._parameter_processor.transform_cached_parameters(
             parameters,
@@ -539,7 +524,7 @@ class SQLProcessor:
             compiled_sql=final_sql,
             execution_parameters=processed_params,
             operation_type=cached_result.operation_type,
-            expression=cloned_expr,
+            expression=cached_result.expression,
             parameter_style=cached_result.parameter_style,
             supports_many=cached_result.supports_many,
             parameter_casts=cached_result.parameter_casts,
@@ -638,11 +623,7 @@ class SQLProcessor:
         """
         cached_expression, cached_operation, cached_profile = parse_cache_entry
         operation_profile = OperationProfile(returns_rows=cached_profile[0], modifies_rows=cached_profile[1])
-        return (
-            cached_expression.copy() if cached_expression is not None else None,
-            cached_operation,
-            operation_profile,
-        )
+        return (cached_expression, cached_operation, operation_profile)
 
     def _resolve_expression(
         self, sqlglot_sql: str, dialect_str: "str | None", expression_override: "exp.Expr | None"
