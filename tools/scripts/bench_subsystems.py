@@ -333,14 +333,13 @@ class _StubDuckDBConnection:
 def _build_stub_driver_benchmarks(iterations: int) -> list[SubsystemBenchmark]:
     """Build pure-Python stub-connection driver micro-benchmarks."""
     from sqlspec.adapters.duckdb import DuckDBConfig
-    from sqlspec.adapters.duckdb.core import build_statement_config as build_duckdb_statement_config
     from sqlspec.adapters.duckdb.driver import DuckDBDriver
 
     stub_conn = _StubDuckDBConnection()
-    shared_stmt_cfg = build_duckdb_statement_config()
     shared_config = DuckDBConfig(
         connection_config={"database": ":memory:"}, driver_features={"enable_arrow_ingest": False}
     )
+    shared_stmt_cfg = shared_config.statement_config
     shared_features = dict(shared_config.driver_features)
     stub_driver = DuckDBDriver(
         connection=stub_conn,  # type: ignore[arg-type]

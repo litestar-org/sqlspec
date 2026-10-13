@@ -3,7 +3,6 @@
 import hashlib
 import logging
 import re
-from collections import OrderedDict
 from collections.abc import Mapping
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
@@ -50,7 +49,7 @@ from sqlspec.data_dictionary import (
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
-from sqlspec.driver._query_cache import STMT_CACHE_MAX_SIZE, CachedQuery, QueryCache
+from sqlspec.driver._query_cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.driver._storage_helpers import (
     CAPABILITY_HINTS,
     arrow_table_needs_parameter_preparation,
@@ -84,7 +83,7 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections import abc
+    from collections import OrderedDict, abc
     from collections.abc import Awaitable
     from types import TracebackType
 
@@ -543,6 +542,7 @@ class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
     __slots__ = (
+        "_cache_holder",
         "_observability",
         "_processed_state_pool",
         "_statement_cache",
@@ -583,15 +583,19 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._transaction_depth = 0
-        self._statement_cache: OrderedDict[str, SQL] = OrderedDict()
         self._stmt_cache_max_size = self._statement_cache_size()
-        self._stmt_cache = QueryCache(self._stmt_cache_max_size)
-        self._stmt_cache_rebind_processor = ParameterProcessor(
-            converter=self.statement_config.parameter_converter,
-            validator=self.statement_config.parameter_validator,
-            cache_max_size=0,
-            validator_cache_max_size=0,
-        )
+        shared_holder = self.driver_features.get("_statement_cache_holder")
+        if (
+            isinstance(shared_holder, StatementCacheHolder)
+            and shared_holder.statement_config is self.statement_config
+            and shared_holder.max_size == self._stmt_cache_max_size
+        ):
+            self._cache_holder = shared_holder
+        else:
+            self._cache_holder = StatementCacheHolder(self.statement_config, self._stmt_cache_max_size)
+        self._statement_cache: OrderedDict[str, SQL] = self._cache_holder._statement_cache
+        self._stmt_cache: QueryCache = self._cache_holder.query_cache
+        self._stmt_cache_rebind_processor: ParameterProcessor = self._cache_holder.rebind_processor
         self._stmt_cache_enabled = False
         self._statement_pool = get_sql_pool()
         self._processed_state_pool = get_processed_state_pool()
@@ -826,9 +830,8 @@ class CommonDriverAttributesMixin:
             statement_config = self.statement_config
 
         if isinstance(statement, str):
-            cached_sql = self._statement_cache.get(statement)
+            cached_sql = self._cache_holder.get_statement(statement)
             if cached_sql is not None and not kwargs:
-                self._statement_cache.move_to_end(statement)
                 has_filters = any(is_statement_filter(p) for p in parameters)
                 if not has_filters:
                     return cached_sql.copy(parameters=parameters)
@@ -846,9 +849,7 @@ class CommonDriverAttributesMixin:
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
             if not filters and not kwargs and isinstance(statement, str) and self._stmt_cache_max_size > 0:
-                if len(self._statement_cache) >= self._stmt_cache_max_size:
-                    self._statement_cache.popitem(last=False)
-                self._statement_cache[statement] = sql_statement
+                self._cache_holder.set_statement(statement, sql_statement, max_size=self._stmt_cache_max_size)
 
         _check_declared_parameters(sql_statement)
         return self._apply_filters(sql_statement, filters)
@@ -960,12 +961,7 @@ class CommonDriverAttributesMixin:
 
     def _statement_cache_size(self) -> int:
         """Return the configured statement-cache capacity."""
-        cache_size = self.driver_features.get("sqlspec_statement_cache_size", STMT_CACHE_MAX_SIZE)
-        try:
-            resolved_size = int(cache_size)
-        except (TypeError, ValueError):
-            return STMT_CACHE_MAX_SIZE
-        return max(0, resolved_size)
+        return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
         is_observability_idle = self._observability is None or self._observability.is_idle

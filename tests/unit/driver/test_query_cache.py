@@ -1087,3 +1087,105 @@ async def test_fast_path_shapes_async(aiosqlite_async_driver: Any, monkeypatch: 
     assert r1_filtered.get_data() == r2_filtered.get_data() == [{"id": 1, "label": "one"}]
     assert cache_hits == []
 
+
+def test_statement_cache_shared_across_sessions(tmp_path: Any, monkeypatch: Any) -> None:
+    """Sessions opened from the same database config share StatementCacheHolder, QueryCache, and rebind processor."""
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.base import SQLSpec
+
+    db_file = tmp_path / "shared_cache.db"
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": str(db_file)})
+    spec.add_config(config)
+
+    try:
+        with spec.provide_session(config) as session1:
+            session1.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+            session1.execute("INSERT INTO items (id, name) VALUES (?, ?)", (1, "alpha"))
+            session1.execute("INSERT INTO items (id, name) VALUES (?, ?)", (2, "beta"))
+            r1 = session1.select_one("SELECT id, name FROM items WHERE id = ?", 1)
+            assert r1 == {"id": 1, "name": "alpha"}
+            cache1 = session1._stmt_cache
+            processor1 = session1._stmt_cache_rebind_processor
+            holder1 = session1._cache_holder
+
+        with spec.provide_session(config) as session2:
+            assert session2._stmt_cache is cache1
+            assert session2._stmt_cache_rebind_processor is processor1
+            assert session2._cache_holder is holder1
+
+            hit_calls: list[str] = []
+            original_hit = type(session2)._execute_cache_hit
+
+            def tracked_hit(self_driver: Any, sql: str, params: Any, cached: CachedQuery) -> Any:
+                hit_calls.append(sql)
+                return original_hit(self_driver, sql, params, cached)
+
+            monkeypatch.setattr(type(session2), "_execute_cache_hit", tracked_hit)
+            r2 = session2.select_one("SELECT id, name FROM items WHERE id = ?", 2)
+            assert r2 == {"id": 2, "name": "beta"}
+            assert hit_calls == ["SELECT id, name FROM items WHERE id = ?"]
+    finally:
+        config.close_pool()
+
+
+def test_statement_cache_shared_across_sessions_isolated_and_thread_safe(tmp_path: Any) -> None:
+    """Different configs have isolated StatementCacheHolders, standalone drivers work, and concurrent access is thread-safe."""
+    import sqlite3
+    import threading
+
+    from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+    from sqlspec.base import SQLSpec
+
+    spec = SQLSpec()
+    cfg_a = SqliteConfig(connection_config={"database": str(tmp_path / "a.db")})
+    cfg_b = SqliteConfig(connection_config={"database": str(tmp_path / "b.db")})
+    spec.add_config(cfg_a)
+    spec.add_config(cfg_b)
+
+    try:
+        with spec.provide_session(cfg_a) as s_a, spec.provide_session(cfg_b) as s_b:
+            assert s_a._cache_holder is not s_b._cache_holder
+            assert s_a._stmt_cache is not s_b._stmt_cache
+            s_a.execute("SELECT 1 AS a")
+            assert s_b._stmt_cache.get("SELECT 1 AS a") is None
+
+            errors: list[Exception] = []
+            holder = s_a._cache_holder
+
+            def worker(tid: int) -> None:
+                try:
+                    for idx in range(50):
+                        sql = f"SELECT {idx % 16} AS v"
+                        stmt = SQL(sql, statement_config=s_a.statement_config)
+                        holder.set_statement(sql, stmt)
+                        _ = holder.get_statement(sql)
+                        holder.query_cache.set(sql, _make_cached(compiled_sql=sql))
+                        _ = holder.query_cache.get(sql)
+                        holder.set_row_count_hint(sql, tid + idx)
+                        _ = holder.get_row_count_hint(sql)
+                        holder.set_bulk_insert_sql(sql, ("t", "c"))
+                        _ = holder.get_bulk_insert_sql(sql)
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            assert errors == []
+    finally:
+        cfg_a.close_pool()
+        cfg_b.close_pool()
+
+    raw_conn = sqlite3.connect(":memory:")
+    try:
+        standalone = SqliteDriver(connection=raw_conn)
+        assert standalone._cache_holder is not None
+        assert standalone.select_value("SELECT ? AS v", 7) == 7
+        assert standalone._stmt_cache.get("SELECT ? AS v") is not None
+    finally:
+        raw_conn.close()
+
+
