@@ -382,6 +382,9 @@ class AiosqliteConnectionPool:
         Raises:
             AiosqliteConnectTimeoutError: If acquisition times out
         """
+        fast_connection = self._try_acquire_idle_connection()
+        if fast_connection is not None:
+            return fast_connection
         try:
             connection = await asyncio.wait_for(self._get_connection(), timeout=self._connect_timeout)
         except AiosqlitePoolClosedError:
@@ -414,8 +417,10 @@ class AiosqliteConnectionPool:
             return
 
         try:
-            with suppress(Exception):
-                await end_transaction(connection.connection, commit=False)
+            raw_conn = connection.connection
+            if getattr(raw_conn, "in_transaction", False):
+                with suppress(Exception):
+                    await end_transaction(raw_conn, commit=False)
             connection.idle_since = time.time()
             self._queue.put_nowait(connection)
         except Exception as e:
@@ -795,6 +800,20 @@ class AiosqliteConnectionPool:
         finally:
             async with self._lock:
                 self._in_flight_creations -= connections_needed
+
+    def _try_acquire_idle_connection(self) -> "AiosqlitePoolConnection | None":
+        """Synchronously claim a warm, recently-idle connection when available."""
+        if self._closed_event.is_set() or (not self._warmed and self._min_size > 0) or self._queue.empty():
+            return None
+        connection = self._queue.get_nowait()
+        idle_since = connection.idle_since
+        if idle_since is not None and connection.is_healthy:
+            idle_time = time.time() - idle_since
+            if idle_time <= self._health_check_interval and idle_time <= self._idle_timeout:
+                connection.idle_since = None
+                return connection
+        self._queue.put_nowait(connection)
+        return None
 
     async def _get_connection(self) -> AiosqlitePoolConnection:
         """Run the three-phase connection acquisition cycle.

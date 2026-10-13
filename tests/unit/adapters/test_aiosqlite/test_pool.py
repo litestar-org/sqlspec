@@ -5,9 +5,11 @@ import sqlite3
 from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING, Any, Literal, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
+from sqlspec.adapters.aiosqlite import pool as pool_module
 from sqlspec.adapters.aiosqlite.pool import (
     SQLITE_BUSY_TIMEOUT,
     SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS,
@@ -24,6 +26,28 @@ from sqlspec.adapters.sqlite.pool import SQLITE_MEMORY_CACHE_SIZE as SYNC_SQLITE
 if TYPE_CHECKING:
     from sqlspec.adapters.aiosqlite._typing import AiosqliteConnection
 
+__all__ = (
+    "test_acquire_and_release_idle_fast_path",
+    "test_acquire_enforces_connect_timeout_on_pool_exhaustion",
+    "test_close_continues_after_a_native_connection_was_closed",
+    "test_concurrent_first_acquire_on_new_file_database_succeeds",
+    "test_default_pool_uses_native_like_shared_pragma_profile",
+    "test_disable_optimizations_preserves_native_memory_profile",
+    "test_file_pool_uses_wal_normal_and_shared_busy_timeout",
+    "test_file_pragma_script_fallback_replays_file_profile",
+    "test_optimization_and_foreign_key_flags_are_independent",
+    "test_post_connect_failure_closes_raw_connection",
+    "test_pragma_script_fallback_continues_after_optimization_failure",
+    "test_pragma_script_fallback_honors_independent_flags",
+    "test_pragma_script_fallback_surfaces_explicit_foreign_key_failure",
+    "test_pragma_script_fallback_uses_native_like_defaults",
+    "test_shared_memory_pragma_script_fallback_replays_read_uncommitted",
+    "test_shared_memory_preserves_read_uncommitted",
+    "test_sqlite_family_pragma_defaults_are_equal",
+    "test_wal_setup_failure_propagates_from_new_connection",
+    "test_wal_setup_retries_locks_and_propagates_errors",
+)
+
 pytest.importorskip("aiosqlite", reason="aiosqlite adapter requires the aiosqlite package")
 
 
@@ -33,26 +57,6 @@ def test_sqlite_family_pragma_defaults_are_equal() -> None:
     assert SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS is SYNC_SQLITE_DEFAULT_ENABLE_OPTIMIZATIONS is True
     assert SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS is SYNC_SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS is False
 
-
-async def _read_pragma(
-    connection: "AiosqliteConnection",
-    statement: Literal[
-        "PRAGMA foreign_keys",
-        "PRAGMA busy_timeout",
-        "PRAGMA cache_size",
-        "PRAGMA journal_mode",
-        "PRAGMA synchronous",
-        "PRAGMA temp_store",
-        "PRAGMA read_uncommitted",
-    ],
-) -> int | str:
-    cursor = await connection.execute(statement)
-    try:
-        row = await cursor.fetchone()
-        assert row is not None
-        return cast("int | str", row[0])
-    finally:
-        await cursor.close()
 
 
 async def test_default_pool_uses_native_like_shared_pragma_profile() -> None:
@@ -155,44 +159,7 @@ async def test_shared_memory_preserves_read_uncommitted() -> None:
         await pool.close()
 
 
-class _FallbackConnection:
-    def __init__(self, fail_statement: str | None = None, *, script_fails: bool = True) -> None:
-        self.executed: list[str] = []
-        self.fail_statement = fail_statement
-        self.script_fails = script_fails
-        self.closed = False
-
-    async def executescript(self, _script: str) -> None:
-        if self.script_fails:
-            raise RuntimeError("script unavailable")
-
-    async def execute(self, statement: str) -> None:
-        self.executed.append(statement)
-        if statement == self.fail_statement:
-            raise RuntimeError("individual pragma failed")
-
-    async def commit(self) -> None:
-        return None
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class _FallbackConnectProxy:
-    def __init__(self, connection: _FallbackConnection) -> None:
-        self._thread = Thread(target=lambda: None)
-        self._connection = connection
-
-    def __await__(self) -> Any:
-        async def resolve() -> _FallbackConnection:
-            return self._connection
-
-        return resolve().__await__()
-
-
 async def test_pragma_script_fallback_uses_native_like_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = _FallbackConnection()
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FallbackConnectProxy(connection))
     pool = AiosqliteConnectionPool({"database": ":memory:"})
@@ -210,8 +177,6 @@ async def test_pragma_script_fallback_uses_native_like_defaults(monkeypatch: pyt
 
 
 async def test_pragma_script_fallback_honors_independent_flags(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = _FallbackConnection()
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FallbackConnectProxy(connection))
     pool = AiosqliteConnectionPool({"database": ":memory:"}, enable_optimizations=False, enable_foreign_keys=True)
@@ -223,8 +188,6 @@ async def test_pragma_script_fallback_honors_independent_flags(monkeypatch: pyte
 
 
 async def test_pragma_script_fallback_surfaces_explicit_foreign_key_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = _FallbackConnection(fail_statement="PRAGMA foreign_keys = ON")
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FallbackConnectProxy(connection))
     pool = AiosqliteConnectionPool({"database": ":memory:"}, enable_foreign_keys=True)
@@ -244,8 +207,6 @@ async def test_pragma_script_fallback_surfaces_explicit_foreign_key_failure(monk
 
 
 async def test_pragma_script_fallback_continues_after_optimization_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = _FallbackConnection(fail_statement="PRAGMA synchronous = OFF")
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FallbackConnectProxy(connection))
     pool = AiosqliteConnectionPool({"database": ":memory:"})
@@ -263,8 +224,6 @@ async def test_pragma_script_fallback_continues_after_optimization_failure(monke
 
 
 async def test_file_pragma_script_fallback_replays_file_profile(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = _FallbackConnection()
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FallbackConnectProxy(connection))
     pool = AiosqliteConnectionPool({"database": "profile.db", "timeout": 30.0})
@@ -280,8 +239,6 @@ async def test_file_pragma_script_fallback_replays_file_profile(monkeypatch: pyt
 
 
 async def test_shared_memory_pragma_script_fallback_replays_read_uncommitted(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = _FallbackConnection()
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FallbackConnectProxy(connection))
     pool = AiosqliteConnectionPool({"database": "file:fallback?mode=memory&cache=shared", "uri": True, "timeout": 30.0})
@@ -303,8 +260,6 @@ async def test_shared_memory_pragma_script_fallback_replays_read_uncommitted(mon
 async def test_post_connect_failure_closes_raw_connection(
     error: BaseException, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = _FallbackConnection(script_fails=False)
     monkeypatch.setattr(pool_module.aiosqlite, "connect", lambda **_: _FallbackConnectProxy(connection))
 
@@ -362,10 +317,6 @@ async def test_concurrent_first_acquire_on_new_file_database_succeeds(tmp_path: 
 async def test_wal_setup_retries_locks_and_propagates_errors(
     monkeypatch: pytest.MonkeyPatch, message: str, failures: int, calls: int
 ) -> None:
-    from unittest.mock import AsyncMock
-
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     connection = AsyncMock()
     connection.execute.side_effect = [sqlite3.OperationalError(message)] * failures + [None]
     monkeypatch.setattr(pool_module.asyncio, "sleep", AsyncMock())
@@ -380,10 +331,6 @@ async def test_wal_setup_retries_locks_and_propagates_errors(
 async def test_wal_setup_failure_propagates_from_new_connection(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from unittest.mock import AsyncMock
-
-    from sqlspec.adapters.aiosqlite import pool as pool_module
-
     monkeypatch.setattr(
         pool_module, "_enable_wal", AsyncMock(side_effect=sqlite3.OperationalError("database is locked"))
     )
@@ -407,3 +354,113 @@ async def test_close_continues_after_a_native_connection_was_closed() -> None:
     finally:
         await second.connection.close()
         await pool.close()
+
+
+async def test_acquire_and_release_idle_fast_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Warm idle connection acquire skips asyncio.wait_for and clean release skips end_transaction."""
+    pool = AiosqliteConnectionPool({"database": str(tmp_path / "fast_path.sqlite")}, pool_size=2, min_size=1)
+    try:
+        async with pool.get_connection() as conn:
+            cursor = await conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+            await cursor.close()
+            await conn.commit()
+
+        wait_for_calls = 0
+        end_tx_calls = 0
+        original_wait_for = pool_module.asyncio.wait_for
+        original_end_tx = pool_module.end_transaction
+
+        async def spy_wait_for(aw: Any, timeout: float | None = None) -> Any:
+            nonlocal wait_for_calls
+            wait_for_calls += 1
+            return await original_wait_for(aw, timeout=timeout)
+
+        async def spy_end_tx(connection: Any, *, commit: bool, supports_autocommit: bool | None = None) -> None:
+            nonlocal end_tx_calls
+            end_tx_calls += 1
+            await original_end_tx(connection, commit=commit, supports_autocommit=supports_autocommit)
+
+        monkeypatch.setattr(pool_module.asyncio, "wait_for", spy_wait_for)
+        monkeypatch.setattr(pool_module, "end_transaction", spy_end_tx)
+
+        for _ in range(10):
+            async with pool.get_connection() as conn:
+                cursor = await conn.execute("SELECT 1")
+                row = await cursor.fetchone()
+                await cursor.close()
+                assert row == (1,)
+
+        assert wait_for_calls == 0
+        assert end_tx_calls == 0
+
+        async with pool.get_connection() as conn:
+            cursor = await conn.execute("INSERT INTO items (name) VALUES ('dirty')")
+            await cursor.close()
+            assert conn.in_transaction is True
+
+        assert end_tx_calls == 1
+
+        async with pool.get_connection() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM items")
+            row = await cursor.fetchone()
+            await cursor.close()
+            assert row == (0,)
+    finally:
+        await pool.close()
+
+
+async def _read_pragma(
+    connection: "AiosqliteConnection",
+    statement: Literal[
+        "PRAGMA foreign_keys",
+        "PRAGMA busy_timeout",
+        "PRAGMA cache_size",
+        "PRAGMA journal_mode",
+        "PRAGMA synchronous",
+        "PRAGMA temp_store",
+        "PRAGMA read_uncommitted",
+    ],
+) -> int | str:
+    cursor = await connection.execute(statement)
+    try:
+        row = await cursor.fetchone()
+        assert row is not None
+        return cast("int | str", row[0])
+    finally:
+        await cursor.close()
+
+
+class _FallbackConnection:
+    def __init__(self, fail_statement: str | None = None, *, script_fails: bool = True) -> None:
+        self.executed: list[str] = []
+        self.fail_statement = fail_statement
+        self.script_fails = script_fails
+        self.closed = False
+
+    async def executescript(self, _script: str) -> None:
+        if self.script_fails:
+            raise RuntimeError("script unavailable")
+
+    async def execute(self, statement: str) -> None:
+        self.executed.append(statement)
+        if statement == self.fail_statement:
+            raise RuntimeError("individual pragma failed")
+
+    async def commit(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FallbackConnectProxy:
+    def __init__(self, connection: _FallbackConnection) -> None:
+        self._thread = Thread(target=lambda: None)
+        self._connection = connection
+
+    def __await__(self) -> Any:
+        async def resolve() -> _FallbackConnection:
+            return self._connection
+
+        return resolve().__await__()
+
