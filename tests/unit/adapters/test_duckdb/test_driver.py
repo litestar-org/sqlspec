@@ -140,9 +140,7 @@ def test_duckdb_materialization_arrow_vs_fetchall_threshold(tmp_path: Path) -> N
         config.close_pool()
 
 
-def test_duckdb_execute_many_caches_bulk_insert_sql_fragments(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_duckdb_execute_many_caches_bulk_insert_sql_fragments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Repeated execute_many bulk inserts cache (target_table, column_sql) and skip sqlglot .sql() on subsequent batches."""
     config = DuckDBConfig(connection_config={"database": str(tmp_path / "bulk_cache.duckdb")})
     try:
@@ -203,4 +201,3 @@ class _SpyDuckDBCursor:
 
     def fetchone(self) -> Any:
         return self._connection.fetchone()
-

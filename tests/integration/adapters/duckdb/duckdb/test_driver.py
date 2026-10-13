@@ -249,4 +249,3 @@ def test_duckdb_integration_native_type_contract_parity(duckdb_session: DuckDBDr
         actual = result.one()["val"]
         assert type(actual) is type(expected)
         assert actual == expected
-

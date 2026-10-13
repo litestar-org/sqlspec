@@ -252,9 +252,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 if sys.exc_info()[1] is None:
                     async with exc_handler:
                         result = await self._dispatch_statement_with_cursor(
-                            connection,
-                            statement,
-                            has_execution_parameters=bool(execution_parameters),
+                            connection, statement, has_execution_parameters=bool(execution_parameters)
                         )
                 else:
                     result = await self._run_with_exception_handler(
@@ -1547,9 +1545,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
             if sys.exc_info()[1] is None:
                 async with exc_handler:
                     result = await self._dispatch_statement_with_cursor(
-                        connection,
-                        statement,
-                        has_execution_parameters=has_execution_parameters,
+                        connection, statement, has_execution_parameters=has_execution_parameters
                     )
             else:
                 result = await self._run_with_exception_handler(
@@ -1783,18 +1779,18 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         result: SQLResult | None = None
         try:
             async with self.with_cursor(self.connection) as cursor:
-                execute = getattr(cursor, "execute", None)
-                fetchall = getattr(cursor, "fetchall", None)
+                returns_rows = cached.operation_profile.returns_rows
+                execute = getattr(cursor, "execute", None) if cursor is not self.connection else None
+                fetchall = getattr(cursor, "fetchall", None) if execute is not None and returns_rows else None
                 can_use_cursor_fast_path = execute is not None and (
-                    (cached.operation_profile.returns_rows and fetchall is not None)
-                    or (not cached.operation_profile.returns_rows and hasattr(cursor, "rowcount"))
+                    (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
                 )
                 if can_use_cursor_fast_path:
                     assert execute is not None
                     execute_result = execute(cached.compiled_sql, params) if params else execute(cached.compiled_sql)
                     if isawaitable(execute_result):
                         await execute_result
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         assert fetchall is not None
                         fetched_data = fetchall()
                         if isawaitable(fetched_data):
@@ -1817,7 +1813,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = await self.dispatch_execute(cursor, direct_statement)
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = (

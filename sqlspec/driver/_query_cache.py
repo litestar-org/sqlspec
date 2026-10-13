@@ -15,13 +15,7 @@ if TYPE_CHECKING:
     from sqlspec.core.parameters import ParameterProfile
     from sqlspec.core.statement import SQL, ProcessedState, StatementConfig
 
-__all__ = (
-    "STMT_CACHE_MAX_SIZE",
-    "CachedQuery",
-    "QueryCache",
-    "StatementCacheHolder",
-    "resolve_statement_cache_size",
-)
+__all__ = ("STMT_CACHE_MAX_SIZE", "CachedQuery", "QueryCache", "StatementCacheHolder", "resolve_statement_cache_size")
 
 STMT_CACHE_MAX_SIZE: Final[int] = 1024
 _CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((

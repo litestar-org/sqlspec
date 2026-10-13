@@ -112,7 +112,6 @@ def description_has_arrow_divergent_types(description: "Sequence[Any] | None") -
     return False
 
 
-
 def format_identifier(identifier: str) -> str:
     """Format an identifier with safe double-quote escaping.
 

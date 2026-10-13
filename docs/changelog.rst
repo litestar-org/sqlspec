@@ -35,6 +35,12 @@ v0.67.0 - Spanner graph and hybrid search, ADK artifact stores, and Python 3.11+
   (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
 * Added Python 3.15 support across package metadata and CI test workflows.
   (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
+* Added pure-Go GizmoData ADBC driver support in ``sqlspec.adapters.adbc`` and
+  extension stores (``ADBCStore``, ``AdbcEventQueueStore``, ``AdbcADKStore``,
+  and ``AdbcADKMemoryStore``) for Oracle (``adbc-driver-oracle``), IBM Db2
+  (``adbc-driver-db2``), native GizmoSQL (``adbc-driver-gizmosql`` with
+  ``auth_type="external"`` OAuth SSO), and DuckDB Quack (``adbc-driver-quack``).
+  (`#839 <https://github.com/litestar-org/sqlspec/pull/839>`_)
 
 **Changed:**
 
@@ -45,6 +51,20 @@ v0.67.0 - Spanner graph and hybrid search, ADK artifact stores, and Python 3.11+
   builder immutability, migration version tracking, and ADK/Litestar/Events
   store contracts across all 20 database adapters.
   (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
+* Unified DuckDB row materialization across ``execute()``, ``select()``, and
+  ``fetch*`` methods to consistently return DuckDB-native ``fetchall()`` Python
+  types on both first and cached executions, while ``select_to_arrow()``
+  continues to expose raw Arrow tables.
+  (`#838 <https://github.com/litestar-org/sqlspec/pull/838>`_)
+* Reduced per-statement and per-session execution overhead with per-config shared
+  statement caches (``StatementCacheHolder``), zero-copy cached SQLGlot AST
+  sharing with copy-on-mutation via ``ensure_owned_expression()``, fast-path
+  execution for parameterless and scalar-positional calls, fast-path execution
+  when statement observers are active, lazy ``SQLResult.statement``
+  materialization on cached ``SELECT`` hits, single-pass ``execute_many()``
+  parameter preparation, and idle-queue/clean-transaction fast paths in
+  ``AiosqliteConnectionPool``.
+  (`#838 <https://github.com/litestar-org/sqlspec/pull/838>`_)
 
 **Fixed:**
 
@@ -52,6 +72,10 @@ v0.67.0 - Spanner graph and hybrid search, ADK artifact stores, and Python 3.11+
   cleanup handling, exception mapping, and dialect generation across core,
   storage, migrations, extensions, and database adapters.
   (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
+* Prevented unparsed or ``COMMAND``/``UNKNOWN`` fallback compilations from
+  populating the driver statement cache, and cached parsed target-table metadata
+  on DuckDB Arrow bulk ``execute_many()`` inserts.
+  (`#838 <https://github.com/litestar-org/sqlspec/pull/838>`_)
 
 v0.66.0 - Native AsyncIO Spanner adapter, extension stores, and sync/async parity
 ---------------------------------------------------------------------------------

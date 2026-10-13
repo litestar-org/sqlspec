@@ -989,9 +989,7 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
-        self._stmt_cache_enabled = bool(
-            self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers
-        )
+        self._stmt_cache_enabled = bool(self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers)
 
     def _require_capability(self, capability_flag: str) -> None:
         """Check that a storage capability is enabled.
@@ -1096,9 +1094,7 @@ class CommonDriverAttributesMixin:
         else:
             param_values = None
 
-        needs_rebind = bool(
-            cached.input_named_parameters or cached.applied_wrap_types or cached.needs_style_remap
-        )
+        needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types or cached.needs_style_remap)
         if not needs_rebind and params:
             if param_values is None:
                 param_values = _cache_param_values(params)
@@ -2255,9 +2251,7 @@ def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supp
 
 
 def _many_parameters_already_prepared(
-    parameters: "list[Any]",
-    statement_config: "StatementConfig",
-    applied_wrap_types: bool,
+    parameters: "list[Any]", statement_config: "StatementConfig", applied_wrap_types: bool
 ) -> bool:
     """Return True when execute_many parameters were already coerced during compile()."""
     if statement_config.parameter_config.type_coercion_map:

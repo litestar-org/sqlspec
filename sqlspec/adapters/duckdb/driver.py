@@ -579,9 +579,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
             affected_rows = resolve_rowcount(cursor)
             return DMLResult(cached.operation_type, affected_rows)
 
-    def _materialize_select_rows(
-        self, cursor: Any, compiled_sql: str
-    ) -> "tuple[list[Any], list[str], int, RowFormat]":
+    def _materialize_select_rows(self, cursor: Any, compiled_sql: str) -> "tuple[list[Any], list[str], int, RowFormat]":
         """Materialize SELECT rows using DuckDB's native Python type contract."""
         description = cursor.description
         hint = self._cache_holder.get_row_count_hint(compiled_sql)

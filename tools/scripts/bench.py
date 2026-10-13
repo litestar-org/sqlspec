@@ -541,6 +541,8 @@ ADBC_ROWS_TRUNCATE = f"DELETE FROM {ADBC_ROWS_TABLE}"
 
 ADBC_ROWS_INSERT = f"INSERT INTO {ADBC_ROWS_TABLE} (id, payload) VALUES (?, ?)"
 
+ADBC_ROWS_INSERT_PG = f"INSERT INTO {ADBC_ROWS_TABLE} (id, payload) VALUES ($1, $2)"
+
 ADBC_ROWS_SELECT = f"SELECT id, payload FROM {ADBC_ROWS_TABLE} ORDER BY id"
 
 MYSQL_JSON_TABLE = "sqlspec_bench_json_rows"
@@ -1165,10 +1167,11 @@ def raw_adbc_rows() -> None:
     config = _adbc_benchmark_connection_config()
     if dbapi is None or config is None:
         _benchmark_unavailable()
+    insert_sql = ADBC_ROWS_INSERT_PG if "postgres" in str(config.get("driver_name", "")) else ADBC_ROWS_INSERT
     with _connect_adbc(dbapi, config) as connection, connection.cursor() as cursor:
         cursor.execute(ADBC_ROWS_CREATE)
         cursor.execute(ADBC_ROWS_TRUNCATE)
-        cursor.executemany(ADBC_ROWS_INSERT, _adbc_benchmark_rows())
+        cursor.executemany(insert_sql, _adbc_benchmark_rows())
         cursor.execute(ADBC_ROWS_SELECT)
         rows = cursor.fetchall()
     assert len(rows) == BENCHMARK_ROWS
@@ -3310,7 +3313,7 @@ def _adbc_benchmark_rows() -> list[tuple[int, str]]:
 
 def _connect_adbc(dbapi: Any, config: dict[str, Any]) -> Any:
     driver_name = config["driver_name"]
-    if driver_name in {"adbc_driver_sqlite", "adbc_driver_duckdb"}:
+    if driver_name in {"adbc_driver_sqlite", "adbc_driver_duckdb", "adbc_driver_postgresql"}:
         module = importlib.import_module(f"{driver_name}.dbapi")
         return module.connect(uri=config["uri"], autocommit=True)
     db_kwargs = {
@@ -4216,7 +4219,7 @@ async def _run_raw_psqlpy_rows(dsn: str) -> None:
     pool_class = _get_psqlpy_pool_class()
     if pool_class is None:
         _benchmark_unavailable()
-    pool = pool_class(dsn=dsn, max_db_pool_size=max(1, POOL_SIZE))
+    pool = pool_class(dsn=dsn, max_db_pool_size=max(2, POOL_SIZE))
     try:
         conn = await pool.connection()
         await conn.execute(SERVICE_ROWS_DROP)
@@ -4233,7 +4236,7 @@ async def _run_sqlspec_psqlpy_rows(dsn: str) -> None:
     config_class = _get_psqlpy_config()
     if config_class is None:
         _benchmark_unavailable()
-    config = config_class(connection_config={"dsn": dsn, "max_db_pool_size": max(1, POOL_SIZE)})
+    config = config_class(connection_config={"dsn": dsn, "max_db_pool_size": max(2, POOL_SIZE)})
     try:
         spec = SQLSpec()
         async with spec.provide_session(config) as session:
@@ -4252,7 +4255,7 @@ async def _run_raw_psqlpy_hot_path(scenario: str) -> None:
         _benchmark_unavailable()
     dsn = _postgres_benchmark_dsn()
     iterations = _service_loop_iterations()
-    pool = pool_class(dsn=dsn, max_db_pool_size=max(1, POOL_SIZE))
+    pool = pool_class(dsn=dsn, max_db_pool_size=max(2, POOL_SIZE))
     try:
         conn = await pool.connection()
         if scenario == "scalar_param_select":
@@ -4297,7 +4300,7 @@ async def _run_sqlspec_psqlpy_hot_path(scenario: str) -> None:
         else None
     )
     config = config_class(
-        connection_config={"dsn": dsn, "max_db_pool_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+        connection_config={"dsn": dsn, "max_db_pool_size": max(2, POOL_SIZE)}, observability_config=obs_cfg
     )
     try:
         if scenario == "scalar_param_select":

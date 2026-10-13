@@ -216,9 +216,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 if sys.exc_info()[1] is None:
                     with exc_handler:
                         result = self._dispatch_statement_with_cursor(
-                            connection,
-                            statement,
-                            has_execution_parameters=bool(execution_parameters),
+                            connection, statement, has_execution_parameters=bool(execution_parameters)
                         )
                 else:
                     result = self._run_with_exception_handler(
@@ -1528,9 +1526,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             if sys.exc_info()[1] is None:
                 with exc_handler:
                     result = self._dispatch_statement_with_cursor(
-                        connection,
-                        statement,
-                        has_execution_parameters=has_execution_parameters,
+                        connection, statement, has_execution_parameters=has_execution_parameters
                     )
             else:
                 result = self._run_with_exception_handler(
@@ -1680,9 +1676,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         result: SQLResult | None = None
         try:
             with self.with_cursor(self.connection) as cursor:
-                execute = getattr(cursor, "execute", None)
-                fetchall = getattr(cursor, "fetchall", None)
                 returns_rows = cached.operation_profile.returns_rows
+                execute = getattr(cursor, "execute", None) if cursor is not self.connection else None
+                fetchall = getattr(cursor, "fetchall", None) if execute is not None and returns_rows else None
                 can_use_cursor_fast_path = execute is not None and (
                     (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
                 )

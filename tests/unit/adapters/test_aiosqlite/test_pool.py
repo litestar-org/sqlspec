@@ -58,7 +58,6 @@ def test_sqlite_family_pragma_defaults_are_equal() -> None:
     assert SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS is SYNC_SQLITE_DEFAULT_ENABLE_FOREIGN_KEYS is False
 
 
-
 async def test_default_pool_uses_native_like_shared_pragma_profile() -> None:
     pool = AiosqliteConnectionPool({"database": ":memory:", "timeout": 30.0})
     pool_connection = await pool.acquire()
@@ -463,4 +462,3 @@ class _FallbackConnectProxy:
             return self._connection
 
         return resolve().__await__()
-

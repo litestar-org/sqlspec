@@ -1062,4 +1062,3 @@ def test_fast_path_with_observability_spans_and_error_recording(tmp_path: Path) 
             assert isinstance(span_manager.finished[2].exception, SQLSpecError)
     finally:
         config.close_pool()
-

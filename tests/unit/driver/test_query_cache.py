@@ -1211,19 +1211,12 @@ def test_fast_path_with_observability_sync(tmp_path: Any, monkeypatch: Any) -> N
         statement_observers=(events.append,),
         lifecycle=cast(
             "LifecycleConfig",
-            {
-                "on_query_start": [starts.append],
-                "on_query_complete": [completes.append],
-                "on_error": [errors.append],
-            },
+            {"on_query_start": [starts.append], "on_query_complete": [completes.append], "on_error": [errors.append]},
         ),
         logging=LoggingConfig(include_sql_hash=True),
     )
     spec = SQLSpec()
-    config = SqliteConfig(
-        connection_config={"database": str(tmp_path / "obs_sync.db")},
-        observability_config=obs,
-    )
+    config = SqliteConfig(connection_config={"database": str(tmp_path / "obs_sync.db")}, observability_config=obs)
     spec.add_config(config)
 
     try:
@@ -1319,19 +1312,12 @@ async def test_fast_path_with_observability_async(tmp_path: Any, monkeypatch: An
         statement_observers=(events.append,),
         lifecycle=cast(
             "LifecycleConfig",
-            {
-                "on_query_start": [starts.append],
-                "on_query_complete": [completes.append],
-                "on_error": [errors.append],
-            },
+            {"on_query_start": [starts.append], "on_query_complete": [completes.append], "on_error": [errors.append]},
         ),
         logging=LoggingConfig(include_sql_hash=True),
     )
     spec = SQLSpec()
-    config = AiosqliteConfig(
-        connection_config={"database": str(tmp_path / "obs_async.db")},
-        observability_config=obs,
-    )
+    config = AiosqliteConfig(connection_config={"database": str(tmp_path / "obs_async.db")}, observability_config=obs)
     spec.add_config(config)
 
     try:
@@ -1586,40 +1572,23 @@ def test_execute_many_single_pass_parameter_preparation(sqlite_sync_driver: Any)
     stmt_tuples.compile()
     _, prepared_tuples = sqlite_sync_driver._compiled_statement(stmt_tuples, custom_cfg)
     assert coercion_calls == 6
-    assert prepared_tuples == [
-        ("10.50", sample_uuid.hex, "2026-10-13", 7),
-        ("20.75", sample_uuid.hex, "2026-10-13", 8),
-    ]
+    assert prepared_tuples == [("10.50", sample_uuid.hex, "2026-10-13", 7), ("20.75", sample_uuid.hex, "2026-10-13", 8)]
 
     coercion_calls = 0
-    list_rows = [
-        [Decimal("1.00"), sample_uuid, sample_date],
-        [Decimal("2.00"), sample_uuid, sample_date],
-    ]
+    list_rows = [[Decimal("1.00"), sample_uuid, sample_date], [Decimal("2.00"), sample_uuid, sample_date]]
     stmt_lists = SQL("INSERT INTO items VALUES (?, ?, ?)", list_rows, statement_config=custom_cfg, is_many=True)
     stmt_lists.compile()
     _, prepared_lists = sqlite_sync_driver._compiled_statement(stmt_lists, custom_cfg)
     assert coercion_calls == 6
-    assert prepared_lists == [
-        ["1.00", sample_uuid.hex, "2026-10-13"],
-        ["2.00", sample_uuid.hex, "2026-10-13"],
-    ]
+    assert prepared_lists == [["1.00", sample_uuid.hex, "2026-10-13"], ["2.00", sample_uuid.hex, "2026-10-13"]]
 
     coercion_calls = 0
-    dict_rows = [
-        {"price": Decimal("3.50"), "uid": sample_uuid},
-        {"price": Decimal("4.50"), "uid": sample_uuid},
-    ]
-    stmt_dicts = SQL(
-        "INSERT INTO items VALUES (:price, :uid)", dict_rows, statement_config=custom_cfg, is_many=True
-    )
+    dict_rows = [{"price": Decimal("3.50"), "uid": sample_uuid}, {"price": Decimal("4.50"), "uid": sample_uuid}]
+    stmt_dicts = SQL("INSERT INTO items VALUES (:price, :uid)", dict_rows, statement_config=custom_cfg, is_many=True)
     stmt_dicts.compile()
     _, prepared_dicts = sqlite_sync_driver._compiled_statement(stmt_dicts, custom_cfg)
     assert coercion_calls == 4
-    assert prepared_dicts == [
-        ("3.50", sample_uuid.hex),
-        ("4.50", sample_uuid.hex),
-    ]
+    assert prepared_dicts == [("3.50", sample_uuid.hex), ("4.50", sample_uuid.hex)]
 
     override_calls = 0
 
@@ -1667,10 +1636,3 @@ def test_declared_parameters_execute_many_copies_only_when_default_missing() -> 
     assert rows[1] is not row_missing
     assert rows[1] == {"id": 2, "note": None}
     assert "note" not in row_missing
-
-
-
-
-
-
-

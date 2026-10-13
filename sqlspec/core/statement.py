@@ -1165,12 +1165,7 @@ class SQL:
 
     @classmethod
     def _create_cached_direct(
-        cls,
-        sql: str,
-        config: "StatementConfig",
-        processed_state: "ProcessedState",
-        *,
-        pooled: bool = True,
+        cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState", *, pooled: bool = True
     ) -> "SQL":
         """Create a minimal SQL object for direct (fast-path) execution.
 
