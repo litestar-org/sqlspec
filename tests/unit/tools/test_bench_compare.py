@@ -13,6 +13,8 @@ from tools.scripts.bench import (
 )
 from tools.scripts.bench_compare import compute_comparison_rows, format_run_args, validate_metadata_parity
 from tools.scripts.bench_compare import main as bench_compare_main
+from tools.scripts.bench_subsystems import _build_stub_driver_benchmarks, _make_temp_db, _setup_test_table
+from tools.scripts.bench_subsystems import run_benchmarks as run_subsystem_benchmarks
 
 __all__ = (
     "test_bench_compare_cli_exits_2_on_hard_metadata_mismatch",
@@ -20,8 +22,38 @@ __all__ = (
     "test_compute_comparison_rows_ratio_mode_and_fallback",
     "test_extended_scenarios_registered_for_all_benchmarked_drivers",
     "test_format_run_args_and_cli_print_run_args",
+    "test_stub_driver_microbenchmarks_run_cleanly",
     "test_validate_metadata_parity_detects_hard_and_soft_mismatches",
 )
+
+
+def test_stub_driver_microbenchmarks_run_cleanly() -> None:
+    """All 9 stub-connection driver micro-benchmarks should build and run with positive timings."""
+    stub_benches = _build_stub_driver_benchmarks(10)
+    expected_names = {
+        "stub driver: fast-path execute(SELECT, tuple)",
+        "stub driver: fast-path execute(INSERT, tuple)",
+        "stub driver: fast-path fetch_one_or_none(SELECT, tuple)",
+        "stub driver: parameterless execute(SELECT)",
+        "stub driver: scalar-param execute(SELECT, int)",
+        "stub driver: complex CTE+2-join execute(SELECT, int)",
+        "stub driver: session-per-request simple SELECT",
+        "stub driver: session-per-request complex CTE SELECT",
+        "stub driver: execute_many 100 rows",
+    }
+    assert {b.name for b in stub_benches} == expected_names
+
+    db_path = _make_temp_db()
+    try:
+        _setup_test_table(db_path)
+        results = run_subsystem_benchmarks(db_path, iterations=10, warmup=2)
+    finally:
+        db_path.unlink(missing_ok=True)
+
+    by_name = {r["name"]: r for r in results}
+    for name in expected_names:
+        assert name in by_name
+        assert by_name[name]["time_per_op_us"] > 0.0
 
 
 def test_extended_scenarios_registered_for_all_benchmarked_drivers() -> None:
