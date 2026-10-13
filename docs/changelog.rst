@@ -9,6 +9,50 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.67.0 - Spanner graph and hybrid search, ADK artifact stores, and Python 3.11+ baseline
+-----------------------------------------------------------------------------------------
+
+**Added:**
+
+* Spanner and Spangres SQLGlot dialects support ``CREATE PROPERTY GRAPH`` and
+  ``CREATE OR REPLACE PROPERTY GRAPH`` DDL (with ``NODE TABLES``, ``EDGE TABLES``,
+  ``SOURCE KEY``, ``DESTINATION KEY``, ``LABEL``, and ``PROPERTIES`` clauses) as
+  well as ``GRAPH_TABLE`` queries with ``MATCH`` path patterns and ``COLUMNS``
+  projections.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added ``sql.hybrid_rrf(...)`` on the ``SQL`` builder factory to generate
+  Reciprocal Rank Fusion (RRF) hybrid search queries combining full-text BM25
+  scoring and vector distance ranking on Spanner and Spangres.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added Google ADK artifact store base classes (``BaseAsyncADKArtifactStore``
+  and ``BaseSyncADKArtifactStore``) and Spanner implementations
+  (``SpannerSyncADKArtifactStore`` and ``SpannerAsyncADKArtifactStore``) with
+  optional Cloud Storage URI offloading for large payloads.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Spanner event queue stores add a composite queue index
+  ``(channel, status, available_at)`` with ``FORCE_INDEX`` query hints, row
+  deletion TTL policies, and single-statement ``THEN RETURN`` claim execution.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added Python 3.15 support across package metadata and CI test workflows.
+  (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
+
+**Changed:**
+
+* Upgraded the minimum supported Python version to 3.11+ and modernized runtime
+  typing, ``datetime.UTC``, and ``asyncio.timeout`` usage across the codebase.
+  (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
+* Standardized driver session lifecycles, statement compilation caching, SQLGlot
+  builder immutability, migration version tracking, and ADK/Litestar/Events
+  store contracts across all 20 database adapters.
+  (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
+
+**Fixed:**
+
+* Hardened parameter conversion, arrow batch streaming, transaction rollback and
+  cleanup handling, exception mapping, and dialect generation across core,
+  storage, migrations, extensions, and database adapters.
+  (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
+
 v0.66.0 - Native AsyncIO Spanner adapter, extension stores, and sync/async parity
 ---------------------------------------------------------------------------------
 
