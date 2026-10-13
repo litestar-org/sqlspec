@@ -15,6 +15,7 @@ from sqlspec.builder import QueryBuilder
 from sqlspec.core import (
     SQL,
     CachedStatement,
+    OperationProfile,
     ParameterDeclaration,
     ParameterStyle,
     SQLResult,
@@ -1198,7 +1199,10 @@ class CommonDriverAttributesMixin:
         if processed.parsed_expression is None or processed.operation_type in {"COMMAND", "UNKNOWN"}:
             return
         param_profile = processed.parameter_profile
-        cached_state = _clone_processed_state(processed)
+        operation_profile = processed.operation_profile
+        if not operation_profile.returns_rows and statement.returns_rows():
+            operation_profile = OperationProfile(returns_rows=True, modifies_rows=operation_profile.modifies_rows)
+        cached_state = _clone_processed_state(processed, operation_profile)
         cached = CachedQuery(
             compiled_sql=processed.compiled_sql,
             parameter_profile=param_profile,
@@ -1206,7 +1210,7 @@ class CommonDriverAttributesMixin:
             applied_wrap_types=processed.applied_wrap_types,
             parameter_casts=cached_state.parameter_casts,
             operation_type=processed.operation_type,
-            operation_profile=processed.operation_profile,
+            operation_profile=operation_profile,
             param_count=param_profile.total_count,
             processed_state=cached_state,
             needs_style_remap=bool(_CACHED_NAMED_STYLES.intersection(param_profile.styles)),
@@ -2043,7 +2047,9 @@ def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") 
     return params
 
 
-def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
+def _clone_processed_state(
+    processed: "ProcessedState", operation_profile: "OperationProfile | None" = None
+) -> "ProcessedState":
     return ProcessedState(
         compiled_sql=processed.compiled_sql,
         execution_parameters=processed.execution_parameters,
@@ -2056,7 +2062,7 @@ def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
         parameter_casts=dict(processed.parameter_casts),
         validation_errors=processed.validation_errors.copy(),
         parameter_profile=processed.parameter_profile,
-        operation_profile=processed.operation_profile,
+        operation_profile=operation_profile if operation_profile is not None else processed.operation_profile,
         is_many=False,
     )
 

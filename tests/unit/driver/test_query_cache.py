@@ -1636,3 +1636,17 @@ def test_declared_parameters_execute_many_copies_only_when_default_missing() -> 
     assert rows[1] is not row_missing
     assert rows[1] == {"id": 2, "note": None}
     assert "note" not in row_missing
+
+
+def test_cached_pragma_returns_rows_on_repeated_execution(sqlite_sync_driver: SqliteDriver) -> None:
+    """Ensure repeated PRAGMA executions preserve row-returning behavior on statement cache hit."""
+    sqlite_sync_driver.execute("CREATE TABLE pragma_test (id INTEGER PRIMARY KEY, name TEXT)")
+
+    first_result = sqlite_sync_driver.execute("PRAGMA table_info(pragma_test)")
+    second_result = sqlite_sync_driver.execute("PRAGMA table_info(pragma_test)")
+
+    first_columns = {row["name"] for row in first_result.get_data()}
+    second_columns = {row["name"] for row in second_result.get_data()}
+
+    assert first_columns == {"id", "name"}
+    assert second_columns == {"id", "name"}
