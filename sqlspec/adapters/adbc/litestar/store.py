@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from sqlspec.adapters.adbc.core import is_postgres_dialect
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
@@ -143,7 +144,8 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         with self._config.provide_session() as driver:
             dialect_value = driver.dialect
-            self._dialect = str(dialect_value) if dialect_value else "postgres"
+            raw_dialect = str(dialect_value).lower() if dialect_value else "postgres"
+            self._dialect = "mssql" if raw_dialect in {"tsql", "sqlserver"} else raw_dialect
 
         assert self._dialect is not None
         return self._dialect
@@ -218,6 +220,48 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             )
             """
 
+        if dialect == "oracle":
+            return f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE TABLE {self._table_name} (
+                    session_id VARCHAR2(255) PRIMARY KEY,
+                    data BLOB NOT NULL,
+                    expires_at TIMESTAMP WITH TIME ZONE
+                )';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -955 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """
+
+        if dialect == "db2":
+            return f"""
+            CREATE TABLE {self._table_name} (
+                session_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                data BLOB NOT NULL,
+                expires_at TIMESTAMP
+            )
+            """
+
+        if dialect == "mssql":
+            return f"""
+            IF OBJECT_ID(N'{self._table_name}', N'U') IS NULL
+            CREATE TABLE {self._table_name} (
+                session_id NVARCHAR(255) PRIMARY KEY,
+                data VARBINARY(MAX) NOT NULL,
+                expires_at DATETIME2
+            );
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.indexes
+                WHERE name = N'idx_{self._table_name}_expires_at'
+                AND object_id = OBJECT_ID(N'{self._table_name}')
+            )
+            CREATE INDEX idx_{self._table_name}_expires_at
+            ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
+            """
+
         return f"""
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id TEXT PRIMARY KEY,
@@ -241,6 +285,8 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         if is_postgres_dialect(dialect):
             return f"${position}"
+        if dialect == "oracle":
+            return f":{position}"
         if dialect in {"mysql", "mariadb"}:
             return "%s"
         if dialect == "bigquery":
@@ -257,6 +303,12 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         if is_postgres_dialect(dialect):
             return "CURRENT_TIMESTAMP AT TIME ZONE 'UTC'"
+        if dialect == "oracle":
+            return "SYSTIMESTAMP AT TIME ZONE 'UTC'"
+        if dialect == "db2":
+            return "CURRENT TIMESTAMP"
+        if dialect == "mssql":
+            return "SYSUTCDATETIME()"
         if dialect in {"mysql", "mariadb"}:
             return "UTC_TIMESTAMP()"
         if dialect == "bigquery":
@@ -267,6 +319,38 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table using ADBC driver."""
+        dialect = self._get_dialect()
+        if dialect == "oracle":
+            table_block = self._table_ddl().strip()
+            index_block = f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE INDEX idx_{self._table_name}_expires_at ON {self._table_name}(expires_at)';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE NOT IN (-955, -1408) THEN
+                        RAISE;
+                    END IF;
+            END;
+            """.strip()
+            with self._config.provide_session() as driver:
+                driver.execute(table_block)
+                driver.execute(index_block)
+                driver.commit()
+            self._log_table_created()
+            return
+
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            index_name = normalize_identifier(f"idx_{self._table_name}_expires_at", "db2")
+            with self._config.provide_session() as driver:
+                if driver.select_one_or_none(_DB2_TABLE_EXISTS_SQL, (schema_name, catalog_table)) is None:
+                    driver.execute(self._table_ddl().strip())
+                if driver.select_one_or_none(_DB2_INDEX_EXISTS_SQL, (schema_name, index_name)) is None:
+                    driver.execute(f"CREATE INDEX idx_{self._table_name}_expires_at ON {self._table_name}(expires_at)")
+                driver.commit()
+            self._log_table_created()
+            return
+
         sql_text = self._table_ddl()
         with self._config.provide_session() as driver:
             driver.execute_script(sql_text)
@@ -283,6 +367,25 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
 
         if dialect in {"bigquery", "snowflake"}:
             return [f"DROP TABLE IF EXISTS {self._table_name}"]
+
+        if dialect == "oracle":
+            return [
+                f"BEGIN EXECUTE IMMEDIATE 'DROP INDEX idx_{self._table_name}_expires_at'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -1418 THEN RAISE; END IF; END;",
+                f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {self._table_name}'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;",
+            ]
+
+        if dialect == "db2":
+            schema_name, catalog_table = _split_db2_table_name(self._table_name)
+            schema_filter = f"TABSCHEMA = '{schema_name}'" if schema_name is not None else "TABSCHEMA = CURRENT SCHEMA"
+            return [
+                f"BEGIN IF EXISTS (SELECT 1 FROM SYSCAT.TABLES WHERE {schema_filter} AND TABNAME = '{catalog_table}') THEN EXECUTE IMMEDIATE 'DROP TABLE {self._table_name}'; END IF; END"
+            ]
+
+        if dialect == "mssql":
+            return [
+                f"IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_{self._table_name}_expires_at' AND object_id = OBJECT_ID(N'{self._table_name}')) DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
+                f"IF OBJECT_ID(N'{self._table_name}', N'U') IS NOT NULL DROP TABLE {self._table_name}",
+            ]
 
         if dialect in {"mysql", "mariadb"}:
             return [
@@ -389,7 +492,7 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             VALUES ({p1}, {p2}, {p3})
             ON DUPLICATE KEY UPDATE data = VALUES(data), expires_at = VALUES(expires_at)
             """
-        elif dialect in {"bigquery", "snowflake"}:
+        elif dialect in {"bigquery", "snowflake", "oracle", "db2", "mssql"}:
             with self._config.provide_session() as driver:
                 check_sql = f"SELECT COUNT(*) as count FROM {self._table_name} WHERE session_id = {p1}"
                 result = driver.select_one(check_sql, key)
@@ -528,3 +631,19 @@ class ADBCStore(BaseSQLSpecStore["AdbcConfig"]):
             if count > 0:
                 self._log_delete_expired(count)
             return count
+
+
+_DB2_TABLE_EXISTS_SQL = (
+    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
+)
+_DB2_INDEX_EXISTS_SQL = (
+    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
+)
+_MIN_QUALIFIED_PARTS = 2
+
+
+def _split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
+    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
+    if len(parts) >= _MIN_QUALIFIED_PARTS:
+        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
+    return None, normalize_identifier(parts[0] if parts else table_name, "db2")

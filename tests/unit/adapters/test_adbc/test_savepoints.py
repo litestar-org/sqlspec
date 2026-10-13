@@ -74,3 +74,48 @@ def test_nested_service_block_reports_missing_savepoints(dialect: str) -> None:
         assert isinstance(raised.value.__cause__, NotImplementedError)
     assert driver._transaction_depth == 0
     assert cast("_Connection", driver.connection).cursor_obj.statements == []
+
+
+def test_oracle_savepoint_lifecycle_omits_release_statement() -> None:
+    driver = _driver("oracle")
+    driver.create_savepoint("sp_1")
+    driver.rollback_to_savepoint("sp_1")
+    driver.release_savepoint("sp_1")
+
+    assert cast("_Connection", driver.connection).cursor_obj.statements == [
+        "SAVEPOINT sp_1",
+        "ROLLBACK TO SAVEPOINT sp_1",
+    ]
+
+
+def test_db2_savepoint_lifecycle_retains_cursors() -> None:
+    driver = _driver("db2")
+    driver.create_savepoint("sp_1")
+    driver.rollback_to_savepoint("sp_1")
+    driver.release_savepoint("sp_1")
+
+    assert cast("_Connection", driver.connection).cursor_obj.statements == [
+        "SAVEPOINT sp_1 ON ROLLBACK RETAIN CURSORS",
+        "ROLLBACK TO SAVEPOINT sp_1",
+        "RELEASE SAVEPOINT sp_1",
+    ]
+
+
+def test_mssql_savepoint_lifecycle_uses_transaction_keywords() -> None:
+    driver = _driver("mssql")
+    driver.create_savepoint("sp_1")
+    driver.rollback_to_savepoint("sp_1")
+    driver.release_savepoint("sp_1")
+
+    assert cast("_Connection", driver.connection).cursor_obj.statements == [
+        "SAVE TRANSACTION sp_1",
+        "ROLLBACK TRANSACTION sp_1",
+    ]
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "oracle", "db2", "mssql"])
+@pytest.mark.parametrize("method", ["create_savepoint", "release_savepoint", "rollback_to_savepoint"])
+def test_savepoints_reject_unsafe_identifiers(dialect: str, method: str) -> None:
+    driver = _driver(dialect)
+    with pytest.raises(Exception, match="Invalid savepoint name"):
+        getattr(driver, method)("sp_1; DROP TABLE users")

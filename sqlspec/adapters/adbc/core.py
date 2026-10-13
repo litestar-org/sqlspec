@@ -2,6 +2,7 @@
 
 import datetime as dt
 import decimal
+import re
 from collections.abc import Sized
 from functools import lru_cache, partial
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -23,6 +24,7 @@ from sqlspec.core.parameters import type_coercion_dispatcher
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
+    DataError,
     DeadlockError,
     ForeignKeyViolationError,
     ImproperConfigurationError,
@@ -40,7 +42,7 @@ from sqlspec.exceptions import (
     map_sqlstate_to_exception,
 )
 from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
-from sqlspec.utils.module_loader import import_string
+from sqlspec.utils.module_loader import import_optional, import_string
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, has_sqlstate
@@ -69,6 +71,7 @@ __all__ = (
     "handle_postgres_rollback",
     "is_postgres_dialect",
     "is_shared_object_driver",
+    "normalize_column_names",
     "normalize_connection_aliases",
     "normalize_driver_path",
     "normalize_postgres_empty_parameters",
@@ -90,6 +93,7 @@ __all__ = (
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 256
+_IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
 _STRICT_COERCION_ALLOWED_TYPES: Final[tuple[type[Any], ...]] = (
     type(None),
@@ -116,9 +120,12 @@ DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
     "bigquery": ("bigquery",),
     "sqlite": ("sqlite", "flight", "flightsql"),
-    "duckdb": ("duckdb", "gizmosql", "gizmo"),
+    "duckdb": ("duckdb", "gizmosql", "gizmo", "quack"),
     "mysql": ("mysql",),
     "snowflake": ("snowflake",),
+    "oracle": ("oracle",),
+    "db2": ("db2", "ibm db2"),
+    "mssql": ("mssql", "sql server", "sqlserver", "microsoft sql"),
 }
 
 
@@ -133,6 +140,13 @@ DIALECT_PARAMETER_STYLES: "dict[str, tuple[ParameterStyle, list[ParameterStyle]]
     ),
     "mysql": (ParameterStyle.POSITIONAL_PYFORMAT, [ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT]),
     "snowflake": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),
+    "oracle": (
+        ParameterStyle.POSITIONAL_COLON,
+        [ParameterStyle.POSITIONAL_COLON, ParameterStyle.NAMED_COLON, ParameterStyle.QMARK],
+    ),
+    "db2": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NAMED_COLON]),
+    "mssql": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT]),
+    "tsql": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NAMED_COLON, ParameterStyle.NAMED_AT]),
 }
 
 _DRIVER_ALIASES: "dict[str, str]" = {
@@ -150,6 +164,12 @@ _DRIVER_ALIASES: "dict[str, str]" = {
     "grpc": "adbc_driver_flightsql.dbapi.connect",
     "gizmosql": "adbc_driver_flightsql.dbapi.connect",
     "gizmo": "adbc_driver_flightsql.dbapi.connect",
+    "oracle": "adbc_driver_oracle.dbapi.connect",
+    "oracledb": "adbc_driver_oracle.dbapi.connect",
+    "db2": "adbc_driver_db2.dbapi.connect",
+    "ibmdb2": "adbc_driver_db2.dbapi.connect",
+    "ibm_db": "adbc_driver_db2.dbapi.connect",
+    "quack": "adbc_driver_quack.dbapi.connect",
 }
 
 _URI_PREFIX_DRIVER: "tuple[tuple[str, str], ...]" = (
@@ -163,6 +183,10 @@ _URI_PREFIX_DRIVER: "tuple[tuple[str, str], ...]" = (
     ("gizmo://", "adbc_driver_flightsql.dbapi.connect"),
     ("snowflake://", "adbc_driver_snowflake.dbapi.connect"),
     ("bigquery://", "adbc_driver_bigquery.dbapi.connect"),
+    ("oracle://", "adbc_driver_oracle.dbapi.connect"),
+    ("db2://", "adbc_driver_db2.dbapi.connect"),
+    ("quack://", "adbc_driver_quack.dbapi.connect"),
+    ("quack+tls://", "adbc_driver_quack.dbapi.connect"),
 )
 
 _DRIVER_PATH_KEYWORDS_TO_DIALECT: "tuple[tuple[str, str], ...]" = (
@@ -172,6 +196,11 @@ _DRIVER_PATH_KEYWORDS_TO_DIALECT: "tuple[tuple[str, str], ...]" = (
     ("bigquery", "bigquery"),
     ("snowflake", "snowflake"),
     ("gizmosql", "duckdb"),
+    ("quack", "duckdb"),
+    ("oracle", "oracle"),
+    ("db2", "db2"),
+    ("mssql", "mssql"),
+    ("sqlserver", "mssql"),
     ("flightsql", "sqlite"),
     ("grpc", "sqlite"),
 )
@@ -183,6 +212,11 @@ _BIGQUERY_DB_KWARGS_OPTIONS: "tuple[tuple[str, str], ...]" = (
 )
 _SHARED_OBJECT_SUFFIXES: "tuple[str, ...]" = (".so", ".dylib", ".dll")
 _DRIVER_MANAGER_CONNECT: Final[str] = "adbc_driver_manager.dbapi.connect"
+_GIZMOSQL_NATIVE_CONNECT: Final[str] = "adbc_driver_gizmosql.dbapi.connect"
+_FLIGHTSQL_CONNECT: Final[str] = "adbc_driver_flightsql.dbapi.connect"
+_MSSQL_NATIVE_CONNECT: Final[str] = "adbc_driver_mssql.dbapi.connect"
+_QUACK_AUTH_KEY: Final[str] = "adbc.quack.token"
+_GIZMOSQL_AUTH_TYPE_KEY: Final[str] = "adbc.gizmosql.auth_type"
 _FLIGHTSQL_DB_KWARGS_FIELDS: "tuple[str, ...]" = ("username", "password")
 _FLIGHTSQL_TLS_SKIP_VERIFY_KEY: Final[str] = "adbc.flight.sql.client_option.tls_skip_verify"
 _FLIGHTSQL_AUTHORIZATION_HEADER_KEY: Final[str] = "adbc.flight.sql.authorization_header"
@@ -204,6 +238,99 @@ _SQLSTATE_DESCRIPTIONS: dict[str, str] = {
     "28": "authorization error",
     "57": "operational error",
     "02": "no data",
+}
+_ORA_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\bORA-(\d{5})\b", re.IGNORECASE)
+_ORA_INTEGRITY_START: Final[int] = 2290
+_ORA_INTEGRITY_END: Final[int] = 2300
+_ORA_PARSING_START: Final[int] = 900
+_ORA_PARSING_END: Final[int] = 1000
+_ORA_ERROR_CODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1: (UniqueViolationError, "unique constraint violation"),
+    60: (DeadlockError, "deadlock detected"),
+    900: (SQLParsingError, "invalid SQL statement"),
+    904: (SQLParsingError, "invalid identifier"),
+    907: (SQLParsingError, "missing right parenthesis"),
+    923: (SQLParsingError, "FROM keyword not found where expected"),
+    933: (SQLParsingError, "SQL command not properly ended"),
+    936: (SQLParsingError, "missing expression"),
+    942: (SQLParsingError, "table or view does not exist"),
+    1013: (QueryTimeoutError, "user requested cancel of current operation"),
+    1017: (PermissionDeniedError, "invalid username/password"),
+    1031: (PermissionDeniedError, "insufficient privileges"),
+    1400: (NotNullViolationError, "not-null constraint violation"),
+    1407: (NotNullViolationError, "not-null constraint violation"),
+    1438: (DataError, "numeric precision overflow"),
+    1722: (DataError, "invalid number"),
+    1843: (DataError, "not a valid month"),
+    1858: (DataError, "invalid character"),
+    1861: (DataError, "literal does not match format string"),
+    2290: (CheckViolationError, "check constraint violation"),
+    2291: (ForeignKeyViolationError, "foreign key constraint violation"),
+    2292: (ForeignKeyViolationError, "foreign key constraint violation"),
+    3113: (DatabaseConnectionError, "end-of-file on communication channel"),
+    3114: (DatabaseConnectionError, "not connected to ORACLE"),
+    3135: (DatabaseConnectionError, "connection lost contact"),
+    8177: (SerializationConflictError, "cannot serialize access"),
+    12154: (DatabaseConnectionError, "TNS resolution failed"),
+    12170: (QueryTimeoutError, "connect timeout"),
+    12505: (DatabaseConnectionError, "listener rejected"),
+    12514: (DatabaseConnectionError, "service not known"),
+    12541: (DatabaseConnectionError, "no listener"),
+    12899: (DataError, "value too large for column"),
+}
+_DB2_SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?:SQLSTATE[=:\s]+|state[:=\s]+)([0-9A-Z]{5})\b", re.IGNORECASE
+)
+_DB2_SQLCODE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\bSQL(?:CODE[=:\s]*)?(-?\d{3,5})[NCW]?\b", re.IGNORECASE)
+_DB2_REASON_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(r'Reason code\s*"?(\d+)"?', re.IGNORECASE)
+_DB2_LOCK_TIMEOUT_REASON_CODE: Final[int] = 68
+_DB2_UNDEFINED_OBJECT_CODE: Final[int] = 204
+_DB2_ROLLBACK_SQLSTATES: Final[frozenset[str]] = frozenset({"40001", "57033"})
+_DB2_ROLLBACK_SQLCODES: Final[frozenset[int]] = frozenset({911, 913})
+_DB2_SQLCODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    104: (SQLParsingError, "sql syntax error"),
+    204: (SQLParsingError, "undefined object"),
+    302: (DataError, "numeric or string value out of range"),
+    407: (NotNullViolationError, "not-null constraint violation"),
+    433: (DataError, "value is too long"),
+    530: (ForeignKeyViolationError, "foreign key constraint violation"),
+    532: (ForeignKeyViolationError, "foreign key constraint violation"),
+    545: (CheckViolationError, "check constraint violation"),
+    551: (PermissionDeniedError, "permission denied"),
+    552: (PermissionDeniedError, "authorization error"),
+    803: (UniqueViolationError, "unique constraint violation"),
+    900: (DatabaseConnectionError, "connection does not exist or was severed"),
+    952: (QueryTimeoutError, "statement execution interrupted or timed out"),
+    1042: (DatabaseConnectionError, "unexpected system error occurred"),
+    30081: (DatabaseConnectionError, "communication failure"),
+}
+_MSSQL_MSG_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\b(?:Msg|error|number)\s+(\d{3,5})\b", re.IGNORECASE)
+_MSSQL_CONSTRAINT_ERROR_CODE: Final[int] = 547
+_MSSQL_ERROR_CODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    53: (DatabaseConnectionError, "could not open connection to SQL Server"),
+    102: (SQLParsingError, "incorrect syntax"),
+    105: (SQLParsingError, "unclosed quotation mark"),
+    156: (SQLParsingError, "incorrect syntax near keyword"),
+    207: (SQLParsingError, "invalid column name"),
+    208: (SQLParsingError, "invalid object name"),
+    229: (PermissionDeniedError, "permission denied on object"),
+    230: (PermissionDeniedError, "permission denied on column"),
+    241: (DataError, "conversion failed when converting date/time"),
+    242: (DataError, "datetime data type conversion out-of-range"),
+    245: (DataError, "conversion failed when converting varchar to int"),
+    262: (PermissionDeniedError, "permission denied in database"),
+    515: (NotNullViolationError, "cannot insert the value NULL into column"),
+    1205: (DeadlockError, "transaction was deadlocked on lock resources"),
+    1222: (QueryTimeoutError, "lock request time out period exceeded"),
+    2601: (UniqueViolationError, "cannot insert duplicate key row"),
+    2627: (UniqueViolationError, "violation of unique or primary key constraint"),
+    2628: (DataError, "string or binary data would be truncated"),
+    3960: (SerializationConflictError, "snapshot isolation transaction aborted due to update conflict"),
+    4060: (DatabaseConnectionError, "cannot open database requested by the login"),
+    8114: (DataError, "error converting data type"),
+    8115: (DataError, "arithmetic overflow error"),
+    8152: (DataError, "string or binary data would be truncated"),
+    18456: (PermissionDeniedError, "login failed for user"),
 }
 
 
@@ -326,6 +453,10 @@ def normalize_driver_path(driver_name: str) -> str:
 def driver_from_uri(uri: str) -> "str | None":
     """Resolve a default driver connect path from a URI."""
     lowered = uri.lower()
+    if lowered.startswith(("gizmosql://", "gizmo://")):
+        return _resolve_gizmosql_driver_connect()
+    if lowered.startswith(("mssql://", "sqlserver://")):
+        return _resolve_mssql_driver_connect()
     for prefix, driver_path in _URI_PREFIX_DRIVER:
         if lowered.startswith(prefix):
             return driver_path
@@ -335,9 +466,17 @@ def driver_from_uri(uri: str) -> "str | None":
 def driver_kind_from_driver_name(driver_name: str) -> "str | None":
     """Return a canonical driver kind based on driver name content."""
     lowered_name = driver_name.lower()
-    if lowered_name in {"gizmosql", "gizmo"}:
+    if lowered_name in {"gizmosql", "gizmo"} or "gizmosql" in lowered_name:
         return "gizmosql"
-    resolved = _DRIVER_ALIASES.get(driver_name.lower(), driver_name)
+    if lowered_name in {"mssql", "sqlserver", "tsql"} or "mssql" in lowered_name or "sqlserver" in lowered_name:
+        return "mssql"
+    if lowered_name in {"oracle", "oracledb"} or "oracle" in lowered_name:
+        return "oracle"
+    if lowered_name in {"db2", "ibmdb2", "ibm_db"} or "db2" in lowered_name:
+        return "db2"
+    if lowered_name == "quack" or "quack" in lowered_name:
+        return "quack"
+    resolved = _DRIVER_ALIASES.get(lowered_name, driver_name)
     lowered = resolved.lower()
     for keyword, _dialect in _DRIVER_PATH_KEYWORDS_TO_DIALECT:
         if keyword in lowered:
@@ -350,6 +489,14 @@ def driver_kind_from_uri(uri: str) -> "str | None":
     lowered = uri.lower()
     if lowered.startswith(("gizmosql://", "gizmo://")):
         return "gizmosql"
+    if lowered.startswith(("mssql://", "sqlserver://")):
+        return "mssql"
+    if lowered.startswith(("quack://", "quack+tls://")):
+        return "quack"
+    if lowered.startswith("oracle://"):
+        return "oracle"
+    if lowered.startswith("db2://"):
+        return "db2"
     for prefix, driver_path in _URI_PREFIX_DRIVER:
         if lowered.startswith(prefix):
             return driver_kind_from_driver_name(driver_path)
@@ -362,6 +509,10 @@ def resolve_driver_name(driver_name: str | None, uri: str | None) -> str:
         if is_shared_object_driver(driver_name):
             return _DRIVER_MANAGER_CONNECT
         lowered_driver = driver_name.lower()
+        if lowered_driver in {"gizmosql", "gizmo"}:
+            return _resolve_gizmosql_driver_connect()
+        if lowered_driver in {"mssql", "sqlserver", "tsql"}:
+            return _resolve_mssql_driver_connect()
         alias = _DRIVER_ALIASES.get(lowered_driver)
         if alias is not None:
             return alias
@@ -377,13 +528,17 @@ def resolve_driver_name(driver_name: str | None, uri: str | None) -> str:
 
 def resolve_driver_name_from_config(connection_config: "Mapping[str, Any]") -> str:
     """Resolve and normalize the driver name from a connection config mapping."""
+    db_kwargs = connection_config.get("db_kwargs")
+    nested_uri = db_kwargs.get("uri") if isinstance(db_kwargs, dict) else None
     uri = (
         connection_config.get("uri")
         or connection_config.get("url")
         or connection_config.get("dsn")
         or connection_config.get("connection_string")
+        or nested_uri
     )
-    return resolve_driver_name(connection_config.get("driver_name"), uri)
+    driver_name = connection_config.get("driver_name") or connection_config.get("driver")
+    return resolve_driver_name(driver_name, uri)
 
 
 def resolve_driver_connect_func(driver_name: str | None, uri: str | None) -> "Callable[..., Any]":
@@ -430,23 +585,41 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
         if lowered_backend in {"duckdb", "sqlite"}:
             return lowered_backend
 
-    driver_name = connection_config.get("driver_name")
-    if isinstance(driver_name, str) and driver_name.lower() in {"gizmosql", "gizmo"}:
-        return "duckdb"
+    driver_name = connection_config.get("driver_name") or connection_config.get("driver")
+    if isinstance(driver_name, str):
+        lowered_driver_name = driver_name.lower()
+        if lowered_driver_name in {"gizmosql", "gizmo"}:
+            return "duckdb"
+        if lowered_driver_name in {"mssql", "sqlserver", "tsql"}:
+            return "mssql"
+        if lowered_driver_name in {"oracle", "oracledb"}:
+            return "oracle"
+        if lowered_driver_name in {"db2", "ibmdb2", "ibm_db"}:
+            return "db2"
+        if lowered_driver_name == "quack":
+            return "duckdb"
+        if is_shared_object_driver(driver_name):
+            return resolve_dialect_from_driver_path(lowered_driver_name)
 
-    if isinstance(driver_name, str) and is_shared_object_driver(driver_name):
-        return resolve_dialect_from_driver_path(driver_name.lower())
-
+    db_kwargs = connection_config.get("db_kwargs")
+    nested_uri = db_kwargs.get("uri") if isinstance(db_kwargs, dict) else None
     uri = (
         connection_config.get("uri")
         or connection_config.get("url")
         or connection_config.get("dsn")
         or connection_config.get("connection_string")
+        or nested_uri
     )
     if isinstance(uri, str):
         lowered_uri = uri.lower()
-        if lowered_uri.startswith(("gizmosql://", "gizmo://")):
+        if lowered_uri.startswith(("gizmosql://", "gizmo://", "quack://", "quack+tls://")):
             return "duckdb"
+        if lowered_uri.startswith(("mssql://", "sqlserver://")):
+            return "mssql"
+        if lowered_uri.startswith("oracle://"):
+            return "oracle"
+        if lowered_uri.startswith("db2://"):
+            return "db2"
         if driver_name is None and lowered_uri.startswith("grpc+tls://"):
             return "duckdb"
 
@@ -473,7 +646,7 @@ def normalize_connection_aliases(connection_config: "Mapping[str, Any]") -> "dic
         config.pop("dsn", None)
         config.pop("connection_string", None)
 
-    driver_name = config.get("driver_name")
+    driver_name = config.get("driver_name") or config.get("driver")
     uri = config.get("uri")
     driver_kind: str | None = None
     if isinstance(driver_name, str):
@@ -481,7 +654,7 @@ def normalize_connection_aliases(connection_config: "Mapping[str, Any]") -> "dic
     if driver_kind is None and isinstance(uri, str):
         driver_kind = driver_kind_from_uri(uri)
 
-    if (driver_kind == "sqlite" or driver_kind is None) and "uri" not in config:
+    if (driver_kind == "sqlite" or driver_kind is None) and "uri" not in config and "db_kwargs" not in config:
         db_path = (
             config.pop("database", None)
             or config.pop("db", None)
@@ -514,8 +687,10 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     """
     config = normalize_connection_aliases(connection_config)
 
-    driver_name = config.get("driver_name")
-    uri = config.get("uri")
+    driver_name = config.get("driver_name") or config.get("driver")
+    db_kwargs_existing = config.get("db_kwargs")
+    nested_uri = db_kwargs_existing.get("uri") if isinstance(db_kwargs_existing, dict) else None
+    uri = config.get("uri") or nested_uri
     driver_kind: str | None = None
     if isinstance(driver_name, str):
         driver_kind = driver_kind_from_driver_name(driver_name)
@@ -534,29 +709,18 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
     if legacy_entrypoint is not None:
         config.setdefault("entrypoint", legacy_entrypoint)
 
-    uses_driver_manager = (
-        resolve_driver_name(
-            driver_name if isinstance(driver_name, str) else None, uri if isinstance(uri, str) else None
-        )
-        == _DRIVER_MANAGER_CONNECT
+    resolved_connect_path = resolve_driver_name(
+        driver_name if isinstance(driver_name, str) else None, uri if isinstance(uri, str) else None
     )
+    uses_driver_manager = resolved_connect_path == _DRIVER_MANAGER_CONNECT
     if not uses_driver_manager:
         config.pop("entrypoint", None)
 
-    if driver_kind in {"gizmosql", "flightsql"}:
-        _lift_flightsql_db_kwargs(config)
-    elif driver_kind == "bigquery":
-        db_kwargs = config.get("db_kwargs")
-        db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
-        for param, option in _BIGQUERY_DB_KWARGS_OPTIONS:
-            if param in config:
-                db_kwargs_dict[option] = config.pop(param)
-        if db_kwargs_dict:
-            config["db_kwargs"] = db_kwargs_dict
+    _lift_driver_specific_db_kwargs(config, driver_kind, resolved_connect_path)
 
     config.pop("driver_name", None)
-    if uses_driver_manager and isinstance(driver_name, str) and "driver" not in config:
-        config["driver"] = driver_name.strip()
+    if uses_driver_manager:
+        _apply_driver_manager_config(config, driver_kind, driver_name)
 
     return config
 
@@ -673,41 +837,17 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_adbc_error(error, QueryTimeoutError, "query timeout")
     if status_name == "CANCELLED":
         return _create_adbc_error(error, OperationCancelledError, "operation cancelled")
+
+    raw_message = str(error)
+    error_msg = raw_message.lower()
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
-    sqlstate = sqlstate_attr if sqlstate_attr is not None else None
+    sqlstate = sqlstate_attr.strip().upper() if isinstance(sqlstate_attr, str) and sqlstate_attr.strip() else None
+
+    if enterprise_mapped := _map_enterprise_exception(error, raw_message, error_msg, sqlstate):
+        return enterprise_mapped
 
     if sqlstate:
-        if sqlstate == "23505":
-            return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
-        if sqlstate == "23503":
-            return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
-        if sqlstate == "23502":
-            return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
-        if sqlstate == "23514":
-            return _create_adbc_error(error, CheckViolationError, "check constraint violation")
-
-        if sqlstate == "40P01":
-            return _create_adbc_error(error, DeadlockError, "deadlock detected")
-        if sqlstate == "40001":
-            return _create_adbc_error(error, SerializationConflictError, "serialization failure")
-
-        if sqlstate == "57014":
-            termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
-            return _create_adbc_error(error, termination_class, "query terminated")
-
-        if sqlstate == "42501":
-            return _create_adbc_error(error, PermissionDeniedError, "insufficient privilege")
-        if sqlstate == "28000":
-            return _create_adbc_error(error, PermissionDeniedError, "invalid authorization")
-
-        exc_class = map_sqlstate_to_exception(sqlstate)
-        if exc_class is not None and exc_class is not SQLSpecError:
-            description = _get_sqlstate_description(sqlstate)
-            return _create_adbc_error(error, exc_class, description)
-
-        return _create_adbc_error(error, SQLSpecError, "database error")
-
-    error_msg = str(error).lower()
+        return _map_sqlstate_exception(error, sqlstate)
 
     if "unique" in error_msg or "duplicate" in error_msg:
         return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
@@ -782,7 +922,12 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
     )
 
-    sqlglot_dialect = "postgres" if detected_dialect == "postgresql" else detected_dialect
+    if detected_dialect == "postgresql":
+        sqlglot_dialect = "postgres"
+    elif detected_dialect == "mssql":
+        sqlglot_dialect = "tsql"
+    else:
+        sqlglot_dialect = detected_dialect
     profile = driver_profile
 
     parameter_overrides: dict[str, Any] = {
@@ -797,6 +942,12 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
         parameter_overrides["ast_transformer"] = _transform_duckdb_copy_parameters
+    elif detected_dialect == "oracle":
+        parameter_overrides["preserve_parameter_format"] = False
+        parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.POSITIONAL_COLON}
+    elif detected_dialect in {"db2", "mssql", "tsql"}:
+        parameter_overrides["preserve_parameter_format"] = False
+        parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK}
 
     if is_postgres_dialect(detected_dialect):
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
@@ -807,19 +958,21 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
 
 
 def apply_driver_features(
-    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None", *, dialect: "str | None" = None
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply ADBC driver feature defaults to the statement config.
 
     Args:
         statement_config: Base statement configuration.
         driver_features: Optional driver feature overrides.
+        dialect: Optional resolved dialect name.
 
     Returns:
         Updated statement configuration and normalized driver features.
     """
     processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
     processed_features = _normalize_adbc_driver_features(processed_features)
+    resolved_dialect = (dialect or resolve_dialect_name(statement_config.dialect)).lower()
 
     json_serializer = cast("Callable[[Any], str] | None", processed_features.setdefault("json_serializer", to_json))
     processed_features.setdefault("enable_cast_detection", True)
@@ -830,11 +983,21 @@ def apply_driver_features(
     processed_features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     processed_features.setdefault("enable_paradedb", True)
     processed_features.setdefault("enable_pg_textsearch", True)
+    processed_features.setdefault("enable_lowercase_column_names", resolved_dialect in {"oracle", "db2"})
 
     if json_serializer is not None:
         statement_config = _apply_adbc_json_serializer(statement_config, json_serializer)
 
     return statement_config, processed_features
+
+
+def normalize_column_names(
+    column_names: "list[str]", driver_features: "Mapping[str, Any] | None" = None
+) -> "list[str]":
+    """Lowercase implicit-uppercase column names when enabled in driver_features."""
+    if not driver_features or not driver_features.get("enable_lowercase_column_names", False):
+        return column_names
+    return [name.lower() if name and _IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name) else name for name in column_names]
 
 
 def enforce_strict_type_coercion(parameters: Any, *, is_many: bool = False) -> None:
@@ -856,7 +1019,11 @@ def enforce_strict_type_coercion(parameters: Any, *, is_many: bool = False) -> N
     _validate_strict_parameter_payload(parameters)
 
 
-def resolve_column_names(description: "list[Any] | None", cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
+def resolve_column_names(
+    description: "list[Any] | None",
+    cache: "dict[int, tuple[Any, list[str]]]",
+    driver_features: "Mapping[str, Any] | None" = None,
+) -> list[str]:
     """Resolve and cache ADBC cursor description column names."""
     if not description:
         return []
@@ -866,7 +1033,7 @@ def resolve_column_names(description: "list[Any] | None", cache: "dict[int, tupl
     if cached is not None and cached[0] is description:
         return cached[1]
 
-    column_names = [col[0] for col in description]
+    column_names = normalize_column_names([col[0] for col in description], driver_features)
     if len(cache) >= COLUMN_CACHE_MAX_SIZE:
         cache.pop(next(iter(cache)))
     cache[cache_key] = (description, column_names)
@@ -874,7 +1041,11 @@ def resolve_column_names(description: "list[Any] | None", cache: "dict[int, tupl
 
 
 def collect_rows(
-    fetched_data: "list[Any] | None", description: "list[Any] | None", *, column_names: "list[str] | None" = None
+    fetched_data: "list[Any] | None",
+    description: "list[Any] | None",
+    *,
+    column_names: "list[str] | None" = None,
+    driver_features: "Mapping[str, Any] | None" = None,
 ) -> "tuple[list[Any], list[str]]":
     """Collect ADBC rows and column names.
 
@@ -886,13 +1057,18 @@ def collect_rows(
         fetched_data: Rows returned from cursor.fetchall().
         description: Cursor description metadata.
         column_names: Optional precomputed column names.
+        driver_features: Optional driver feature configuration.
 
     Returns:
         Tuple of (rows, column_names).
     """
     if not description:
         return [], []
-    resolved_column_names = [col[0] for col in description] if column_names is None else column_names
+    resolved_column_names = (
+        normalize_column_names([col[0] for col in description], driver_features)
+        if column_names is None
+        else normalize_column_names(column_names, driver_features)
+    )
     if not fetched_data:
         return [], resolved_column_names
     return fetched_data, resolved_column_names
@@ -1327,6 +1503,133 @@ def _get_sqlstate_description(sqlstate: str) -> str:
     return _SQLSTATE_DESCRIPTIONS.get(class_code, "database error")
 
 
+def _map_oracle_exception(error: Any, raw_message: str) -> "SQLSpecError | None":
+    match = _ORA_CODE_PATTERN.search(raw_message)
+    if match is None:
+        return None
+    code = int(match.group(1))
+    if code in _ORA_ERROR_CODE_MAP:
+        exc_cls, desc = _ORA_ERROR_CODE_MAP[code]
+        return _create_adbc_error(error, exc_cls, desc)
+    if _ORA_INTEGRITY_START <= code < _ORA_INTEGRITY_END:
+        return _create_adbc_error(error, IntegrityError, "integrity constraint violation")
+    if _ORA_PARSING_START <= code < _ORA_PARSING_END:
+        return _create_adbc_error(error, SQLParsingError, "SQL parsing error")
+    return None
+
+
+def _extract_db2_sqlcode(error: Any, raw_message: str, has_db2_marker: bool) -> "int | None":
+    match = _DB2_SQLCODE_PATTERN.search(raw_message)
+    if match is not None:
+        return abs(int(match.group(1)))
+    vendor_code = getattr(error, "vendor_code", None)
+    if isinstance(vendor_code, int) and (vendor_code < 0 or has_db2_marker):
+        return abs(vendor_code)
+    return None
+
+
+def _map_db2_exception(
+    error: Any, raw_message: str, lowered_message: str, explicit_sqlstate: "str | None"
+) -> "SQLSpecError | None":
+    sqlstate = explicit_sqlstate
+    if sqlstate is None:
+        state_matches = _DB2_SQLSTATE_PATTERN.findall(raw_message)
+        if state_matches:
+            sqlstate = str(state_matches[-1]).upper()
+
+    has_db2_marker = (
+        "db2" in lowered_message
+        or "sqlstate=" in lowered_message
+        or "reason code" in lowered_message
+        or _DB2_SQLCODE_PATTERN.search(raw_message) is not None
+    )
+    sqlcode = _extract_db2_sqlcode(error, raw_message, has_db2_marker)
+    if not has_db2_marker and sqlcode is None and sqlstate not in {"57033", "42704"}:
+        return None
+
+    if sqlstate in _DB2_ROLLBACK_SQLSTATES or (sqlcode is not None and sqlcode in _DB2_ROLLBACK_SQLCODES):
+        reason_match = _DB2_REASON_CODE_PATTERN.search(raw_message)
+        if reason_match is not None and int(reason_match.group(1)) == _DB2_LOCK_TIMEOUT_REASON_CODE:
+            return _create_adbc_error(error, QueryTimeoutError, "lock timeout")
+        if sqlstate == "57033" or (sqlcode is not None and sqlcode in _DB2_ROLLBACK_SQLCODES) or has_db2_marker:
+            return _create_adbc_error(error, DeadlockError, "deadlock detected")
+
+    if sqlstate == "42704" or sqlcode == _DB2_UNDEFINED_OBJECT_CODE:
+        return _create_adbc_error(error, SQLParsingError, "undefined object")
+    if sqlstate == "42501" or (sqlcode is not None and sqlcode in {551, 552}):
+        return _create_adbc_error(error, PermissionDeniedError, "permission denied")
+
+    if sqlcode is not None and sqlcode in _DB2_SQLCODE_MAP:
+        exc_cls, desc = _DB2_SQLCODE_MAP[sqlcode]
+        return _create_adbc_error(error, exc_cls, desc)
+    return None
+
+
+def _map_mssql_exception(error: Any, raw_message: str, lowered_message: str) -> "SQLSpecError | None":
+    has_mssql_marker = any(marker in lowered_message for marker in ("mssql", "sql server", "sqlserver", "tds:", "msg "))
+    code: int | None = None
+    vendor_code = getattr(error, "vendor_code", None)
+    if isinstance(vendor_code, int) and vendor_code > 0 and has_mssql_marker:
+        code = vendor_code
+    else:
+        msg_match = _MSSQL_MSG_NUMBER_PATTERN.search(raw_message)
+        if msg_match is not None and has_mssql_marker:
+            code = int(msg_match.group(1))
+
+    if code is None:
+        return None
+    if code == _MSSQL_CONSTRAINT_ERROR_CODE:
+        if "check constraint" in lowered_message:
+            return _create_adbc_error(error, CheckViolationError, "check constraint violation")
+        return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    if code in _MSSQL_ERROR_CODE_MAP:
+        exc_cls, desc = _MSSQL_ERROR_CODE_MAP[code]
+        return _create_adbc_error(error, exc_cls, desc)
+    return None
+
+
+def _map_enterprise_exception(
+    error: Any, raw_message: str, lowered_message: str, sqlstate: "str | None"
+) -> "SQLSpecError | None":
+    if oracle_mapped := _map_oracle_exception(error, raw_message):
+        return oracle_mapped
+    if db2_mapped := _map_db2_exception(error, raw_message, lowered_message, sqlstate):
+        return db2_mapped
+    return _map_mssql_exception(error, raw_message, lowered_message)
+
+
+def _map_sqlstate_exception(error: Any, sqlstate: str) -> SQLSpecError:
+    if sqlstate == "23505":
+        return _create_adbc_error(error, UniqueViolationError, "unique constraint violation")
+    if sqlstate == "23503":
+        return _create_adbc_error(error, ForeignKeyViolationError, "foreign key constraint violation")
+    if sqlstate == "23502":
+        return _create_adbc_error(error, NotNullViolationError, "not-null constraint violation")
+    if sqlstate == "23514":
+        return _create_adbc_error(error, CheckViolationError, "check constraint violation")
+
+    if sqlstate == "40P01":
+        return _create_adbc_error(error, DeadlockError, "deadlock detected")
+    if sqlstate == "40001":
+        return _create_adbc_error(error, SerializationConflictError, "serialization failure")
+
+    if sqlstate == "57014":
+        termination_class = _classify_timeout_or_cancellation(str(error)) or OperationalError
+        return _create_adbc_error(error, termination_class, "query terminated")
+
+    if sqlstate == "42501":
+        return _create_adbc_error(error, PermissionDeniedError, "insufficient privilege")
+    if sqlstate == "28000":
+        return _create_adbc_error(error, PermissionDeniedError, "invalid authorization")
+
+    exc_class = map_sqlstate_to_exception(sqlstate)
+    if exc_class is not None and exc_class is not SQLSpecError:
+        description = _get_sqlstate_description(sqlstate)
+        return _create_adbc_error(error, exc_class, description)
+
+    return _create_adbc_error(error, SQLSpecError, "database error")
+
+
 def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "dict[str, Any]":
     if "strict_type_coercion" in processed_features and "enable_strict_type_coercion" not in processed_features:
         processed_features["enable_strict_type_coercion"] = processed_features["strict_type_coercion"]
@@ -1508,6 +1811,20 @@ def _prepare_parameter_sequence_with_casts(
 _prepare_batch_with_casts = prepare_batch_with_casts
 
 
+def _resolve_gizmosql_driver_connect() -> str:
+    """Return the preferred GizmoSQL connect path based on installed packages."""
+    if import_optional("adbc_driver_gizmosql") is not None:
+        return _GIZMOSQL_NATIVE_CONNECT
+    return _FLIGHTSQL_CONNECT
+
+
+def _resolve_mssql_driver_connect() -> str:
+    """Return the preferred SQL Server connect path based on installed packages."""
+    if import_optional("adbc_driver_mssql") is not None:
+        return _MSSQL_NATIVE_CONNECT
+    return _DRIVER_MANAGER_CONNECT
+
+
 def _resolve_flightsql_db_kwargs_keys() -> "tuple[str, str]":
     database_options = import_optional_attr("adbc_driver_flightsql", "DatabaseOptions")
     if database_options is None:
@@ -1515,21 +1832,9 @@ def _resolve_flightsql_db_kwargs_keys() -> "tuple[str, str]":
     return database_options.TLS_SKIP_VERIFY.value, database_options.AUTHORIZATION_HEADER.value
 
 
-def _lift_flightsql_db_kwargs(config: "dict[str, Any]") -> None:
-    db_kwargs = config.pop("db_kwargs", None)
-    db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
-    tls_skip_verify_key, authorization_header_key = _resolve_flightsql_db_kwargs_keys()
-
-    for field in _FLIGHTSQL_DB_KWARGS_FIELDS:
-        if field in config:
-            db_kwargs_dict.setdefault(field, config.pop(field))
-
-    if "tls_skip_verify" in config:
-        tls_skip_verify = config.pop("tls_skip_verify")
-        if isinstance(tls_skip_verify, bool):
-            tls_skip_verify = str(tls_skip_verify).lower()
-        db_kwargs_dict.setdefault(tls_skip_verify_key, tls_skip_verify)
-
+def _lift_flightsql_common_options(
+    config: "dict[str, Any]", db_kwargs_dict: "dict[str, Any]", authorization_header_key: str
+) -> None:
     if "authorization_header" in config:
         db_kwargs_dict.setdefault(authorization_header_key, config.pop("authorization_header"))
 
@@ -1563,9 +1868,89 @@ def _lift_flightsql_db_kwargs(config: "dict[str, Any]") -> None:
             for hdr_key, hdr_val in headers.items():
                 db_kwargs_dict.setdefault(f"{_FLIGHTSQL_RPC_CALL_HEADER_PREFIX}{hdr_key}", str(hdr_val))
 
+
+def _lift_native_gizmosql_db_kwargs(config: "dict[str, Any]") -> None:
+    db_kwargs = config.pop("db_kwargs", None)
+    db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+    _tls_skip_verify_key, authorization_header_key = _resolve_flightsql_db_kwargs_keys()
+    _lift_flightsql_common_options(config, db_kwargs_dict, authorization_header_key)
     config.pop("gizmosql_backend", None)
     if db_kwargs_dict:
         config["db_kwargs"] = db_kwargs_dict
+
+
+def _lift_flightsql_db_kwargs(config: "dict[str, Any]") -> None:
+    db_kwargs = config.pop("db_kwargs", None)
+    db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+    tls_skip_verify_key, authorization_header_key = _resolve_flightsql_db_kwargs_keys()
+
+    for field in _FLIGHTSQL_DB_KWARGS_FIELDS:
+        if field in config:
+            db_kwargs_dict.setdefault(field, config.pop(field))
+
+    if "auth_type" in config:
+        db_kwargs_dict.setdefault(_GIZMOSQL_AUTH_TYPE_KEY, config.pop("auth_type"))
+
+    if "tls_skip_verify" in config:
+        tls_skip_verify = config.pop("tls_skip_verify")
+        if isinstance(tls_skip_verify, bool):
+            tls_skip_verify = str(tls_skip_verify).lower()
+        db_kwargs_dict.setdefault(tls_skip_verify_key, tls_skip_verify)
+
+    _lift_flightsql_common_options(config, db_kwargs_dict, authorization_header_key)
+
+    config.pop("gizmosql_backend", None)
+    if db_kwargs_dict:
+        config["db_kwargs"] = db_kwargs_dict
+
+
+def _lift_driver_specific_db_kwargs(
+    config: "dict[str, Any]", driver_kind: "str | None", resolved_connect_path: str
+) -> None:
+    if driver_kind == "gizmosql" and resolved_connect_path == _GIZMOSQL_NATIVE_CONNECT:
+        _lift_native_gizmosql_db_kwargs(config)
+        return
+    if driver_kind in {"gizmosql", "flightsql"}:
+        _lift_flightsql_db_kwargs(config)
+        return
+    if driver_kind == "bigquery":
+        db_kwargs = config.get("db_kwargs")
+        db_kwargs_dict: dict[str, Any] = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+        for param, option in _BIGQUERY_DB_KWARGS_OPTIONS:
+            if param in config:
+                db_kwargs_dict[option] = config.pop(param)
+        if db_kwargs_dict:
+            config["db_kwargs"] = db_kwargs_dict
+        return
+    if driver_kind == "quack" and "token" in config:
+        db_kwargs = config.get("db_kwargs")
+        db_kwargs_dict = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+        db_kwargs_dict.setdefault(_QUACK_AUTH_KEY, config.pop("token"))
+        config["db_kwargs"] = db_kwargs_dict
+        return
+    if driver_kind == "oracle":
+        db_kwargs = config.get("db_kwargs")
+        db_kwargs_dict = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+        for field in ("username", "password"):
+            if field in config:
+                db_kwargs_dict.setdefault(field, config.pop(field))
+        if db_kwargs_dict:
+            config["db_kwargs"] = db_kwargs_dict
+
+
+def _apply_driver_manager_config(config: "dict[str, Any]", driver_kind: "str | None", driver_name: Any) -> None:
+    if driver_kind == "mssql":
+        config["driver"] = "mssql"
+    elif isinstance(driver_name, str) and "driver" not in config:
+        config["driver"] = driver_name.strip()
+    if any(field in config for field in ("uri", "username", "password")):
+        db_kwargs = config.get("db_kwargs")
+        db_kwargs_dict = dict(db_kwargs) if isinstance(db_kwargs, dict) else {}
+        for field in ("uri", "username", "password"):
+            if field in config:
+                db_kwargs_dict.setdefault(field, config.pop(field))
+        if db_kwargs_dict:
+            config["db_kwargs"] = db_kwargs_dict
 
 
 driver_profile: Final[DriverParameterProfile] = build_profile()

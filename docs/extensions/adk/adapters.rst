@@ -15,13 +15,14 @@ Use async adapters for best performance with ADK runners:
 - **MySQL/MariaDB**: ``aiomysql``, ``asyncmy``
 - **SQLite**: ``aiosqlite`` (development and single-process)
 - **Oracle**: ``oracledb``
+- **IBM Db2**: ``db2`` (native ``ibm_db`` sync and async modes)
 - **DuckDB**: ``duckdb`` (analytics; reduced-scope for ADK)
-- **ADBC**: ``adbc`` (Arrow-native portability; reduced-scope for ADK)
+- **ADBC**: ``adbc`` (Arrow-native portability across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, Oracle, IBM Db2, and SQL Server)
 - **Spanner**: ``spanner`` (Google Cloud, globally distributed; supports both async and sync modes)
 - **SQL Server**: ``mssql_python`` (native Arrow and BulkCopy), ``pymssql`` (FreeTDS), ``arrow_odbc`` (Arrow over Microsoft ODBC Driver 18)
 
-Sync adapters (``psycopg`` sync mode, ``spanner`` sync mode, ``sqlite``, ``mysqlconnector``,
-``pymysql``, ``mssql_python``, ``pymssql``, ``arrow_odbc``) work but require wrapping with ``anyio`` for async
+Sync adapters (``psycopg`` sync mode, ``spanner`` sync mode, ``db2`` sync mode, ``sqlite``, ``mysqlconnector``,
+``pymysql``, ``mssql_python``, ``pymssql``, ``arrow_odbc``, ``adbc``) work with ADK and use ``anyio`` worker-thread dispatch for async
 ADK runners.
 
 Each Adapter Provides

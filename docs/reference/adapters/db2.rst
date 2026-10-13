@@ -32,6 +32,11 @@ newer. On other platforms ``pip`` builds ``ibm_db`` from source: set
 ``CLIDRIVER_VERSION=v11.5.9`` to download a compatible CLI driver, or point
 ``IBM_DB_HOME`` at an existing Db2 client installation.
 
+.. tip::
+
+   For Arrow-first analytical workloads on IBM Db2, you can also connect through
+   :doc:`ADBC <adbc>` using ``adbc-driver-db2`` (``AdbcConfig(connection_config={"driver_name": "db2", "uri": ...})``).
+
 Quick Start
 ===========
 

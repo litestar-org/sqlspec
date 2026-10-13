@@ -83,6 +83,11 @@ The table below classifies every backend by its ADK support level.
      - Full
      - Full
      - Oracle Database driver.
+   * - db2
+     - Supported
+     - Full
+     - Basic
+     - IBM Db2 (LUW); ``POSSTR`` memory search.
    * - duckdb
      - Reduced-scope
      - Full
@@ -92,7 +97,7 @@ The table below classifies every backend by its ADK support level.
      - Reduced-scope
      - Full
      - Basic
-     - Portability layer; native adapters provide optimized search.
+     - Arrow Database Connectivity across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, Oracle, IBM Db2, and SQL Server.
    * - mssql_python
      - Supported
      - Full
@@ -172,9 +177,8 @@ PostgreSQL backends (asyncpg, psycopg, psqlpy) provide the fullest feature set:
 - Full-text search via ``tsvector`` for memory entries.
 - ``UPSERT`` and ``RETURNING`` clauses for atomic operations.
 - ``append_event_and_update_state()`` executes as a single transaction.
-- ``fillfactor``, ``autovacuum_vacuum_scale_factor``, and
-  ``autovacuum_analyze_scale_factor`` tune the generated tables. The existing
-  ``fillfactor=80`` default is preserved.
+- ``fillfactor`` (default ``80``), ``autovacuum_vacuum_scale_factor``, and
+  ``autovacuum_analyze_scale_factor`` tune the generated tables.
 
 **Recommended for production deployments.**
 
@@ -290,13 +294,19 @@ DuckDB provides session and event storage but has limitations:
 ADBC
 ----
 
-ADBC (Arrow Database Connectivity) provides a driver-agnostic interface:
+ADBC (Arrow Database Connectivity) provides a portable Arrow-native store
+(:class:`~sqlspec.adapters.adbc.adk.AdbcADKStore` and
+:class:`~sqlspec.adapters.adbc.adk.AdbcADKMemoryStore`):
 
-- Works with any ADBC-compatible driver (PostgreSQL, SQLite, DuckDB, etc.).
+- Dialect-aware DDL, parameter binding, and pagination for PostgreSQL, SQLite,
+  DuckDB, BigQuery, Snowflake, Oracle (``:1, :2`` placeholders and PL/SQL
+  idempotent DDL), IBM Db2 (``SYSCAT`` catalog guards and ``POSSTR`` memory
+  search), and SQL Server (``OBJECT_ID`` / ``sys.indexes`` guards and
+  ``DATETIME2`` / ``NVARCHAR(MAX)`` storage).
 - Arrow-native data transfer for high-throughput event ingestion.
-- Backend capabilities depend on the underlying database driver.
-- Memory search uses the portable baseline path; choose a native adapter for
-  backend-specific FTS, retention, and storage tuning.
+- Portable substring memory search across all supported ADBC dialects; choose a
+  dedicated native adapter when you need backend-specific full-text search
+  indexes or retention policies.
 
 SQL Server (mssql-python and pymssql)
 -------------------------------------
@@ -304,11 +314,8 @@ SQL Server (mssql-python and pymssql)
 ``mssql_python`` and ``pymssql`` provide SQL Server-backed ADK storage:
 
 - Session and event storage use SQL Server tables with ``DATETIME2(6)`` and
-  ``NVARCHAR(MAX)`` JSON payload columns. Microsoft's
-  `type mapping reference <https://learn.microsoft.com/en-us/sql/connect/python/mssql-python/data-type-mappings>`_
-  lists native ``JSON`` as unsupported, even when the server supports the type.
-  The existing ``native_json=True`` override remains available for deployments
-  that have independently verified driver support.
+  ``NVARCHAR(MAX)`` JSON payload columns. Pass ``native_json=True`` when your
+  SQL Server deployment and driver support native ``JSON`` columns.
 - ``append_event_and_update_state()`` commits the session update, event row, and
   scoped state in one transaction.
 - Memory search is ``LIKE``-based across memory entries.

@@ -531,3 +531,135 @@ def test_adbc_driver_standalone_applies_features_and_enforces_strict_coercion() 
 
     with pytest.raises(SQLSpecError):
         driver.prepare_driver_parameters([object()], driver.statement_config)
+
+
+def test_oracle_driver_aliases_uri_and_parameter_profile() -> None:
+    """Oracle aliases and oracle:// URI resolve to adbc_driver_oracle and POSITIONAL_COLON parameters."""
+    for conn_cfg in (
+        {"driver_name": "oracle", "uri": "oracle://scott:tiger@localhost:1521/FREEPDB1"},
+        {"driver_name": "oracledb", "uri": "oracle://scott:tiger@localhost:1521/FREEPDB1"},
+        {"uri": "oracle://scott:tiger@localhost:1521/FREEPDB1"},
+    ):
+        config = AdbcConfig(connection_config=conn_cfg)
+        assert _resolve_driver_name(config) == "adbc_driver_oracle.dbapi.connect"
+        assert config.statement_config.dialect == "oracle"
+        assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.POSITIONAL_COLON
+        assert set(config.statement_config.parameter_config.supported_execution_parameter_styles or ()) == {
+            ParameterStyle.POSITIONAL_COLON
+        }
+
+
+def test_oracle_lifts_discrete_username_and_password_into_db_kwargs() -> None:
+    """adbc_driver_oracle.dbapi.connect only accepts uri at top level; username/password move to db_kwargs."""
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "oracle",
+            "uri": "oracle://localhost:1521/FREEPDB1",
+            "username": "scott",
+            "password": "tiger",
+        }
+    )
+    resolved = _get_connection_config_dict(config)
+    assert resolved["uri"] == "oracle://localhost:1521/FREEPDB1"
+    assert "username" not in resolved
+    assert "password" not in resolved
+    assert resolved["db_kwargs"] == {"username": "scott", "password": "tiger"}
+
+
+def test_db2_driver_aliases_uri_and_parameter_profile() -> None:
+    """Db2 aliases and db2:// URI resolve to adbc_driver_db2 and QMARK parameters."""
+    for conn_cfg in (
+        {"driver_name": "db2", "uri": "DATABASE=testdb;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=secret;"},
+        {"driver_name": "ibmdb2", "uri": "db2://db2inst1:secret@localhost:50000/testdb"},
+        {"driver_name": "ibm_db", "uri": "db2://db2inst1:secret@localhost:50000/testdb"},
+        {"uri": "db2://db2inst1:secret@localhost:50000/testdb"},
+    ):
+        config = AdbcConfig(connection_config=conn_cfg)
+        assert _resolve_driver_name(config) == "adbc_driver_db2.dbapi.connect"
+        assert config.statement_config.dialect == "db2"
+        assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
+        assert set(config.statement_config.parameter_config.supported_execution_parameter_styles or ()) == {
+            ParameterStyle.QMARK
+        }
+
+
+def test_mssql_driver_manager_fallback_and_tsql_statement_config(monkeypatch: Any) -> None:
+    """When adbc_driver_mssql is absent, mssql routes through adbc_driver_manager with driver='mssql'."""
+    monkeypatch.setattr(
+        "sqlspec.adapters.adbc.core.import_optional", lambda name: None if name == "adbc_driver_mssql" else MagicMock()
+    )
+
+    for conn_cfg in (
+        {"driver_name": "mssql", "uri": "sqlserver://sa:Pass@localhost:1433?database=master"},
+        {"driver_name": "sqlserver", "uri": "mssql://sa:Pass@localhost:1433?database=master"},
+        {"uri": "sqlserver://sa:Pass@localhost:1433?database=master"},
+        {"driver": "mssql", "db_kwargs": {"uri": "sqlserver://sa:Pass@localhost:1433?database=master"}},
+    ):
+        config = AdbcConfig(connection_config=conn_cfg)
+        assert _resolve_driver_name(config) == "adbc_driver_manager.dbapi.connect"
+        assert config.statement_config.dialect == "tsql"
+        assert config.statement_config.parameter_config.default_parameter_style == ParameterStyle.QMARK
+        assert set(config.statement_config.parameter_config.supported_execution_parameter_styles or ()) == {
+            ParameterStyle.QMARK
+        }
+        resolved = _get_connection_config_dict(config)
+        assert resolved["driver"] == "mssql"
+        assert "uri" not in resolved
+        assert resolved["db_kwargs"]["uri"].startswith(("sqlserver://", "mssql://"))
+
+
+def test_mssql_native_package_preferred_when_installed(monkeypatch: Any) -> None:
+    """When adbc_driver_mssql is installed, mssql resolves to adbc_driver_mssql.dbapi.connect."""
+    monkeypatch.setattr(
+        "sqlspec.adapters.adbc.core.import_optional", lambda name: MagicMock() if name == "adbc_driver_mssql" else None
+    )
+    config = AdbcConfig(connection_config={"driver_name": "mssql", "uri": "sqlserver://localhost:1433"})
+    assert _resolve_driver_name(config) == "adbc_driver_mssql.dbapi.connect"
+    assert config.statement_config.dialect == "tsql"
+
+
+def test_gizmosql_prefers_native_driver_when_installed(monkeypatch: Any) -> None:
+    """When adbc_driver_gizmosql is installed, gizmosql resolves to adbc_driver_gizmosql.dbapi.connect."""
+    monkeypatch.setattr(
+        "sqlspec.adapters.adbc.core.import_optional",
+        lambda name: MagicMock() if name == "adbc_driver_gizmosql" else None,
+    )
+    config = AdbcConfig(
+        connection_config={
+            "driver_name": "gizmosql",
+            "uri": "grpc+tls://localhost:31337",
+            "auth_type": "external",
+            "tls_skip_verify": True,
+        }
+    )
+    assert _resolve_driver_name(config) == "adbc_driver_gizmosql.dbapi.connect"
+    resolved = _get_connection_config_dict(config)
+    assert resolved["auth_type"] == "external"
+    assert resolved["tls_skip_verify"] is True
+
+
+def test_gizmosql_flightsql_fallback_lifts_auth_type_into_db_kwargs(monkeypatch: Any) -> None:
+    """When adbc_driver_gizmosql is absent, auth_type is lifted into db_kwargs['adbc.gizmosql.auth_type']."""
+    monkeypatch.setattr("sqlspec.adapters.adbc.core.import_optional", lambda _name: None)
+    config = AdbcConfig(
+        connection_config={"driver_name": "gizmosql", "uri": "grpc+tls://localhost:31337", "auth_type": "external"}
+    )
+    assert _resolve_driver_name(config) == "adbc_driver_flightsql.dbapi.connect"
+    resolved = _get_connection_config_dict(config)
+    assert "auth_type" not in resolved
+    assert resolved["db_kwargs"]["adbc.gizmosql.auth_type"] == "external"
+
+
+def test_quack_driver_aliases_uri_and_token_normalization() -> None:
+    """Quack driver resolves to adbc_driver_quack, duckdb dialect, and lifts token into db_kwargs."""
+    for conn_cfg in (
+        {"driver_name": "quack", "uri": "quack+tls://quack.example.com:9999", "token": "secret-jwt"},
+        {"uri": "quack://localhost:9999", "token": "secret-jwt"},
+        {"uri": "quack+tls://localhost:9999", "token": "secret-jwt"},
+    ):
+        config = AdbcConfig(connection_config=conn_cfg)
+        assert _resolve_driver_name(config) == "adbc_driver_quack.dbapi.connect"
+        assert config.statement_config.dialect == "duckdb"
+        resolved = _get_connection_config_dict(config)
+        assert "token" not in resolved
+        assert resolved["db_kwargs"]["adbc.quack.token"] == "secret-jwt"
