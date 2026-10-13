@@ -1,6 +1,7 @@
 """DuckDB adapter compiled helpers."""
 
 import contextlib
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -46,12 +47,13 @@ from sqlspec.utils.type_guards import has_rowcount
 from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.storage import StorageDestination, SyncStoragePipeline
 
 
 __all__ = (
+    "ARROW_MIN_ROWS",
     "apply_driver_features",
     "build_connection_config",
     "build_profile",
@@ -59,11 +61,56 @@ __all__ = (
     "collect_rows",
     "create_mapped_exception",
     "default_statement_config",
+    "description_has_arrow_divergent_types",
     "driver_profile",
     "format_identifier",
     "normalize_execute_parameters",
     "resolve_rowcount",
 )
+
+ARROW_MIN_ROWS: Final[int] = 64
+
+_FIXED_ARRAY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[\d+\]")
+_ARROW_SAFE_SCALAR_TYPES: Final[frozenset[str]] = frozenset({
+    "INTEGER",
+    "BIGINT",
+    "VARCHAR",
+    "DOUBLE",
+    "BOOLEAN",
+    "DATE",
+    "TIMESTAMP",
+    "SMALLINT",
+    "TINYINT",
+    "UBIGINT",
+    "UINTEGER",
+    "USMALLINT",
+    "UTINYINT",
+    "FLOAT",
+    "BLOB",
+    "UUID",
+    "TIME",
+    "TIMESTAMP WITH TIME ZONE",
+    "TIMESTAMPTZ",
+    "TIMESTAMP_S",
+    "TIMESTAMP_MS",
+    "JSON",
+})
+
+
+def description_has_arrow_divergent_types(description: "Sequence[Any] | None") -> bool:
+    """Return whether any column in ``cursor.description`` diverges between Arrow and ``fetchall()``."""
+    if not description:
+        return False
+    for column in description:
+        if len(column) <= 1 or column[1] is None:
+            continue
+        type_str = str(column[1]).upper()
+        if type_str in _ARROW_SAFE_SCALAR_TYPES:
+            continue
+        if _type_str_is_arrow_divergent(type_str):
+            return True
+    return False
+
 
 
 def format_identifier(identifier: str) -> str:
@@ -715,6 +762,25 @@ def _restore_uuid_columns(rows: "list[dict[str, Any]]", description: "list[Any] 
             value = row.get(column)
             if isinstance(value, str):
                 row[column] = uuid_from_string(value)
+
+
+def _type_str_is_arrow_divergent(type_str: str) -> bool:
+    if (
+        "HUGEINT" in type_str
+        or "TIMETZ" in type_str
+        or "TIME WITH TIME ZONE" in type_str
+        or "TIMESTAMP_NS" in type_str
+        or "INTERVAL" in type_str
+        or "MAP(" in type_str
+        or "BIGNUM" in type_str
+        or "VARINT" in type_str
+    ):
+        return True
+    if type_str == "BIT" or "BIT[" in type_str or " BIT" in type_str or type_str.startswith("BIT "):
+        return True
+    if "UUID" in type_str and type_str != "UUID":
+        return True
+    return "[" in type_str and _FIXED_ARRAY_PATTERN.search(type_str) is not None
 
 
 driver_profile = build_profile()

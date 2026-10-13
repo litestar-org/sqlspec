@@ -9,6 +9,7 @@ from sqlglot import exp
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
 from sqlspec.adapters.duckdb.core import (
+    ARROW_MIN_ROWS,
     _build_storage_copy_sql,
     _build_storage_read_sql,
     _DuckDBStreamSource,
@@ -17,6 +18,7 @@ from sqlspec.adapters.duckdb.core import (
     collect_rows,
     create_mapped_exception,
     default_statement_config,
+    description_has_arrow_divergent_types,
     driver_profile,
     format_identifier,
     normalize_execute_parameters,
@@ -51,8 +53,9 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, RowFormat, StatementParameters
 else:
     pa = import_optional("pyarrow")
 
@@ -143,18 +146,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            arrow_table = cursor.to_arrow_table()
-            data = arrow_table.to_pylist()
-            _restore_uuid_columns(data, cursor.description)
-            column_names = list(arrow_table.column_names)
-
+            data, column_names, row_count, row_format = self._materialize_select_rows(cursor, sql)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
-                data_row_count=len(data),
+                data_row_count=row_count,
                 is_select_result=True,
-                row_format="dict",
+                row_format=row_format,
             )
 
         row_count = resolve_rowcount(cursor)
@@ -558,6 +557,51 @@ class DuckDBDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "DuckDBConnection") -> int:
         """Resolve rowcount from DuckDB cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute a cached query using DuckDB's unified row materializer."""
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(cached.compiled_sql, normalize_execute_parameters(params))
+            if cached.operation_profile.returns_rows:
+                data, column_names, row_count, row_format = self._materialize_select_rows(cursor, cached.compiled_sql)
+                return self.build_cached_select_result(
+                    sql,
+                    params,
+                    cached,
+                    selected_data=data,
+                    column_names=column_names,
+                    data_row_count=row_count,
+                    row_format=row_format,
+                )
+            affected_rows = resolve_rowcount(cursor)
+            return DMLResult(cached.operation_type, affected_rows)
+
+    def _materialize_select_rows(
+        self, cursor: Any, compiled_sql: str
+    ) -> "tuple[list[Any], list[str], int, RowFormat]":
+        """Materialize SELECT rows using DuckDB's native Python type contract."""
+        description = cursor.description
+        hint = self._cache_holder.get_row_count_hint(compiled_sql)
+        if (
+            (hint is not None and hint < ARROW_MIN_ROWS)
+            or description_has_arrow_divergent_types(description)
+            or not hasattr(cursor, "to_arrow_table")
+        ):
+            fetched_data = cursor.fetchall()
+            data, column_names = collect_rows(fetched_data, description)
+            row_count = len(data)
+            self._cache_holder.set_row_count_hint(compiled_sql, row_count)
+            return data, column_names, row_count, "tuple"
+
+        arrow_table = cursor.to_arrow_table()
+        data = arrow_table.to_pylist()
+        _restore_uuid_columns(data, description)
+        column_names = list(arrow_table.column_names)
+        row_count = len(data)
+        self._cache_holder.set_row_count_hint(compiled_sql, row_count)
+        return data, column_names, row_count, "dict"
 
     def _native_storage_job(
         self,
