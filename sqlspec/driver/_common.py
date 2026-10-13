@@ -959,6 +959,32 @@ class CommonDriverAttributesMixin:
         """
         return _find_filter_impl(filter_type, filters)
 
+    def build_cached_select_result(
+        self,
+        sql: str,
+        params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
+        cached: "CachedQuery",
+        *,
+        selected_data: "list[Any]",
+        column_names: "list[str]",
+        data_row_count: int,
+        row_format: "RowFormat" = "dict",
+        last_inserted_id: int | str | None = None,
+    ) -> "SQLResult":
+        """Build a fast-path SELECT result with deferred statement materialization."""
+        return SQLResult.create_cached_select(
+            sql=sql,
+            config=self.statement_config,
+            cached_state=cached.processed_state,
+            compiled_sql=cached.compiled_sql,
+            params=params,
+            data=selected_data,
+            column_names=column_names,
+            rows_affected=data_row_count,
+            row_format=row_format,
+            last_inserted_id=last_inserted_id,
+        )
+
     def _statement_cache_size(self) -> int:
         """Return the configured statement-cache capacity."""
         return resolve_statement_cache_size(self.driver_features)
@@ -1020,9 +1046,7 @@ class CommonDriverAttributesMixin:
             )
         effective_compiled_sql = cached.compiled_sql if compiled_sql is None else compiled_sql
         cached_state = cached.processed_state
-        direct_state = self._processed_state_pool.acquire()
-        ProcessedState.__init__(
-            direct_state,
+        direct_state = ProcessedState(
             compiled_sql=effective_compiled_sql,
             execution_parameters=prepared_parameters,
             parsed_expression=cached_state.parsed_expression,
@@ -1031,13 +1055,14 @@ class CommonDriverAttributesMixin:
             applied_wrap_types=cached_state.applied_wrap_types,
             filter_hash=cached_state.filter_hash,
             parameter_fingerprint=cached_state.parameter_fingerprint,
-            parameter_casts=dict(cached_state.parameter_casts),
-            validation_errors=cached_state.validation_errors.copy(),
+            parameter_casts=cached_state.parameter_casts,
+            validation_errors=cached_state.validation_errors,
             parameter_profile=cached_state.parameter_profile,
             operation_profile=cached_state.operation_profile,
             is_many=False,
+            expression_is_shared=True,
         )
-        return SQL._create_cached_direct(sql, self.statement_config, direct_state)
+        return SQL._create_cached_direct(sql, self.statement_config, direct_state, pooled=False)
 
     def _sub_statement(self, sql: str, execution_parameters: "ConvertedParameters") -> "SQL":
         direct_state = self._processed_state_pool.acquire()

@@ -451,7 +451,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         statements while preserving driver exception mapping behavior.
         """
         cursor = None
-        direct_statement: SQL | None = None
         returns_rows = cached.operation_profile.returns_rows
         self._invalidate_rowid_target_cache(cached.operation_type)
         try:
@@ -489,25 +488,20 @@ class SqliteDriver(SyncDriverAdapterBase):
             description = cursor.description
             column_names = [col[0] for col in description] if description else []
             row_format = resolve_row_format(fetched_data)
-            execution_result = self.create_execution_result(
-                cursor,
+            return self.build_cached_select_result(
+                sql,
+                params,
+                cached,
                 selected_data=fetched_data,
                 column_names=column_names,
                 data_row_count=len(fetched_data),
-                is_select_result=True,
                 row_format=row_format,
                 last_inserted_id=last_inserted_id,
             )
-            direct_statement = self._cached_statement(
-                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-            )
-            return self.build_statement_result(direct_statement, execution_result)
         finally:
             if cursor is not None:
                 with contextlib.suppress(Exception):
                     cursor.close()
-            if direct_statement is not None:
-                self._release_pooled_statement(direct_statement)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:

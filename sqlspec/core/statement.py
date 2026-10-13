@@ -1164,7 +1164,14 @@ class SQL:
         return builder
 
     @classmethod
-    def _create_cached_direct(cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState") -> "SQL":
+    def _create_cached_direct(
+        cls,
+        sql: str,
+        config: "StatementConfig",
+        processed_state: "ProcessedState",
+        *,
+        pooled: bool = True,
+    ) -> "SQL":
         """Create a minimal SQL object for direct (fast-path) execution.
 
         Bypasses standard __init__ and parameter processing.
@@ -1175,7 +1182,7 @@ class SQL:
         stmt._statement_config = config
         stmt._dialect = stmt._normalize_dialect(config.dialect)
         stmt._processed_state = processed_state
-        stmt._pooled = True
+        stmt._pooled = pooled
         stmt._is_cache_direct = True
         stmt._is_many = False
         stmt._is_script = False

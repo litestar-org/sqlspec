@@ -1775,18 +1775,15 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         if isawaitable(fetched_data):
                             fetched_data = await fetched_data
                         data, column_names, row_count = self.collect_rows(cursor, fetched_data)
-                        execution_result = self.create_execution_result(
-                            cursor,
+                        result = self.build_cached_select_result(
+                            sql,
+                            params,
+                            cached,
                             selected_data=data,
                             column_names=column_names,
                             data_row_count=row_count,
-                            is_select_result=True,
                             row_format=resolve_row_format(data),
                         )
-                        direct_statement = self._cached_statement(
-                            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-                        )
-                        result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = self.resolve_rowcount(cursor)
                         result = DMLResult(cached.operation_type, affected_rows)

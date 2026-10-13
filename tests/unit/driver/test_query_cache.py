@@ -540,6 +540,9 @@ def test_sync_cache_hit_does_not_retry_after_execute(
     cursor.execute = execute_then_error
     if stage == "fetchall":
         cursor.fetchall = Mock(side_effect=error)
+    elif stage == "build_statement_result":
+        monkeypatch.setattr(driver, "build_statement_result", Mock(side_effect=error))
+        monkeypatch.setattr(driver, "build_cached_select_result", Mock(side_effect=error))
     elif stage != "execute":
         monkeypatch.setattr(driver, stage, Mock(side_effect=error))
     returns_rows = stage not in {"execute", "resolve_rowcount"}
@@ -720,6 +723,9 @@ async def test_async_cache_hit_does_not_retry_after_execute(
     cursor.execute = execute_async
     if stage == "fetchall":
         cursor.fetchall = Mock(side_effect=error)
+    elif stage == "build_statement_result":
+        monkeypatch.setattr(driver, "build_statement_result", Mock(side_effect=error))
+        monkeypatch.setattr(driver, "build_cached_select_result", Mock(side_effect=error))
     elif stage != "execute":
         monkeypatch.setattr(driver, stage, Mock(side_effect=error))
 
@@ -1372,6 +1378,68 @@ async def test_fast_path_with_observability_async(tmp_path: Any, monkeypatch: An
             assert errors[0]["sql"] == insert_sql
     finally:
         await config.close_pool()
+
+
+def test_fast_path_select_lazy_statement_materialization_sync(sqlite_sync_driver: Any) -> None:
+    sqlite_sync_driver._stmt_cache_enabled = True
+    sql = "SELECT ? AS val"
+
+    warm_result = sqlite_sync_driver.execute(sql, (0,))
+    assert warm_result.one() == {"val": 0}
+    assert warm_result._statement is not None
+
+    r1 = sqlite_sync_driver.execute(sql, (1,))
+    r2 = sqlite_sync_driver.execute(sql, (2,))
+    assert r1._statement is None
+    assert r2._statement is None
+    assert r1.one() == {"val": 1}
+    assert r2.one() == {"val": 2}
+    assert r1._statement is None
+    assert r2._statement is None
+
+    stmt1 = r1.statement
+    stmt2 = r2.statement
+    assert stmt1 is not stmt2
+    assert r1._statement is stmt1
+    assert r2._statement is stmt2
+    assert stmt1.raw_sql == sql
+    assert stmt2.raw_sql == sql
+    assert stmt1.operation_type == "SELECT"
+    assert stmt2.operation_type == "SELECT"
+    assert stmt1._processed_state.execution_parameters == (1,)
+    assert stmt2._processed_state.execution_parameters == (2,)
+    assert stmt1.parameters == [1]
+    assert stmt2.parameters == [2]
+
+
+@pytest.mark.anyio
+async def test_fast_path_select_lazy_statement_materialization_async(aiosqlite_async_driver: Any) -> None:
+    aiosqlite_async_driver._stmt_cache_enabled = True
+    sql = "SELECT ? AS val"
+
+    warm_result = await aiosqlite_async_driver.execute(sql, (0,))
+    assert warm_result.one() == {"val": 0}
+    assert warm_result._statement is not None
+
+    r1 = await aiosqlite_async_driver.execute(sql, (1,))
+    r2 = await aiosqlite_async_driver.execute(sql, (2,))
+    assert r1._statement is None
+    assert r2._statement is None
+    assert r1.one() == {"val": 1}
+    assert r2.one() == {"val": 2}
+    assert r1._statement is None
+    assert r2._statement is None
+
+    stmt1 = r1.statement
+    stmt2 = r2.statement
+    assert stmt1 is not stmt2
+    assert stmt1.raw_sql == sql
+    assert stmt2.raw_sql == sql
+    assert stmt1.operation_type == "SELECT"
+    assert stmt2.operation_type == "SELECT"
+    assert stmt1._processed_state.execution_parameters == (1,)
+    assert stmt2._processed_state.execution_parameters == (2,)
+
 
 
 
