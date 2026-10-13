@@ -13,7 +13,7 @@ Supported Drivers (High Level)
 - **MySQL & MariaDB**: aiomysql, asyncmy, mysql-connector, pymysql
 - **Oracle**: oracledb (sync/async), ADBC
 - **IBM Db2**: ibm_db (sync/async), ADBC
-- **SQL Server**: mssql-python, pymssql, arrow-odbc, ADBC
+- **SQL Server**: mssql-python, pymssql, arrow-odbc
 - **Analytics & Cloud**: DuckDB, BigQuery, Spanner, Snowflake (ADBC), GizmoSQL (ADBC), arrow-odbc
 
 Core Execution Pattern

@@ -339,9 +339,9 @@ relational and analytical adapters, including:
 
 * **ADBC** (:class:`~sqlspec.adapters.adbc.events.AdbcEventQueueStore`) with
   dialect-aware DDL and index guards for PostgreSQL, SQLite, DuckDB, BigQuery,
-  Snowflake, Oracle, IBM Db2, and SQL Server.
-* **SQL Server** through ``mssql_python``, ``pymssql``, ``arrow_odbc``, and
-  ``adbc`` (using ``DATETIME2`` timestamps and ``NVARCHAR(MAX)`` JSON payload
+  Snowflake, Oracle, and IBM Db2.
+* **SQL Server** through ``mssql_python``, ``pymssql``, and ``arrow_odbc``
+  (using ``DATETIME2(6)`` timestamps and ``NVARCHAR(MAX)`` JSON payload
   columns).
 * **IBM Db2** through ``db2``, ``arrow_odbc``, and ``adbc`` (using ``CLOB(1M)``
   payloads and ``SYSCAT`` catalog guards).

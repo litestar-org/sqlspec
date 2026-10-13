@@ -97,7 +97,7 @@ The table below classifies every backend by its ADK support level.
      - Reduced-scope
      - Full
      - Basic
-     - Arrow Database Connectivity across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, Oracle, IBM Db2, and SQL Server.
+     - Arrow Database Connectivity across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, Oracle, and IBM Db2.
    * - mssql_python
      - Supported
      - Full
@@ -300,9 +300,8 @@ ADBC (Arrow Database Connectivity) provides a portable Arrow-native store
 
 - Dialect-aware DDL, parameter binding, and pagination for PostgreSQL, SQLite,
   DuckDB, BigQuery, Snowflake, Oracle (``:1, :2`` placeholders and PL/SQL
-  idempotent DDL), IBM Db2 (``SYSCAT`` catalog guards and ``POSSTR`` memory
-  search), and SQL Server (``OBJECT_ID`` / ``sys.indexes`` guards and
-  ``DATETIME2`` / ``NVARCHAR(MAX)`` storage).
+  idempotent DDL), and IBM Db2 (``SYSCAT`` catalog guards and ``POSSTR`` memory
+  search).
 - Arrow-native data transfer for high-throughput event ingestion.
 - Portable substring memory search across all supported ADBC dialects; choose a
   dedicated native adapter when you need backend-specific full-text search

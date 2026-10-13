@@ -41,7 +41,7 @@ from :class:`~sqlspec.extensions.litestar.store.BaseSQLSpecStore`:
 - **Spanner**: ``sqlspec.adapters.spanner.litestar.SpannerAsyncStore`` and ``sqlspec.adapters.spanner.litestar.SpannerSyncStore``
 - **Oracle**: ``sqlspec.adapters.oracledb.litestar.OracleAsyncStore`` and ``sqlspec.adapters.oracledb.litestar.OracleSyncStore``
 - **IBM Db2**: ``sqlspec.adapters.db2.litestar.Db2AsyncStore`` and ``sqlspec.adapters.db2.litestar.Db2SyncStore``
-- **Arrow / ADBC**: ``sqlspec.adapters.adbc.litestar.ADBCStore`` (supports PostgreSQL, SQLite, DuckDB, MySQL/MariaDB, BigQuery, Snowflake, Oracle, IBM Db2, and SQL Server)
+- **Arrow / ADBC**: ``sqlspec.adapters.adbc.litestar.ADBCStore`` (supports PostgreSQL, SQLite, DuckDB, MySQL/MariaDB, BigQuery, Snowflake, Oracle, and IBM Db2)
 
 Each store can create its session table. It can also add new columns from its
 own DDL. Set this behavior under ``extension_config["litestar"]``:

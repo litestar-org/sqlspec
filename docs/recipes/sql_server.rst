@@ -12,7 +12,7 @@ It covers driver selection, connection management, transactional workflows, and 
 Choosing a Driver
 =================
 
-SQLSpec offers four drivers for Microsoft SQL Server depending on workload requirements and platform dependencies:
+SQLSpec offers three drivers for Microsoft SQL Server depending on workload requirements and platform dependencies:
 
 .. list-table::
    :header-rows: 1
@@ -30,10 +30,6 @@ SQLSpec offers four drivers for Microsoft SQL Server depending on workload requi
      - qmark (``?``) / pyformat (``%(name)s``)
      - ``execute_many`` only
      - FreeTDS-based driver.
-   * - ``adbc`` (``driver="mssql"``)
-     - qmark (``?``) / ``:name`` / ``@name``
-     - Native ``adbc_ingest`` Arrow tables
-     - Native Go TDS ADBC driver via ADBC Driver Foundry (``dbc install mssql``); zero-ODBC Arrow transport.
    * - ``arrow-odbc``
      - qmark (``?``)
      - Arrow-first ODBC streaming

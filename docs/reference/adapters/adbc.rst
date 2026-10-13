@@ -2,7 +2,7 @@
 ADBC
 ====
 
-The Arrow Database Connectivity (ADBC) adapter connects SQLSpec to 11 relational,
+The Arrow Database Connectivity (ADBC) adapter connects SQLSpec to 10 relational,
 analytical, cloud, and Arrow Flight SQL backends through a single
 :class:`~sqlspec.adapters.adbc.AdbcConfig` interface.
 
@@ -26,19 +26,15 @@ Install SQLSpec with the ``adbc`` extra (which installs ``adbc-driver-manager`` 
 
 .. tab-set::
 
-   .. tab-item:: Enterprise (Oracle, Db2, SQL Server)
+   .. tab-item:: Enterprise (Oracle, Db2)
 
       .. code-block:: bash
 
-         # Oracle (pure-Rust ADBC driver wheel from GizmoData)
+         # Oracle (pure-Go ADBC driver wheel from GizmoData)
          uv add "sqlspec[adbc]" adbc-driver-oracle
 
-         # IBM Db2 (requires IBM ODBC/CLI driver header/library at runtime)
+         # IBM Db2 (pure-Go DRDA ADBC driver wheel from GizmoData)
          uv add "sqlspec[adbc]" adbc-driver-db2
-
-         # Microsoft SQL Server via ADBC Driver Foundry (installs native Go TDS driver)
-         uv add "sqlspec[adbc]"
-         dbc install mssql
 
    .. tab-item:: Relational & Local (PostgreSQL, SQLite, DuckDB, Quack)
 
@@ -95,11 +91,6 @@ connection ``uri`` scheme:
      - ``db2://``
      - ``adbc_driver_db2``
      - ``db2`` dialect; positional ``?`` parameters; lowercases implicit uppercase column names.
-   * - SQL Server
-     - ``mssql``, ``sqlserver``, ``tsql``
-     - ``mssql://``, ``sqlserver://``
-     - ``adbc_driver_mssql`` or ``adbc_driver_manager`` (``driver="mssql"``)
-     - ``tsql`` compilation dialect; positional ``?`` execution parameters; ``SAVE TRANSACTION`` savepoints.
    * - SQLite
      - ``sqlite``, ``sqlite3``
      - ``sqlite://``
@@ -148,7 +139,7 @@ Connection Examples
 
 .. tab-set::
 
-   .. tab-item:: Enterprise (Oracle, Db2, SQL Server)
+   .. tab-item:: Enterprise (Oracle, Db2)
 
       .. code-block:: python
 
@@ -169,14 +160,6 @@ Connection Examples
              connection_config={
                  "driver_name": "db2",
                  "uri": "DATABASE=testdb;HOSTNAME=localhost;PORT=50000;PROTOCOL=TCPIP;UID=db2inst1;PWD=secret;",
-             }
-         )
-
-         # Microsoft SQL Server (loaded via ADBC driver manager or adbc_driver_mssql)
-         mssql_config = AdbcConfig(
-             connection_config={
-                 "driver_name": "mssql",
-                 "uri": "sqlserver://sa:SecretPassword123!@localhost:1433?database=app_db&trustServerCertificate=true",
              }
          )
 
@@ -311,10 +294,6 @@ blocks use SQL savepoints with dialect-specific syntax:
      - ``SAVEPOINT <name> ON ROLLBACK RETAIN CURSORS``
      - ``ROLLBACK TO SAVEPOINT <name>``
      - ``RELEASE SAVEPOINT <name>``
-   * - SQL Server (``mssql`` / ``tsql``)
-     - ``SAVE TRANSACTION <name>``
-     - ``ROLLBACK TRANSACTION <name>``
-     - No-op (T-SQL does not release individual savepoints)
    * - DuckDB, BigQuery, Snowflake
      - Raises ``NotImplementedError``
      - Raises ``NotImplementedError``
@@ -367,7 +346,7 @@ queries as an automatic fallback:
   ``adbc_get_objects``, SQLSpec normalizes them directly without issuing catalog SQL.
 - When native metadata is unsupported, incomplete, or omits index/DDL details,
   ``AdbcDataDictionary`` falls back to the dialect's SQL catalog queries (`postgres`,
-  `oracle`, `db2`, `mssql`, `sqlite`, `duckdb`, `bigquery`).
+  `oracle`, `db2`, `sqlite`, `duckdb`, `bigquery`).
 - For Oracle, ``get_optimal_type(driver, "json")`` inspects the server version and
   selects native ``JSON`` on Oracle 21c+, ``BLOB`` on Oracle 12c–19c, and ``CLOB`` on
   older versions.
@@ -379,7 +358,7 @@ Framework and AI Extension Stores
 =================================
 
 ``AdbcConfig`` integrates with all SQLSpec synchronous extension stores across every
-supported relational and analytical dialect (`postgres`, `oracle`, `db2`, `mssql`,
+supported relational and analytical dialect (`postgres`, `oracle`, `db2`,
 `sqlite`, `duckdb`, `bigquery`, `snowflake`):
 
 - **Litestar Sessions**: :class:`~sqlspec.adapters.adbc.litestar.store.ADBCStore`

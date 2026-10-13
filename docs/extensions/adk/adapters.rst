@@ -17,7 +17,7 @@ Use async adapters for best performance with ADK runners:
 - **Oracle**: ``oracledb``
 - **IBM Db2**: ``db2`` (native ``ibm_db`` sync and async modes)
 - **DuckDB**: ``duckdb`` (analytics; reduced-scope for ADK)
-- **ADBC**: ``adbc`` (Arrow-native portability across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, Oracle, IBM Db2, and SQL Server)
+- **ADBC**: ``adbc`` (Arrow-native portability across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, Oracle, and IBM Db2)
 - **Spanner**: ``spanner`` (Google Cloud, globally distributed; supports both async and sync modes)
 - **SQL Server**: ``mssql_python`` (native Arrow and BulkCopy), ``pymssql`` (FreeTDS), ``arrow_odbc`` (Arrow over Microsoft ODBC Driver 18)
 
