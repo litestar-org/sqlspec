@@ -3236,6 +3236,7 @@ def _write_json_results(
     }
     with Path(output_path).open("w") as f:
         json.dump(output, f, indent=2)
+        f.write("\n")
 
 
 def _optimize_raw_sqlite(conn: sqlite3.Connection) -> None:

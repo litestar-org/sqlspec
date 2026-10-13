@@ -1011,7 +1011,7 @@ def _write_json_results(
         "included_cases": [result["name"] for result in results],
         "results": results,
     }
-    Path(output_path).write_text(json.dumps(output, indent=2, sort_keys=True))
+    Path(output_path).write_text(f"{json.dumps(output, indent=2, sort_keys=True)}\n")
 
 
 if __name__ == "__main__":
