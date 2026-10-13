@@ -50,8 +50,12 @@ TypeCoercionFallback = tuple[type, Callable[[Any], Any]]
 
 _EXECUTE_MANY_SAMPLE_THRESHOLD: Final[int] = 10
 _EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3
+_FALLBACK_CACHE_MAX_SIZE: Final[int] = 256
 
 _TYPE_COERCION_DISPATCHERS: Final[dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]] = {}
+_TYPE_COERCION_FALLBACKS_CACHE: Final[
+    dict[int, tuple[dict[type, Callable[[Any], Any]], int, tuple[TypeCoercionFallback, ...]]]
+] = {}
 
 
 def structural_fingerprint(parameters: "ParameterPayload", is_many: bool = False) -> Any:
@@ -970,7 +974,16 @@ def type_coercion_fallbacks(
     """Return the ordered fallback items for a coercion map, empty when none is configured."""
     if not type_coercion_map:
         return ()
-    return tuple(type_coercion_map.items())
+    map_id = id(type_coercion_map)
+    map_len = len(type_coercion_map)
+    cached = _TYPE_COERCION_FALLBACKS_CACHE.get(map_id)
+    if cached is not None and cached[0] is type_coercion_map and cached[1] == map_len:
+        return cached[2]
+    if len(_TYPE_COERCION_FALLBACKS_CACHE) >= _FALLBACK_CACHE_MAX_SIZE:
+        _TYPE_COERCION_FALLBACKS_CACHE.clear()
+    items = tuple(type_coercion_map.items())
+    _TYPE_COERCION_FALLBACKS_CACHE[map_id] = (type_coercion_map, map_len, items)
+    return items
 
 
 def apply_type_coercion(

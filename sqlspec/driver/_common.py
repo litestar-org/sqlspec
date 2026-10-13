@@ -647,12 +647,11 @@ class CommonDriverAttributesMixin:
     ) -> "ConvertedParameters":
         """Rebind parameters for a cached query."""
         config = self.statement_config.parameter_config
-        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
         if (
             not cached.input_named_parameters
             and not cached.applied_wrap_types
             and not config.type_coercion_map
-            and not needs_style_remap
+            and not cached.needs_style_remap
         ):
             return params
         return self._stmt_cache_rebind_processor.transform_cached_parameters(
@@ -1088,19 +1087,22 @@ class CommonDriverAttributesMixin:
         if cached is None or cached.param_count != len(params):
             return None
 
-        param_values = _cache_param_values(params)
-
         config = self.statement_config
         param_config = config.parameter_config
-        if param_config.ast_transformer is not None and any(p is None for p in param_values):
-            return None
+        if param_config.ast_transformer is not None:
+            param_values = _cache_param_values(params)
+            if any(p is None for p in param_values):
+                return None
+        else:
+            param_values = None
 
-        needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
-        if not needs_rebind:
+        needs_rebind = bool(
+            cached.input_named_parameters or cached.applied_wrap_types or cached.needs_style_remap
+        )
+        if not needs_rebind and params:
+            if param_values is None:
+                param_values = _cache_param_values(params)
             needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
-
-        if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
-            needs_rebind = True
 
         if not needs_rebind and not config._has_output_transformer:
             runtime = self._observability
@@ -1211,6 +1213,7 @@ class CommonDriverAttributesMixin:
             operation_profile=processed.operation_profile,
             param_count=param_profile.total_count,
             processed_state=cached_state,
+            needs_style_remap=bool(_CACHED_NAMED_STYLES.intersection(param_profile.styles)),
         )
         self._stmt_cache.set(statement.raw_sql, cached)
 
@@ -1905,11 +1908,22 @@ def parameter_values_need_processing(
     type_coercion_map: "dict[type, Any] | None",
     fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
 ) -> bool:
+    if not values:
+        return False
+    if not type_coercion_map:
+        if len(values) == 1:
+            return type(values[0]) is TypedParameter
+        return any(type(value) is TypedParameter for value in values)
     if fallback_items is None:
         fallback_items = type_coercion_fallbacks(type_coercion_map)
-    if len(values) == 1:
-        return parameter_value_needs_processing(values[0], type_coercion_map, fallback_items)
-    return any(parameter_value_needs_processing(value, type_coercion_map, fallback_items) for value in values)
+    dispatcher = type_coercion_dispatcher(fallback_items)
+    for value in values:
+        value_type = type(value)
+        if value_type is TypedParameter or value_type in type_coercion_map:
+            return True
+        if dispatcher.resolve_type(value_type) is not None:
+            return True
+    return False
 
 
 def parameter_value_needs_processing(
@@ -1927,7 +1941,7 @@ def parameter_value_needs_processing(
         return True
     if fallback_items is None:
         fallback_items = type_coercion_fallbacks(type_coercion_map)
-    return type_coercion_dispatcher(fallback_items).get(value) is not None
+    return type_coercion_dispatcher(fallback_items).resolve_type(value_type) is not None
 
 
 def _resolve_fast_params(

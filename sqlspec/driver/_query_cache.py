@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final, final
 
 from mypy_extensions import mypyc_attr
 
-from sqlspec.core.parameters import ParameterProcessor
+from sqlspec.core.parameters import ParameterProcessor, ParameterStyle
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -24,6 +24,12 @@ __all__ = (
 )
 
 STMT_CACHE_MAX_SIZE: Final[int] = 1024
+_CACHED_NAMED_STYLES: Final[frozenset[str]] = frozenset((
+    ParameterStyle.NAMED_COLON.value,
+    ParameterStyle.NAMED_AT.value,
+    ParameterStyle.NAMED_DOLLAR.value,
+    ParameterStyle.NAMED_PYFORMAT.value,
+))
 
 
 @final
@@ -40,11 +46,13 @@ class CachedQuery:
     operation_profile: "OperationProfile"
     param_count: int
     processed_state: "ProcessedState"
+    needs_style_remap: bool
 
     __slots__ = (
         "applied_wrap_types",
         "compiled_sql",
         "input_named_parameters",
+        "needs_style_remap",
         "operation_profile",
         "operation_type",
         "param_count",
@@ -64,6 +72,7 @@ class CachedQuery:
         operation_profile: "OperationProfile",
         param_count: int,
         processed_state: "ProcessedState",
+        needs_style_remap: bool | None = None,
     ) -> None:
         self.compiled_sql = compiled_sql
         self.parameter_profile = parameter_profile
@@ -74,6 +83,11 @@ class CachedQuery:
         self.operation_profile = operation_profile
         self.param_count = param_count
         self.processed_state = processed_state
+        self.needs_style_remap = (
+            bool(_CACHED_NAMED_STYLES.intersection(parameter_profile.styles))
+            if needs_style_remap is None
+            else needs_style_remap
+        )
 
 
 @final

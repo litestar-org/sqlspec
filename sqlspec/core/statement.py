@@ -1392,11 +1392,7 @@ class SQL:
         mixed = self._resolve_mixed_parameter_inputs()
         params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         if self._rebind_processor is None:
-            self._rebind_processor = ParameterProcessor(
-                converter=self._statement_config.parameter_converter,
-                validator=self._statement_config.parameter_validator,
-                cache_max_size=0,
-            )
+            self._rebind_processor = _get_rebind_processor(self._statement_config)
         processor = self._rebind_processor
         rebound_params = processor.transform_cached_parameters(
             params,
@@ -1472,6 +1468,7 @@ class SQL:
         new_sql._positional_parameters = []
         new_sql._sql_param_counters = self._sql_param_counters.copy()
         new_sql._declared_parameters = self._declared_parameters
+        new_sql._rebind_processor = self._rebind_processor
 
         return new_sql
 
@@ -1985,6 +1982,8 @@ class StatementConfig:
 
 
 _DEFAULT_CONFIG: "StatementConfig | None" = None
+_REBIND_PROCESSORS: "dict[tuple[int, int], tuple[Any, Any, ParameterProcessor]]" = {}
+_REBIND_PROCESSOR_CACHE_MAX_SIZE: Final[int] = 256
 
 
 def get_default_config() -> StatementConfig:
@@ -2009,6 +2008,9 @@ def get_default_parameter_config() -> ParameterStyleConfig:
     return ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
     )
+
+
+Statement: TypeAlias = str | exp.Expr | SQL
 
 
 def _rebuild_sql(
@@ -2038,7 +2040,19 @@ def _rebuild_sql(
     return new_sql
 
 
-Statement: TypeAlias = str | exp.Expr | SQL
+def _get_rebind_processor(config: "StatementConfig") -> ParameterProcessor:
+    """Return a shared stateless ParameterProcessor for cached-statement rebinding."""
+    converter = config.parameter_converter
+    validator = config.parameter_validator
+    key = (id(converter), id(validator))
+    cached = _REBIND_PROCESSORS.get(key)
+    if cached is not None and cached[0] is converter and cached[1] is validator:
+        return cached[2]
+    if len(_REBIND_PROCESSORS) >= _REBIND_PROCESSOR_CACHE_MAX_SIZE:
+        _REBIND_PROCESSORS.clear()
+    processor = ParameterProcessor(converter=converter, validator=validator, cache_max_size=0)
+    _REBIND_PROCESSORS[key] = (converter, validator, processor)
+    return processor
 
 
 def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:

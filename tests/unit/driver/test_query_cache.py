@@ -30,7 +30,7 @@ from sqlspec.core import (
     get_cache,
 )
 from sqlspec.core.filters import LimitOffsetFilter
-from sqlspec.core.parameters._processor import ParameterProcessor
+from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
 from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._query_cache import CachedQuery, QueryCache
 from sqlspec.driver._sync import SyncDriverAdapterBase
@@ -1505,6 +1505,39 @@ async def test_fast_path_ambient_exception_isolation_async(cached_async_cursor: 
         res_ambient = await AsyncDriverAdapterBase._execute_cache_hit(driver, sql, ("ambient",), cached)
         assert res_ambient.one() == {"value": "ambient"}
         assert helper_calls == 1
+
+
+def test_precomputed_fast_path_coercion_and_rebind_processor(sqlite_sync_driver: Any) -> None:
+    coercion_map: dict[type, Any] = {int: str, float: str}
+    fallbacks_1 = type_coercion_fallbacks(coercion_map)
+    fallbacks_2 = type_coercion_fallbacks(coercion_map)
+    assert fallbacks_1 is fallbacks_2
+
+    coercion_map[bool] = int
+    fallbacks_3 = type_coercion_fallbacks(coercion_map)
+    assert fallbacks_3 is not fallbacks_1
+    assert len(fallbacks_3) == 3
+
+    sqlite_sync_driver._stmt_cache_enabled = True
+    sqlite_sync_driver.execute("SELECT :val AS v", {"val": 10})
+    cached_named = sqlite_sync_driver._stmt_cache.get("SELECT :val AS v")
+    assert cached_named is not None
+    assert cached_named.needs_style_remap is True
+
+    sqlite_sync_driver.execute("SELECT ? AS v", (10,))
+    cached_qmark = sqlite_sync_driver._stmt_cache.get("SELECT ? AS v")
+    assert cached_qmark is not None
+    assert cached_qmark.needs_style_remap is False
+
+    base_stmt = SQL("SELECT * FROM users WHERE id = ?", 1, statement_config=sqlite_sync_driver.statement_config)
+    base_stmt.compile()
+    copy_1 = base_stmt.copy(parameters=(2,))
+    copy_2 = base_stmt.copy(parameters=(3,))
+    copy_1.compile()
+    copy_2.compile()
+    assert copy_1._rebind_processor is not None
+    assert copy_1._rebind_processor is copy_2._rebind_processor
+
 
 
 
