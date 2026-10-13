@@ -9,6 +9,7 @@ from sqlglot import exp
 from sqlspec.adapters.duckdb._typing import DuckDBCursor, DuckDBSessionContext
 from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
 from sqlspec.adapters.duckdb.core import (
+    ARROW_MIN_ROWS,
     _build_storage_copy_sql,
     _build_storage_read_sql,
     _DuckDBStreamSource,
@@ -17,6 +18,7 @@ from sqlspec.adapters.duckdb.core import (
     collect_rows,
     create_mapped_exception,
     default_statement_config,
+    description_has_arrow_divergent_types,
     driver_profile,
     format_identifier,
     normalize_execute_parameters,
@@ -51,8 +53,9 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
     from sqlspec.driver import ExecutionResult
+    from sqlspec.driver._query_cache import CachedQuery
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
-    from sqlspec.typing import ArrowReturnFormat, StatementParameters
+    from sqlspec.typing import ArrowReturnFormat, RowFormat, StatementParameters
 else:
     pa = import_optional("pyarrow")
 
@@ -143,18 +146,14 @@ class DuckDBDriver(SyncDriverAdapterBase):
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
-            arrow_table = cursor.to_arrow_table()
-            data = arrow_table.to_pylist()
-            _restore_uuid_columns(data, cursor.description)
-            column_names = list(arrow_table.column_names)
-
+            data, column_names, row_count, row_format = self._materialize_select_rows(cursor, sql)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
                 column_names=column_names,
-                data_row_count=len(data),
+                data_row_count=row_count,
                 is_select_result=True,
-                row_format="dict",
+                row_format=row_format,
             )
 
         row_count = resolve_rowcount(cursor)
@@ -179,8 +178,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql = cached_statement.compiled_sql
 
         if prepared_parameters:
-            parsed_expression = cached_statement.expression or statement.expression
+            parsed_expression = cached_statement.expression or statement._peek_expression()
             if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
+                parsed_expression.meta["compiled_sql"] = sql
                 bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
                 if bulk_result is not None:
                     return self.create_execution_result(
@@ -559,6 +559,49 @@ class DuckDBDriver(SyncDriverAdapterBase):
         """Resolve rowcount from DuckDB cursor for the direct execution path."""
         return resolve_rowcount(cursor)
 
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Execute a cached query using DuckDB's unified row materializer."""
+        with self.with_cursor(self.connection) as cursor:
+            cursor.execute(cached.compiled_sql, normalize_execute_parameters(params))
+            if cached.operation_profile.returns_rows:
+                data, column_names, row_count, row_format = self._materialize_select_rows(cursor, cached.compiled_sql)
+                return self.build_cached_select_result(
+                    sql,
+                    params,
+                    cached,
+                    selected_data=data,
+                    column_names=column_names,
+                    data_row_count=row_count,
+                    row_format=row_format,
+                )
+            affected_rows = resolve_rowcount(cursor)
+            return DMLResult(cached.operation_type, affected_rows)
+
+    def _materialize_select_rows(self, cursor: Any, compiled_sql: str) -> "tuple[list[Any], list[str], int, RowFormat]":
+        """Materialize SELECT rows using DuckDB's native Python type contract."""
+        description = cursor.description
+        hint = self._cache_holder.get_row_count_hint(compiled_sql)
+        if (
+            (hint is not None and hint < ARROW_MIN_ROWS)
+            or description_has_arrow_divergent_types(description)
+            or not hasattr(cursor, "to_arrow_table")
+        ):
+            fetched_data = cursor.fetchall()
+            data, column_names = collect_rows(fetched_data, description)
+            row_count = len(data)
+            self._cache_holder.set_row_count_hint(compiled_sql, row_count)
+            return data, column_names, row_count, "tuple"
+
+        arrow_table = cursor.to_arrow_table()
+        data = arrow_table.to_pylist()
+        _restore_uuid_columns(data, description)
+        column_names = list(arrow_table.column_names)
+        row_count = len(data)
+        self._cache_holder.set_row_count_hint(compiled_sql, row_count)
+        return data, column_names, row_count, "dict"
+
     def _native_storage_job(
         self,
         sql: str,
@@ -607,7 +650,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg)
         return int(result[0])
 
-    def _execute_bulk_insert_many(self, expression: exp.Insert, prepared_parameters: Any) -> "DMLResult | None":
+    def _execute_bulk_insert_many(
+        self, expression: exp.Insert, prepared_parameters: Any, compiled_sql: str = ""
+    ) -> "DMLResult | None":
         """Execute a batch INSERT via Arrow registration when the payload is simple."""
         if not isinstance(prepared_parameters, list) or not prepared_parameters:
             return None
@@ -632,8 +677,15 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if arrow_table is None:
             return None
 
-        target_table = table_expr.sql(dialect="duckdb")
-        column_sql = ", ".join(column.sql(dialect="duckdb") for column in expression.this.expressions)
+        cache_key = compiled_sql or (str(expression._meta.get("compiled_sql", "")) if expression._meta else "")
+        cached_sql_pair = self._cache_holder.get_bulk_insert_sql(cache_key) if cache_key else None
+        if cached_sql_pair is not None:
+            target_table, column_sql = cached_sql_pair
+        else:
+            target_table = table_expr.sql(dialect="duckdb")
+            column_sql = ", ".join(column.sql(dialect="duckdb") for column in expression.this.expressions)
+            if cache_key:
+                self._cache_holder.set_bulk_insert_sql(cache_key, (target_table, column_sql))
         temp_view = f"_sqlspec_batch_{uuid4().hex}"
         exc_handler = self.handle_database_exceptions()
         with exc_handler:

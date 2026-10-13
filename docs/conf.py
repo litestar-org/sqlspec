@@ -65,7 +65,6 @@ extensions = [
     "auto_pytabs.sphinx_ext",
     "sphinx_copybutton",
     "sphinx_click",
-    "click_extra.sphinx",
     "sphinx_design",
     "sphinx_paramlinks",
     "sphinxcontrib.mermaid",
@@ -73,6 +72,7 @@ extensions = [
     "sphinx_iconify",
     "tools.sphinx_ext.playground",
 ]
+myst_enable_extensions = ["alert", "colon_fence"]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "litestar": ("https://docs.litestar.dev/latest/", None),
@@ -80,7 +80,7 @@ intersphinx_mapping = {
     "anyio": ("https://anyio.readthedocs.io/en/stable/", None),
     "multidict": ("https://multidict.aio-libs.org/en/stable/", None),
     "cryptography": ("https://cryptography.io/en/latest/", None),
-    "pydantic": ("https://docs.pydantic.dev/latest/", None),
+    "pydantic": ("https://pydantic.dev/docs/validation/latest/", None),
     "sanic": ("https://sanic.readthedocs.io/en/latest/", None),
     "flask": ("https://flask.palletsprojects.com/en/stable/", None),
     "fastapi": ("https://fastapi.tiangolo.com/", None),

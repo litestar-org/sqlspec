@@ -14,13 +14,14 @@ Run with::
 
     uv run python tools/scripts/bench_gate.py
     uv run python tools/scripts/bench_gate.py --rows 5000 --iterations 5
-    uv run python tools/scripts/bench_gate.py --threshold-iterative 50  # stricter
+    uv run python tools/scripts/bench_gate.py --threshold-iterative 50
 """
 
 import importlib.util
 import json
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -39,18 +40,12 @@ __all__ = (
     "run_gate",
 )
 
-
-# Import bench.py from the same directory, regardless of working directory
 _bench_path = Path(__file__).parent / "bench.py"
 _spec = importlib.util.spec_from_file_location("bench", _bench_path)
 assert _spec is not None
 assert _spec.loader is not None
 bench_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bench_mod)
-
-# ---------------------------------------------------------------------------
-# Default overhead thresholds (percentage of raw time)
-# ---------------------------------------------------------------------------
 
 DEFAULT_THRESHOLDS: dict[str, float] = {
     "iterative_inserts": 100.0,
@@ -59,11 +54,8 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "read_heavy": 12.0,
 }
 
-# Core scenarios to gate on
 GATE_SCENARIOS = ["iterative_inserts", "repeated_queries", "write_heavy", "read_heavy"]
 
-# PRD benchmark matrix for mypyc expansion work. This keeps the benchmark
-# expectations next to the scripts that actually exercise them.
 BENCHMARK_SCENARIO_MATRIX: dict[str, dict[str, str | tuple[str, ...]]] = {
     "parameter_pipeline": {
         "tracked_by": "tools/scripts/bench_subsystems.py + tools/scripts/bench.py",
@@ -138,20 +130,16 @@ def run_gate(
     Returns:
         Tuple of (results list, all_passed boolean).
     """
-    # Set bench.py global rows
     cast("Any", bench_mod).ROWS_TO_INSERT = rows
 
-    # Run benchmarks using the same infrastructure as bench.py
     errors: list[str] = []
     bench_results = bench_mod.run_benchmark("sqlite", errors, iterations=iterations, warmup=warmup)
 
-    # Build lookup: (library, scenario) -> median time
     time_lookup: dict[tuple[str, str], float] = {}
     for result in bench_results:
         key = (result["library"], result["scenario"])
         time_lookup[key] = result["time"]
 
-    # Determine sqlspec label (may include "(mypyc)")
     sqlspec_label = bench_mod.SQLSPEC_LABEL
 
     gate_results: list[dict[str, Any]] = []
@@ -240,32 +228,6 @@ def print_gate_table(results: list[dict[str, Any]]) -> None:
     console.print(table)
 
 
-def _write_json_results(
-    results: list[dict[str, Any]],
-    output_path: str | Path,
-    *,
-    rows: int,
-    iterations: int,
-    warmup: int,
-    thresholds: dict[str, float],
-    all_passed: bool,
-) -> None:
-    """Write a performance gate report to JSON."""
-    output = {
-        "metadata": {
-            "rows": rows,
-            "iterations": iterations,
-            "warmup": warmup,
-            "mypyc_compiled": bench_mod._is_compiled(),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        },
-        "thresholds": thresholds,
-        "all_passed": all_passed,
-        "results": results,
-    }
-    Path(output_path).write_text(json.dumps(output, indent=2, sort_keys=True))
-
-
 @click.command()
 @click.option("--rows", default=10_000, show_default=True, help="Number of rows per scenario")
 @click.option(
@@ -281,6 +243,12 @@ def _write_json_results(
     help="Number of warmup iterations (not timed)",
 )
 @click.option("--json-output", default=None, type=click.Path(), help="Write gate results to a JSON file")
+@click.option(
+    "--include-subsystems/--no-include-subsystems",
+    default=False,
+    show_default=True,
+    help="Also run and display subsystem and stub-driver micro-benchmarks (report-only)",
+)
 @click.option(
     "--threshold-iterative",
     "threshold_iterative",
@@ -313,6 +281,7 @@ def main(
     rows: int,
     iterations: int,
     warmup: int,
+    include_subsystems: bool,
     threshold_iterative: float,
     threshold_repeated: float,
     threshold_write: float,
@@ -341,6 +310,9 @@ def main(
     results, all_passed = run_gate(rows=rows, iterations=iterations, warmup=warmup, thresholds=thresholds)
 
     print_gate_table(results)
+    if include_subsystems:
+        _run_report_only_subsystems(iterations=max(100, rows // 10), warmup=max(5, warmup))
+
     if json_output is not None:
         _write_json_results(
             results,
@@ -360,6 +332,47 @@ def main(
         failed = [r["scenario"] for r in results if not r["passed"]]
         click.secho(f"\nGate FAILED. Scenarios exceeding threshold: {', '.join(failed)}", fg="red")
         sys.exit(1)
+
+
+def _run_report_only_subsystems(*, iterations: int, warmup: int) -> None:
+    """Run subsystem micro-benchmarks in report-only mode."""
+    from tools.scripts.bench_subsystems import _make_temp_db, _setup_test_table, print_results_table, run_benchmarks
+
+    db_path = _make_temp_db()
+    try:
+        _setup_test_table(db_path)
+        click.echo("\nRunning report-only subsystem micro-benchmarks...")
+        sub_results = run_benchmarks(db_path, iterations=iterations, warmup=warmup, profile=False)
+        print_results_table(sub_results)
+    finally:
+        with suppress(OSError):
+            db_path.unlink()
+
+
+def _write_json_results(
+    results: list[dict[str, Any]],
+    output_path: str | Path,
+    *,
+    rows: int,
+    iterations: int,
+    warmup: int,
+    thresholds: dict[str, float],
+    all_passed: bool,
+) -> None:
+    """Write a performance gate report to JSON."""
+    output = {
+        "metadata": {
+            "rows": rows,
+            "iterations": iterations,
+            "warmup": warmup,
+            "mypyc_compiled": bench_mod._is_compiled(),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        },
+        "thresholds": thresholds,
+        "all_passed": all_passed,
+        "results": results,
+    }
+    Path(output_path).write_text(json.dumps(output, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,74 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.67.0 - Spanner graph and hybrid search, ADK artifact stores, and Python 3.11+ baseline
+-----------------------------------------------------------------------------------------
+
+**Added:**
+
+* Spanner and Spangres SQLGlot dialects support ``CREATE PROPERTY GRAPH`` and
+  ``CREATE OR REPLACE PROPERTY GRAPH`` DDL (with ``NODE TABLES``, ``EDGE TABLES``,
+  ``SOURCE KEY``, ``DESTINATION KEY``, ``LABEL``, and ``PROPERTIES`` clauses) as
+  well as ``GRAPH_TABLE`` queries with ``MATCH`` path patterns and ``COLUMNS``
+  projections.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added ``sql.hybrid_rrf(...)`` on the ``SQL`` builder factory to generate
+  Reciprocal Rank Fusion (RRF) hybrid search queries combining full-text BM25
+  scoring and vector distance ranking on Spanner and Spangres.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added Google ADK artifact store base classes (``BaseAsyncADKArtifactStore``
+  and ``BaseSyncADKArtifactStore``) and Spanner implementations
+  (``SpannerSyncADKArtifactStore`` and ``SpannerAsyncADKArtifactStore``) with
+  optional Cloud Storage URI offloading for large payloads.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Spanner event queue stores add a composite queue index
+  ``(channel, status, available_at)`` with ``FORCE_INDEX`` query hints, row
+  deletion TTL policies, and single-statement ``THEN RETURN`` claim execution.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added Python 3.15 support across package metadata and CI test workflows.
+  (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
+* Added pure-Go GizmoData ADBC driver support in ``sqlspec.adapters.adbc`` and
+  extension stores (``ADBCStore``, ``AdbcEventQueueStore``, ``AdbcADKStore``,
+  and ``AdbcADKMemoryStore``) for Oracle (``adbc-driver-oracle``), IBM Db2
+  (``adbc-driver-db2``), native GizmoSQL (``adbc-driver-gizmosql`` with
+  ``auth_type="external"`` OAuth SSO), and DuckDB Quack (``adbc-driver-quack``).
+  (`#839 <https://github.com/litestar-org/sqlspec/pull/839>`_)
+
+**Changed:**
+
+* Upgraded the minimum supported Python version to 3.11+ and modernized runtime
+  typing, ``datetime.UTC``, and ``asyncio.timeout`` usage across the codebase.
+  (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
+* Standardized driver session lifecycles, statement compilation caching, SQLGlot
+  builder immutability, migration version tracking, and ADK/Litestar/Events
+  store contracts across all 20 database adapters.
+  (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
+* Unified DuckDB row materialization across ``execute()``, ``select()``, and
+  ``fetch*`` methods to consistently return DuckDB-native ``fetchall()`` Python
+  types on both first and cached executions, while ``select_to_arrow()``
+  continues to expose raw Arrow tables.
+  (`#838 <https://github.com/litestar-org/sqlspec/pull/838>`_)
+* Reduced per-statement and per-session execution overhead with per-config shared
+  statement caches (``StatementCacheHolder``), zero-copy cached SQLGlot AST
+  sharing with copy-on-mutation via ``ensure_owned_expression()``, fast-path
+  execution for parameterless and scalar-positional calls, fast-path execution
+  when statement observers are active, lazy ``SQLResult.statement``
+  materialization on cached ``SELECT`` hits, single-pass ``execute_many()``
+  parameter preparation, and idle-queue/clean-transaction fast paths in
+  ``AiosqliteConnectionPool``.
+  (`#838 <https://github.com/litestar-org/sqlspec/pull/838>`_)
+
+**Fixed:**
+
+* Hardened parameter conversion, arrow batch streaming, transaction rollback and
+  cleanup handling, exception mapping, and dialect generation across core,
+  storage, migrations, extensions, and database adapters.
+  (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
+* Prevented unparsed or ``COMMAND``/``UNKNOWN`` fallback compilations from
+  populating the driver statement cache, and cached parsed target-table metadata
+  on DuckDB Arrow bulk ``execute_many()`` inserts.
+  (`#838 <https://github.com/litestar-org/sqlspec/pull/838>`_)
+
 v0.66.0 - Native AsyncIO Spanner adapter, extension stores, and sync/async parity
 ---------------------------------------------------------------------------------
 

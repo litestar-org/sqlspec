@@ -9,6 +9,17 @@ from sqlspec.adapters.duckdb import DuckDBDriver
 from sqlspec.exceptions import SQLBuilderError
 from tests.conftest import requires_interpreted
 
+__all__ = (
+    "duckdb_session",
+    "test_duckdb_data_types",
+    "test_duckdb_error_handling_and_edge_cases",
+    "test_duckdb_integration_native_type_contract_parity",
+    "test_duckdb_schema_operations",
+    "test_duckdb_statement_stack_continue_on_error",
+    "test_duckdb_unsupported_lock_raises",
+    "test_duckdb_window_functions",
+)
+
 pytestmark = pytest.mark.xdist_group("duckdb")
 
 
@@ -210,3 +221,31 @@ def test_duckdb_statement_stack_continue_on_error(duckdb_session: DuckDBDriver) 
     verify = duckdb_session.execute("SELECT COUNT(*) AS total FROM test_table")
     assert verify.data is not None
     assert verify.get_data()[0]["total"] == 2
+
+
+@pytest.mark.parametrize(
+    "sql_expr",
+    [
+        "1::HUGEINT",
+        "1::UHUGEINT",
+        "'101'::BIT",
+        "'12:00:00+00'::TIMETZ",
+        "'2026-01-01 00:00:00'::TIMESTAMP_NS",
+        "INTERVAL 1 DAY",
+        "'550e8400-e29b-41d4-a716-446655440000'::UUID",
+        "[1, 2, 3]::INT[3]",
+        "MAP {'a': 1}",
+        "[INTERVAL 1 DAY]",
+        "{'u': '550e8400-e29b-41d4-a716-446655440000'::UUID}",
+        "1::BIGNUM",
+    ],
+)
+def test_duckdb_integration_native_type_contract_parity(duckdb_session: DuckDBDriver, sql_expr: str) -> None:
+    """Integration check that first and cached DuckDB queries return raw fetchall() Python types."""
+    expected = duckdb_session.connection.execute(f"SELECT {sql_expr} AS val").fetchall()[0][0]
+    query = f"SELECT {sql_expr} AS val WHERE ? >= 0"
+    for index in range(3):
+        result = duckdb_session.execute(query, (index,))
+        actual = result.one()["val"]
+        assert type(actual) is type(expected)
+        assert actual == expected

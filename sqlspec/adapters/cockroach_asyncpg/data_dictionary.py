@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 __all__ = ("CockroachAsyncpgDataDictionary",)
 
 
-_COCKROACH_METADATA_DOMAINS = (
+_COCKROACH_METADATA_DOMAINS: tuple[str, ...] = (
     "schemas",
     "objects",
     "tables",

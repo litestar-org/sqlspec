@@ -14,8 +14,6 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk._types import SessionOrderBy, StoredEvent, StoredSession
 
@@ -37,9 +35,6 @@ ADK_RESET_TABLE_PROFILES: Final = (
 
 class _ADKStoreCommon(Generic[ConfigT]):
     """Shared non-async ADK store state and helpers."""
-
-    if TYPE_CHECKING:
-        _drop_tables_sql: "Callable[[], list[str]]"
 
     __slots__ = (
         "_app_state_table",
@@ -129,6 +124,10 @@ class _ADKStoreCommon(Generic[ConfigT]):
         """Return whether adapter-level table creation should run."""
         manage_schema, create_schema = self._schema_management_flags()
         return manage_schema and create_schema
+
+    def _drop_tables_sql(self) -> "list[str]":
+        """Get the DROP TABLE SQL statements for this database dialect."""
+        raise NotImplementedError
 
     def _reset_drop_statements(self) -> "list[str]":
         """Return all table drops needed before recreating the clean-break schema."""

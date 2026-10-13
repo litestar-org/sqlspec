@@ -8,9 +8,11 @@ Run with::
     uv run python tools/scripts/bench_subsystems.py
 """
 
+import gc
 import io
 import json
 import sqlite3
+import statistics
 import tempfile
 import time
 import timeit
@@ -26,10 +28,436 @@ from tools.profiling import HotPathProfiler
 
 __all__ = ("SubsystemBenchmark", "main", "print_results_table", "run_benchmarks")
 
+STUB_COMPLEX_QUERY_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM events
+    WHERE ts >= ?
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM users u
+JOIN orgs o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+LIMIT 25
+"""
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
+class SubsystemBenchmark:
+    """Container for a single subsystem benchmark."""
+
+    __slots__ = ("bench_fn", "description", "iterations", "name", "setup_fn")
+
+    def __init__(
+        self, name: str, bench_fn: Any, iterations: int = 10_000, setup_fn: Any = None, description: str = ""
+    ) -> None:
+        self.name = name
+        self.bench_fn = bench_fn
+        self.iterations = iterations
+        self.setup_fn = setup_fn
+        self.description = description
+
+
+def run_benchmarks(db_path: Path, iterations: int, warmup: int, profile: bool = False) -> list[dict[str, Any]]:
+    """Run all subsystem benchmarks using interleaved round-robin rounds.
+
+    Args:
+        db_path: Path to the temporary SQLite database.
+        iterations: Number of iterations per benchmark.
+        warmup: Number of warmup iterations.
+        profile: Whether to profile the benchmarks using HotPathProfiler.
+
+    Returns:
+        List of result dictionaries with timing data.
+    """
+    benchmarks = _build_benchmarks(db_path, iterations)
+    active_benchmarks: list[SubsystemBenchmark] = []
+    cleanup_benchmarks: list[SubsystemBenchmark] = []
+    for bench in benchmarks:
+        if bench.name == "_cleanup_":
+            cleanup_benchmarks.append(bench)
+        else:
+            active_benchmarks.append(bench)
+
+    try:
+        for bench in active_benchmarks:
+            for _ in range(warmup):
+                bench.bench_fn()
+
+        results: list[dict[str, Any]] = []
+        if profile:
+            for bench in active_benchmarks:
+                click.echo(f"  Benchmarking: {bench.name}...")
+                with HotPathProfiler() as prof:
+                    elapsed = timeit.timeit(bench.bench_fn, number=bench.iterations)
+                click.echo(f"  Profile results for {bench.name}:")
+                prof.print_report(limit=10)
+                click.echo()
+                time_per_op_us = (elapsed / bench.iterations) * 1_000_000
+                ops_per_sec = bench.iterations / elapsed if elapsed > 0 else float("inf")
+                results.append({
+                    "name": bench.name,
+                    "time_per_op_us": time_per_op_us,
+                    "ops_per_sec": ops_per_sec,
+                    "total_time": elapsed,
+                    "iterations": bench.iterations,
+                    "description": bench.description,
+                })
+            return results
+
+        rounds = min(5, max(1, iterations))
+        per_round_us: dict[str, list[float]] = {bench.name: [] for bench in active_benchmarks}
+        total_elapsed: dict[str, float] = dict.fromkeys((bench.name for bench in active_benchmarks), 0.0)
+        total_iters: dict[str, int] = dict.fromkeys((bench.name for bench in active_benchmarks), 0)
+
+        for _ in range(rounds):
+            for bench in active_benchmarks:
+                batch_size = max(1, bench.iterations // rounds)
+                gc.collect()
+                gc_was_enabled = gc.isenabled()
+                if gc_was_enabled:
+                    gc.disable()
+                try:
+                    elapsed = timeit.timeit(bench.bench_fn, number=batch_size)
+                finally:
+                    if gc_was_enabled:
+                        gc.enable()
+                per_round_us[bench.name].append((elapsed / batch_size) * 1_000_000)
+                total_elapsed[bench.name] += elapsed
+                total_iters[bench.name] += batch_size
+
+        for bench in active_benchmarks:
+            click.echo(f"  Benchmarking: {bench.name}...")
+            samples = per_round_us[bench.name]
+            median_us = statistics.median(samples) if samples else 0.0
+            ops_per_sec = 1_000_000.0 / median_us if median_us > 0 else float("inf")
+            results.append({
+                "name": bench.name,
+                "time_per_op_us": median_us,
+                "ops_per_sec": ops_per_sec,
+                "total_time": total_elapsed[bench.name],
+                "iterations": total_iters[bench.name],
+                "description": bench.description,
+            })
+
+        return results
+    finally:
+        for bench in cleanup_benchmarks:
+            if bench.setup_fn:
+                bench.setup_fn()
+
+
+def print_results_table(results: list[dict[str, Any]]) -> None:
+    """Print benchmark results as a rich table.
+
+    Args:
+        results: List of result dictionaries from run_benchmarks.
+    """
+    console = Console()
+
+    subsystem_times = [
+        r["time_per_op_us"]
+        for r in results
+        if not r["name"].startswith("raw ") and r["name"] != "session.execute() - full path"
+    ]
+    total_subsystem_us = sum(subsystem_times) if subsystem_times else 1.0
+
+    table = Table(title="Subsystem Micro-Benchmarks (sqlite)")
+    table.add_column("Subsystem", style="cyan", no_wrap=True, max_width=52)
+    table.add_column("Time/Op", justify="right", style="yellow")
+    table.add_column("Ops/sec", justify="right", style="green")
+    table.add_column("Relative Cost", justify="right", style="magenta")
+
+    for r in results:
+        name = r["name"]
+        us = r["time_per_op_us"]
+        ops = r["ops_per_sec"]
+        pct = (us / total_subsystem_us) * 100 if total_subsystem_us > 0 else 0
+
+        _us_per_ms = 1000
+        if us >= _us_per_ms:
+            time_str = f"{us / _us_per_ms:.2f} ms"
+        elif us >= 1:
+            time_str = f"{us:.2f} us"
+        else:
+            time_str = f"{us * 1000:.1f} ns"
+
+        _million = 1_000_000
+        _thousand = 1_000
+        if ops >= _million:
+            ops_str = f"{ops / _million:.2f}M"
+        elif ops >= _thousand:
+            ops_str = f"{ops / _thousand:.1f}K"
+        else:
+            ops_str = f"{ops:.0f}"
+
+        if name.startswith("raw "):
+            pct_str = "(baseline)"
+        elif name == "session.execute() - full path":
+            pct_str = "(end-to-end)"
+        else:
+            pct_str = f"{pct:.1f}%"
+
+        table.add_row(name, time_str, ops_str, pct_str)
+
+    console.print(table)
+
+    console.print()
+    full_execute = next((r for r in results if r["name"] == "session.execute() - full path"), None)
+    raw_execute = next((r for r in results if r["name"] == "raw sqlite3 conn.execute()"), None)
+
+    if full_execute and raw_execute:
+        overhead_us = full_execute["time_per_op_us"] - raw_execute["time_per_op_us"]
+        overhead_pct = (overhead_us / raw_execute["time_per_op_us"]) * 100 if raw_execute["time_per_op_us"] > 0 else 0
+        console.print(f"  [bold]Per-call overhead:[/bold] {overhead_us:.2f} us ({overhead_pct:.1f}% vs raw)")
+        console.print(f"  [bold]Raw execute:[/bold] {raw_execute['time_per_op_us']:.2f} us/op")
+        console.print(f"  [bold]sqlspec execute:[/bold] {full_execute['time_per_op_us']:.2f} us/op")
+
+
+@click.command()
+@click.option("--iterations", default=10_000, show_default=True, help="Number of iterations per subsystem benchmark")
+@click.option("--warmup", default=100, show_default=True, help="Number of warmup iterations (not timed)")
+@click.option("--profile", is_flag=True, default=False, help="Profile the benchmarks using HotPathProfiler")
+@click.option("--json-output", default=None, type=click.Path(), help="Write subsystem results to a JSON file")
+def main(iterations: int, warmup: int, profile: bool, json_output: str | None) -> None:
+    """Run subsystem micro-benchmarks for sqlspec hot path profiling.
+
+    Isolates each execution subsystem and measures it independently to
+    identify exactly where time is spent during query execution.
+    """
+    console = Console()
+    console.print("[bold]sqlspec Subsystem Micro-Benchmarks[/bold]")
+    console.print(f"  iterations={iterations}, warmup={warmup}, profile={profile}")
+    console.print()
+
+    db_path = _make_temp_db()
+    try:
+        _setup_test_table(db_path)
+        click.echo("Running benchmarks...")
+        results = run_benchmarks(db_path, iterations, warmup, profile=profile)
+        click.echo()
+        print_results_table(results)
+        if json_output is not None:
+            _write_json_results(results, json_output, iterations=iterations, warmup=warmup, profile=profile)
+            click.secho(f"Subsystem report written to {json_output}", fg="green")
+    finally:
+        with suppress(OSError):
+            db_path.unlink()
+
+    click.echo()
+    click.secho("Subsystem benchmarks complete.", fg="green")
+
+
+class _StubArrowTable:
+    """Minimal no-op Arrow table stub for pre-Phase-5 DuckDB dispatch_execute."""
+
+    __slots__ = ("column_names", "num_rows")
+
+    def __init__(self) -> None:
+        self.column_names = ["id", "value"]
+        self.num_rows = 1
+
+    def to_pylist(self) -> list[dict[str, Any]]:
+        return [{"id": 1, "value": "value_1"}]
+
+
+class _StubDuckDBCursor:
+    """Minimal no-op DB-API cursor isolating pure-Python SQLSpec driver overhead."""
+
+    __slots__ = ("_arrow_table", "description", "rowcount")
+
+    def __init__(self) -> None:
+        self.description = [
+            ("id", "NUMBER", None, None, None, None, None),
+            ("value", "STRING", None, None, None, None, None),
+        ]
+        self.rowcount = 1
+        self._arrow_table = _StubArrowTable()
+
+    def execute(self, sql: str, parameters: Any = None) -> "_StubDuckDBCursor":
+        return self
+
+    def executemany(self, sql: str, parameters: Any = None) -> "_StubDuckDBCursor":
+        return self
+
+    def fetchall(self) -> list[tuple[int, str]]:
+        return [(1, "value_1")]
+
+    def to_arrow_table(self) -> _StubArrowTable:
+        return self._arrow_table
+
+    def close(self) -> None:
+        return None
+
+
+class _StubDuckDBConnection:
+    """Minimal no-op DB-API connection returning a reusable stub cursor."""
+
+    __slots__ = ("_cursor", "description", "rowcount")
+
+    def __init__(self) -> None:
+        self._cursor = _StubDuckDBCursor()
+        self.description = self._cursor.description
+        self.rowcount = 1
+
+    def cursor(self) -> _StubDuckDBCursor:
+        return self._cursor
+
+    def execute(self, sql: str, parameters: Any = None) -> _StubDuckDBCursor:
+        return self._cursor
+
+    def executemany(self, sql: str, parameters: Any = None) -> _StubDuckDBCursor:
+        return self._cursor
+
+    def fetchall(self) -> list[tuple[int, str]]:
+        return self._cursor.fetchall()
+
+    def to_arrow_table(self) -> _StubArrowTable:
+        return self._cursor.to_arrow_table()
+
+    def register(self, name: str, table: Any) -> None:
+        return None
+
+    def unregister(self, name: str) -> None:
+        return None
+
+    def commit(self) -> None:
+        return None
+
+    def rollback(self) -> None:
+        return None
+
+
+def _build_stub_driver_benchmarks(iterations: int) -> list[SubsystemBenchmark]:
+    """Build pure-Python stub-connection driver micro-benchmarks."""
+    from sqlspec.adapters.duckdb import DuckDBConfig
+    from sqlspec.adapters.duckdb.driver import DuckDBDriver
+
+    stub_conn = _StubDuckDBConnection()
+    shared_config = DuckDBConfig(
+        connection_config={"database": ":memory:"}, driver_features={"enable_arrow_ingest": False}
+    )
+    shared_stmt_cfg = shared_config.statement_config
+    shared_features = dict(shared_config.driver_features)
+    stub_driver = DuckDBDriver(
+        connection=stub_conn,  # type: ignore[arg-type]
+        statement_config=shared_stmt_cfg,
+        driver_features=shared_features,
+    )
+
+    select_sql = "SELECT id, value FROM test WHERE value = ?"
+    insert_sql = "INSERT INTO test (value) VALUES (?)"
+    no_param_sql = "SELECT 1"
+    scalar_sql = "SELECT id, value FROM test WHERE id = ?"
+    many_sql = "INSERT INTO test (id, value) VALUES (?, ?)"
+    batch_100: list[tuple[int, str]] = [(idx, f"value_{idx}") for idx in range(100)]
+
+    stub_driver.execute(select_sql, ("value_1",))
+    stub_driver.execute(select_sql, ("value_1",))
+    stub_driver.execute(insert_sql, ("value_1",))
+    stub_driver.execute(insert_sql, ("value_1",))
+    stub_driver.fetch_one_or_none(select_sql, ("value_1",))
+    stub_driver.execute(no_param_sql)
+    stub_driver.execute(scalar_sql, 1)
+    stub_driver.execute(STUB_COMPLEX_QUERY_SQL, 1)
+    stub_driver.execute_many(many_sql, batch_100)
+
+    def bench_stub_fast_select() -> None:
+        stub_driver.execute(select_sql, ("value_1",))
+
+    def bench_stub_fast_insert() -> None:
+        stub_driver.execute(insert_sql, ("value_1",))
+
+    def bench_stub_fast_fetch_one_or_none() -> None:
+        stub_driver.fetch_one_or_none(select_sql, ("value_1",))
+
+    def bench_stub_no_param_select() -> None:
+        stub_driver.execute(no_param_sql)
+
+    def bench_stub_scalar_select() -> None:
+        stub_driver.execute(scalar_sql, 1)
+
+    def bench_stub_complex_cte() -> None:
+        stub_driver.execute(STUB_COMPLEX_QUERY_SQL, 1)
+
+    def bench_stub_session_per_request_simple() -> None:
+        drv = DuckDBDriver(
+            connection=stub_conn,  # type: ignore[arg-type]
+            statement_config=shared_stmt_cfg,
+            driver_features=shared_features,
+        )
+        drv.execute(select_sql, ("value_1",))
+
+    def bench_stub_session_per_request_complex() -> None:
+        drv = DuckDBDriver(
+            connection=stub_conn,  # type: ignore[arg-type]
+            statement_config=shared_stmt_cfg,
+            driver_features=shared_features,
+        )
+        drv.execute(STUB_COMPLEX_QUERY_SQL, 1)
+
+    def bench_stub_execute_many_100() -> None:
+        stub_driver.execute_many(many_sql, batch_100)
+
+    bounded_iters = max(1, min(iterations, 2_000))
+    return [
+        SubsystemBenchmark(
+            name="stub driver: fast-path execute(SELECT, tuple)",
+            bench_fn=bench_stub_fast_select,
+            iterations=iterations,
+            description="Pure-Python driver overhead on warm fast-path SELECT with 1-tuple param",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: fast-path execute(INSERT, tuple)",
+            bench_fn=bench_stub_fast_insert,
+            iterations=iterations,
+            description="Pure-Python driver overhead on warm fast-path INSERT with 1-tuple param",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: fast-path fetch_one_or_none(SELECT, tuple)",
+            bench_fn=bench_stub_fast_fetch_one_or_none,
+            iterations=iterations,
+            description="Pure-Python driver overhead on warm fetch_one_or_none with 1-tuple param",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: parameterless execute(SELECT)",
+            bench_fn=bench_stub_no_param_select,
+            iterations=iterations,
+            description="Pure-Python driver overhead on parameterless SELECT 1",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: scalar-param execute(SELECT, int)",
+            bench_fn=bench_stub_scalar_select,
+            iterations=iterations,
+            description="Pure-Python driver overhead on SELECT with scalar positional param",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: complex CTE+2-join execute(SELECT, int)",
+            bench_fn=bench_stub_complex_cte,
+            iterations=bounded_iters,
+            description="Pure-Python driver overhead on CTE + 2-join query with scalar param",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: session-per-request simple SELECT",
+            bench_fn=bench_stub_session_per_request_simple,
+            iterations=bounded_iters,
+            description="New driver instance per request executing simple SELECT",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: session-per-request complex CTE SELECT",
+            bench_fn=bench_stub_session_per_request_complex,
+            iterations=bounded_iters,
+            description="New driver instance per request executing CTE + 2-join SELECT",
+        ),
+        SubsystemBenchmark(
+            name="stub driver: execute_many 100 rows",
+            bench_fn=bench_stub_execute_many_100,
+            iterations=bounded_iters,
+            description="Pure-Python driver overhead on execute_many with 100 parameter rows",
+        ),
+    ]
 
 
 def _make_temp_db() -> Path:
@@ -59,26 +487,6 @@ def _librt_string_writer_type() -> "type[Any] | None":
     except ImportError:
         return None
     return StringWriter
-
-
-# ---------------------------------------------------------------------------
-# Benchmark definitions
-# ---------------------------------------------------------------------------
-
-
-class SubsystemBenchmark:
-    """Container for a single subsystem benchmark."""
-
-    __slots__ = ("bench_fn", "description", "iterations", "name", "setup_fn")
-
-    def __init__(
-        self, name: str, bench_fn: Any, iterations: int = 10_000, setup_fn: Any = None, description: str = ""
-    ) -> None:
-        self.name = name
-        self.bench_fn = bench_fn
-        self.iterations = iterations
-        self.setup_fn = setup_fn
-        self.description = description
 
 
 def _build_librt_candidate_benchmarks(iterations: int) -> list[SubsystemBenchmark]:
@@ -161,7 +569,7 @@ def _build_librt_candidate_benchmarks(iterations: int) -> list[SubsystemBenchmar
     def bench_splitter_join_baseline() -> None:
         statement_chars: list[str] = []
         for token_value in token_values:
-            statement_chars.append(token_value)  # noqa: PERF402 - Keep the splitter's token append shape.
+            statement_chars.append(token_value)  # noqa: PERF402
         "".join(statement_chars).strip()
 
     benchmarks.append(
@@ -248,10 +656,14 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     """
     benchmarks: list[SubsystemBenchmark] = []
 
-    # --- 1. SQL object construction ---
-
-    from sqlspec import sql
+    from sqlspec import SQLSpec, sql
+    from sqlspec.adapters.sqlite import SqliteConfig
+    from sqlspec.adapters.sqlite.driver import SqliteCursor
+    from sqlspec.core.result._base import SQLResult
     from sqlspec.core.statement import SQL
+    from sqlspec.storage.pipeline import SyncStoragePipeline, _decode_arrow_payload, _encode_row_payload
+    from sqlspec.storage.registry import StorageRegistry
+    from sqlspec.typing import Empty
 
     def bench_sql_construction_no_params() -> None:
         SQL("INSERT INTO test (value) VALUES (?)")
@@ -305,15 +717,9 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # --- 2. SQL.compile() ---
-
     insert_stmt = SQL("INSERT INTO test (value) VALUES (?)", ("hello",))
 
     def bench_compile_insert() -> None:
-        insert_stmt._processed_state = type(insert_stmt)._processed_state
-        # Reset to force recompilation
-        from sqlspec.typing import Empty
-
         insert_stmt._processed_state = Empty
         insert_stmt.compile()
 
@@ -329,8 +735,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     select_stmt = SQL("SELECT * FROM test WHERE value = ?", ("value_1",))
 
     def bench_compile_select() -> None:
-        from sqlspec.typing import Empty
-
         select_stmt._processed_state = Empty
         select_stmt.compile()
 
@@ -352,8 +756,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
     complex_stmt = SQL(complex_sql, ("active", "2024-01-01", 100, 50))
 
     def bench_compile_complex() -> None:
-        from sqlspec.typing import Empty
-
         complex_stmt._processed_state = Empty
         complex_stmt.compile()
 
@@ -366,30 +768,19 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # --- 3. Query cache cycle ---
-    # We need a real SqliteDriver to test the QC path.
-
-    from sqlspec import SQLSpec
-    from sqlspec.adapters.sqlite import SqliteConfig
-
     spec = SQLSpec()
     config = SqliteConfig(connection_config={"database": str(db_path), "isolation_level": None})
 
-    # We need to get a driver instance to test QC methods.
-    # Use the session context to get the driver, but keep it alive.
     _session_ctx = spec.provide_session(config)
     session = _session_ctx.__enter__()
 
-    # Create the test table and seed data through the sqlspec session
     session.execute("CREATE TABLE IF NOT EXISTS test (value TEXT)")
     data = [(f"value_{i}",) for i in range(100)]
     session.execute_many("INSERT INTO test (value) VALUES (?)", data)
 
-    # Prime the query cache by executing a query twice (first stores, second hits cache)
     session.execute("INSERT INTO test (value) VALUES (?)", ("cache_prime",))
     session.execute("INSERT INTO test (value) VALUES (?)", ("cache_prime2",))
 
-    # Now benchmark the cache-miss lookup path
     def bench_cache_execution_miss() -> None:
         session._cached_execution("INSERT INTO unique_table (col) VALUES (?)", ("val",))
 
@@ -402,7 +793,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # Full statement cache lookup cycle
     def bench_cached_execution() -> None:
         session._cached_execution("INSERT INTO test (value) VALUES (?)", ("bench_val",))
 
@@ -414,8 +804,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
             description="Full stmt_cache lookup -> prepare -> execute cycle",
         )
     )
-
-    # --- 4. Parameter processing ---
 
     def bench_prepare_driver_params_tuple() -> None:
         session.prepare_driver_parameters(("value_1",), session.statement_config, is_many=False)
@@ -453,10 +841,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # --- 5. Result construction ---
-
-    from sqlspec.core.result._base import SQLResult
-
     result_stmt = SQL("INSERT INTO test (value) VALUES (?)", ("hello",))
     result_stmt.compile()
 
@@ -493,11 +877,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
             description="Construct SQLResult for a SELECT with 100 rows",
         )
     )
-
-    # --- 6. Storage runtime + Arrow boundary helpers ---
-
-    from sqlspec.storage.pipeline import SyncStoragePipeline, _decode_arrow_payload, _encode_row_payload
-    from sqlspec.storage.registry import StorageRegistry
 
     storage_root = db_path.parent / "bench-storage-runtime"
     storage_root.mkdir(exist_ok=True)
@@ -548,12 +927,8 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # --- 7. Cursor context manager overhead ---
-
     raw_conn = sqlite3.connect(str(db_path), isolation_level=None)
     raw_conn.execute("PRAGMA journal_mode = WAL")
-
-    from sqlspec.adapters.sqlite.driver import SqliteCursor
 
     def bench_cursor_context_manager() -> None:
         with SqliteCursor(raw_conn) as _cursor:
@@ -568,7 +943,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # Raw cursor for comparison
     def bench_raw_cursor() -> None:
         cursor = raw_conn.cursor()
         cursor.close()
@@ -582,8 +956,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # --- 8. Full execute() overhead (single statement, end-to-end) ---
-
     def bench_full_execute() -> None:
         session.execute("INSERT INTO test (value) VALUES (?)", ("bench_e2e",))
 
@@ -596,7 +968,6 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
-    # Raw sqlite for comparison
     def bench_raw_execute() -> None:
         raw_conn.execute("INSERT INTO test (value) VALUES (?)", ("bench_raw",))
 
@@ -609,6 +980,7 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         )
     )
 
+    benchmarks.extend(_build_stub_driver_benchmarks(iterations))
     benchmarks.extend(_build_librt_candidate_benchmarks(iterations))
 
     def cleanup_benchmarks() -> None:
@@ -618,140 +990,11 @@ def _build_benchmarks(db_path: Path, iterations: int) -> list[SubsystemBenchmark
         with suppress(OSError):
             storage_root.rmdir()
 
-    # Store session context for cleanup
     benchmarks.append(
         SubsystemBenchmark(name="_cleanup_", bench_fn=lambda: None, iterations=0, setup_fn=cleanup_benchmarks)
     )
 
     return benchmarks
-
-
-# ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
-
-
-def run_benchmarks(db_path: Path, iterations: int, warmup: int, profile: bool = False) -> list[dict[str, Any]]:
-    """Run all subsystem benchmarks and return results.
-
-    Args:
-        db_path: Path to the temporary SQLite database.
-        iterations: Number of iterations per benchmark.
-        warmup: Number of warmup iterations.
-        profile: Whether to profile the benchmarks using HotPathProfiler.
-
-    Returns:
-        List of result dictionaries with timing data.
-    """
-    benchmarks = _build_benchmarks(db_path, iterations)
-    results: list[dict[str, Any]] = []
-
-    for bench in benchmarks:
-        if bench.name == "_cleanup_":
-            if bench.setup_fn:
-                bench.setup_fn()
-            continue
-
-        click.echo(f"  Benchmarking: {bench.name}...")
-
-        # Warmup
-        for _ in range(warmup):
-            bench.bench_fn()
-
-        # Timed run using timeit
-        if profile:
-            with HotPathProfiler() as prof:
-                elapsed = timeit.timeit(bench.bench_fn, number=bench.iterations)
-            click.echo(f"  Profile results for {bench.name}:")
-            prof.print_report(limit=10)
-            click.echo()
-        else:
-            elapsed = timeit.timeit(bench.bench_fn, number=bench.iterations)
-        time_per_op_us = (elapsed / bench.iterations) * 1_000_000  # microseconds
-        ops_per_sec = bench.iterations / elapsed if elapsed > 0 else float("inf")
-
-        results.append({
-            "name": bench.name,
-            "time_per_op_us": time_per_op_us,
-            "ops_per_sec": ops_per_sec,
-            "total_time": elapsed,
-            "iterations": bench.iterations,
-            "description": bench.description,
-        })
-
-    return results
-
-
-def print_results_table(results: list[dict[str, Any]]) -> None:
-    """Print benchmark results as a rich table.
-
-    Args:
-        results: List of result dictionaries from run_benchmarks.
-    """
-    console = Console()
-
-    # Calculate total overhead as sum of key subsystem times (excluding raw baselines)
-    subsystem_times = [
-        r["time_per_op_us"]
-        for r in results
-        if not r["name"].startswith("raw ") and r["name"] != "session.execute() - full path"
-    ]
-    total_subsystem_us = sum(subsystem_times) if subsystem_times else 1.0
-
-    table = Table(title="Subsystem Micro-Benchmarks (sqlite)")
-    table.add_column("Subsystem", style="cyan", no_wrap=True, max_width=42)
-    table.add_column("Time/Op", justify="right", style="yellow")
-    table.add_column("Ops/sec", justify="right", style="green")
-    table.add_column("Relative Cost", justify="right", style="magenta")
-
-    for r in results:
-        name = r["name"]
-        us = r["time_per_op_us"]
-        ops = r["ops_per_sec"]
-        pct = (us / total_subsystem_us) * 100 if total_subsystem_us > 0 else 0
-
-        # Format time with appropriate unit
-        _us_per_ms = 1000
-        if us >= _us_per_ms:
-            time_str = f"{us / _us_per_ms:.2f} ms"
-        elif us >= 1:
-            time_str = f"{us:.2f} us"
-        else:
-            time_str = f"{us * 1000:.1f} ns"
-
-        # Format ops/sec
-        _million = 1_000_000
-        _thousand = 1_000
-        if ops >= _million:
-            ops_str = f"{ops / _million:.2f}M"
-        elif ops >= _thousand:
-            ops_str = f"{ops / _thousand:.1f}K"
-        else:
-            ops_str = f"{ops:.0f}"
-
-        # Style for baselines
-        if name.startswith("raw "):
-            pct_str = "(baseline)"
-        elif name == "session.execute() - full path":
-            pct_str = "(end-to-end)"
-        else:
-            pct_str = f"{pct:.1f}%"
-
-        table.add_row(name, time_str, ops_str, pct_str)
-
-    console.print(table)
-
-    # Print summary
-    console.print()
-    full_execute = next((r for r in results if r["name"] == "session.execute() - full path"), None)
-    raw_execute = next((r for r in results if r["name"] == "raw sqlite3 conn.execute()"), None)
-
-    if full_execute and raw_execute:
-        overhead_us = full_execute["time_per_op_us"] - raw_execute["time_per_op_us"]
-        overhead_pct = (overhead_us / raw_execute["time_per_op_us"]) * 100 if raw_execute["time_per_op_us"] > 0 else 0
-        console.print(f"  [bold]Per-call overhead:[/bold] {overhead_us:.2f} us ({overhead_pct:.1f}% vs raw)")
-        console.print(f"  [bold]Raw execute:[/bold] {raw_execute['time_per_op_us']:.2f} us/op")
-        console.print(f"  [bold]sqlspec execute:[/bold] {full_execute['time_per_op_us']:.2f} us/op")
 
 
 def _write_json_results(
@@ -769,45 +1012,6 @@ def _write_json_results(
         "results": results,
     }
     Path(output_path).write_text(json.dumps(output, indent=2, sort_keys=True))
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-@click.command()
-@click.option("--iterations", default=10_000, show_default=True, help="Number of iterations per subsystem benchmark")
-@click.option("--warmup", default=100, show_default=True, help="Number of warmup iterations (not timed)")
-@click.option("--profile", is_flag=True, default=False, help="Profile the benchmarks using HotPathProfiler")
-@click.option("--json-output", default=None, type=click.Path(), help="Write subsystem results to a JSON file")
-def main(iterations: int, warmup: int, profile: bool, json_output: str | None) -> None:
-    """Run subsystem micro-benchmarks for sqlspec hot path profiling.
-
-    Isolates each execution subsystem and measures it independently to
-    identify exactly where time is spent during query execution.
-    """
-    console = Console()
-    console.print("[bold]sqlspec Subsystem Micro-Benchmarks[/bold]")
-    console.print(f"  iterations={iterations}, warmup={warmup}, profile={profile}")
-    console.print()
-
-    db_path = _make_temp_db()
-    try:
-        _setup_test_table(db_path)
-        click.echo("Running benchmarks...")
-        results = run_benchmarks(db_path, iterations, warmup, profile=profile)
-        click.echo()
-        print_results_table(results)
-        if json_output is not None:
-            _write_json_results(results, json_output, iterations=iterations, warmup=warmup, profile=profile)
-            click.secho(f"Subsystem report written to {json_output}", fg="green")
-    finally:
-        with suppress(OSError):
-            db_path.unlink()
-
-    click.echo()
-    click.secho("Subsystem benchmarks complete.", fg="green")
 
 
 if __name__ == "__main__":

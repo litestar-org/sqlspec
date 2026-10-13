@@ -7,9 +7,11 @@ import asyncio
 import cProfile
 import gc
 import importlib
+import importlib.metadata
 import inspect
 import json
 import os
+import platform
 import pstats
 import sqlite3
 import statistics
@@ -26,7 +28,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from sqlspec import SQLSpec
+from sqlspec import ObservabilityConfig, SQLSpec
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.utils.schema import _convert_numpy_recursive, to_schema, transform_dict_keys
@@ -36,36 +38,77 @@ __all__ = (
     "main",
     "print_benchmark_table",
     "raw_adbc_rows",
+    "raw_aiosqlite_complex_query",
+    "raw_aiosqlite_no_param_select",
+    "raw_aiosqlite_observability_select",
+    "raw_aiosqlite_scalar_param_select",
+    "raw_aiosqlite_session_per_request",
     "raw_aiosqlite_worker_hops",
+    "raw_asyncpg_complex_query",
     "raw_asyncpg_initialization",
     "raw_asyncpg_iterative_inserts",
+    "raw_asyncpg_no_param_select",
+    "raw_asyncpg_observability_select",
     "raw_asyncpg_read_heavy",
     "raw_asyncpg_repeated_queries",
     "raw_asyncpg_rows",
+    "raw_asyncpg_scalar_param_select",
+    "raw_asyncpg_session_per_request",
     "raw_asyncpg_write_heavy",
     "raw_cockroach_asyncpg_rows",
     "raw_cockroach_psycopg_async_rows",
     "raw_cockroach_psycopg_sync_rows",
     "raw_duckdb_bulk",
+    "raw_duckdb_complex_query",
     "raw_duckdb_initialization",
     "raw_duckdb_iterative_inserts",
+    "raw_duckdb_no_param_select",
+    "raw_duckdb_observability_select",
     "raw_duckdb_read_heavy",
     "raw_duckdb_repeated_queries",
+    "raw_duckdb_scalar_param_select",
+    "raw_duckdb_session_per_request",
     "raw_duckdb_write_heavy",
     "raw_mysqlconnector_json_rows",
+    "raw_oracle_complex_query",
     "raw_oracle_lob_fetch_1k",
     "raw_oracle_lob_fetch_100k",
+    "raw_oracle_no_param_select",
+    "raw_oracle_observability_select",
+    "raw_oracle_scalar_param_select",
+    "raw_oracle_session_per_request",
+    "raw_psqlpy_complex_query",
+    "raw_psqlpy_no_param_select",
+    "raw_psqlpy_observability_select",
+    "raw_psqlpy_rows",
+    "raw_psqlpy_scalar_param_select",
+    "raw_psqlpy_session_per_request",
+    "raw_psycopg_async_complex_query",
+    "raw_psycopg_async_no_param_select",
+    "raw_psycopg_async_observability_select",
     "raw_psycopg_async_rows",
+    "raw_psycopg_async_scalar_param_select",
+    "raw_psycopg_async_session_per_request",
+    "raw_psycopg_sync_complex_query",
+    "raw_psycopg_sync_no_param_select",
+    "raw_psycopg_sync_observability_select",
     "raw_psycopg_sync_rows",
+    "raw_psycopg_sync_scalar_param_select",
+    "raw_psycopg_sync_session_per_request",
     "raw_spanner_strings",
     "raw_sqlite_complex_parameters",
+    "raw_sqlite_complex_query",
     "raw_sqlite_dict_key_transform",
     "raw_sqlite_initialization",
     "raw_sqlite_iterative_inserts",
+    "raw_sqlite_no_param_select",
+    "raw_sqlite_observability_select",
     "raw_sqlite_read_heavy",
     "raw_sqlite_repeated_queries",
+    "raw_sqlite_scalar_param_select",
     "raw_sqlite_schema_mapping",
     "raw_sqlite_schema_type_numpy",
+    "raw_sqlite_session_per_request",
     "raw_sqlite_thin_path_stress",
     "raw_sqlite_write_heavy",
     "run_benchmark",
@@ -86,23 +129,44 @@ __all__ = (
     "sqlalchemy_sqlite_repeated_queries",
     "sqlalchemy_sqlite_write_heavy",
     "sqlspec_adbc_rows",
+    "sqlspec_aiosqlite_complex_query",
+    "sqlspec_aiosqlite_no_param_select",
+    "sqlspec_aiosqlite_observability_select",
+    "sqlspec_aiosqlite_scalar_param_select",
+    "sqlspec_aiosqlite_session_per_request",
     "sqlspec_aiosqlite_worker_hops",
+    "sqlspec_asyncpg_complex_query",
     "sqlspec_asyncpg_initialization",
     "sqlspec_asyncpg_iterative_inserts",
+    "sqlspec_asyncpg_no_param_select",
+    "sqlspec_asyncpg_observability_select",
     "sqlspec_asyncpg_read_heavy",
     "sqlspec_asyncpg_repeated_queries",
     "sqlspec_asyncpg_rows",
+    "sqlspec_asyncpg_scalar_param_select",
+    "sqlspec_asyncpg_session_per_request",
     "sqlspec_asyncpg_write_heavy",
     "sqlspec_cockroach_asyncpg_rows",
     "sqlspec_cockroach_psycopg_async_rows",
     "sqlspec_cockroach_psycopg_sync_rows",
     "sqlspec_duckdb_bulk",
+    "sqlspec_duckdb_complex_query",
     "sqlspec_duckdb_initialization",
     "sqlspec_duckdb_iterative_inserts",
+    "sqlspec_duckdb_no_param_select",
+    "sqlspec_duckdb_observability_select",
     "sqlspec_duckdb_read_heavy",
     "sqlspec_duckdb_repeated_queries",
+    "sqlspec_duckdb_scalar_param_select",
+    "sqlspec_duckdb_session_per_request",
     "sqlspec_duckdb_write_heavy",
     "sqlspec_mysqlconnector_json_rows",
+    "sqlspec_oracle_async_complex_query",
+    "sqlspec_oracle_async_no_param_select",
+    "sqlspec_oracle_async_observability_select",
+    "sqlspec_oracle_async_scalar_param_select",
+    "sqlspec_oracle_async_session_per_request",
+    "sqlspec_oracle_complex_query",
     "sqlspec_oracle_json_read",
     "sqlspec_oracle_lob_fetch_1k",
     "sqlspec_oracle_lob_fetch_100k",
@@ -113,62 +177,75 @@ __all__ = (
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_1k",
     "sqlspec_oracle_lob_fetch_fetch_lobs_true_100k",
     "sqlspec_oracle_native_json_write",
+    "sqlspec_oracle_no_param_select",
+    "sqlspec_oracle_observability_select",
+    "sqlspec_oracle_scalar_param_select",
     "sqlspec_oracle_serialized_json_write",
+    "sqlspec_oracle_session_per_request",
+    "sqlspec_psqlpy_complex_query",
+    "sqlspec_psqlpy_no_param_select",
+    "sqlspec_psqlpy_observability_select",
+    "sqlspec_psqlpy_rows",
+    "sqlspec_psqlpy_scalar_param_select",
+    "sqlspec_psqlpy_session_per_request",
+    "sqlspec_psycopg_async_complex_query",
+    "sqlspec_psycopg_async_no_param_select",
+    "sqlspec_psycopg_async_observability_select",
     "sqlspec_psycopg_async_rows",
+    "sqlspec_psycopg_async_scalar_param_select",
+    "sqlspec_psycopg_async_session_per_request",
+    "sqlspec_psycopg_sync_complex_query",
+    "sqlspec_psycopg_sync_no_param_select",
+    "sqlspec_psycopg_sync_observability_select",
     "sqlspec_psycopg_sync_rows",
+    "sqlspec_psycopg_sync_scalar_param_select",
+    "sqlspec_psycopg_sync_session_per_request",
     "sqlspec_spanner_strings",
     "sqlspec_sqlite_complex_parameters",
+    "sqlspec_sqlite_complex_query",
     "sqlspec_sqlite_dict_key_transform",
     "sqlspec_sqlite_initialization",
     "sqlspec_sqlite_iterative_inserts",
+    "sqlspec_sqlite_no_param_select",
+    "sqlspec_sqlite_observability_select",
     "sqlspec_sqlite_read_heavy",
     "sqlspec_sqlite_repeated_queries",
+    "sqlspec_sqlite_scalar_param_select",
     "sqlspec_sqlite_schema_mapping",
     "sqlspec_sqlite_schema_type_numpy",
+    "sqlspec_sqlite_session_per_request",
     "sqlspec_sqlite_thin_path_stress",
     "sqlspec_sqlite_write_heavy",
 )
 
-# Pool leak detection helper
 _leaked_pools: list[str] = []
 
-
-class BenchmarkUnavailableError(RuntimeError):
-    """Signal that an optional benchmark dependency or service is unavailable."""
-
-
-def _benchmark_unavailable() -> NoReturn:
-    raise BenchmarkUnavailableError
-
-
-def _is_compiled() -> bool:
-    """Detect if sqlspec driver modules are mypyc-compiled."""
-    try:
-        from sqlspec.driver import _sync
-
-        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
-    except ImportError:
-        return False
-
-
-SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
-
-
 ROWS_TO_INSERT = 10_000
-POOL_SIZE = 1  # Match the single raw connection used by each benchmark scenario
+
+POOL_SIZE = 1
+
 DEFAULT_BENCH_ITERATIONS = 7
+
 DEFAULT_BENCH_WARMUP = 3
+
 NOISY_STDDEV_RATIO = 0.10
+
 CORE_LIBRARIES = ("raw", "sqlspec", "sqlalchemy")
+
 CORE_SCENARIOS = ("initialization", "write_heavy", "read_heavy", "iterative_inserts", "repeated_queries")
+
 ORACLE_LOB_ROWS = 100
+
 ORACLE_LOB_PAYLOAD_SIZES = {"1k": 1024, "100k": 100 * 1024}
+
 ORACLE_JSON_ROWS = 100
+
 ORACLE_JSON_PAYLOAD = {
     "active": True,
     "count": 3,
     "items": [{"name": "alpha", "value": 1.25}, {"name": "beta", "value": 2.5}],
 }
+
 ORACLE_LOB_ENV_VARS = (
     "SQLSPEC_BENCH_ORACLE_HOST",
     "SQLSPEC_BENCH_ORACLE_PORT",
@@ -176,8 +253,24 @@ ORACLE_LOB_ENV_VARS = (
     "SQLSPEC_BENCH_ORACLE_USER",
     "SQLSPEC_BENCH_ORACLE_PASSWORD",
 )
+
 POSTGRES_DSN_ENV = "SQLSPEC_BENCH_POSTGRES_DSN"
+
 COCKROACH_DSN_ENV = "SQLSPEC_BENCH_COCKROACH_DSN"
+
+HOT_PATH_EXTENDED_SCENARIOS = (
+    ("raw", "scalar_param_select"),
+    ("sqlspec", "scalar_param_select"),
+    ("raw", "no_param_select"),
+    ("sqlspec", "no_param_select"),
+    ("raw", "complex_query"),
+    ("sqlspec", "complex_query"),
+    ("raw", "session_per_request"),
+    ("sqlspec", "session_per_request"),
+    ("raw", "observability_select"),
+    ("sqlspec", "observability_select"),
+)
+
 SQLITE_EXTENDED_SCENARIOS = (
     ("raw", "dict_key_transform"),
     ("sqlspec", "dict_key_transform"),
@@ -189,7 +282,9 @@ SQLITE_EXTENDED_SCENARIOS = (
     ("sqlspec", "thin_path_stress"),
     ("raw", "schema_type_numpy"),
     ("sqlspec", "schema_type_numpy"),
+    *HOT_PATH_EXTENDED_SCENARIOS,
 )
+
 ORACLE_EXTENDED_SCENARIOS = (
     ("sqlspec_native_json", "json_write"),
     ("sqlspec_serialized_json", "json_write"),
@@ -204,13 +299,37 @@ ORACLE_EXTENDED_SCENARIOS = (
     ("sqlspec_fetch_lobs_true", "lob_fetch_100k"),
     ("sqlspec_async", "lob_fetch_100k"),
     ("sqlspec_async_fetch_lobs_true", "lob_fetch_100k"),
+    ("raw", "scalar_param_select"),
+    ("sqlspec", "scalar_param_select"),
+    ("sqlspec_async", "scalar_param_select"),
+    ("raw", "no_param_select"),
+    ("sqlspec", "no_param_select"),
+    ("sqlspec_async", "no_param_select"),
+    ("raw", "complex_query"),
+    ("sqlspec", "complex_query"),
+    ("sqlspec_async", "complex_query"),
+    ("raw", "session_per_request"),
+    ("sqlspec", "session_per_request"),
+    ("sqlspec_async", "session_per_request"),
+    ("raw", "observability_select"),
+    ("sqlspec", "observability_select"),
+    ("sqlspec_async", "observability_select"),
 )
-AIOSQLITE_EXTENDED_SCENARIOS = (("raw", "worker_hops"), ("sqlspec", "worker_hops"))
+
+AIOSQLITE_EXTENDED_SCENARIOS = (("raw", "worker_hops"), ("sqlspec", "worker_hops"), *HOT_PATH_EXTENDED_SCENARIOS)
+
 SPANNER_EXTENDED_SCENARIOS = (("raw", "strings"), ("sqlspec", "strings"))
+
 MYSQLCONNECTOR_EXTENDED_SCENARIOS = (("raw", "json_rows"), ("sqlspec", "json_rows"))
+
 ADBC_EXTENDED_SCENARIOS = (("raw", "rows"), ("sqlspec", "rows"))
-DUCKDB_EXTENDED_SCENARIOS = (("raw", "bulk"), ("sqlspec", "bulk"))
+
+DUCKDB_EXTENDED_SCENARIOS = (("raw", "bulk"), ("sqlspec", "bulk"), *HOT_PATH_EXTENDED_SCENARIOS)
+
 SERVICE_ROWS_SCENARIOS = (("raw", "rows"), ("sqlspec", "rows"))
+
+POSTGRES_EXTENDED_SCENARIOS = (*SERVICE_ROWS_SCENARIOS, *HOT_PATH_EXTENDED_SCENARIOS)
+
 EXTENDED_SCENARIOS_BY_DRIVER = {
     "sqlite": SQLITE_EXTENDED_SCENARIOS,
     "aiosqlite": AIOSQLITE_EXTENDED_SCENARIOS,
@@ -219,13 +338,244 @@ EXTENDED_SCENARIOS_BY_DRIVER = {
     "adbc": ADBC_EXTENDED_SCENARIOS,
     "duckdb": DUCKDB_EXTENDED_SCENARIOS,
     "oracle": ORACLE_EXTENDED_SCENARIOS,
-    "psycopg_sync": SERVICE_ROWS_SCENARIOS,
-    "psycopg_async": SERVICE_ROWS_SCENARIOS,
-    "asyncpg": SERVICE_ROWS_SCENARIOS,
+    "psycopg_sync": POSTGRES_EXTENDED_SCENARIOS,
+    "psycopg_async": POSTGRES_EXTENDED_SCENARIOS,
+    "asyncpg": POSTGRES_EXTENDED_SCENARIOS,
+    "psqlpy": POSTGRES_EXTENDED_SCENARIOS,
     "cockroach_psycopg_sync": SERVICE_ROWS_SCENARIOS,
     "cockroach_psycopg_async": SERVICE_ROWS_SCENARIOS,
     "cockroach_asyncpg": SERVICE_ROWS_SCENARIOS,
 }
+
+SCALAR_PARAM_SELECT_SQL = "SELECT ?;"
+
+SCALAR_PARAM_SELECT_ASYNCPG_SQL = "SELECT $1::int;"
+
+SCALAR_PARAM_SELECT_PG_SQL = "SELECT %s::int;"
+
+SCALAR_PARAM_SELECT_ORACLE_SQL = "SELECT :1 FROM DUAL"
+
+NO_PARAM_SELECT_SQL = "SELECT 1;"
+
+NO_PARAM_SELECT_ORACLE_SQL = "SELECT 1 FROM DUAL"
+
+COMPLEX_SCHEMA_DDL = (
+    "CREATE TABLE users (id INTEGER, org_id INTEGER, status TEXT, name TEXT);",
+    "CREATE TABLE orgs (id INTEGER, tier TEXT, region TEXT);",
+    "CREATE TABLE events (id INTEGER, user_id INTEGER, kind TEXT, ts INTEGER, amount FLOAT);",
+)
+
+COMPLEX_QUERY_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM events
+    WHERE ts >= ?
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM users u
+JOIN orgs o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+LIMIT 25
+"""
+
+POSTGRES_COMPLEX_DROP_DDL = (
+    "DROP TABLE IF EXISTS sqlspec_bench_events",
+    "DROP TABLE IF EXISTS sqlspec_bench_users",
+    "DROP TABLE IF EXISTS sqlspec_bench_orgs",
+)
+
+POSTGRES_COMPLEX_SCHEMA_DDL = (
+    "CREATE TABLE sqlspec_bench_users (id INTEGER, org_id INTEGER, status TEXT, name TEXT)",
+    "CREATE TABLE sqlspec_bench_orgs (id INTEGER, tier TEXT, region TEXT)",
+    "CREATE TABLE sqlspec_bench_events (id INTEGER, user_id INTEGER, kind TEXT, ts INTEGER, amount DOUBLE PRECISION)",
+)
+
+POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM sqlspec_bench_events
+    WHERE ts >= $1::int
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM sqlspec_bench_users u
+JOIN sqlspec_bench_orgs o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+LIMIT 25
+"""
+
+POSTGRES_COMPLEX_QUERY_PG_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM sqlspec_bench_events
+    WHERE ts >= %s::int
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM sqlspec_bench_users u
+JOIN sqlspec_bench_orgs o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+LIMIT 25
+"""
+
+ORACLE_COMPLEX_TABLES = ("SQLSPEC_BENCH_EVENTS", "SQLSPEC_BENCH_USERS", "SQLSPEC_BENCH_ORGS")
+
+ORACLE_COMPLEX_SCHEMA_DDL = (
+    "CREATE TABLE SQLSPEC_BENCH_USERS (id NUMBER, org_id NUMBER, status VARCHAR2(32), name VARCHAR2(64))",
+    "CREATE TABLE SQLSPEC_BENCH_ORGS (id NUMBER, tier VARCHAR2(32), region VARCHAR2(32))",
+    "CREATE TABLE SQLSPEC_BENCH_EVENTS (id NUMBER, user_id NUMBER, kind VARCHAR2(32), ts NUMBER, amount BINARY_DOUBLE)",
+)
+
+ORACLE_COMPLEX_QUERY_SQL = """
+WITH recent_events AS (
+    SELECT user_id, kind, COUNT(*) AS cnt, SUM(amount) AS total_amount
+    FROM SQLSPEC_BENCH_EVENTS
+    WHERE ts >= :1
+    GROUP BY user_id, kind
+)
+SELECT u.id, u.name, o.tier, o.region, r.kind, r.cnt, r.total_amount
+FROM SQLSPEC_BENCH_USERS u
+JOIN SQLSPEC_BENCH_ORGS o ON o.id = u.org_id
+LEFT JOIN recent_events r ON r.user_id = u.id
+WHERE u.status = 'active' AND o.region = 'us'
+ORDER BY r.total_amount DESC
+FETCH FIRST 25 ROWS ONLY
+"""
+
+ORACLE_KV_TABLE = "SQLSPEC_BENCH_KV"
+
+ORACLE_KV_CREATE_SQL = f"CREATE TABLE {ORACLE_KV_TABLE} (value VARCHAR2(64))"
+
+ORACLE_KV_INSERT_SQL = f"INSERT INTO {ORACLE_KV_TABLE} (value) VALUES (:1)"
+
+ORACLE_KV_SELECT_BY_VALUE_SQL = f"SELECT value FROM {ORACLE_KV_TABLE} WHERE value = :1"
+
+SERVICE_ROWS_SELECT_BY_PAYLOAD_PG = "SELECT id, payload FROM sqlspec_bench_rows WHERE payload = %s"
+
+SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG = "SELECT id, payload FROM sqlspec_bench_rows WHERE payload = $1"
+
+HOT_PATH_COMPLEX_ITERATIONS_CAP = 500
+
+CREATE_TEST_TABLE = "CREATE TABLE test (value TEXT);"
+
+DROP_TEST_TABLE = "DROP TABLE IF EXISTS test;"
+
+INSERT_TEST_VALUE = "INSERT INTO test (value) VALUES (?);"
+
+INSERT_TEST_VALUE_ASYNCPG = "INSERT INTO test (value) VALUES ($1);"
+
+SELECT_TEST_VALUES = "SELECT * FROM test;"
+
+INSERT_TEST_VALUE_SQLA = "INSERT INTO test (value) VALUES (:value);"
+
+SELECT_BY_VALUE = "SELECT * FROM test WHERE value = ?;"
+
+SELECT_BY_VALUE_ASYNCPG = "SELECT * FROM test WHERE value = $1;"
+
+SELECT_BY_VALUE_SQLA = "SELECT * FROM test WHERE value = :value;"
+
+SERVICE_ROWS_CREATE = "CREATE TABLE IF NOT EXISTS sqlspec_bench_rows (id INTEGER PRIMARY KEY, payload TEXT)"
+
+SERVICE_ROWS_DROP = "DROP TABLE IF EXISTS sqlspec_bench_rows"
+
+SERVICE_ROWS_INSERT_PG = "INSERT INTO sqlspec_bench_rows (id, payload) VALUES (%s, %s)"
+
+SERVICE_ROWS_INSERT_ASYNCPG = "INSERT INTO sqlspec_bench_rows (id, payload) VALUES ($1, $2)"
+
+SERVICE_ROWS_SELECT = "SELECT id, payload FROM sqlspec_bench_rows ORDER BY id"
+
+CREATE_WIDE_TABLE = """CREATE TABLE wide_test (
+    first_name TEXT,
+    last_name TEXT,
+    email_address TEXT,
+    phone_number TEXT,
+    street_address TEXT,
+    postal_code TEXT,
+    country_name TEXT,
+    birth_date TEXT,
+    account_balance TEXT,
+    is_active TEXT
+);"""
+
+INSERT_WIDE_ROW = (
+    "INSERT INTO wide_test "
+    "(first_name, last_name, email_address, phone_number, street_address, "
+    "postal_code, country_name, birth_date, account_balance, is_active) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+)
+
+SELECT_WIDE_ALL = "SELECT * FROM wide_test;"
+
+CREATE_COMPLEX_TABLE = """CREATE TABLE complex_test (
+    uuid_val TEXT,
+    created_at TEXT,
+    payload TEXT
+);"""
+
+INSERT_COMPLEX_ROW = "INSERT INTO complex_test (uuid_val, created_at, payload) VALUES (?, ?, ?);"
+
+SELECT_COMPLEX_ALL = "SELECT * FROM complex_test;"
+
+BENCHMARK_ROWS = 1_000
+
+DUCKDB_BULK_TABLE = "sqlspec_bench_bulk"
+
+DUCKDB_BULK_CREATE = f"CREATE TABLE {DUCKDB_BULK_TABLE} (id INTEGER, payload VARCHAR)"
+
+DUCKDB_BULK_INSERT = f"INSERT INTO {DUCKDB_BULK_TABLE} (id, payload) VALUES (?, ?)"
+
+DUCKDB_BULK_COUNT = f"SELECT COUNT(*) FROM {DUCKDB_BULK_TABLE}"
+
+ADBC_ROWS_TABLE = "sqlspec_bench_adbc_rows"
+
+ADBC_ROWS_CREATE = f"CREATE TABLE IF NOT EXISTS {ADBC_ROWS_TABLE} (id INTEGER, payload VARCHAR)"
+
+ADBC_ROWS_TRUNCATE = f"DELETE FROM {ADBC_ROWS_TABLE}"
+
+ADBC_ROWS_INSERT = f"INSERT INTO {ADBC_ROWS_TABLE} (id, payload) VALUES (?, ?)"
+
+ADBC_ROWS_INSERT_PG = f"INSERT INTO {ADBC_ROWS_TABLE} (id, payload) VALUES ($1, $2)"
+
+ADBC_ROWS_SELECT = f"SELECT id, payload FROM {ADBC_ROWS_TABLE} ORDER BY id"
+
+MYSQL_JSON_TABLE = "sqlspec_bench_json_rows"
+
+MYSQL_JSON_CREATE = f"CREATE TABLE IF NOT EXISTS {MYSQL_JSON_TABLE} (id INT PRIMARY KEY, payload JSON NOT NULL)"
+
+MYSQL_JSON_INSERT_RAW = f"INSERT INTO {MYSQL_JSON_TABLE} (id, payload) VALUES (%s, %s)"
+
+MYSQL_JSON_INSERT = f"INSERT INTO {MYSQL_JSON_TABLE} (id, payload) VALUES (?, ?)"
+
+MYSQL_JSON_SELECT = f"SELECT id, payload FROM {MYSQL_JSON_TABLE} ORDER BY id"
+
+SPANNER_STRINGS_TABLE = "sqlspec_bench_strings"
+
+SPANNER_STRINGS_SELECT = f"SELECT id, payload FROM {SPANNER_STRINGS_TABLE} ORDER BY id"
+
+SCHEMA_TYPE_NUMPY_ROW_COUNT = 5_000
+
+SCHEMA_TYPE_NUMPY_FIRST_FIELD_4 = 4
+
+_SCHEMA_TYPE_NUMPY_PAYLOAD: list[dict[str, int]] | None = None
+
+_SCHEMA_TYPE_NUMPY_ROW_TYPE: type[Any] | None = None
+
+_SCHEMA_TYPE_NUMPY_VECTOR_TYPE: type[Any] | None = None
+
+ORACLE_LOB_TABLES = {"1k": "SQLSPEC_LOB_1K", "100k": "SQLSPEC_LOB_100K"}
+
+ORACLE_JSON_TABLE = "SQLSPEC_JSON_BENCH"
+
+
+class BenchmarkUnavailableError(RuntimeError):
+    """Signal that an optional benchmark dependency or service is unavailable."""
 
 
 @click.command()
@@ -275,7 +625,6 @@ def main(
     ROWS_TO_INSERT = rows
     POOL_SIZE = pool_size
 
-    # If --profile-scenario is given, implicitly enable profiling
     if profile_scenario:
         profile = True
 
@@ -305,7 +654,7 @@ def main(
     else:
         click.echo("No benchmark results to display.")
     if json_output:
-        _write_json_results(results, json_output, rows=rows, pool_size=pool_size, iterations=iterations)
+        _write_json_results(results, json_output, rows=rows, pool_size=pool_size, iterations=iterations, warmup=warmup)
         click.secho(f"Results written to {json_output}", fg="green")
     if errors:
         for err in errors:
@@ -318,95 +667,6 @@ def main(
     if errors:
         raise click.exceptions.Exit(1)
     click.echo(f"Benchmarks complete for drivers: {', '.join(driver)}")
-
-
-def _new_benchmark_loop() -> asyncio.AbstractEventLoop:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    return loop
-
-
-def _close_benchmark_loop(loop: asyncio.AbstractEventLoop) -> None:
-    try:
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        if hasattr(loop, "shutdown_default_executor"):
-            loop.run_until_complete(loop.shutdown_default_executor())
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()
-
-
-def _run_scenario_once(func: Any, loop: asyncio.AbstractEventLoop | None) -> None:
-    if loop is not None:
-        loop.run_until_complete(func())
-    else:
-        func()
-
-
-def _run_benchmark_iterations(
-    func: Any, *, is_async: bool, iterations: int, warmup: int, profiler: cProfile.Profile | None = None
-) -> list[float]:
-    loop = _new_benchmark_loop() if is_async else None
-    try:
-        for _ in range(warmup):
-            _run_scenario_once(func, loop)
-
-        times: list[float] = []
-        for _ in range(iterations):
-            gc.collect()
-            gc_was_enabled = gc.isenabled()
-            if gc_was_enabled:
-                gc.disable()
-            start = time.perf_counter()
-            try:
-                if profiler is not None:
-                    profiler.enable()
-                _run_scenario_once(func, loop)
-            finally:
-                if profiler is not None:
-                    profiler.disable()
-                if gc_was_enabled:
-                    gc.enable()
-            times.append(time.perf_counter() - start)
-        return times
-    finally:
-        if loop is not None:
-            _close_benchmark_loop(loop)
-
-
-def _summarize_times(times: list[float]) -> dict[str, float | bool]:
-    median_time = statistics.median(times)
-    stddev = statistics.stdev(times) if len(times) > 1 else 0.0
-    quartiles = statistics.quantiles(times, n=4, method="inclusive") if len(times) > 1 else (0.0, 0.0, 0.0)
-    iqr = quartiles[2] - quartiles[0]
-    noise_ratio = stddev / median_time if median_time > 0 else 0.0
-    return {
-        "time": median_time,
-        "stddev": stddev,
-        "iqr": iqr,
-        "noise_ratio": noise_ratio,
-        "noisy": noise_ratio > NOISY_STDDEV_RATIO,
-    }
-
-
-def _benchmark_library_label(library: str) -> str:
-    """Return a display label for a benchmark library key."""
-    if library == "sqlspec":
-        return SQLSPEC_LABEL
-    if library == "sqlspec_fetch_lobs_true":
-        return f"{SQLSPEC_LABEL} fetch_lobs=True"
-    if library == "sqlspec_async":
-        return f"{SQLSPEC_LABEL} async"
-    if library == "sqlspec_async_fetch_lobs_true":
-        return f"{SQLSPEC_LABEL} async fetch_lobs=True"
-    return library
-
-
-def _driver_has_core_scenarios(driver: str) -> bool:
-    """Return True when a driver has any core benchmark scenario registered."""
-    return any(
-        (library, driver, scenario) in SCENARIO_REGISTRY for scenario in CORE_SCENARIOS for library in CORE_LIBRARIES
-    )
 
 
 def run_benchmark(
@@ -485,7 +745,6 @@ def run_benchmark_profiled(
 
     for scenario in CORE_SCENARIOS:
         for lib in CORE_LIBRARIES:
-            # If profiling a specific scenario, skip others
             if profile_scenario and scenario != profile_scenario:
                 continue
 
@@ -512,12 +771,10 @@ def run_benchmark_profiled(
                     **summary,
                 })
 
-                # Save profile data
                 prof_path = profiles_dir / f"{prof_name}.prof"
                 profiler.dump_stats(str(prof_path))
                 click.echo(f"  Profile saved: {prof_path}")
 
-                # Print top 20 summary
                 console.print(f"\n  [bold cyan]Profile summary: {prof_name}[/bold cyan]")
                 profile_stats = pstats.Stats(profiler)
                 profile_stats.strip_dirs()
@@ -581,66 +838,6 @@ def run_extended_benchmark(
     return results
 
 
-def _write_json_results(
-    results: list[dict[str, Any]], output_path: str, *, rows: int, pool_size: int, iterations: int
-) -> None:
-    """Write benchmark results to a JSON file.
-
-    Args:
-        results: List of benchmark result dictionaries
-        output_path: Path to write the JSON file
-        rows: Number of rows used in the benchmark
-        pool_size: Pool size used in the benchmark
-        iterations: Number of timed iterations per scenario
-    """
-    output = {
-        "metadata": {
-            "rows": rows,
-            "pool_size": pool_size,
-            "iterations": iterations,
-            "mypyc_compiled": _is_compiled(),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        },
-        "results": [
-            {
-                "driver": r["driver"],
-                "library": r["library"],
-                "library_key": r.get("library_key", r["library"]),
-                "scenario": r["scenario"],
-                "time": r["time"],
-                "times": r.get("times", [r["time"]]),
-                "stddev": r.get("stddev", 0.0),
-                "iqr": r.get("iqr", 0.0),
-                "noise_ratio": r.get("noise_ratio", 0.0),
-                "noisy": r.get("noisy", False),
-            }
-            for r in results
-        ],
-    }
-    with Path(output_path).open("w") as f:
-        json.dump(output, f, indent=2)
-
-
-# --- Scenario helpers and registry ---
-# SQLite implementations
-# ------------------------------
-
-CREATE_TEST_TABLE = "CREATE TABLE test (value TEXT);"
-DROP_TEST_TABLE = "DROP TABLE IF EXISTS test;"
-INSERT_TEST_VALUE = "INSERT INTO test (value) VALUES (?);"
-INSERT_TEST_VALUE_ASYNCPG = "INSERT INTO test (value) VALUES ($1);"
-SELECT_TEST_VALUES = "SELECT * FROM test;"
-INSERT_TEST_VALUE_SQLA = "INSERT INTO test (value) VALUES (:value);"
-
-
-def _optimize_raw_sqlite(conn: sqlite3.Connection) -> None:
-    """Apply same PRAGMAs that sqlspec applies for fair comparison."""
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA foreign_keys = ON")
-
-
 def raw_sqlite_initialization() -> None:
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         conn = sqlite3.connect(tmp.name)
@@ -654,7 +851,6 @@ def raw_sqlite_write_heavy() -> None:
         conn = sqlite3.connect(tmp.name)
         _optimize_raw_sqlite(conn)
         conn.execute(CREATE_TEST_TABLE)
-        # Use executemany for fair comparison
         data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
         conn.executemany(INSERT_TEST_VALUE, data)
         conn.commit()
@@ -689,7 +885,6 @@ def sqlspec_sqlite_write_heavy() -> None:
         config = SqliteConfig(connection_config={"database": tmp.name})
         with spec.provide_session(config) as session:
             session.execute(CREATE_TEST_TABLE)
-            # Use execute_many for bulk inserts
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
             session.execute_many(INSERT_TEST_VALUE, data)
 
@@ -704,16 +899,6 @@ def sqlspec_sqlite_read_heavy() -> None:
             session.execute_many(INSERT_TEST_VALUE, data)
             rows = session.fetch(SELECT_TEST_VALUES)
             assert len(rows) == ROWS_TO_INSERT
-
-
-def _get_sqlalchemy() -> tuple[Any, Any]:
-    """Import SQLAlchemy lazily."""
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError:
-        return None, None
-    else:
-        return create_engine, text
 
 
 def sqlalchemy_sqlite_initialization() -> None:
@@ -735,7 +920,6 @@ def sqlalchemy_sqlite_write_heavy() -> None:
         engine = create_engine(f"sqlite:///{tmp.name}")
         with engine.connect() as conn:
             conn.execute(text(CREATE_TEST_TABLE))
-            # Use insert with bindparams for fair bulk comparison
             data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
             conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
             conn.commit()
@@ -757,29 +941,13 @@ def sqlalchemy_sqlite_read_heavy() -> None:
             assert len(rows) == ROWS_TO_INSERT
 
 
-# DuckDB implementations
-# DuckDB is sync like sqlite, but uses its own driver
-# ------------------------------
-
-
-def _get_duckdb() -> Any:
-    """Import duckdb lazily."""
-    try:
-        import duckdb
-    except ImportError:
-        return None
-    else:
-        return duckdb
-
-
 def raw_duckdb_initialization() -> None:
     duckdb = _get_duckdb()
     if duckdb is None:
         return
-    # DuckDB needs to create the file itself - use temp name then delete
     with tempfile.NamedTemporaryFile(suffix=".duckdb", delete=False) as tmp:
         tmp_path = Path(tmp.name)
-    tmp_path.unlink()  # Delete so DuckDB can create fresh
+    tmp_path.unlink()
     try:
         conn = duckdb.connect(str(tmp_path))
         conn.execute(CREATE_TEST_TABLE)
@@ -993,72 +1161,17 @@ def sqlspec_duckdb_bulk() -> None:
             tmp_path.unlink()
 
 
-def _get_adbc_dbapi() -> Any:
-    """Import the ADBC DB-API lazily."""
-    try:
-        from adbc_driver_manager import dbapi
-    except ImportError:
-        return None
-    else:
-        return dbapi
-
-
-def _get_adbc_config() -> Any:
-    """Import AdbcConfig lazily."""
-    try:
-        from sqlspec.adapters.adbc import AdbcConfig
-    except ImportError:
-        return None
-    else:
-        return AdbcConfig
-
-
-def _adbc_benchmark_connection_config() -> dict[str, Any] | None:
-    """Build an ADBC benchmark connection from service-provided environment values."""
-    uri = os.environ.get("SQLSPEC_BENCH_ADBC_URI")
-    driver_name = os.environ.get("SQLSPEC_BENCH_ADBC_DRIVER_NAME")
-    if not uri or not driver_name:
-        return None
-    config: dict[str, Any] = {"uri": uri, "driver_name": driver_name}
-    for env_name, config_name in (
-        ("SQLSPEC_BENCH_ADBC_USERNAME", "username"),
-        ("SQLSPEC_BENCH_ADBC_PASSWORD", "password"),
-        ("SQLSPEC_BENCH_ADBC_GIZMOSQL_BACKEND", "gizmosql_backend"),
-    ):
-        value = os.environ.get(env_name)
-        if value:
-            config[config_name] = value
-    if os.environ.get("SQLSPEC_BENCH_ADBC_TLS_SKIP_VERIFY") == "1":
-        config["tls_skip_verify"] = True
-    return config
-
-
-def _adbc_benchmark_rows() -> list[tuple[int, str]]:
-    """Return the stable row payload used by the ADBC benchmark."""
-    return [(index, f"value_{index}") for index in range(BENCHMARK_ROWS)]
-
-
-def _connect_adbc(dbapi: Any, config: dict[str, Any]) -> Any:
-    driver_name = config["driver_name"]
-    if driver_name in {"adbc_driver_sqlite", "adbc_driver_duckdb"}:
-        module = importlib.import_module(f"{driver_name}.dbapi")
-        return module.connect(uri=config["uri"], autocommit=True)
-    db_kwargs = {
-        key: config[key] for key in ("username", "password", "gizmosql_backend", "tls_skip_verify") if key in config
-    }
-    return dbapi.connect(driver=driver_name, uri=config["uri"], db_kwargs=db_kwargs, autocommit=True)
-
-
 def raw_adbc_rows() -> None:
     """Fetch rows through the native ADBC DB-API path."""
     dbapi = _get_adbc_dbapi()
     config = _adbc_benchmark_connection_config()
     if dbapi is None or config is None:
         _benchmark_unavailable()
+    insert_sql = ADBC_ROWS_INSERT_PG if "postgres" in str(config.get("driver_name", "")) else ADBC_ROWS_INSERT
     with _connect_adbc(dbapi, config) as connection, connection.cursor() as cursor:
         cursor.execute(ADBC_ROWS_CREATE)
         cursor.execute(ADBC_ROWS_TRUNCATE)
-        cursor.executemany(ADBC_ROWS_INSERT, _adbc_benchmark_rows())
+        cursor.executemany(insert_sql, _adbc_benchmark_rows())
         cursor.execute(ADBC_ROWS_SELECT)
         rows = cursor.fetchall()
     assert len(rows) == BENCHMARK_ROWS
@@ -1080,53 +1193,6 @@ def sqlspec_adbc_rows() -> None:
             assert len(rows) == BENCHMARK_ROWS
     finally:
         config.close_pool()
-
-
-def _get_mysql_connector() -> Any:
-    """Import mysql-connector lazily."""
-    try:
-        import mysql.connector
-    except ImportError:
-        return None
-    else:
-        return mysql.connector
-
-
-def _get_mysql_connector_config() -> Any:
-    """Import MysqlConnectorSyncConfig lazily."""
-    try:
-        from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncConfig
-    except ImportError:
-        return None
-    else:
-        return MysqlConnectorSyncConfig
-
-
-def _mysql_benchmark_connection_config() -> dict[str, Any] | None:
-    """Build a MySQL benchmark connection from service-provided environment values."""
-    required: dict[str, Any] = {
-        "host": os.environ.get("SQLSPEC_BENCH_MYSQL_HOST"),
-        "port": os.environ.get("SQLSPEC_BENCH_MYSQL_PORT"),
-        "user": os.environ.get("SQLSPEC_BENCH_MYSQL_USER"),
-        "password": os.environ.get("SQLSPEC_BENCH_MYSQL_PASSWORD"),
-        "database": os.environ.get("SQLSPEC_BENCH_MYSQL_DATABASE"),
-    }
-    if any(value is None for value in required.values()):
-        return None
-    required["port"] = int(required["port"])
-    required["use_pure"] = True
-    required["autocommit"] = True
-    return required
-
-
-def _json_benchmark_rows() -> list[tuple[int, str]]:
-    """Return the stable JSON payload used by the MySQL benchmark."""
-    return [(index, json.dumps({"index": index, "values": [index, index + 1]})) for index in range(BENCHMARK_ROWS)]
-
-
-def _json_row_payload(row: Any) -> Any:
-    payload = row.get("payload") if isinstance(row, dict) else row[1]
-    return json.loads(payload) if isinstance(payload, str) else payload
 
 
 def raw_mysqlconnector_json_rows() -> None:
@@ -1167,19 +1233,6 @@ def sqlspec_mysqlconnector_json_rows() -> None:
         config.close_pool()
     assert len(rows) == BENCHMARK_ROWS
     assert _json_row_payload(rows[0])["values"] == [0, 1]
-
-
-def _spanner_benchmark_config() -> dict[str, Any] | None:
-    """Build a Spanner benchmark connection from service-provided environment values."""
-    required: dict[str, Any] = {
-        "project": os.environ.get("SQLSPEC_BENCH_SPANNER_PROJECT"),
-        "instance_id": os.environ.get("SQLSPEC_BENCH_SPANNER_INSTANCE_ID"),
-        "database_id": os.environ.get("SQLSPEC_BENCH_SPANNER_DATABASE_ID"),
-        "api_endpoint": os.environ.get("SQLSPEC_BENCH_SPANNER_API_ENDPOINT"),
-    }
-    if any(value is None for value in required.values()):
-        return None
-    return required
 
 
 def raw_spanner_strings() -> None:
@@ -1230,17 +1283,6 @@ def sqlspec_spanner_strings() -> None:
     finally:
         config.close_pool()
     assert len(rows) == BENCHMARK_ROWS
-
-
-def _get_duckdb_engine() -> tuple[Any, Any]:
-    """Import SQLAlchemy with duckdb_engine lazily."""
-    try:
-        importlib.import_module("duckdb_engine")
-        from sqlalchemy import create_engine, text
-    except ImportError:
-        return None, None
-    else:
-        return create_engine, text
 
 
 def sqlalchemy_duckdb_initialization() -> None:
@@ -1344,11 +1386,6 @@ def sqlalchemy_duckdb_repeated_queries() -> None:
             tmp_path.unlink()
 
 
-# Iterative insert scenarios - tests per-call overhead
-# This is what euri10's original benchmark measured for sqlspec
-# but not for raw/sqlalchemy (which used executemany)
-
-
 def raw_sqlite_iterative_inserts() -> None:
     """Individual inserts in a loop - shows per-call overhead."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
@@ -1386,13 +1423,6 @@ def sqlalchemy_sqlite_iterative_inserts() -> None:
             conn.commit()
 
 
-# Query cache scenarios - tests repeated single-row operations
-# These stress the query preparation/caching path
-SELECT_BY_VALUE = "SELECT * FROM test WHERE value = ?;"
-SELECT_BY_VALUE_ASYNCPG = "SELECT * FROM test WHERE value = $1;"
-SELECT_BY_VALUE_SQLA = "SELECT * FROM test WHERE value = :value;"
-
-
 def raw_sqlite_repeated_queries() -> None:
     """Repeated single-row queries - tests query preparation overhead."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
@@ -1402,7 +1432,6 @@ def raw_sqlite_repeated_queries() -> None:
         data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
         conn.executemany(INSERT_TEST_VALUE, data)
         conn.commit()
-        # Query same rows repeatedly with different params
         for i in range(ROWS_TO_INSERT):
             cursor = conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",))
             cursor.fetchone()
@@ -1418,8 +1447,6 @@ def sqlspec_sqlite_repeated_queries() -> None:
             session.execute(CREATE_TEST_TABLE)
             data: Sequence[tuple[str]] = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
             session.execute_many(INSERT_TEST_VALUE, data)
-            # Query same rows repeatedly with different params
-            # This should hit the query cache after the first few iterations
             for i in range(ROWS_TO_INSERT):
                 session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
 
@@ -1436,51 +1463,9 @@ def sqlalchemy_sqlite_repeated_queries() -> None:
             data = [{"value": f"value_{i}"} for i in range(ROWS_TO_INSERT)]
             conn.execute(text(INSERT_TEST_VALUE_SQLA), data)
             conn.commit()
-            # Query same rows repeatedly with different params
             for i in range(ROWS_TO_INSERT):
                 result = conn.execute(text(SELECT_BY_VALUE_SQLA), {"value": f"value_{i % 100}"})
                 result.fetchone()
-
-
-# Aiosqlite implementations
-# These test async sqlite performance
-
-
-def _check_pool_leak(pool: Any, scenario_name: str) -> None:
-    """Check for connection leaks in a pool.
-
-    Args:
-        pool: Connection pool with size() and checked_out() methods
-        scenario_name: Name of the scenario for error reporting
-    """
-    if pool is None:
-        return
-
-    with suppress(AttributeError, TypeError):
-        total = pool.size()
-        checked_out = pool.checked_out()
-        if checked_out > 0:
-            _leaked_pools.append(f"{scenario_name}: {checked_out}/{total} connections leaked")
-
-
-def _get_aiosqlite() -> Any:
-    """Import aiosqlite lazily."""
-    try:
-        import aiosqlite
-    except ImportError:
-        return None
-    else:
-        return aiosqlite
-
-
-def _get_aiosqlite_config() -> Any:
-    """Import AiosqliteConfig lazily."""
-    try:
-        from sqlspec.adapters.aiosqlite import AiosqliteConfig
-    except ImportError:
-        return None
-    else:
-        return AiosqliteConfig
 
 
 async def raw_aiosqlite_initialization() -> None:
@@ -1576,7 +1561,6 @@ async def sqlspec_aiosqlite_initialization() -> None:
     aiosqlite_config_type = _get_aiosqlite_config()
     if aiosqlite_config_type is None:
         return
-    # Use delete=False so we control when the file is deleted (after pool close)
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
@@ -1585,7 +1569,6 @@ async def sqlspec_aiosqlite_initialization() -> None:
         async with spec.provide_session(config) as session:
             await session.execute(DROP_TEST_TABLE)
             await session.execute(CREATE_TEST_TABLE)
-        # Properly close the pool to release all connections
         _check_pool_leak(config.connection_instance, "aiosqlite/initialization")
         await config.close_pool()
     finally:
@@ -1809,67 +1792,6 @@ async def sqlalchemy_aiosqlite_repeated_queries() -> None:
             await anyio.Path(tmp_path).unlink()
 
 
-# Asyncpg implementations
-# These require asyncpg and optionally SQLAlchemy[asyncio] to be installed
-
-
-def _get_asyncpg() -> Any:
-    """Import asyncpg lazily."""
-    try:
-        from asyncpg import connect
-    except ImportError:
-        return None
-    else:
-        return connect
-
-
-def _get_asyncpg_config() -> Any:
-    """Import AsyncpgConfig lazily."""
-    try:
-        from sqlspec.adapters.asyncpg import AsyncpgConfig
-    except ImportError:
-        return None
-    else:
-        return AsyncpgConfig
-
-
-def _get_async_sqlalchemy() -> tuple[Any, Any]:
-    """Import async SQLAlchemy lazily."""
-    try:
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import create_async_engine
-    except ImportError:
-        return None, None
-    else:
-        return create_async_engine, text
-
-
-def _postgres_benchmark_dsn() -> str:
-    dsn = os.environ.get(POSTGRES_DSN_ENV)
-    if not dsn:
-        _benchmark_unavailable()
-    return dsn
-
-
-def _cockroach_benchmark_dsn() -> str:
-    dsn = os.environ.get(COCKROACH_DSN_ENV)
-    if not dsn:
-        _benchmark_unavailable()
-    return dsn
-
-
-def _asyncpg_connect_kwargs(dsn: str) -> dict[str, Any]:
-    """Adapt a service DSN to asyncpg's keyword set."""
-    parsed = urlsplit(dsn)
-    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    sslmode = query.pop("sslmode", None)
-    clean_dsn = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
-    kwargs: dict[str, Any] = {"dsn": clean_dsn}
-    if sslmode == "disable":
-        kwargs["ssl"] = False
-    return kwargs
-
-
 async def raw_asyncpg_initialization() -> None:
     connect = _get_asyncpg()
     if connect is None:
@@ -1887,7 +1809,6 @@ async def raw_asyncpg_write_heavy() -> None:
     conn = await connect(**_asyncpg_connect_kwargs(_postgres_benchmark_dsn()))
     await conn.execute(DROP_TEST_TABLE)
     await conn.execute(CREATE_TEST_TABLE)
-    # Use executemany for fair comparison
     data = [(f"value_{i}",) for i in range(ROWS_TO_INSERT)]
     await conn.executemany(INSERT_TEST_VALUE_ASYNCPG, data)
     await conn.close()
@@ -2082,11 +2003,1488 @@ async def sqlalchemy_asyncpg_repeated_queries() -> None:
     await engine.dispose()
 
 
-SERVICE_ROWS_CREATE = "CREATE TABLE IF NOT EXISTS sqlspec_bench_rows (id INTEGER PRIMARY KEY, payload TEXT)"
-SERVICE_ROWS_DROP = "DROP TABLE IF EXISTS sqlspec_bench_rows"
-SERVICE_ROWS_INSERT_PG = "INSERT INTO sqlspec_bench_rows (id, payload) VALUES (%s, %s)"
-SERVICE_ROWS_INSERT_ASYNCPG = "INSERT INTO sqlspec_bench_rows (id, payload) VALUES ($1, $2)"
-SERVICE_ROWS_SELECT = "SELECT id, payload FROM sqlspec_bench_rows ORDER BY id"
+def raw_psycopg_sync_rows() -> None:
+    _run_raw_psycopg_sync_rows(_postgres_benchmark_dsn(), cockroach=False)
+
+
+def sqlspec_psycopg_sync_rows() -> None:
+    _run_sqlspec_sync_service_rows(_postgres_benchmark_dsn(), driver="psycopg_sync")
+
+
+async def raw_psycopg_async_rows() -> None:
+    await _run_raw_psycopg_async_rows(_postgres_benchmark_dsn())
+
+
+async def sqlspec_psycopg_async_rows() -> None:
+    await _run_sqlspec_async_service_rows(_postgres_benchmark_dsn(), driver="psycopg_async")
+
+
+async def raw_asyncpg_rows() -> None:
+    await _run_raw_asyncpg_rows(_postgres_benchmark_dsn())
+
+
+async def sqlspec_asyncpg_rows() -> None:
+    await _run_sqlspec_async_service_rows(_postgres_benchmark_dsn(), driver="asyncpg")
+
+
+def raw_cockroach_psycopg_sync_rows() -> None:
+    _run_raw_psycopg_sync_rows(_cockroach_benchmark_dsn(), cockroach=True)
+
+
+def sqlspec_cockroach_psycopg_sync_rows() -> None:
+    _run_sqlspec_sync_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_psycopg_sync")
+
+
+async def raw_cockroach_psycopg_async_rows() -> None:
+    await _run_raw_psycopg_async_rows(_cockroach_benchmark_dsn())
+
+
+async def sqlspec_cockroach_psycopg_async_rows() -> None:
+    await _run_sqlspec_async_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_psycopg_async")
+
+
+async def raw_cockroach_asyncpg_rows() -> None:
+    await _run_raw_asyncpg_rows(_cockroach_benchmark_dsn())
+
+
+async def sqlspec_cockroach_asyncpg_rows() -> None:
+    await _run_sqlspec_async_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_asyncpg")
+
+
+class WideRowDict(TypedDict):
+    """TypedDict schema matching the wide_test table for schema_mapping benchmark."""
+
+    first_name: str
+    last_name: str
+    email_address: str
+    phone_number: str
+    street_address: str
+    postal_code: str
+    country_name: str
+    birth_date: str
+    account_balance: str
+    is_active: str
+
+
+def assert_schema_type_numpy_vector_fallback() -> None:
+    """Assert ndarray -> list[float] fallback still works for msgspec schema conversion."""
+    import numpy as np
+
+    vector_type = _schema_type_numpy_vector_type()
+    converted = to_schema([{"values": np.array([1.0, 2.0])}], schema_type=vector_type)
+    assert len(converted) == 1
+    assert converted[0].values == [1.0, 2.0]
+
+
+def raw_sqlite_dict_key_transform() -> None:
+    """SELECT 10K rows with 10 columns, then transform keys to camelCase (raw)."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_WIDE_TABLE)
+        data = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
+        conn.executemany(INSERT_WIDE_ROW, data)
+        conn.commit()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(SELECT_WIDE_ALL)
+        rows = cursor.fetchall()
+        assert len(rows) == ROWS_TO_INSERT
+        conn.close()
+
+
+def sqlspec_sqlite_dict_key_transform() -> None:
+    """SELECT 10K rows with 10 columns, then transform keys to camelCase (sqlspec)."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_WIDE_TABLE)
+            data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
+            session.execute_many(INSERT_WIDE_ROW, data)
+            rows = session.fetch(SELECT_WIDE_ALL)
+            assert len(rows) == ROWS_TO_INSERT
+            transformed = [transform_dict_keys(row, camelize) for row in rows]
+            assert len(transformed) == ROWS_TO_INSERT
+            first = transformed[0]
+            assert "firstName" in first
+
+
+def raw_sqlite_schema_mapping() -> None:
+    """SELECT 10K rows and return as raw tuples (baseline for schema mapping)."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_WIDE_TABLE)
+        data = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
+        conn.executemany(INSERT_WIDE_ROW, data)
+        conn.commit()
+        cursor = conn.execute(SELECT_WIDE_ALL)
+        rows = cursor.fetchall()
+        assert len(rows) == ROWS_TO_INSERT
+        conn.close()
+
+
+def sqlspec_sqlite_schema_mapping() -> None:
+    """SELECT 10K rows and map to TypedDict using schema_type= parameter."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_WIDE_TABLE)
+            data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
+            session.execute_many(INSERT_WIDE_ROW, data)
+            rows = session.fetch(SELECT_WIDE_ALL, schema_type=WideRowDict)
+            assert len(rows) == ROWS_TO_INSERT
+            first = rows[0]
+            assert "first_name" in first
+
+
+def raw_sqlite_schema_type_numpy() -> None:
+    """Legacy baseline: pre-walk a 5000x5 payload before msgspec schema conversion."""
+    row_type = _schema_type_numpy_row_type()
+    rows = to_schema(_convert_numpy_recursive(_schema_type_numpy_payload()), schema_type=row_type)
+    assert len(rows) == SCHEMA_TYPE_NUMPY_ROW_COUNT
+    assert rows[0].field_4 == SCHEMA_TYPE_NUMPY_FIRST_FIELD_4
+
+
+def sqlspec_sqlite_schema_type_numpy() -> None:
+    """Convert a 5000x5 payload through the current msgspec schema_type path."""
+    row_type = _schema_type_numpy_row_type()
+    rows = to_schema(_schema_type_numpy_payload(), schema_type=row_type)
+    assert len(rows) == SCHEMA_TYPE_NUMPY_ROW_COUNT
+    assert rows[0].field_4 == SCHEMA_TYPE_NUMPY_FIRST_FIELD_4
+
+
+def raw_sqlite_complex_parameters() -> None:
+    """INSERT rows with complex parameter types: UUID, datetime, JSON (raw)."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_COMPLEX_TABLE)
+        data = [_generate_complex_row(i) for i in range(ROWS_TO_INSERT)]
+        conn.executemany(INSERT_COMPLEX_ROW, data)
+        conn.commit()
+        cursor = conn.execute(SELECT_COMPLEX_ALL)
+        rows = cursor.fetchall()
+        assert len(rows) == ROWS_TO_INSERT
+        conn.close()
+
+
+def sqlspec_sqlite_complex_parameters() -> None:
+    """INSERT rows with complex parameter types: UUID, datetime, JSON (sqlspec)."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_COMPLEX_TABLE)
+            data: Sequence[tuple[str, str, str]] = [_generate_complex_row(i) for i in range(ROWS_TO_INSERT)]
+            session.execute_many(INSERT_COMPLEX_ROW, data)
+            rows = session.fetch(SELECT_COMPLEX_ALL)
+            assert len(rows) == ROWS_TO_INSERT
+
+
+def raw_sqlite_thin_path_stress() -> None:
+    """100K individual INSERTs to stress-test per-call execution path (raw)."""
+    stress_count = ROWS_TO_INSERT * 10
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_TEST_TABLE)
+        for i in range(stress_count):
+            conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
+        conn.commit()
+        conn.close()
+
+
+def sqlspec_sqlite_thin_path_stress() -> None:
+    """100K individual INSERTs to stress-test the thin execute path (sqlspec)."""
+    stress_count = ROWS_TO_INSERT * 10
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            for i in range(stress_count):
+                session.execute(INSERT_TEST_VALUE, (f"value_{i}",))
+
+
+def raw_oracle_lob_fetch_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows through raw python-oracledb."""
+    _run_raw_oracle_lob_fetch("1k")
+
+
+def raw_oracle_lob_fetch_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows through raw python-oracledb."""
+    _run_raw_oracle_lob_fetch("100k")
+
+
+def sqlspec_oracle_lob_fetch_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with sqlspec direct LOB fetching."""
+    _run_sqlspec_oracle_lob_fetch("1k", fetch_lobs=False)
+
+
+def sqlspec_oracle_lob_fetch_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with sqlspec direct LOB fetching."""
+    _run_sqlspec_oracle_lob_fetch("100k", fetch_lobs=False)
+
+
+def sqlspec_oracle_lob_fetch_fetch_lobs_true_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with sqlspec LOB locators enabled."""
+    _run_sqlspec_oracle_lob_fetch("1k", fetch_lobs=True)
+
+
+def sqlspec_oracle_lob_fetch_fetch_lobs_true_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with sqlspec LOB locators enabled."""
+    _run_sqlspec_oracle_lob_fetch("100k", fetch_lobs=True)
+
+
+async def sqlspec_oracle_lob_fetch_async_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with async sqlspec direct LOB fetching."""
+    await _run_sqlspec_oracle_lob_fetch_async("1k", fetch_lobs=False)
+
+
+async def sqlspec_oracle_lob_fetch_async_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with async sqlspec direct LOB fetching."""
+    await _run_sqlspec_oracle_lob_fetch_async("100k", fetch_lobs=False)
+
+
+async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k() -> None:
+    """Fetch 100 1 KiB Oracle CLOB rows with async sqlspec LOB locators enabled."""
+    await _run_sqlspec_oracle_lob_fetch_async("1k", fetch_lobs=True)
+
+
+async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k() -> None:
+    """Fetch 100 100 KiB Oracle CLOB rows with async sqlspec LOB locators enabled."""
+    await _run_sqlspec_oracle_lob_fetch_async("100k", fetch_lobs=True)
+
+
+def sqlspec_oracle_native_json_write() -> None:
+    """Write native Python mappings to an Oracle native JSON column."""
+    _run_sqlspec_oracle_json_write(serialized=False)
+
+
+def sqlspec_oracle_serialized_json_write() -> None:
+    """Write pre-serialized strings to an Oracle native JSON column."""
+    _run_sqlspec_oracle_json_write(serialized=True)
+
+
+def sqlspec_oracle_json_read() -> None:
+    """Read native JSON values from Oracle through SQLSpec."""
+    _run_sqlspec_oracle_json_read()
+
+
+def raw_sqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw sqlite3."""
+    with sqlite3.connect(":memory:") as conn:
+        for i in range(ROWS_TO_INSERT):
+            row = conn.execute(SCALAR_PARAM_SELECT_SQL, (i,)).fetchone()
+            assert row is not None
+            assert row[0] == i
+
+
+def sqlspec_sqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec SqliteConfig."""
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for i in range(ROWS_TO_INSERT):
+                val = session.select_value(SCALAR_PARAM_SELECT_SQL, i)
+                assert val == i
+    finally:
+        config.close_pool()
+
+
+def raw_sqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw sqlite3."""
+    with sqlite3.connect(":memory:") as conn:
+        for _ in range(ROWS_TO_INSERT):
+            rows = conn.execute(NO_PARAM_SELECT_SQL).fetchall()
+            assert len(rows) == 1
+
+
+def sqlspec_sqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec SqliteConfig."""
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for _ in range(ROWS_TO_INSERT):
+                res = session.execute(NO_PARAM_SELECT_SQL)
+                assert res is not None
+    finally:
+        config.close_pool()
+
+
+def raw_sqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw sqlite3."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with sqlite3.connect(":memory:") as conn:
+        for ddl in COMPLEX_SCHEMA_DDL:
+            conn.execute(ddl)
+        for i in range(iterations):
+            conn.execute(COMPLEX_QUERY_SQL, (i,)).fetchall()
+
+
+def sqlspec_sqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query with scalar positional param through SQLSpec SqliteConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = SqliteConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for ddl in COMPLEX_SCHEMA_DDL:
+                session.execute(ddl)
+            for i in range(iterations):
+                session.execute(COMPLEX_QUERY_SQL, i)
+    finally:
+        config.close_pool()
+
+
+def raw_sqlite_session_per_request() -> None:
+    """Execute one query per request on a reused raw sqlite3 connection."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        conn.commit()
+        for i in range(iterations):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+        conn.close()
+
+
+def sqlspec_sqlite_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec SqliteConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(connection_config={"database": tmp.name})
+        try:
+            with spec.provide_session(config) as session:
+                session.execute(CREATE_TEST_TABLE)
+                session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                with spec.provide_session(config) as session:
+                    session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+        finally:
+            config.close_pool()
+
+
+def raw_sqlite_observability_select() -> None:
+    """Baseline raw sqlite3 repeated SELECT for observability comparison."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        conn = sqlite3.connect(tmp.name)
+        _optimize_raw_sqlite(conn)
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        conn.commit()
+        for i in range(ROWS_TO_INSERT):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+        conn.close()
+
+
+def sqlspec_sqlite_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on SqliteConfig."""
+    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+        spec = SQLSpec()
+        config = SqliteConfig(
+            connection_config={"database": tmp.name},
+            observability_config=ObservabilityConfig(statement_observers=(_noop_statement_observer,)),
+        )
+        try:
+            with spec.provide_session(config) as session:
+                session.execute(CREATE_TEST_TABLE)
+                session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+                for i in range(ROWS_TO_INSERT):
+                    session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+        finally:
+            config.close_pool()
+
+
+async def raw_aiosqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw aiosqlite."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    async with aiosqlite.connect(":memory:") as conn:
+        for i in range(ROWS_TO_INSERT):
+            cursor = await conn.execute(SCALAR_PARAM_SELECT_SQL, (i,))
+            row = await cursor.fetchone()
+            assert row is not None
+            assert row[0] == i
+
+
+async def sqlspec_aiosqlite_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    spec = SQLSpec()
+    config = aiosqlite_config_type(connection_config={"database": ":memory:", "pool_size": POOL_SIZE})
+    try:
+        async with spec.provide_session(config) as session:
+            for i in range(ROWS_TO_INSERT):
+                val = await session.select_value(SCALAR_PARAM_SELECT_SQL, i)
+                assert val == i
+        _check_pool_leak(config.connection_instance, "aiosqlite/scalar_param_select")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+async def raw_aiosqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw aiosqlite."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    async with aiosqlite.connect(":memory:") as conn:
+        for _ in range(ROWS_TO_INSERT):
+            cursor = await conn.execute(NO_PARAM_SELECT_SQL)
+            rows = await cursor.fetchall()
+            assert len(rows) == 1
+
+
+async def sqlspec_aiosqlite_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    spec = SQLSpec()
+    config = aiosqlite_config_type(connection_config={"database": ":memory:", "pool_size": POOL_SIZE})
+    try:
+        async with spec.provide_session(config) as session:
+            for _ in range(ROWS_TO_INSERT):
+                res = await session.execute(NO_PARAM_SELECT_SQL)
+                assert res is not None
+        _check_pool_leak(config.connection_instance, "aiosqlite/no_param_select")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+async def raw_aiosqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw aiosqlite."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    async with aiosqlite.connect(":memory:") as conn:
+        for ddl in COMPLEX_SCHEMA_DDL:
+            await conn.execute(ddl)
+        await conn.commit()
+        for i in range(iterations):
+            cursor = await conn.execute(COMPLEX_QUERY_SQL, (i,))
+            await cursor.fetchall()
+
+
+async def sqlspec_aiosqlite_complex_query() -> None:
+    """Execute a CTE + 2-join query with scalar positional param through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = aiosqlite_config_type(connection_config={"database": ":memory:", "pool_size": POOL_SIZE})
+    try:
+        async with spec.provide_session(config) as session:
+            for ddl in COMPLEX_SCHEMA_DDL:
+                await session.execute(ddl)
+            for i in range(iterations):
+                await session.execute(COMPLEX_QUERY_SQL, i)
+        _check_pool_leak(config.connection_instance, "aiosqlite/complex_query")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+async def raw_aiosqlite_session_per_request() -> None:
+    """Execute one query per request on a reused raw aiosqlite connection."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            await conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            await conn.commit()
+            for i in range(iterations):
+                cursor = await conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+async def sqlspec_aiosqlite_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        spec = SQLSpec()
+        config = aiosqlite_config_type(connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE})
+        try:
+            async with spec.provide_session(config) as session:
+                await session.execute(DROP_TEST_TABLE)
+                await session.execute(CREATE_TEST_TABLE)
+                await session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+            _check_pool_leak(config.connection_instance, "aiosqlite/session_per_request")
+            await config.close_pool()
+        finally:
+            if config.connection_instance is not None:
+                await config.close_pool()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+async def raw_aiosqlite_observability_select() -> None:
+    """Baseline raw aiosqlite repeated SELECT for observability comparison."""
+    aiosqlite = _get_aiosqlite()
+    if aiosqlite is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        async with aiosqlite.connect(str(tmp_path)) as conn:
+            await conn.execute(CREATE_TEST_TABLE)
+            await conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            await conn.commit()
+            for i in range(ROWS_TO_INSERT):
+                cursor = await conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",))
+                await cursor.fetchone()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+async def sqlspec_aiosqlite_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on AiosqliteConfig."""
+    aiosqlite_config_type = _get_aiosqlite_config()
+    if aiosqlite_config_type is None:
+        return
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        spec = SQLSpec()
+        config = aiosqlite_config_type(
+            connection_config={"database": str(tmp_path), "pool_size": POOL_SIZE},
+            observability_config=ObservabilityConfig(statement_observers=(_noop_statement_observer,)),
+        )
+        try:
+            async with spec.provide_session(config) as session:
+                await session.execute(DROP_TEST_TABLE)
+                await session.execute(CREATE_TEST_TABLE)
+                await session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+                for i in range(ROWS_TO_INSERT):
+                    await session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+            _check_pool_leak(config.connection_instance, "aiosqlite/observability_select")
+            await config.close_pool()
+        finally:
+            if config.connection_instance is not None:
+                await config.close_pool()
+    finally:
+        with suppress(OSError):
+            await anyio.Path(tmp_path).unlink()
+
+
+def raw_duckdb_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw duckdb."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    conn = duckdb.connect(":memory:")
+    try:
+        for i in range(ROWS_TO_INSERT):
+            row = conn.execute(SCALAR_PARAM_SELECT_SQL, (i,)).fetchone()
+            assert row is not None
+            assert row[0] == i
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec DuckDBConfig."""
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for i in range(ROWS_TO_INSERT):
+                val = session.select_value(SCALAR_PARAM_SELECT_SQL, i)
+                assert val == i
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw duckdb."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    conn = duckdb.connect(":memory:")
+    try:
+        for _ in range(ROWS_TO_INSERT):
+            rows = conn.execute(NO_PARAM_SELECT_SQL).fetchall()
+            assert len(rows) == 1
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec DuckDBConfig."""
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for _ in range(ROWS_TO_INSERT):
+                res = session.execute(NO_PARAM_SELECT_SQL)
+                assert res is not None
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw duckdb."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    conn = duckdb.connect(":memory:")
+    try:
+        for ddl in COMPLEX_SCHEMA_DDL:
+            conn.execute(ddl)
+        for i in range(iterations):
+            conn.execute(COMPLEX_QUERY_SQL, (i,)).fetchall()
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_complex_query() -> None:
+    """Execute a CTE + 2-join query with scalar positional param through SQLSpec DuckDBConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            for ddl in COMPLEX_SCHEMA_DDL:
+                session.execute(ddl)
+            for i in range(iterations):
+                session.execute(COMPLEX_QUERY_SQL, i)
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_session_per_request() -> None:
+    """Execute one query per request on a reused raw duckdb connection."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        for i in range(iterations):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec DuckDBConfig."""
+    iterations = min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
+    spec = SQLSpec()
+    config = DuckDBConfig(connection_config={"database": ":memory:"})
+    try:
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        for i in range(iterations):
+            with spec.provide_session(config) as session:
+                session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+    finally:
+        config.close_pool()
+
+
+def raw_duckdb_observability_select() -> None:
+    """Baseline raw duckdb repeated SELECT for observability comparison."""
+    duckdb = _get_duckdb()
+    if duckdb is None:
+        _benchmark_unavailable()
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(CREATE_TEST_TABLE)
+        conn.executemany(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+        for i in range(ROWS_TO_INSERT):
+            conn.execute(SELECT_BY_VALUE, (f"value_{i % 100}",)).fetchone()
+    finally:
+        conn.close()
+
+
+def sqlspec_duckdb_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on DuckDBConfig."""
+    spec = SQLSpec()
+    config = DuckDBConfig(
+        connection_config={"database": ":memory:"},
+        observability_config=ObservabilityConfig(statement_observers=(_noop_statement_observer,)),
+    )
+    try:
+        with spec.provide_session(config) as session:
+            session.execute(CREATE_TEST_TABLE)
+            session.execute_many(INSERT_TEST_VALUE, [(f"value_{i}",) for i in range(100)])
+            for i in range(ROWS_TO_INSERT):
+                session.fetch_one_or_none(SELECT_BY_VALUE, (f"value_{i % 100}",))
+    finally:
+        config.close_pool()
+
+
+async def raw_asyncpg_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw asyncpg."""
+    await _run_raw_asyncpg_hot_path("scalar_param_select")
+
+
+async def sqlspec_asyncpg_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("scalar_param_select")
+
+
+async def raw_asyncpg_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw asyncpg."""
+    await _run_raw_asyncpg_hot_path("no_param_select")
+
+
+async def sqlspec_asyncpg_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("no_param_select")
+
+
+async def raw_asyncpg_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw asyncpg."""
+    await _run_raw_asyncpg_hot_path("complex_query")
+
+
+async def sqlspec_asyncpg_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("complex_query")
+
+
+async def raw_asyncpg_session_per_request() -> None:
+    """Execute one query per request on a reused raw asyncpg connection."""
+    await _run_raw_asyncpg_hot_path("session_per_request")
+
+
+async def sqlspec_asyncpg_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("session_per_request")
+
+
+async def raw_asyncpg_observability_select() -> None:
+    """Baseline raw asyncpg repeated SELECT for observability comparison."""
+    await _run_raw_asyncpg_hot_path("observability_select")
+
+
+async def sqlspec_asyncpg_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on AsyncpgConfig."""
+    await _run_sqlspec_asyncpg_hot_path("observability_select")
+
+
+def raw_psycopg_sync_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw psycopg sync."""
+    _run_raw_psycopg_sync_hot_path("scalar_param_select")
+
+
+def sqlspec_psycopg_sync_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("scalar_param_select")
+
+
+def raw_psycopg_sync_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw psycopg sync."""
+    _run_raw_psycopg_sync_hot_path("no_param_select")
+
+
+def sqlspec_psycopg_sync_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("no_param_select")
+
+
+def raw_psycopg_sync_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw psycopg sync."""
+    _run_raw_psycopg_sync_hot_path("complex_query")
+
+
+def sqlspec_psycopg_sync_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("complex_query")
+
+
+def raw_psycopg_sync_session_per_request() -> None:
+    """Execute one query per request on a reused raw psycopg sync connection."""
+    _run_raw_psycopg_sync_hot_path("session_per_request")
+
+
+def sqlspec_psycopg_sync_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("session_per_request")
+
+
+def raw_psycopg_sync_observability_select() -> None:
+    """Baseline raw psycopg sync repeated SELECT for observability comparison."""
+    _run_raw_psycopg_sync_hot_path("observability_select")
+
+
+def sqlspec_psycopg_sync_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on PsycopgSyncConfig."""
+    _run_sqlspec_psycopg_sync_hot_path("observability_select")
+
+
+async def raw_psycopg_async_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw psycopg async."""
+    await _run_raw_psycopg_async_hot_path("scalar_param_select")
+
+
+async def sqlspec_psycopg_async_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("scalar_param_select")
+
+
+async def raw_psycopg_async_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw psycopg async."""
+    await _run_raw_psycopg_async_hot_path("no_param_select")
+
+
+async def sqlspec_psycopg_async_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("no_param_select")
+
+
+async def raw_psycopg_async_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw psycopg async."""
+    await _run_raw_psycopg_async_hot_path("complex_query")
+
+
+async def sqlspec_psycopg_async_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("complex_query")
+
+
+async def raw_psycopg_async_session_per_request() -> None:
+    """Execute one query per request on a reused raw psycopg async connection."""
+    await _run_raw_psycopg_async_hot_path("session_per_request")
+
+
+async def sqlspec_psycopg_async_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("session_per_request")
+
+
+async def raw_psycopg_async_observability_select() -> None:
+    """Baseline raw psycopg async repeated SELECT for observability comparison."""
+    await _run_raw_psycopg_async_hot_path("observability_select")
+
+
+async def sqlspec_psycopg_async_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on PsycopgAsyncConfig."""
+    await _run_sqlspec_psycopg_async_hot_path("observability_select")
+
+
+async def raw_psqlpy_rows() -> None:
+    """Fetch rows through the native psqlpy connection pool."""
+    await _run_raw_psqlpy_rows(_postgres_benchmark_dsn())
+
+
+async def sqlspec_psqlpy_rows() -> None:
+    """Fetch rows through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_rows(_postgres_benchmark_dsn())
+
+
+async def raw_psqlpy_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw psqlpy."""
+    await _run_raw_psqlpy_hot_path("scalar_param_select")
+
+
+async def sqlspec_psqlpy_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("scalar_param_select")
+
+
+async def raw_psqlpy_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through raw psqlpy."""
+    await _run_raw_psqlpy_hot_path("no_param_select")
+
+
+async def sqlspec_psqlpy_no_param_select() -> None:
+    """Execute parameterless SELECT 1 queries through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("no_param_select")
+
+
+async def raw_psqlpy_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw psqlpy."""
+    await _run_raw_psqlpy_hot_path("complex_query")
+
+
+async def sqlspec_psqlpy_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("complex_query")
+
+
+async def raw_psqlpy_session_per_request() -> None:
+    """Execute one query per request on a reused raw psqlpy connection."""
+    await _run_raw_psqlpy_hot_path("session_per_request")
+
+
+async def sqlspec_psqlpy_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("session_per_request")
+
+
+async def raw_psqlpy_observability_select() -> None:
+    """Baseline raw psqlpy repeated SELECT for observability comparison."""
+    await _run_raw_psqlpy_hot_path("observability_select")
+
+
+async def sqlspec_psqlpy_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on PsqlpyConfig."""
+    await _run_sqlspec_psqlpy_hot_path("observability_select")
+
+
+def raw_oracle_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through raw python-oracledb."""
+    _run_raw_oracle_hot_path("scalar_param_select")
+
+
+def sqlspec_oracle_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("scalar_param_select")
+
+
+async def sqlspec_oracle_async_scalar_param_select() -> None:
+    """Execute scalar parameter SELECT queries through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("scalar_param_select")
+
+
+def raw_oracle_no_param_select() -> None:
+    """Execute parameterless SELECT 1 FROM DUAL queries through raw python-oracledb."""
+    _run_raw_oracle_hot_path("no_param_select")
+
+
+def sqlspec_oracle_no_param_select() -> None:
+    """Execute parameterless SELECT 1 FROM DUAL queries through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("no_param_select")
+
+
+async def sqlspec_oracle_async_no_param_select() -> None:
+    """Execute parameterless SELECT 1 FROM DUAL queries through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("no_param_select")
+
+
+def raw_oracle_complex_query() -> None:
+    """Execute a CTE + 2-join query through raw python-oracledb."""
+    _run_raw_oracle_hot_path("complex_query")
+
+
+def sqlspec_oracle_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("complex_query")
+
+
+async def sqlspec_oracle_async_complex_query() -> None:
+    """Execute a CTE + 2-join query through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("complex_query")
+
+
+def raw_oracle_session_per_request() -> None:
+    """Execute one query per request on a reused raw python-oracledb connection."""
+    _run_raw_oracle_hot_path("session_per_request")
+
+
+def sqlspec_oracle_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("session_per_request")
+
+
+async def sqlspec_oracle_async_session_per_request() -> None:
+    """Execute one query per provide_session context through SQLSpec OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("session_per_request")
+
+
+def raw_oracle_observability_select() -> None:
+    """Baseline raw python-oracledb repeated SELECT for observability comparison."""
+    _run_raw_oracle_hot_path("observability_select")
+
+
+def sqlspec_oracle_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on OracleSyncConfig."""
+    _run_sqlspec_oracle_hot_path("observability_select")
+
+
+async def sqlspec_oracle_async_observability_select() -> None:
+    """Execute repeated SELECT queries with a statement observer attached on OracleAsyncConfig."""
+    await _run_sqlspec_oracle_async_hot_path("observability_select")
+
+
+def print_benchmark_table(results: list[dict[str, Any]]) -> None:
+    console = Console()
+    table = Table(title="Benchmark Results")
+    table.add_column("Driver", style="cyan", no_wrap=True)
+    table.add_column("Library", style="magenta")
+    table.add_column("Scenario", style="green")
+    table.add_column("Time (s)", justify="right", style="yellow")
+    table.add_column("Stddev", justify="right")
+    table.add_column("IQR", justify="right")
+    table.add_column("Noise", justify="center")
+    table.add_column("% Slower vs Raw", justify="right", style="red")
+
+    multi_iter = any(len(row.get("times", [])) > 1 for row in results)
+
+    raw_times: dict[tuple[str, str], float] = {}
+    for row in results:
+        if row["library"] == "raw":
+            raw_times[row["driver"], row["scenario"]] = row["time"]
+
+    for row in results:
+        driver = row["driver"]
+        scenario = row["scenario"]
+        lib = row["library"]
+        t = row["time"]
+        times = row.get("times", [t])
+        stddev = float(row.get("stddev", 0.0))
+        iqr = float(row.get("iqr", 0.0))
+        noise = "yes" if row.get("noisy", False) else ""
+        if lib == "raw":
+            percent_slower = "---"
+        else:
+            raw_time = raw_times.get((driver, scenario))
+            percent_slower = f"{100 * (t - raw_time) / raw_time:.1f}%" if raw_time and raw_time > 0 else "n/a"
+        time_str = f"{t:.4f} ({min(times):.4f}-{max(times):.4f})" if multi_iter and len(times) > 1 else f"{t:.4f}"
+        table.add_row(driver, lib, scenario, time_str, f"{stddev:.4f}", f"{iqr:.4f}", noise, percent_slower)
+    console.print(table)
+
+
+def _benchmark_unavailable() -> NoReturn:
+    raise BenchmarkUnavailableError
+
+
+def _is_compiled() -> bool:
+    """Detect if sqlspec driver modules are mypyc-compiled."""
+    try:
+        from sqlspec.driver import _sync
+
+        return hasattr(_sync, "__file__") and (_sync.__file__ or "").endswith(".so")
+    except ImportError:
+        return False
+
+
+def _new_benchmark_loop() -> asyncio.AbstractEventLoop:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop
+
+
+def _close_benchmark_loop(loop: asyncio.AbstractEventLoop) -> None:
+    try:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        if hasattr(loop, "shutdown_default_executor"):
+            loop.run_until_complete(loop.shutdown_default_executor())
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
+def _run_scenario_once(func: Any, loop: asyncio.AbstractEventLoop | None) -> None:
+    if loop is not None:
+        loop.run_until_complete(func())
+    else:
+        func()
+
+
+def _run_benchmark_iterations(
+    func: Any, *, is_async: bool, iterations: int, warmup: int, profiler: cProfile.Profile | None = None
+) -> list[float]:
+    loop = _new_benchmark_loop() if is_async else None
+    try:
+        for _ in range(warmup):
+            _run_scenario_once(func, loop)
+
+        times: list[float] = []
+        for _ in range(iterations):
+            gc.collect()
+            gc_was_enabled = gc.isenabled()
+            if gc_was_enabled:
+                gc.disable()
+            start = time.perf_counter()
+            try:
+                if profiler is not None:
+                    profiler.enable()
+                _run_scenario_once(func, loop)
+            finally:
+                if profiler is not None:
+                    profiler.disable()
+                if gc_was_enabled:
+                    gc.enable()
+            times.append(time.perf_counter() - start)
+        return times
+    finally:
+        if loop is not None:
+            _close_benchmark_loop(loop)
+
+
+def _summarize_times(times: list[float]) -> dict[str, float | bool]:
+    median_time = statistics.median(times)
+    stddev = statistics.stdev(times) if len(times) > 1 else 0.0
+    quartiles = statistics.quantiles(times, n=4, method="inclusive") if len(times) > 1 else (0.0, 0.0, 0.0)
+    iqr = quartiles[2] - quartiles[0]
+    noise_ratio = stddev / median_time if median_time > 0 else 0.0
+    return {
+        "time": median_time,
+        "stddev": stddev,
+        "iqr": iqr,
+        "noise_ratio": noise_ratio,
+        "noisy": noise_ratio > NOISY_STDDEV_RATIO,
+    }
+
+
+def _benchmark_library_label(library: str) -> str:
+    """Return a display label for a benchmark library key."""
+    if library == "sqlspec":
+        return SQLSPEC_LABEL
+    if library == "sqlspec_fetch_lobs_true":
+        return f"{SQLSPEC_LABEL} fetch_lobs=True"
+    if library == "sqlspec_async":
+        return f"{SQLSPEC_LABEL} async"
+    if library == "sqlspec_async_fetch_lobs_true":
+        return f"{SQLSPEC_LABEL} async fetch_lobs=True"
+    return library
+
+
+def _driver_has_core_scenarios(driver: str) -> bool:
+    """Return True when a driver has any core benchmark scenario registered."""
+    return any(
+        (library, driver, scenario) in SCENARIO_REGISTRY for scenario in CORE_SCENARIOS for library in CORE_LIBRARIES
+    )
+
+
+def _collect_environment_metadata() -> dict[str, Any]:
+    """Collect Python, platform, and key package versions for benchmark reproducibility."""
+    packages: dict[str, str | None] = {}
+    for pkg_name in ("duckdb", "sqlglot", "aiosqlite", "pyarrow", "sqlspec"):
+        try:
+            packages[pkg_name] = importlib.metadata.version(pkg_name)
+        except importlib.metadata.PackageNotFoundError:
+            packages[pkg_name] = None
+    return {"python_version": platform.python_version(), "platform": platform.platform(), "packages": packages}
+
+
+def _write_json_results(
+    results: list[dict[str, Any]],
+    output_path: str,
+    *,
+    rows: int,
+    pool_size: int,
+    iterations: int,
+    warmup: int = DEFAULT_BENCH_WARMUP,
+) -> None:
+    """Write benchmark results to a JSON file.
+
+    Args:
+        results: List of benchmark result dictionaries
+        output_path: Path to write the JSON file
+        rows: Number of rows used in the benchmark
+        pool_size: Pool size used in the benchmark
+        iterations: Number of timed iterations per scenario
+        warmup: Number of warmup iterations per scenario
+    """
+    output = {
+        "metadata": {
+            "rows": rows,
+            "pool_size": pool_size,
+            "iterations": iterations,
+            "warmup": warmup,
+            "mypyc_compiled": _is_compiled(),
+            "environment": _collect_environment_metadata(),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        },
+        "results": [
+            {
+                "driver": r["driver"],
+                "library": r["library"],
+                "library_key": r.get("library_key", r["library"]),
+                "scenario": r["scenario"],
+                "time": r["time"],
+                "times": r.get("times", [r["time"]]),
+                "stddev": r.get("stddev", 0.0),
+                "iqr": r.get("iqr", 0.0),
+                "noise_ratio": r.get("noise_ratio", 0.0),
+                "noisy": r.get("noisy", False),
+            }
+            for r in results
+        ],
+    }
+    with Path(output_path).open("w") as f:
+        json.dump(output, f, indent=2)
+
+
+def _optimize_raw_sqlite(conn: sqlite3.Connection) -> None:
+    """Apply same PRAGMAs that sqlspec applies for fair comparison."""
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _get_sqlalchemy() -> tuple[Any, Any]:
+    """Import SQLAlchemy lazily."""
+    try:
+        from sqlalchemy import create_engine, text
+    except ImportError:
+        return None, None
+    else:
+        return create_engine, text
+
+
+def _get_duckdb() -> Any:
+    """Import duckdb lazily."""
+    try:
+        import duckdb
+    except ImportError:
+        return None
+    else:
+        return duckdb
+
+
+def _get_adbc_dbapi() -> Any:
+    """Import the ADBC DB-API lazily."""
+    try:
+        from adbc_driver_manager import dbapi
+    except ImportError:
+        return None
+    else:
+        return dbapi
+
+
+def _get_adbc_config() -> Any:
+    """Import AdbcConfig lazily."""
+    try:
+        from sqlspec.adapters.adbc import AdbcConfig
+    except ImportError:
+        return None
+    else:
+        return AdbcConfig
+
+
+def _adbc_benchmark_connection_config() -> dict[str, Any] | None:
+    """Build an ADBC benchmark connection from service-provided environment values."""
+    uri = os.environ.get("SQLSPEC_BENCH_ADBC_URI")
+    driver_name = os.environ.get("SQLSPEC_BENCH_ADBC_DRIVER_NAME")
+    if not uri or not driver_name:
+        return None
+    config: dict[str, Any] = {"uri": uri, "driver_name": driver_name}
+    for env_name, config_name in (
+        ("SQLSPEC_BENCH_ADBC_USERNAME", "username"),
+        ("SQLSPEC_BENCH_ADBC_PASSWORD", "password"),
+        ("SQLSPEC_BENCH_ADBC_GIZMOSQL_BACKEND", "gizmosql_backend"),
+    ):
+        value = os.environ.get(env_name)
+        if value:
+            config[config_name] = value
+    if os.environ.get("SQLSPEC_BENCH_ADBC_TLS_SKIP_VERIFY") == "1":
+        config["tls_skip_verify"] = True
+    return config
+
+
+def _adbc_benchmark_rows() -> list[tuple[int, str]]:
+    """Return the stable row payload used by the ADBC benchmark."""
+    return [(index, f"value_{index}") for index in range(BENCHMARK_ROWS)]
+
+
+def _connect_adbc(dbapi: Any, config: dict[str, Any]) -> Any:
+    driver_name = config["driver_name"]
+    if driver_name in {"adbc_driver_sqlite", "adbc_driver_duckdb", "adbc_driver_postgresql"}:
+        module = importlib.import_module(f"{driver_name}.dbapi")
+        return module.connect(uri=config["uri"], autocommit=True)
+    db_kwargs = {
+        key: config[key] for key in ("username", "password", "gizmosql_backend", "tls_skip_verify") if key in config
+    }
+    return dbapi.connect(driver=driver_name, uri=config["uri"], db_kwargs=db_kwargs, autocommit=True)
+
+
+def _get_mysql_connector() -> Any:
+    """Import mysql-connector lazily."""
+    try:
+        import mysql.connector
+    except ImportError:
+        return None
+    else:
+        return mysql.connector
+
+
+def _get_mysql_connector_config() -> Any:
+    """Import MysqlConnectorSyncConfig lazily."""
+    try:
+        from sqlspec.adapters.mysqlconnector import MysqlConnectorSyncConfig
+    except ImportError:
+        return None
+    else:
+        return MysqlConnectorSyncConfig
+
+
+def _mysql_benchmark_connection_config() -> dict[str, Any] | None:
+    """Build a MySQL benchmark connection from service-provided environment values."""
+    required: dict[str, Any] = {
+        "host": os.environ.get("SQLSPEC_BENCH_MYSQL_HOST"),
+        "port": os.environ.get("SQLSPEC_BENCH_MYSQL_PORT"),
+        "user": os.environ.get("SQLSPEC_BENCH_MYSQL_USER"),
+        "password": os.environ.get("SQLSPEC_BENCH_MYSQL_PASSWORD"),
+        "database": os.environ.get("SQLSPEC_BENCH_MYSQL_DATABASE"),
+    }
+    if any(value is None for value in required.values()):
+        return None
+    required["port"] = int(required["port"])
+    required["use_pure"] = True
+    required["autocommit"] = True
+    return required
+
+
+def _json_benchmark_rows() -> list[tuple[int, str]]:
+    """Return the stable JSON payload used by the MySQL benchmark."""
+    return [(index, json.dumps({"index": index, "values": [index, index + 1]})) for index in range(BENCHMARK_ROWS)]
+
+
+def _json_row_payload(row: Any) -> Any:
+    payload = row.get("payload") if isinstance(row, dict) else row[1]
+    return json.loads(payload) if isinstance(payload, str) else payload
+
+
+def _spanner_benchmark_config() -> dict[str, Any] | None:
+    """Build a Spanner benchmark connection from service-provided environment values."""
+    required: dict[str, Any] = {
+        "project": os.environ.get("SQLSPEC_BENCH_SPANNER_PROJECT"),
+        "instance_id": os.environ.get("SQLSPEC_BENCH_SPANNER_INSTANCE_ID"),
+        "database_id": os.environ.get("SQLSPEC_BENCH_SPANNER_DATABASE_ID"),
+        "api_endpoint": os.environ.get("SQLSPEC_BENCH_SPANNER_API_ENDPOINT"),
+    }
+    if any(value is None for value in required.values()):
+        return None
+    return required
+
+
+def _get_duckdb_engine() -> tuple[Any, Any]:
+    """Import SQLAlchemy with duckdb_engine lazily."""
+    try:
+        importlib.import_module("duckdb_engine")
+        from sqlalchemy import create_engine, text
+    except ImportError:
+        return None, None
+    else:
+        return create_engine, text
+
+
+def _check_pool_leak(pool: Any, scenario_name: str) -> None:
+    """Check for connection leaks in a pool.
+
+    Args:
+        pool: Connection pool with size() and checked_out() methods
+        scenario_name: Name of the scenario for error reporting
+    """
+    if pool is None:
+        return
+
+    with suppress(AttributeError, TypeError):
+        total = pool.size()
+        checked_out = pool.checked_out()
+        if checked_out > 0:
+            _leaked_pools.append(f"{scenario_name}: {checked_out}/{total} connections leaked")
+
+
+def _get_aiosqlite() -> Any:
+    """Import aiosqlite lazily."""
+    try:
+        import aiosqlite
+    except ImportError:
+        return None
+    else:
+        return aiosqlite
+
+
+def _get_aiosqlite_config() -> Any:
+    """Import AiosqliteConfig lazily."""
+    try:
+        from sqlspec.adapters.aiosqlite import AiosqliteConfig
+    except ImportError:
+        return None
+    else:
+        return AiosqliteConfig
+
+
+def _get_asyncpg() -> Any:
+    """Import asyncpg lazily."""
+    try:
+        from asyncpg import connect
+    except ImportError:
+        return None
+    else:
+        return connect
+
+
+def _get_asyncpg_config() -> Any:
+    """Import AsyncpgConfig lazily."""
+    try:
+        from sqlspec.adapters.asyncpg import AsyncpgConfig
+    except ImportError:
+        return None
+    else:
+        return AsyncpgConfig
+
+
+def _get_async_sqlalchemy() -> tuple[Any, Any]:
+    """Import async SQLAlchemy lazily."""
+    try:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+    except ImportError:
+        return None, None
+    else:
+        return create_async_engine, text
+
+
+def _postgres_benchmark_dsn() -> str:
+    dsn = os.environ.get(POSTGRES_DSN_ENV)
+    if not dsn:
+        _benchmark_unavailable()
+    return dsn
+
+
+def _cockroach_benchmark_dsn() -> str:
+    dsn = os.environ.get(COCKROACH_DSN_ENV)
+    if not dsn:
+        _benchmark_unavailable()
+    return dsn
+
+
+def _asyncpg_connect_kwargs(dsn: str) -> dict[str, Any]:
+    """Adapt a service DSN to asyncpg's keyword set."""
+    parsed = urlsplit(dsn)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    sslmode = query.pop("sslmode", None)
+    clean_dsn = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+    kwargs: dict[str, Any] = {"dsn": clean_dsn}
+    if sslmode == "disable":
+        kwargs["ssl"] = False
+    return kwargs
 
 
 def _service_benchmark_rows() -> list[tuple[int, str]]:
@@ -2226,135 +3624,6 @@ async def _run_sqlspec_async_service_rows(dsn: str, *, driver: str) -> None:
         await config.close_pool()
 
 
-def raw_psycopg_sync_rows() -> None:
-    _run_raw_psycopg_sync_rows(_postgres_benchmark_dsn(), cockroach=False)
-
-
-def sqlspec_psycopg_sync_rows() -> None:
-    _run_sqlspec_sync_service_rows(_postgres_benchmark_dsn(), driver="psycopg_sync")
-
-
-async def raw_psycopg_async_rows() -> None:
-    await _run_raw_psycopg_async_rows(_postgres_benchmark_dsn())
-
-
-async def sqlspec_psycopg_async_rows() -> None:
-    await _run_sqlspec_async_service_rows(_postgres_benchmark_dsn(), driver="psycopg_async")
-
-
-async def raw_asyncpg_rows() -> None:
-    await _run_raw_asyncpg_rows(_postgres_benchmark_dsn())
-
-
-async def sqlspec_asyncpg_rows() -> None:
-    await _run_sqlspec_async_service_rows(_postgres_benchmark_dsn(), driver="asyncpg")
-
-
-def raw_cockroach_psycopg_sync_rows() -> None:
-    _run_raw_psycopg_sync_rows(_cockroach_benchmark_dsn(), cockroach=True)
-
-
-def sqlspec_cockroach_psycopg_sync_rows() -> None:
-    _run_sqlspec_sync_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_psycopg_sync")
-
-
-async def raw_cockroach_psycopg_async_rows() -> None:
-    await _run_raw_psycopg_async_rows(_cockroach_benchmark_dsn())
-
-
-async def sqlspec_cockroach_psycopg_async_rows() -> None:
-    await _run_sqlspec_async_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_psycopg_async")
-
-
-async def raw_cockroach_asyncpg_rows() -> None:
-    await _run_raw_asyncpg_rows(_cockroach_benchmark_dsn())
-
-
-async def sqlspec_cockroach_asyncpg_rows() -> None:
-    await _run_sqlspec_async_service_rows(_cockroach_benchmark_dsn(), driver="cockroach_asyncpg")
-
-
-# ===========================================================================
-# Extended benchmark scenarios
-# These exercise sqlspec-specific features (dict key transforms, schema
-# mapping, complex parameter types, thin path stress testing).
-# ===========================================================================
-
-# --- SQL constants for extended scenarios ---
-
-CREATE_WIDE_TABLE = """CREATE TABLE wide_test (
-    first_name TEXT,
-    last_name TEXT,
-    email_address TEXT,
-    phone_number TEXT,
-    street_address TEXT,
-    postal_code TEXT,
-    country_name TEXT,
-    birth_date TEXT,
-    account_balance TEXT,
-    is_active TEXT
-);"""
-
-INSERT_WIDE_ROW = (
-    "INSERT INTO wide_test "
-    "(first_name, last_name, email_address, phone_number, street_address, "
-    "postal_code, country_name, birth_date, account_balance, is_active) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
-)
-
-SELECT_WIDE_ALL = "SELECT * FROM wide_test;"
-
-CREATE_COMPLEX_TABLE = """CREATE TABLE complex_test (
-    uuid_val TEXT,
-    created_at TEXT,
-    payload TEXT
-);"""
-
-INSERT_COMPLEX_ROW = "INSERT INTO complex_test (uuid_val, created_at, payload) VALUES (?, ?, ?);"
-
-SELECT_COMPLEX_ALL = "SELECT * FROM complex_test;"
-
-BENCHMARK_ROWS = 1_000
-DUCKDB_BULK_TABLE = "sqlspec_bench_bulk"
-DUCKDB_BULK_CREATE = f"CREATE TABLE {DUCKDB_BULK_TABLE} (id INTEGER, payload VARCHAR)"
-DUCKDB_BULK_INSERT = f"INSERT INTO {DUCKDB_BULK_TABLE} (id, payload) VALUES (?, ?)"
-DUCKDB_BULK_COUNT = f"SELECT COUNT(*) FROM {DUCKDB_BULK_TABLE}"
-ADBC_ROWS_TABLE = "sqlspec_bench_adbc_rows"
-ADBC_ROWS_CREATE = f"CREATE TABLE IF NOT EXISTS {ADBC_ROWS_TABLE} (id INTEGER, payload VARCHAR)"
-ADBC_ROWS_TRUNCATE = f"DELETE FROM {ADBC_ROWS_TABLE}"
-ADBC_ROWS_INSERT = f"INSERT INTO {ADBC_ROWS_TABLE} (id, payload) VALUES (?, ?)"
-ADBC_ROWS_SELECT = f"SELECT id, payload FROM {ADBC_ROWS_TABLE} ORDER BY id"
-MYSQL_JSON_TABLE = "sqlspec_bench_json_rows"
-MYSQL_JSON_CREATE = f"CREATE TABLE IF NOT EXISTS {MYSQL_JSON_TABLE} (id INT PRIMARY KEY, payload JSON NOT NULL)"
-MYSQL_JSON_INSERT_RAW = f"INSERT INTO {MYSQL_JSON_TABLE} (id, payload) VALUES (%s, %s)"
-MYSQL_JSON_INSERT = f"INSERT INTO {MYSQL_JSON_TABLE} (id, payload) VALUES (?, ?)"
-MYSQL_JSON_SELECT = f"SELECT id, payload FROM {MYSQL_JSON_TABLE} ORDER BY id"
-SPANNER_STRINGS_TABLE = "sqlspec_bench_strings"
-SPANNER_STRINGS_SELECT = f"SELECT id, payload FROM {SPANNER_STRINGS_TABLE} ORDER BY id"
-
-
-class WideRowDict(TypedDict):
-    """TypedDict schema matching the wide_test table for schema_mapping benchmark."""
-
-    first_name: str
-    last_name: str
-    email_address: str
-    phone_number: str
-    street_address: str
-    postal_code: str
-    country_name: str
-    birth_date: str
-    account_balance: str
-    is_active: str
-
-
-SCHEMA_TYPE_NUMPY_ROW_COUNT = 5_000
-SCHEMA_TYPE_NUMPY_FIRST_FIELD_4 = 4
-_SCHEMA_TYPE_NUMPY_PAYLOAD: list[dict[str, int]] | None = None
-_SCHEMA_TYPE_NUMPY_ROW_TYPE: type[Any] | None = None
-_SCHEMA_TYPE_NUMPY_VECTOR_TYPE: type[Any] | None = None
-
-
 def _schema_type_numpy_payload() -> list[dict[str, int]]:
     """Return the stable 5000x5 payload used by the schema_type numpy benchmark."""
     global _SCHEMA_TYPE_NUMPY_PAYLOAD
@@ -2396,16 +3665,6 @@ def _schema_type_numpy_vector_type() -> type[Any]:
     return _SCHEMA_TYPE_NUMPY_VECTOR_TYPE
 
 
-def assert_schema_type_numpy_vector_fallback() -> None:
-    """Assert ndarray -> list[float] fallback still works for msgspec schema conversion."""
-    import numpy as np
-
-    vector_type = _schema_type_numpy_vector_type()
-    converted = to_schema([{"values": np.array([1.0, 2.0])}], schema_type=vector_type)
-    assert len(converted) == 1
-    assert converted[0].values == [1.0, 2.0]
-
-
 def _generate_wide_row(i: int) -> tuple[str, ...]:
     """Generate a single row tuple for the wide_test table."""
     return (
@@ -2430,166 +3689,6 @@ def _generate_complex_row(i: int) -> tuple[str, str, str]:
     created_at = f"2024-{1 + (i % 12):02d}-{1 + (i % 28):02d}T{i % 24:02d}:{i % 60:02d}:00"
     payload = f'{{"key": "value_{i}", "count": {i}, "tags": ["a", "b"]}}'
     return (uid, created_at, payload)
-
-
-# --- dict_key_transform scenarios ---
-
-
-def raw_sqlite_dict_key_transform() -> None:
-    """SELECT 10K rows with 10 columns, then transform keys to camelCase (raw)."""
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        conn = sqlite3.connect(tmp.name)
-        _optimize_raw_sqlite(conn)
-        conn.execute(CREATE_WIDE_TABLE)
-        data = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
-        conn.executemany(INSERT_WIDE_ROW, data)
-        conn.commit()
-        # Raw driver: fetch as tuples; build dicts manually then transform
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute(SELECT_WIDE_ALL)
-        rows = cursor.fetchall()
-        assert len(rows) == ROWS_TO_INSERT
-        # No transform for raw - just fetch (raw baseline)
-        conn.close()
-
-
-def sqlspec_sqlite_dict_key_transform() -> None:
-    """SELECT 10K rows with 10 columns, then transform keys to camelCase (sqlspec)."""
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        spec = SQLSpec()
-        config = SqliteConfig(connection_config={"database": tmp.name})
-        with spec.provide_session(config) as session:
-            session.execute(CREATE_WIDE_TABLE)
-            data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
-            session.execute_many(INSERT_WIDE_ROW, data)
-            rows = session.fetch(SELECT_WIDE_ALL)
-            assert len(rows) == ROWS_TO_INSERT
-            # Apply dict key transformation from snake_case to camelCase
-            transformed = [transform_dict_keys(row, camelize) for row in rows]
-            assert len(transformed) == ROWS_TO_INSERT
-            # Verify transformation worked on first row
-            first = transformed[0]
-            assert "firstName" in first
-
-
-# --- schema_mapping scenarios ---
-
-
-def raw_sqlite_schema_mapping() -> None:
-    """SELECT 10K rows and return as raw tuples (baseline for schema mapping)."""
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        conn = sqlite3.connect(tmp.name)
-        _optimize_raw_sqlite(conn)
-        conn.execute(CREATE_WIDE_TABLE)
-        data = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
-        conn.executemany(INSERT_WIDE_ROW, data)
-        conn.commit()
-        cursor = conn.execute(SELECT_WIDE_ALL)
-        rows = cursor.fetchall()
-        assert len(rows) == ROWS_TO_INSERT
-        conn.close()
-
-
-def sqlspec_sqlite_schema_mapping() -> None:
-    """SELECT 10K rows and map to TypedDict using schema_type= parameter."""
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        spec = SQLSpec()
-        config = SqliteConfig(connection_config={"database": tmp.name})
-        with spec.provide_session(config) as session:
-            session.execute(CREATE_WIDE_TABLE)
-            data: Sequence[tuple[str, ...]] = [_generate_wide_row(i) for i in range(ROWS_TO_INSERT)]
-            session.execute_many(INSERT_WIDE_ROW, data)
-            rows = session.fetch(SELECT_WIDE_ALL, schema_type=WideRowDict)
-            assert len(rows) == ROWS_TO_INSERT
-            # Verify schema mapping worked
-            first = rows[0]
-            assert "first_name" in first
-
-
-# --- schema_type_numpy scenarios ---
-
-
-def raw_sqlite_schema_type_numpy() -> None:
-    """Legacy baseline: pre-walk a 5000x5 payload before msgspec schema conversion."""
-    row_type = _schema_type_numpy_row_type()
-    rows = to_schema(_convert_numpy_recursive(_schema_type_numpy_payload()), schema_type=row_type)
-    assert len(rows) == SCHEMA_TYPE_NUMPY_ROW_COUNT
-    assert rows[0].field_4 == SCHEMA_TYPE_NUMPY_FIRST_FIELD_4
-
-
-def sqlspec_sqlite_schema_type_numpy() -> None:
-    """Convert a 5000x5 payload through the current msgspec schema_type path."""
-    row_type = _schema_type_numpy_row_type()
-    rows = to_schema(_schema_type_numpy_payload(), schema_type=row_type)
-    assert len(rows) == SCHEMA_TYPE_NUMPY_ROW_COUNT
-    assert rows[0].field_4 == SCHEMA_TYPE_NUMPY_FIRST_FIELD_4
-
-
-# --- complex_parameters scenarios ---
-
-
-def raw_sqlite_complex_parameters() -> None:
-    """INSERT rows with complex parameter types: UUID, datetime, JSON (raw)."""
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        conn = sqlite3.connect(tmp.name)
-        _optimize_raw_sqlite(conn)
-        conn.execute(CREATE_COMPLEX_TABLE)
-        data = [_generate_complex_row(i) for i in range(ROWS_TO_INSERT)]
-        conn.executemany(INSERT_COMPLEX_ROW, data)
-        conn.commit()
-        # Read back to verify
-        cursor = conn.execute(SELECT_COMPLEX_ALL)
-        rows = cursor.fetchall()
-        assert len(rows) == ROWS_TO_INSERT
-        conn.close()
-
-
-def sqlspec_sqlite_complex_parameters() -> None:
-    """INSERT rows with complex parameter types: UUID, datetime, JSON (sqlspec)."""
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        spec = SQLSpec()
-        config = SqliteConfig(connection_config={"database": tmp.name})
-        with spec.provide_session(config) as session:
-            session.execute(CREATE_COMPLEX_TABLE)
-            data: Sequence[tuple[str, str, str]] = [_generate_complex_row(i) for i in range(ROWS_TO_INSERT)]
-            session.execute_many(INSERT_COMPLEX_ROW, data)
-            # Read back to verify
-            rows = session.fetch(SELECT_COMPLEX_ALL)
-            assert len(rows) == ROWS_TO_INSERT
-
-
-# --- thin_path_stress scenarios ---
-
-
-def raw_sqlite_thin_path_stress() -> None:
-    """100K individual INSERTs to stress-test per-call execution path (raw)."""
-    stress_count = ROWS_TO_INSERT * 10
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        conn = sqlite3.connect(tmp.name)
-        _optimize_raw_sqlite(conn)
-        conn.execute(CREATE_TEST_TABLE)
-        for i in range(stress_count):
-            conn.execute(INSERT_TEST_VALUE, (f"value_{i}",))
-        conn.commit()
-        conn.close()
-
-
-def sqlspec_sqlite_thin_path_stress() -> None:
-    """100K individual INSERTs to stress-test the thin execute path (sqlspec)."""
-    stress_count = ROWS_TO_INSERT * 10
-    with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
-        spec = SQLSpec()
-        config = SqliteConfig(connection_config={"database": tmp.name})
-        with spec.provide_session(config) as session:
-            session.execute(CREATE_TEST_TABLE)
-            for i in range(stress_count):
-                session.execute(INSERT_TEST_VALUE, (f"value_{i}",))
-
-
-# --- Oracle LOB fetch scenarios ---
-
-ORACLE_LOB_TABLES = {"1k": "SQLSPEC_LOB_1K", "100k": "SQLSPEC_LOB_100K"}
-ORACLE_JSON_TABLE = "SQLSPEC_JSON_BENCH"
 
 
 def _get_oracledb() -> Any:
@@ -2816,73 +3915,578 @@ def _run_sqlspec_oracle_json_read() -> None:
             config.close_pool()
 
 
-def raw_oracle_lob_fetch_1k() -> None:
-    """Fetch 100 1 KiB Oracle CLOB rows through raw python-oracledb."""
-    _run_raw_oracle_lob_fetch("1k")
+def _noop_statement_observer(_event: Any) -> None:
+    """No-op statement observer used for observability benchmark scenarios."""
+    return
 
 
-def raw_oracle_lob_fetch_100k() -> None:
-    """Fetch 100 100 KiB Oracle CLOB rows through raw python-oracledb."""
-    _run_raw_oracle_lob_fetch("100k")
+def _service_loop_iterations() -> int:
+    """Return bounded iteration count for network-backed hot-path scenarios."""
+    return min(ROWS_TO_INSERT, HOT_PATH_COMPLEX_ITERATIONS_CAP)
 
 
-def sqlspec_oracle_lob_fetch_1k() -> None:
-    """Fetch 100 1 KiB Oracle CLOB rows with sqlspec direct LOB fetching."""
-    _run_sqlspec_oracle_lob_fetch("1k", fetch_lobs=False)
+async def _run_raw_asyncpg_hot_path(scenario: str) -> None:
+    connect = _get_asyncpg()
+    if connect is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    conn = await connect(**_asyncpg_connect_kwargs(dsn))
+    try:
+        if scenario == "scalar_param_select":
+            for i in range(iterations):
+                val = await conn.fetchval(SCALAR_PARAM_SELECT_ASYNCPG_SQL, i)
+                assert val == i
+        elif scenario == "no_param_select":
+            for _ in range(iterations):
+                rows = await conn.fetch(NO_PARAM_SELECT_SQL)
+                assert len(rows) == 1
+        elif scenario == "complex_query":
+            for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                await conn.execute(ddl)
+            for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                await conn.execute(ddl)
+            for i in range(iterations):
+                await conn.fetch(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, i)
+        elif scenario in {"session_per_request", "observability_select"}:
+            await conn.execute(SERVICE_ROWS_DROP)
+            await conn.execute(SERVICE_ROWS_CREATE)
+            await conn.executemany(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                await conn.fetchrow(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, f"value_{i % 100}")
+    finally:
+        await conn.close()
 
 
-def sqlspec_oracle_lob_fetch_100k() -> None:
-    """Fetch 100 100 KiB Oracle CLOB rows with sqlspec direct LOB fetching."""
-    _run_sqlspec_oracle_lob_fetch("100k", fetch_lobs=False)
+async def _run_sqlspec_asyncpg_hot_path(scenario: str) -> None:
+    asyncpg_config_type = _get_asyncpg_config()
+    if asyncpg_config_type is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = asyncpg_config_type(
+        connection_config={"dsn": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_ASYNCPG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+    finally:
+        await config.close_pool()
 
 
-def sqlspec_oracle_lob_fetch_fetch_lobs_true_1k() -> None:
-    """Fetch 100 1 KiB Oracle CLOB rows with sqlspec LOB locators enabled."""
-    _run_sqlspec_oracle_lob_fetch("1k", fetch_lobs=True)
+def _run_raw_psycopg_sync_hot_path(scenario: str) -> None:
+    psycopg = _get_psycopg()
+    if psycopg is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    with psycopg.connect(dsn) as conn, conn.cursor() as cursor:
+        if scenario == "scalar_param_select":
+            for i in range(iterations):
+                cursor.execute(SCALAR_PARAM_SELECT_PG_SQL, (i,))
+                row = cursor.fetchone()
+                assert row is not None
+                assert row[0] == i
+        elif scenario == "no_param_select":
+            for _ in range(iterations):
+                cursor.execute(NO_PARAM_SELECT_SQL)
+                rows = cursor.fetchall()
+                assert len(rows) == 1
+        elif scenario == "complex_query":
+            for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                cursor.execute(ddl)
+            for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                cursor.execute(ddl)
+            conn.commit()
+            for i in range(iterations):
+                cursor.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, (i,))
+                cursor.fetchall()
+        elif scenario in {"session_per_request", "observability_select"}:
+            cursor.execute(SERVICE_ROWS_DROP)
+            cursor.execute(SERVICE_ROWS_CREATE)
+            cursor.executemany(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+            conn.commit()
+            for i in range(iterations):
+                cursor.execute(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+                cursor.fetchone()
 
 
-def sqlspec_oracle_lob_fetch_fetch_lobs_true_100k() -> None:
-    """Fetch 100 100 KiB Oracle CLOB rows with sqlspec LOB locators enabled."""
-    _run_sqlspec_oracle_lob_fetch("100k", fetch_lobs=True)
+def _run_sqlspec_psycopg_sync_hot_path(scenario: str) -> None:
+    config_class = _get_sync_service_config("psycopg_sync")
+    if config_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = config_class(
+        connection_config={"conninfo": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = session.select_value(SCALAR_PARAM_SELECT_PG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    session.execute(ddl)
+                for i in range(iterations):
+                    session.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, i)
+        elif scenario == "session_per_request":
+            with spec.provide_session(config) as session:
+                session.execute(SERVICE_ROWS_DROP)
+                session.execute(SERVICE_ROWS_CREATE)
+                session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                with spec.provide_session(config) as session:
+                    session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            with spec.provide_session(config) as session:
+                session.execute(SERVICE_ROWS_DROP)
+                session.execute(SERVICE_ROWS_CREATE)
+                session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+    finally:
+        config.close_pool()
 
 
-async def sqlspec_oracle_lob_fetch_async_1k() -> None:
-    """Fetch 100 1 KiB Oracle CLOB rows with async sqlspec direct LOB fetching."""
-    await _run_sqlspec_oracle_lob_fetch_async("1k", fetch_lobs=False)
+async def _run_raw_psycopg_async_hot_path(scenario: str) -> None:
+    psycopg = _get_psycopg()
+    if psycopg is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    conn = await psycopg.AsyncConnection.connect(dsn)
+    try:
+        async with conn.cursor() as cursor:
+            if scenario == "scalar_param_select":
+                for i in range(iterations):
+                    await cursor.execute(SCALAR_PARAM_SELECT_PG_SQL, (i,))
+                    row = await cursor.fetchone()
+                    assert row is not None
+                    assert row[0] == i
+            elif scenario == "no_param_select":
+                for _ in range(iterations):
+                    await cursor.execute(NO_PARAM_SELECT_SQL)
+                    rows = await cursor.fetchall()
+                    assert len(rows) == 1
+            elif scenario == "complex_query":
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await cursor.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await cursor.execute(ddl)
+                await conn.commit()
+                for i in range(iterations):
+                    await cursor.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, (i,))
+                    await cursor.fetchall()
+            elif scenario in {"session_per_request", "observability_select"}:
+                await cursor.execute(SERVICE_ROWS_DROP)
+                await cursor.execute(SERVICE_ROWS_CREATE)
+                await cursor.executemany(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+                await conn.commit()
+                for i in range(iterations):
+                    await cursor.execute(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+                    await cursor.fetchone()
+    finally:
+        await conn.close()
 
 
-async def sqlspec_oracle_lob_fetch_async_100k() -> None:
-    """Fetch 100 100 KiB Oracle CLOB rows with async sqlspec direct LOB fetching."""
-    await _run_sqlspec_oracle_lob_fetch_async("100k", fetch_lobs=False)
+async def _run_sqlspec_psycopg_async_hot_path(scenario: str) -> None:
+    config_class = _get_async_service_config("psycopg_async")
+    if config_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = config_class(
+        connection_config={"conninfo": dsn, "min_size": 1, "max_size": max(1, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_PG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(POSTGRES_COMPLEX_QUERY_PG_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_PG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_PG, (f"value_{i % 100}",))
+    finally:
+        await config.close_pool()
 
 
-async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_1k() -> None:
-    """Fetch 100 1 KiB Oracle CLOB rows with async sqlspec LOB locators enabled."""
-    await _run_sqlspec_oracle_lob_fetch_async("1k", fetch_lobs=True)
+def _get_psqlpy_pool_class() -> Any:
+    """Import psqlpy ConnectionPool lazily."""
+    try:
+        from psqlpy import ConnectionPool
+    except ImportError:
+        return None
+    else:
+        return ConnectionPool
 
 
-async def sqlspec_oracle_lob_fetch_async_fetch_lobs_true_100k() -> None:
-    """Fetch 100 100 KiB Oracle CLOB rows with async sqlspec LOB locators enabled."""
-    await _run_sqlspec_oracle_lob_fetch_async("100k", fetch_lobs=True)
+def _get_psqlpy_config() -> Any:
+    """Import PsqlpyConfig lazily."""
+    try:
+        from sqlspec.adapters.psqlpy import PsqlpyConfig
+    except ImportError:
+        return None
+    else:
+        return PsqlpyConfig
 
 
-def sqlspec_oracle_native_json_write() -> None:
-    """Write native Python mappings to an Oracle native JSON column."""
-    _run_sqlspec_oracle_json_write(serialized=False)
+async def _run_raw_psqlpy_rows(dsn: str) -> None:
+    pool_class = _get_psqlpy_pool_class()
+    if pool_class is None:
+        _benchmark_unavailable()
+    pool = pool_class(dsn=dsn, max_db_pool_size=max(2, POOL_SIZE))
+    try:
+        conn = await pool.connection()
+        await conn.execute(SERVICE_ROWS_DROP)
+        await conn.execute(SERVICE_ROWS_CREATE)
+        await conn.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [[idx, val] for idx, val in _service_benchmark_rows()])
+        res = await conn.fetch(SERVICE_ROWS_SELECT)
+        rows = res.result()
+        assert len(rows) == BENCHMARK_ROWS
+    finally:
+        pool.close()
 
 
-def sqlspec_oracle_serialized_json_write() -> None:
-    """Write pre-serialized strings to an Oracle native JSON column."""
-    _run_sqlspec_oracle_json_write(serialized=True)
+async def _run_sqlspec_psqlpy_rows(dsn: str) -> None:
+    config_class = _get_psqlpy_config()
+    if config_class is None:
+        _benchmark_unavailable()
+    config = config_class(connection_config={"dsn": dsn, "max_db_pool_size": max(2, POOL_SIZE)})
+    try:
+        spec = SQLSpec()
+        async with spec.provide_session(config) as session:
+            await session.execute(SERVICE_ROWS_DROP)
+            await session.execute(SERVICE_ROWS_CREATE)
+            await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, _service_benchmark_rows())
+            rows = await session.fetch(SERVICE_ROWS_SELECT)
+        assert len(rows) == BENCHMARK_ROWS
+    finally:
+        await config.close_pool()
 
 
-def sqlspec_oracle_json_read() -> None:
-    """Read native JSON values from Oracle through SQLSpec."""
-    _run_sqlspec_oracle_json_read()
+async def _run_raw_psqlpy_hot_path(scenario: str) -> None:
+    pool_class = _get_psqlpy_pool_class()
+    if pool_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    pool = pool_class(dsn=dsn, max_db_pool_size=max(2, POOL_SIZE))
+    try:
+        conn = await pool.connection()
+        if scenario == "scalar_param_select":
+            for i in range(iterations):
+                res = await conn.fetch(SCALAR_PARAM_SELECT_ASYNCPG_SQL, [i])
+                rows = res.result()
+                assert len(rows) == 1
+        elif scenario == "no_param_select":
+            for _ in range(iterations):
+                res = await conn.fetch(NO_PARAM_SELECT_SQL)
+                rows = res.result()
+                assert len(rows) == 1
+        elif scenario == "complex_query":
+            for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                await conn.execute(ddl)
+            for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                await conn.execute(ddl)
+            for i in range(iterations):
+                res = await conn.fetch(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, [i])
+                res.result()
+        elif scenario in {"session_per_request", "observability_select"}:
+            await conn.execute(SERVICE_ROWS_DROP)
+            await conn.execute(SERVICE_ROWS_CREATE)
+            await conn.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [[i, f"value_{i}"] for i in range(100)])
+            for i in range(iterations):
+                res = await conn.fetch(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, [f"value_{i % 100}"])
+                res.result()
+    finally:
+        pool.close()
 
+
+async def _run_sqlspec_psqlpy_hot_path(scenario: str) -> None:
+    config_class = _get_psqlpy_config()
+    if config_class is None:
+        _benchmark_unavailable()
+    dsn = _postgres_benchmark_dsn()
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = config_class(
+        connection_config={"dsn": dsn, "max_db_pool_size": max(2, POOL_SIZE)}, observability_config=obs_cfg
+    )
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_ASYNCPG_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for ddl in POSTGRES_COMPLEX_DROP_DDL:
+                    await session.execute(ddl)
+                for ddl in POSTGRES_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(POSTGRES_COMPLEX_QUERY_ASYNCPG_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute(SERVICE_ROWS_DROP)
+                await session.execute(SERVICE_ROWS_CREATE)
+                await session.execute_many(SERVICE_ROWS_INSERT_ASYNCPG, [(i, f"value_{i}") for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(SERVICE_ROWS_SELECT_BY_PAYLOAD_ASYNCPG, (f"value_{i % 100}",))
+    finally:
+        await config.close_pool()
+
+
+def _run_raw_oracle_hot_path(scenario: str) -> None:
+    oracledb = _get_oracledb()
+    if oracledb is None:
+        _benchmark_unavailable()
+    iterations = _service_loop_iterations()
+    conn = oracledb.connect(**_oracle_connect_config_from_env())
+    try:
+        with conn.cursor() as cursor:
+            if scenario == "scalar_param_select":
+                for i in range(iterations):
+                    cursor.execute(SCALAR_PARAM_SELECT_ORACLE_SQL, (i,))
+                    row = cursor.fetchone()
+                    assert row is not None
+                    assert row[0] == i
+            elif scenario == "no_param_select":
+                for _ in range(iterations):
+                    cursor.execute(NO_PARAM_SELECT_ORACLE_SQL)
+                    rows = cursor.fetchall()
+                    assert len(rows) == 1
+            elif scenario == "complex_query":
+                for tbl in ORACLE_COMPLEX_TABLES:
+                    cursor.execute(_oracle_drop_table_sql(tbl))
+                for ddl in ORACLE_COMPLEX_SCHEMA_DDL:
+                    cursor.execute(ddl)
+                conn.commit()
+                for i in range(iterations):
+                    cursor.execute(ORACLE_COMPLEX_QUERY_SQL, (i,))
+                    cursor.fetchall()
+            elif scenario in {"session_per_request", "observability_select"}:
+                cursor.execute(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                cursor.execute(ORACLE_KV_CREATE_SQL)
+                cursor.executemany(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+                conn.commit()
+                for i in range(iterations):
+                    cursor.execute(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+                    cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def _run_sqlspec_oracle_hot_path(scenario: str) -> None:
+    from sqlspec.adapters.oracledb import OracleSyncConfig
+
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = OracleSyncConfig(connection_config=_oracle_connection_config_from_env(), observability_config=obs_cfg)
+    try:
+        if scenario == "scalar_param_select":
+            with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = session.select_value(SCALAR_PARAM_SELECT_ORACLE_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = session.execute(NO_PARAM_SELECT_ORACLE_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            with spec.provide_session(config) as session:
+                for tbl in ORACLE_COMPLEX_TABLES:
+                    session.execute_script(_oracle_drop_table_sql(tbl))
+                for ddl in ORACLE_COMPLEX_SCHEMA_DDL:
+                    session.execute(ddl)
+                for i in range(iterations):
+                    session.execute(ORACLE_COMPLEX_QUERY_SQL, i)
+        elif scenario == "session_per_request":
+            with spec.provide_session(config) as session:
+                session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                session.execute(ORACLE_KV_CREATE_SQL)
+                session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                with spec.provide_session(config) as session:
+                    session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            with spec.provide_session(config) as session:
+                session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                session.execute(ORACLE_KV_CREATE_SQL)
+                session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+                for i in range(iterations):
+                    session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        _check_pool_leak(config.connection_instance, f"oracle/{scenario}")
+        config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            config.close_pool()
+
+
+async def _run_sqlspec_oracle_async_hot_path(scenario: str) -> None:
+    from sqlspec.adapters.oracledb import OracleAsyncConfig
+
+    iterations = _service_loop_iterations()
+    spec = SQLSpec()
+    obs_cfg = (
+        ObservabilityConfig(statement_observers=(_noop_statement_observer,))
+        if scenario == "observability_select"
+        else None
+    )
+    config = OracleAsyncConfig(connection_config=_oracle_connection_config_from_env(), observability_config=obs_cfg)
+    try:
+        if scenario == "scalar_param_select":
+            async with spec.provide_session(config) as session:
+                for i in range(iterations):
+                    val = await session.select_value(SCALAR_PARAM_SELECT_ORACLE_SQL, i)
+                    assert val == i
+        elif scenario == "no_param_select":
+            async with spec.provide_session(config) as session:
+                for _ in range(iterations):
+                    res = await session.execute(NO_PARAM_SELECT_ORACLE_SQL)
+                    assert res is not None
+        elif scenario == "complex_query":
+            async with spec.provide_session(config) as session:
+                for tbl in ORACLE_COMPLEX_TABLES:
+                    await session.execute_script(_oracle_drop_table_sql(tbl))
+                for ddl in ORACLE_COMPLEX_SCHEMA_DDL:
+                    await session.execute(ddl)
+                for i in range(iterations):
+                    await session.execute(ORACLE_COMPLEX_QUERY_SQL, i)
+        elif scenario == "session_per_request":
+            async with spec.provide_session(config) as session:
+                await session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                await session.execute(ORACLE_KV_CREATE_SQL)
+                await session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+            for i in range(iterations):
+                async with spec.provide_session(config) as session:
+                    await session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        elif scenario == "observability_select":
+            async with spec.provide_session(config) as session:
+                await session.execute_script(_oracle_drop_table_sql(ORACLE_KV_TABLE))
+                await session.execute(ORACLE_KV_CREATE_SQL)
+                await session.execute_many(ORACLE_KV_INSERT_SQL, [(f"value_{i}",) for i in range(100)])
+                for i in range(iterations):
+                    await session.fetch_one_or_none(ORACLE_KV_SELECT_BY_VALUE_SQL, (f"value_{i % 100}",))
+        _check_pool_leak(config.connection_instance, f"oracle_async/{scenario}")
+        await config.close_pool()
+    finally:
+        if config.connection_instance is not None:
+            await config.close_pool()
+
+
+SQLSPEC_LABEL = "sqlspec (mypyc)" if _is_compiled() else "sqlspec"
 
 SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
-    # SQLite scenarios
     ("raw", "sqlite", "initialization"): raw_sqlite_initialization,
     ("raw", "sqlite", "write_heavy"): raw_sqlite_write_heavy,
     ("raw", "sqlite", "read_heavy"): raw_sqlite_read_heavy,
@@ -2898,7 +4502,6 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "sqlite", "read_heavy"): sqlalchemy_sqlite_read_heavy,
     ("sqlalchemy", "sqlite", "iterative_inserts"): sqlalchemy_sqlite_iterative_inserts,
     ("sqlalchemy", "sqlite", "repeated_queries"): sqlalchemy_sqlite_repeated_queries,
-    # DuckDB scenarios
     ("raw", "duckdb", "initialization"): raw_duckdb_initialization,
     ("raw", "duckdb", "write_heavy"): raw_duckdb_write_heavy,
     ("raw", "duckdb", "read_heavy"): raw_duckdb_read_heavy,
@@ -2914,7 +4517,6 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "duckdb", "read_heavy"): sqlalchemy_duckdb_read_heavy,
     ("sqlalchemy", "duckdb", "iterative_inserts"): sqlalchemy_duckdb_iterative_inserts,
     ("sqlalchemy", "duckdb", "repeated_queries"): sqlalchemy_duckdb_repeated_queries,
-    # Aiosqlite scenarios
     ("raw", "aiosqlite", "initialization"): raw_aiosqlite_initialization,
     ("raw", "aiosqlite", "write_heavy"): raw_aiosqlite_write_heavy,
     ("raw", "aiosqlite", "read_heavy"): raw_aiosqlite_read_heavy,
@@ -2940,20 +4542,20 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec", "adbc", "rows"): sqlspec_adbc_rows,
     ("raw", "duckdb", "bulk"): raw_duckdb_bulk,
     ("sqlspec", "duckdb", "bulk"): sqlspec_duckdb_bulk,
-    # PostgreSQL and CockroachDB service row scenarios
     ("raw", "psycopg_sync", "rows"): raw_psycopg_sync_rows,
     ("sqlspec", "psycopg_sync", "rows"): sqlspec_psycopg_sync_rows,
     ("raw", "psycopg_async", "rows"): raw_psycopg_async_rows,
     ("sqlspec", "psycopg_async", "rows"): sqlspec_psycopg_async_rows,
     ("raw", "asyncpg", "rows"): raw_asyncpg_rows,
     ("sqlspec", "asyncpg", "rows"): sqlspec_asyncpg_rows,
+    ("raw", "psqlpy", "rows"): raw_psqlpy_rows,
+    ("sqlspec", "psqlpy", "rows"): sqlspec_psqlpy_rows,
     ("raw", "cockroach_psycopg_sync", "rows"): raw_cockroach_psycopg_sync_rows,
     ("sqlspec", "cockroach_psycopg_sync", "rows"): sqlspec_cockroach_psycopg_sync_rows,
     ("raw", "cockroach_psycopg_async", "rows"): raw_cockroach_psycopg_async_rows,
     ("sqlspec", "cockroach_psycopg_async", "rows"): sqlspec_cockroach_psycopg_async_rows,
     ("raw", "cockroach_asyncpg", "rows"): raw_cockroach_asyncpg_rows,
     ("sqlspec", "cockroach_asyncpg", "rows"): sqlspec_cockroach_asyncpg_rows,
-    # Asyncpg scenarios
     ("raw", "asyncpg", "initialization"): raw_asyncpg_initialization,
     ("raw", "asyncpg", "write_heavy"): raw_asyncpg_write_heavy,
     ("raw", "asyncpg", "read_heavy"): raw_asyncpg_read_heavy,
@@ -2969,7 +4571,6 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlalchemy", "asyncpg", "read_heavy"): sqlalchemy_asyncpg_read_heavy,
     ("sqlalchemy", "asyncpg", "iterative_inserts"): sqlalchemy_asyncpg_iterative_inserts,
     ("sqlalchemy", "asyncpg", "repeated_queries"): sqlalchemy_asyncpg_repeated_queries,
-    # Extended SQLite scenarios (raw vs sqlspec only)
     ("raw", "sqlite", "dict_key_transform"): raw_sqlite_dict_key_transform,
     ("sqlspec", "sqlite", "dict_key_transform"): sqlspec_sqlite_dict_key_transform,
     ("raw", "sqlite", "schema_mapping"): raw_sqlite_schema_mapping,
@@ -2980,7 +4581,76 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec", "sqlite", "complex_parameters"): sqlspec_sqlite_complex_parameters,
     ("raw", "sqlite", "thin_path_stress"): raw_sqlite_thin_path_stress,
     ("sqlspec", "sqlite", "thin_path_stress"): sqlspec_sqlite_thin_path_stress,
-    # Extended Oracle LOB fetch scenarios
+    ("raw", "sqlite", "scalar_param_select"): raw_sqlite_scalar_param_select,
+    ("sqlspec", "sqlite", "scalar_param_select"): sqlspec_sqlite_scalar_param_select,
+    ("raw", "sqlite", "no_param_select"): raw_sqlite_no_param_select,
+    ("sqlspec", "sqlite", "no_param_select"): sqlspec_sqlite_no_param_select,
+    ("raw", "sqlite", "complex_query"): raw_sqlite_complex_query,
+    ("sqlspec", "sqlite", "complex_query"): sqlspec_sqlite_complex_query,
+    ("raw", "sqlite", "session_per_request"): raw_sqlite_session_per_request,
+    ("sqlspec", "sqlite", "session_per_request"): sqlspec_sqlite_session_per_request,
+    ("raw", "sqlite", "observability_select"): raw_sqlite_observability_select,
+    ("sqlspec", "sqlite", "observability_select"): sqlspec_sqlite_observability_select,
+    ("raw", "aiosqlite", "scalar_param_select"): raw_aiosqlite_scalar_param_select,
+    ("sqlspec", "aiosqlite", "scalar_param_select"): sqlspec_aiosqlite_scalar_param_select,
+    ("raw", "aiosqlite", "no_param_select"): raw_aiosqlite_no_param_select,
+    ("sqlspec", "aiosqlite", "no_param_select"): sqlspec_aiosqlite_no_param_select,
+    ("raw", "aiosqlite", "complex_query"): raw_aiosqlite_complex_query,
+    ("sqlspec", "aiosqlite", "complex_query"): sqlspec_aiosqlite_complex_query,
+    ("raw", "aiosqlite", "session_per_request"): raw_aiosqlite_session_per_request,
+    ("sqlspec", "aiosqlite", "session_per_request"): sqlspec_aiosqlite_session_per_request,
+    ("raw", "aiosqlite", "observability_select"): raw_aiosqlite_observability_select,
+    ("sqlspec", "aiosqlite", "observability_select"): sqlspec_aiosqlite_observability_select,
+    ("raw", "duckdb", "scalar_param_select"): raw_duckdb_scalar_param_select,
+    ("sqlspec", "duckdb", "scalar_param_select"): sqlspec_duckdb_scalar_param_select,
+    ("raw", "duckdb", "no_param_select"): raw_duckdb_no_param_select,
+    ("sqlspec", "duckdb", "no_param_select"): sqlspec_duckdb_no_param_select,
+    ("raw", "duckdb", "complex_query"): raw_duckdb_complex_query,
+    ("sqlspec", "duckdb", "complex_query"): sqlspec_duckdb_complex_query,
+    ("raw", "duckdb", "session_per_request"): raw_duckdb_session_per_request,
+    ("sqlspec", "duckdb", "session_per_request"): sqlspec_duckdb_session_per_request,
+    ("raw", "duckdb", "observability_select"): raw_duckdb_observability_select,
+    ("sqlspec", "duckdb", "observability_select"): sqlspec_duckdb_observability_select,
+    ("raw", "asyncpg", "scalar_param_select"): raw_asyncpg_scalar_param_select,
+    ("sqlspec", "asyncpg", "scalar_param_select"): sqlspec_asyncpg_scalar_param_select,
+    ("raw", "asyncpg", "no_param_select"): raw_asyncpg_no_param_select,
+    ("sqlspec", "asyncpg", "no_param_select"): sqlspec_asyncpg_no_param_select,
+    ("raw", "asyncpg", "complex_query"): raw_asyncpg_complex_query,
+    ("sqlspec", "asyncpg", "complex_query"): sqlspec_asyncpg_complex_query,
+    ("raw", "asyncpg", "session_per_request"): raw_asyncpg_session_per_request,
+    ("sqlspec", "asyncpg", "session_per_request"): sqlspec_asyncpg_session_per_request,
+    ("raw", "asyncpg", "observability_select"): raw_asyncpg_observability_select,
+    ("sqlspec", "asyncpg", "observability_select"): sqlspec_asyncpg_observability_select,
+    ("raw", "psycopg_sync", "scalar_param_select"): raw_psycopg_sync_scalar_param_select,
+    ("sqlspec", "psycopg_sync", "scalar_param_select"): sqlspec_psycopg_sync_scalar_param_select,
+    ("raw", "psycopg_sync", "no_param_select"): raw_psycopg_sync_no_param_select,
+    ("sqlspec", "psycopg_sync", "no_param_select"): sqlspec_psycopg_sync_no_param_select,
+    ("raw", "psycopg_sync", "complex_query"): raw_psycopg_sync_complex_query,
+    ("sqlspec", "psycopg_sync", "complex_query"): sqlspec_psycopg_sync_complex_query,
+    ("raw", "psycopg_sync", "session_per_request"): raw_psycopg_sync_session_per_request,
+    ("sqlspec", "psycopg_sync", "session_per_request"): sqlspec_psycopg_sync_session_per_request,
+    ("raw", "psycopg_sync", "observability_select"): raw_psycopg_sync_observability_select,
+    ("sqlspec", "psycopg_sync", "observability_select"): sqlspec_psycopg_sync_observability_select,
+    ("raw", "psycopg_async", "scalar_param_select"): raw_psycopg_async_scalar_param_select,
+    ("sqlspec", "psycopg_async", "scalar_param_select"): sqlspec_psycopg_async_scalar_param_select,
+    ("raw", "psycopg_async", "no_param_select"): raw_psycopg_async_no_param_select,
+    ("sqlspec", "psycopg_async", "no_param_select"): sqlspec_psycopg_async_no_param_select,
+    ("raw", "psycopg_async", "complex_query"): raw_psycopg_async_complex_query,
+    ("sqlspec", "psycopg_async", "complex_query"): sqlspec_psycopg_async_complex_query,
+    ("raw", "psycopg_async", "session_per_request"): raw_psycopg_async_session_per_request,
+    ("sqlspec", "psycopg_async", "session_per_request"): sqlspec_psycopg_async_session_per_request,
+    ("raw", "psycopg_async", "observability_select"): raw_psycopg_async_observability_select,
+    ("sqlspec", "psycopg_async", "observability_select"): sqlspec_psycopg_async_observability_select,
+    ("raw", "psqlpy", "scalar_param_select"): raw_psqlpy_scalar_param_select,
+    ("sqlspec", "psqlpy", "scalar_param_select"): sqlspec_psqlpy_scalar_param_select,
+    ("raw", "psqlpy", "no_param_select"): raw_psqlpy_no_param_select,
+    ("sqlspec", "psqlpy", "no_param_select"): sqlspec_psqlpy_no_param_select,
+    ("raw", "psqlpy", "complex_query"): raw_psqlpy_complex_query,
+    ("sqlspec", "psqlpy", "complex_query"): sqlspec_psqlpy_complex_query,
+    ("raw", "psqlpy", "session_per_request"): raw_psqlpy_session_per_request,
+    ("sqlspec", "psqlpy", "session_per_request"): sqlspec_psqlpy_session_per_request,
+    ("raw", "psqlpy", "observability_select"): raw_psqlpy_observability_select,
+    ("sqlspec", "psqlpy", "observability_select"): sqlspec_psqlpy_observability_select,
     ("raw", "oracle", "lob_fetch_1k"): raw_oracle_lob_fetch_1k,
     ("raw", "oracle", "lob_fetch_100k"): raw_oracle_lob_fetch_100k,
     ("sqlspec", "oracle", "lob_fetch_1k"): sqlspec_oracle_lob_fetch_1k,
@@ -2994,48 +4664,22 @@ SCENARIO_REGISTRY: dict[tuple[str, str, str], Any] = {
     ("sqlspec_native_json", "oracle", "json_write"): sqlspec_oracle_native_json_write,
     ("sqlspec_serialized_json", "oracle", "json_write"): sqlspec_oracle_serialized_json_write,
     ("sqlspec", "oracle", "json_read"): sqlspec_oracle_json_read,
+    ("raw", "oracle", "scalar_param_select"): raw_oracle_scalar_param_select,
+    ("sqlspec", "oracle", "scalar_param_select"): sqlspec_oracle_scalar_param_select,
+    ("sqlspec_async", "oracle", "scalar_param_select"): sqlspec_oracle_async_scalar_param_select,
+    ("raw", "oracle", "no_param_select"): raw_oracle_no_param_select,
+    ("sqlspec", "oracle", "no_param_select"): sqlspec_oracle_no_param_select,
+    ("sqlspec_async", "oracle", "no_param_select"): sqlspec_oracle_async_no_param_select,
+    ("raw", "oracle", "complex_query"): raw_oracle_complex_query,
+    ("sqlspec", "oracle", "complex_query"): sqlspec_oracle_complex_query,
+    ("sqlspec_async", "oracle", "complex_query"): sqlspec_oracle_async_complex_query,
+    ("raw", "oracle", "session_per_request"): raw_oracle_session_per_request,
+    ("sqlspec", "oracle", "session_per_request"): sqlspec_oracle_session_per_request,
+    ("sqlspec_async", "oracle", "session_per_request"): sqlspec_oracle_async_session_per_request,
+    ("raw", "oracle", "observability_select"): raw_oracle_observability_select,
+    ("sqlspec", "oracle", "observability_select"): sqlspec_oracle_observability_select,
+    ("sqlspec_async", "oracle", "observability_select"): sqlspec_oracle_async_observability_select,
 }
-
-
-def print_benchmark_table(results: list[dict[str, Any]]) -> None:
-    console = Console()
-    table = Table(title="Benchmark Results")
-    table.add_column("Driver", style="cyan", no_wrap=True)
-    table.add_column("Library", style="magenta")
-    table.add_column("Scenario", style="green")
-    table.add_column("Time (s)", justify="right", style="yellow")
-    table.add_column("Stddev", justify="right")
-    table.add_column("IQR", justify="right")
-    table.add_column("Noise", justify="center")
-    table.add_column("% Slower vs Raw", justify="right", style="red")
-
-    # Check if any result has multiple iterations
-    multi_iter = any(len(row.get("times", [])) > 1 for row in results)
-
-    # Build a lookup for raw times: {(driver, scenario): time}
-    raw_times: dict[tuple[str, str], float] = {}
-    for row in results:
-        if row["library"] == "raw":
-            raw_times[row["driver"], row["scenario"]] = row["time"]
-
-    for row in results:
-        driver = row["driver"]
-        scenario = row["scenario"]
-        lib = row["library"]
-        t = row["time"]
-        times = row.get("times", [t])
-        stddev = float(row.get("stddev", 0.0))
-        iqr = float(row.get("iqr", 0.0))
-        noise = "yes" if row.get("noisy", False) else ""
-        if lib == "raw":
-            percent_slower = "---"
-        else:
-            raw_time = raw_times.get((driver, scenario))
-            percent_slower = f"{100 * (t - raw_time) / raw_time:.1f}%" if raw_time and raw_time > 0 else "n/a"
-        time_str = f"{t:.4f} ({min(times):.4f}-{max(times):.4f})" if multi_iter and len(times) > 1 else f"{t:.4f}"
-        table.add_row(driver, lib, scenario, time_str, f"{stddev:.4f}", f"{iqr:.4f}", noise, percent_slower)
-    console.print(table)
-
 
 if __name__ == "__main__":
     main()
