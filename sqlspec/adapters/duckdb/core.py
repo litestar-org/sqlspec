@@ -225,10 +225,15 @@ def resolve_rowcount(cursor: Any) -> int:
     Returns:
         Rowcount value derived from cursor output.
     """
-    with contextlib.suppress(Exception):
+    try:
         result = cursor.fetchone()
-        if result and isinstance(result, tuple) and len(result) == 1:
+    except Exception:
+        result = None
+    if result and isinstance(result, tuple) and len(result) == 1:
+        try:
             return int(result[0])
+        except (TypeError, ValueError):
+            result = None
     if has_rowcount(cursor):
         return max(cursor.rowcount, 0)
     return 0

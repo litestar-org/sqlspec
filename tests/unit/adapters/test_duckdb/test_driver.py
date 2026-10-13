@@ -5,11 +5,13 @@ from typing import Any, Self
 
 import duckdb
 import pytest
+from sqlglot import exp
 
 from sqlspec.adapters.duckdb import DuckDBConfig
 from sqlspec.core.result import SQLResult
 
 __all__ = (
+    "test_duckdb_execute_many_caches_bulk_insert_sql_fragments",
     "test_duckdb_materialization_arrow_vs_fetchall_threshold",
     "test_duckdb_native_type_contract_parity",
     "test_duckdb_unparseable_select_returns_rows_across_repeated_calls",
@@ -134,6 +136,33 @@ def test_duckdb_materialization_arrow_vs_fetchall_threshold(tmp_path: Path) -> N
                 assert counts == {"arrow": 0, "fetchall": 1}
             finally:
                 session.connection = raw_connection
+    finally:
+        config.close_pool()
+
+
+def test_duckdb_execute_many_caches_bulk_insert_sql_fragments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated execute_many bulk inserts cache (target_table, column_sql) and skip sqlglot .sql() on subsequent batches."""
+    config = DuckDBConfig(connection_config={"database": str(tmp_path / "bulk_cache.duckdb")})
+    try:
+        with config.provide_session() as session:
+            session.execute("CREATE TABLE bulk_items (id INTEGER, name VARCHAR)")
+            insert_sql = "INSERT INTO bulk_items (id, name) VALUES (?, ?)"
+            res1 = session.execute_many(insert_sql, [(1, "a"), (2, "b")])
+            assert res1.rows_affected == 2
+            cached_pair = session._cache_holder.get_bulk_insert_sql(insert_sql)
+            assert cached_pair == ("bulk_items", "id, name")
+
+            def fail_sql(*_args: Any, **_kwargs: Any) -> str:
+                msg = "exp.Expr.sql should not be called on bulk insert cache hit"
+                raise AssertionError(msg)
+
+            monkeypatch.setattr(exp.Expr, "sql", fail_sql)
+            res2 = session.execute_many(insert_sql, [(3, "c"), (4, "d")])
+            assert res2.rows_affected == 2
+            count = session.select_value("SELECT COUNT(*) FROM bulk_items")
+            assert count == 4
     finally:
         config.close_pool()
 

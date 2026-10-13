@@ -180,6 +180,7 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if prepared_parameters:
             parsed_expression = cached_statement.expression or statement._peek_expression()
             if isinstance(parsed_expression, exp.Insert) and not parsed_expression.args.get("returning"):
+                parsed_expression.meta["compiled_sql"] = sql
                 bulk_result = self._execute_bulk_insert_many(parsed_expression, prepared_parameters)
                 if bulk_result is not None:
                     return self.create_execution_result(
@@ -651,7 +652,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
             raise SQLSpecError(msg)
         return int(result[0])
 
-    def _execute_bulk_insert_many(self, expression: exp.Insert, prepared_parameters: Any) -> "DMLResult | None":
+    def _execute_bulk_insert_many(
+        self, expression: exp.Insert, prepared_parameters: Any, compiled_sql: str = ""
+    ) -> "DMLResult | None":
         """Execute a batch INSERT via Arrow registration when the payload is simple."""
         if not isinstance(prepared_parameters, list) or not prepared_parameters:
             return None
@@ -676,8 +679,15 @@ class DuckDBDriver(SyncDriverAdapterBase):
         if arrow_table is None:
             return None
 
-        target_table = table_expr.sql(dialect="duckdb")
-        column_sql = ", ".join(column.sql(dialect="duckdb") for column in expression.this.expressions)
+        cache_key = compiled_sql or (str(expression._meta.get("compiled_sql", "")) if expression._meta else "")
+        cached_sql_pair = self._cache_holder.get_bulk_insert_sql(cache_key) if cache_key else None
+        if cached_sql_pair is not None:
+            target_table, column_sql = cached_sql_pair
+        else:
+            target_table = table_expr.sql(dialect="duckdb")
+            column_sql = ", ".join(column.sql(dialect="duckdb") for column in expression.this.expressions)
+            if cache_key:
+                self._cache_holder.set_bulk_insert_sql(cache_key, (target_table, column_sql))
         temp_view = f"_sqlspec_batch_{uuid4().hex}"
         exc_handler = self.handle_database_exceptions()
         with exc_handler:
