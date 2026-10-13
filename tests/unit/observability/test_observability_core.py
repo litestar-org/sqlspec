@@ -21,6 +21,7 @@ from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.observability import (
     GCPLogFormatter,
     LifecycleDispatcher,
@@ -1026,3 +1027,39 @@ def test_observability_config_diagnostics_and_logging(caplog) -> None:
     truncated_batch, was_truncated = _maybe_truncate_parameters([[1, 2, 3, 4], [5, 6, 7, 8]], max_items=2)
     assert was_truncated is True
     assert truncated_batch == [[1, 2], [5, 6]]
+
+
+def test_fast_path_with_observability_spans_and_error_recording(tmp_path: Path) -> None:
+    """Fast-path cached query execution records spans and span exceptions when observability is active."""
+    spec = SQLSpec()
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "obs_spans.db")},
+        observability_config=ObservabilityConfig(print_sql=True),
+    )
+    spec.add_config(config)
+
+    try:
+        with spec.provide_session(config) as session:
+            span_manager = _FakeSpanManager()
+            assert session._observability is not None
+            session._observability.span_manager = cast("Any", span_manager)
+            assert session._stmt_cache_enabled is True
+
+            session.execute("CREATE TABLE t_span (id INTEGER PRIMARY KEY)")
+            span_manager.started.clear()
+            span_manager.finished.clear()
+
+            session.execute("INSERT INTO t_span (id) VALUES (?)", (1,))
+            session.execute("INSERT INTO t_span (id) VALUES (?)", (2,))
+            assert len(span_manager.finished) == 2
+            assert span_manager.finished[0].attributes["operation"] == "INSERT"
+            assert span_manager.finished[1].attributes["operation"] == "INSERT"
+            assert span_manager.finished[1].exception is None
+
+            with pytest.raises(SQLSpecError):
+                session.execute("INSERT INTO t_span (id) VALUES (?)", (1,))
+            assert len(span_manager.finished) == 3
+            assert isinstance(span_manager.finished[2].exception, SQLSpecError)
+    finally:
+        config.close_pool()
+

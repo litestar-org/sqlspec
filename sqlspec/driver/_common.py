@@ -87,7 +87,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
     from types import TracebackType
 
-    from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
+    from sqlspec.core import ArrowResult, FilterTypeT, OperationType, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
@@ -964,9 +964,8 @@ class CommonDriverAttributesMixin:
         return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
-        is_observability_idle = self._observability is None or self._observability.is_idle
         self._stmt_cache_enabled = bool(
-            self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers and is_observability_idle
+            self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers
         )
 
     def _require_capability(self, capability_flag: str) -> None:
@@ -1079,6 +1078,9 @@ class CommonDriverAttributesMixin:
             needs_rebind = True
 
         if not needs_rebind and not config._has_output_transformer:
+            runtime = self._observability
+            if runtime is not None and not runtime.is_idle:
+                return self._execute_cache_hit_observed(statement, params, cached)
             return self._execute_cache_hit(statement, params, cached)
 
         if needs_rebind:
@@ -1097,10 +1099,20 @@ class CommonDriverAttributesMixin:
         prepared = self._cached_statement(
             statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
         )
+        runtime = self._observability
+        if runtime is not None and not runtime.is_idle:
+            return self._execute_cached_statement_observed(
+                prepared, compiled_sql, rebound_params, cached.operation_type
+            )
         return self._execute_cached_statement(prepared)
 
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
+
+    def _execute_cached_statement_observed(
+        self, statement: "SQL", compiled_sql: str, execution_parameters: Any, operation: "OperationType"
+    ) -> "SQLResult | Awaitable[SQLResult]":
+        return self._execute_cached_statement(statement)
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
@@ -1115,6 +1127,11 @@ class CommonDriverAttributesMixin:
             sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
         )
         return self._execute_cached_statement(prepared)
+
+    def _execute_cache_hit_observed(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult | Awaitable[SQLResult]":
+        return self._execute_cache_hit(sql, params, cached)
 
     def _cache_statement(self, statement: "SQL") -> None:
         """Store statement in cache if eligible.

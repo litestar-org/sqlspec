@@ -1,15 +1,22 @@
 # pyright: reportPrivateUsage = false
 """Tests for SQL query caching functionality."""
 
+import sqlite3
+import threading
 from collections import UserDict
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlglot import parse_one
 
+from sqlspec import ObservabilityConfig
+from sqlspec.adapters.aiosqlite import AiosqliteConfig
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
+from sqlspec.base import SQLSpec
+from sqlspec.config import LifecycleConfig
 from sqlspec.core import (
     SQL,
     CachedStatement,
@@ -22,10 +29,12 @@ from sqlspec.core import (
     clear_all_caches,
     get_cache,
 )
+from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._processor import ParameterProcessor
 from sqlspec.driver._query_cache import CachedQuery, QueryCache
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.observability import LoggingConfig, StatementEvent
 
 
 def _make_cached(
@@ -981,8 +990,6 @@ def test_cache_statement_command_not_cached(sqlite_sync_driver: Any) -> None:
 
 def test_fast_path_shapes_sync(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
     """Parameterless and scalar/varargs positional calls route through _cached_execution while StatementFilter bypasses it."""
-    from sqlspec.core.filters import LimitOffsetFilter
-
     sqlite_sync_driver._stmt_cache_enabled = True
     sqlite_sync_driver.execute("CREATE TABLE t_shapes (id INTEGER, label TEXT)")
     sqlite_sync_driver.execute("INSERT INTO t_shapes (id, label) VALUES (?, ?)", (1, "one"))
@@ -1036,8 +1043,6 @@ def test_fast_path_shapes_sync(sqlite_sync_driver: Any, monkeypatch: Any) -> Non
 @pytest.mark.anyio
 async def test_fast_path_shapes_async(aiosqlite_async_driver: Any, monkeypatch: Any) -> None:
     """Async parameterless and scalar/varargs positional calls route through _cached_execution while StatementFilter bypasses it."""
-    from sqlspec.core.filters import LimitOffsetFilter
-
     aiosqlite_async_driver._stmt_cache_enabled = True
     await aiosqlite_async_driver.execute("CREATE TABLE t_shapes (id INTEGER, label TEXT)")
     await aiosqlite_async_driver.execute("INSERT INTO t_shapes (id, label) VALUES (?, ?)", (1, "one"))
@@ -1090,9 +1095,6 @@ async def test_fast_path_shapes_async(aiosqlite_async_driver: Any, monkeypatch: 
 
 def test_statement_cache_shared_across_sessions(tmp_path: Any, monkeypatch: Any) -> None:
     """Sessions opened from the same database config share StatementCacheHolder, QueryCache, and rebind processor."""
-    from sqlspec.adapters.sqlite import SqliteConfig
-    from sqlspec.base import SQLSpec
-
     db_file = tmp_path / "shared_cache.db"
     spec = SQLSpec()
     config = SqliteConfig(connection_config={"database": str(db_file)})
@@ -1131,12 +1133,6 @@ def test_statement_cache_shared_across_sessions(tmp_path: Any, monkeypatch: Any)
 
 def test_statement_cache_shared_across_sessions_isolated_and_thread_safe(tmp_path: Any) -> None:
     """Different configs have isolated StatementCacheHolders, standalone drivers work, and concurrent access is thread-safe."""
-    import sqlite3
-    import threading
-
-    from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
-    from sqlspec.base import SQLSpec
-
     spec = SQLSpec()
     cfg_a = SqliteConfig(connection_config={"database": str(tmp_path / "a.db")})
     cfg_b = SqliteConfig(connection_config={"database": str(tmp_path / "b.db")})
@@ -1187,5 +1183,195 @@ def test_statement_cache_shared_across_sessions_isolated_and_thread_safe(tmp_pat
         assert standalone._stmt_cache.get("SELECT ? AS v") is not None
     finally:
         raw_conn.close()
+
+
+def test_fast_path_with_observability_sync(tmp_path: Any, monkeypatch: Any) -> None:
+    """Fast path stays enabled with observability active and emits matching events and error hooks."""
+    events: list[StatementEvent] = []
+    starts: list[dict[str, Any]] = []
+    completes: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    obs = ObservabilityConfig(
+        statement_observers=(events.append,),
+        lifecycle=cast(
+            "LifecycleConfig",
+            {
+                "on_query_start": [starts.append],
+                "on_query_complete": [completes.append],
+                "on_error": [errors.append],
+            },
+        ),
+        logging=LoggingConfig(include_sql_hash=True),
+    )
+    spec = SQLSpec()
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "obs_sync.db")},
+        observability_config=obs,
+    )
+    spec.add_config(config)
+
+    try:
+        with spec.provide_session(config) as session:
+            assert session._stmt_cache_enabled is True
+            session.execute("CREATE TABLE obs_items (id INTEGER PRIMARY KEY, label TEXT)")
+
+            events.clear()
+            starts.clear()
+            completes.clear()
+            errors.clear()
+
+            hit_calls: list[str] = []
+            original_hit = type(session)._execute_cache_hit
+
+            def tracked_hit(self_driver: Any, sql: str, params: Any, cached: CachedQuery) -> Any:
+                hit_calls.append(sql)
+                return original_hit(self_driver, sql, params, cached)
+
+            monkeypatch.setattr(type(session), "_execute_cache_hit", tracked_hit)
+
+            insert_sql = "INSERT INTO obs_items (id, label) VALUES (?, ?)"
+            session.execute(insert_sql, (1, "alpha"))
+            session.execute(insert_sql, (2, "beta"))
+            assert hit_calls == [insert_sql]
+            assert len(events) == 2
+            assert len(starts) == 2
+            assert len(completes) == 2
+
+            ev1, ev2 = events[0], events[1]
+            assert ev1.sql == ev2.sql == insert_sql
+            assert ev1.driver == ev2.driver == "SqliteDriver"
+            assert ev1.operation == ev2.operation == "INSERT"
+            assert ev1.execution_mode == ev2.execution_mode
+            assert ev1.is_many == ev2.is_many is False
+            assert ev1.is_script == ev2.is_script is False
+            assert ev1.rows_affected == ev2.rows_affected == 1
+            assert ev1.sql_hash is not None
+            assert ev1.sql_hash == ev2.sql_hash
+            assert type(ev1.parameters) is type(ev2.parameters)
+            assert starts[0]["sql"] == starts[1]["sql"] == insert_sql
+            assert starts[0]["operation"] == starts[1]["operation"] == "INSERT"
+            assert completes[0]["rows_affected"] == completes[1]["rows_affected"] == 1
+
+            events.clear()
+            starts.clear()
+            completes.clear()
+            hit_calls.clear()
+
+            select_sql = "SELECT id, label FROM obs_items WHERE id = ?"
+            r1 = session.select_one(select_sql, (1,))
+            r2 = session.select_one(select_sql, (1,))
+            assert r1 == r2 == {"id": 1, "label": "alpha"}
+            assert hit_calls == [select_sql]
+            assert len(events) == 2
+            s_ev1, s_ev2 = events[0], events[1]
+            assert s_ev1.sql == s_ev2.sql == select_sql
+            assert s_ev1.parameters == s_ev2.parameters == [1]
+            assert s_ev1.driver == s_ev2.driver == "SqliteDriver"
+            assert s_ev1.operation == s_ev2.operation == "SELECT"
+            assert s_ev1.execution_mode == s_ev2.execution_mode
+            assert s_ev1.is_many == s_ev2.is_many is False
+            assert s_ev1.is_script == s_ev2.is_script is False
+            assert s_ev1.rows_affected == s_ev2.rows_affected == 1
+            assert s_ev1.sql_hash == s_ev2.sql_hash
+            assert starts[0] == starts[1]
+            assert completes[0] == completes[1]
+
+            with pytest.raises(SQLSpecError):
+                session.execute(insert_sql, (1, "duplicate"))
+            assert len(errors) == 1
+            assert isinstance(errors[0]["exception"], SQLSpecError)
+            assert errors[0]["sql"] == insert_sql
+
+            transformed_cfg = session.statement_config.replace(
+                statement_transformers=((lambda expr, ctx: (expr, ctx)),)
+            )
+            transformed_drv = SqliteDriver(connection=session.connection, statement_config=transformed_cfg)
+            assert transformed_drv._stmt_cache_enabled is False
+    finally:
+        config.close_pool()
+
+
+@pytest.mark.anyio
+async def test_fast_path_with_observability_async(tmp_path: Any, monkeypatch: Any) -> None:
+    """Async fast path stays enabled with observability active and emits matching events and error hooks."""
+    events: list[StatementEvent] = []
+    starts: list[dict[str, Any]] = []
+    completes: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    obs = ObservabilityConfig(
+        statement_observers=(events.append,),
+        lifecycle=cast(
+            "LifecycleConfig",
+            {
+                "on_query_start": [starts.append],
+                "on_query_complete": [completes.append],
+                "on_error": [errors.append],
+            },
+        ),
+        logging=LoggingConfig(include_sql_hash=True),
+    )
+    spec = SQLSpec()
+    config = AiosqliteConfig(
+        connection_config={"database": str(tmp_path / "obs_async.db")},
+        observability_config=obs,
+    )
+    spec.add_config(config)
+
+    try:
+        async with spec.provide_session(config) as session:
+            assert session._stmt_cache_enabled is True
+            await session.execute("CREATE TABLE obs_items (id INTEGER PRIMARY KEY, label TEXT)")
+
+            events.clear()
+            starts.clear()
+            completes.clear()
+            errors.clear()
+
+            hit_calls: list[str] = []
+            original_hit = type(session)._execute_cache_hit
+
+            async def tracked_hit(self_driver: Any, sql: str, params: Any, cached: CachedQuery) -> Any:
+                hit_calls.append(sql)
+                return await original_hit(self_driver, sql, params, cached)
+
+            monkeypatch.setattr(type(session), "_execute_cache_hit", tracked_hit)
+
+            insert_sql = "INSERT INTO obs_items (id, label) VALUES (?, ?)"
+            await session.execute(insert_sql, (1, "alpha"))
+            await session.execute(insert_sql, (2, "beta"))
+            assert hit_calls == [insert_sql]
+            assert len(events) == 2
+
+            select_sql = "SELECT id, label FROM obs_items WHERE id = ?"
+            events.clear()
+            starts.clear()
+            completes.clear()
+            hit_calls.clear()
+
+            r1 = await session.select_one(select_sql, (1,))
+            r2 = await session.select_one(select_sql, (1,))
+            assert r1 == r2 == {"id": 1, "label": "alpha"}
+            assert hit_calls == [select_sql]
+            assert len(events) == 2
+            s_ev1, s_ev2 = events[0], events[1]
+            assert s_ev1.sql == s_ev2.sql == select_sql
+            assert s_ev1.parameters == s_ev2.parameters == [1]
+            assert s_ev1.driver == s_ev2.driver == "AiosqliteDriver"
+            assert s_ev1.operation == s_ev2.operation == "SELECT"
+            assert s_ev1.rows_affected == s_ev2.rows_affected == 1
+            assert s_ev1.sql_hash == s_ev2.sql_hash
+            assert starts[0] == starts[1]
+            assert completes[0] == completes[1]
+
+            with pytest.raises(SQLSpecError):
+                await session.execute(insert_sql, (1, "duplicate"))
+            assert len(errors) == 1
+            assert isinstance(errors[0]["exception"], SQLSpecError)
+            assert errors[0]["sql"] == insert_sql
+    finally:
+        await config.close_pool()
+
 
 
