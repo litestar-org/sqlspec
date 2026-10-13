@@ -2,7 +2,7 @@ from typing import Any, Final, Generic, TypeVar, cast
 
 from mypy_extensions import mypyc_attr
 
-__all__ = ("TypeDispatcher",)
+__all__ = ("_NO_MATCH", "TypeDispatcher")
 
 
 T = TypeVar("T")

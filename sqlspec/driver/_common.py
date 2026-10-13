@@ -1508,10 +1508,20 @@ class CommonDriverAttributesMixin:
         if statement.is_processed:
             if statement._compiled_from_cache:
                 compiled_sql, execution_parameters = statement.compile()
-                prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
-                )
                 processed = statement.get_processed_state()
+                if (
+                    statement.is_many
+                    and isinstance(execution_parameters, list)
+                    and type(self).prepare_driver_parameters is CommonDriverAttributesMixin.prepare_driver_parameters
+                    and _many_parameters_already_prepared(
+                        execution_parameters, statement_config, processed.applied_wrap_types
+                    )
+                ):
+                    prepared_parameters: Any = execution_parameters
+                else:
+                    prepared_parameters = self.prepare_driver_parameters(
+                        execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+                    )
                 cached_statement = CachedStatement(
                     compiled_sql=compiled_sql,
                     parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
@@ -1536,12 +1546,22 @@ class CommonDriverAttributesMixin:
                 )
                 return cached_statement, prepared_parameters
 
-            prepared_parameters = self.prepare_driver_parameters(
-                processed.execution_parameters,
-                statement_config,
-                is_many=statement.is_many,
-                prepared_statement=statement,
-            )
+            if (
+                statement.is_many
+                and isinstance(processed.execution_parameters, list)
+                and type(self).prepare_driver_parameters is CommonDriverAttributesMixin.prepare_driver_parameters
+                and _many_parameters_already_prepared(
+                    processed.execution_parameters, statement_config, processed.applied_wrap_types
+                )
+            ):
+                prepared_parameters = processed.execution_parameters
+            else:
+                prepared_parameters = self.prepare_driver_parameters(
+                    processed.execution_parameters,
+                    statement_config,
+                    is_many=statement.is_many,
+                    prepared_statement=statement,
+                )
             cached_statement = CachedStatement(
                 compiled_sql=processed.compiled_sql,
                 parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
@@ -1604,9 +1624,17 @@ class CommonDriverAttributesMixin:
         compiled_sql, execution_parameters = statement.compile()
         processed = statement.get_processed_state()
 
-        prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
-        )
+        if (
+            statement.is_many
+            and isinstance(execution_parameters, list)
+            and type(self).prepare_driver_parameters is CommonDriverAttributesMixin.prepare_driver_parameters
+            and _many_parameters_already_prepared(execution_parameters, statement_config, processed.applied_wrap_types)
+        ):
+            prepared_parameters = execution_parameters
+        else:
+            prepared_parameters = self.prepare_driver_parameters(
+                execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+            )
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
@@ -2226,6 +2254,31 @@ def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supp
             raise SQLSpecError(msg)
 
 
+def _many_parameters_already_prepared(
+    parameters: "list[Any]",
+    statement_config: "StatementConfig",
+    applied_wrap_types: bool,
+) -> bool:
+    """Return True when execute_many parameters were already coerced during compile()."""
+    if statement_config.parameter_config.type_coercion_map:
+        return True
+    if applied_wrap_types:
+        return False
+    if not parameters:
+        return True
+    first = parameters[0]
+    if isinstance(first, (tuple, list)):
+        return not any(type(v) is TypedParameter for v in first)
+    if isinstance(first, dict):
+        return not any(type(v) is TypedParameter for v in first.values())
+    return type(first) is not TypedParameter
+
+
+def _row_needs_declared_default(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> bool:
+    """Return True when any optional declared parameter is missing from supplied."""
+    return any(not declaration.required and declaration.name not in supplied for declaration in declared)
+
+
 def _check_declared_parameters(sql_statement: "SQL") -> None:
     """Enforce declared-parameter contracts on a copy of the user params.
 
@@ -2240,18 +2293,28 @@ def _check_declared_parameters(sql_statement: "SQL") -> None:
     if sql_statement.is_many:
         rows = sql_statement.positional_parameters
         if rows and isinstance(rows[0], dict):
-            copied_rows: list[Any] = []
-            for row in rows:
+            copied_rows: list[Any] | None = None
+            for idx, row in enumerate(rows):
                 if isinstance(row, dict):
-                    row_copy = dict(row)
-                    _check_declared_named_row(declared, row_copy)
-                    copied_rows.append(row_copy)
-                else:
+                    if _row_needs_declared_default(declared, row):
+                        row_copy = dict(row)
+                        _check_declared_named_row(declared, row_copy)
+                        if copied_rows is None:
+                            copied_rows = list(rows[:idx])
+                        copied_rows.append(row_copy)
+                        continue
+                    _check_declared_named_row(declared, row)
+                if copied_rows is not None:
                     copied_rows.append(row)
-            sql_statement._positional_parameters = copied_rows
+            if copied_rows is not None:
+                sql_statement._positional_parameters = copied_rows
         return
     if sql_statement.positional_parameters:
         return
-    named_copy = dict(sql_statement.named_parameters)
-    _check_declared_named_row(declared, named_copy)
-    sql_statement._named_parameters = named_copy
+    named_params = sql_statement.named_parameters
+    if _row_needs_declared_default(declared, named_params):
+        named_copy = dict(named_params)
+        _check_declared_named_row(declared, named_copy)
+        sql_statement._named_parameters = named_copy
+    else:
+        _check_declared_named_row(declared, named_params)

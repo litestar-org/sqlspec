@@ -6,8 +6,11 @@ import threading
 from collections import UserDict
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager, contextmanager
+from datetime import date
+from decimal import Decimal
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
+from uuid import UUID, uuid4
 
 import pytest
 from sqlglot import parse_one
@@ -25,13 +28,18 @@ from sqlspec.core import (
     ParameterInfo,
     ParameterProfile,
     ParameterStyle,
+    ParameterStyleConfig,
     ProcessedState,
+    StatementConfig,
+    TypedParameter,
     clear_all_caches,
     get_cache,
 )
 from sqlspec.core.filters import LimitOffsetFilter
+from sqlspec.core.parameters._declared import ParameterDeclaration
 from sqlspec.core.parameters._processor import ParameterProcessor, type_coercion_fallbacks
 from sqlspec.driver._async import AsyncDriverAdapterBase
+from sqlspec.driver._common import _check_declared_parameters
 from sqlspec.driver._query_cache import CachedQuery, QueryCache
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
@@ -1537,6 +1545,129 @@ def test_precomputed_fast_path_coercion_and_rebind_processor(sqlite_sync_driver:
     copy_2.compile()
     assert copy_1._rebind_processor is not None
     assert copy_1._rebind_processor is copy_2._rebind_processor
+
+
+def test_execute_many_single_pass_parameter_preparation(sqlite_sync_driver: Any) -> None:
+    coercion_calls = 0
+
+    def coerce_decimal(val: Decimal) -> str:
+        nonlocal coercion_calls
+        coercion_calls += 1
+        return str(val)
+
+    def coerce_uuid(val: UUID) -> str:
+        nonlocal coercion_calls
+        coercion_calls += 1
+        return val.hex
+
+    def coerce_date(val: date) -> str:
+        nonlocal coercion_calls
+        coercion_calls += 1
+        return val.isoformat()
+
+    custom_cfg = StatementConfig(
+        dialect="sqlite",
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            default_execution_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON},
+            supported_execution_parameter_styles={ParameterStyle.QMARK},
+            type_coercion_map={Decimal: coerce_decimal, UUID: coerce_uuid, date: coerce_date},
+        ),
+    )
+
+    sample_uuid = uuid4()
+    sample_date = date(2026, 10, 13)
+    tuple_rows = [
+        (Decimal("10.50"), sample_uuid, sample_date, TypedParameter(7, int)),
+        (Decimal("20.75"), sample_uuid, sample_date, TypedParameter(8, int)),
+    ]
+    stmt_tuples = SQL("INSERT INTO items VALUES (?, ?, ?, ?)", tuple_rows, statement_config=custom_cfg, is_many=True)
+    stmt_tuples.compile()
+    _, prepared_tuples = sqlite_sync_driver._compiled_statement(stmt_tuples, custom_cfg)
+    assert coercion_calls == 6
+    assert prepared_tuples == [
+        ("10.50", sample_uuid.hex, "2026-10-13", 7),
+        ("20.75", sample_uuid.hex, "2026-10-13", 8),
+    ]
+
+    coercion_calls = 0
+    list_rows = [
+        [Decimal("1.00"), sample_uuid, sample_date],
+        [Decimal("2.00"), sample_uuid, sample_date],
+    ]
+    stmt_lists = SQL("INSERT INTO items VALUES (?, ?, ?)", list_rows, statement_config=custom_cfg, is_many=True)
+    stmt_lists.compile()
+    _, prepared_lists = sqlite_sync_driver._compiled_statement(stmt_lists, custom_cfg)
+    assert coercion_calls == 6
+    assert prepared_lists == [
+        ["1.00", sample_uuid.hex, "2026-10-13"],
+        ["2.00", sample_uuid.hex, "2026-10-13"],
+    ]
+
+    coercion_calls = 0
+    dict_rows = [
+        {"price": Decimal("3.50"), "uid": sample_uuid},
+        {"price": Decimal("4.50"), "uid": sample_uuid},
+    ]
+    stmt_dicts = SQL(
+        "INSERT INTO items VALUES (:price, :uid)", dict_rows, statement_config=custom_cfg, is_many=True
+    )
+    stmt_dicts.compile()
+    _, prepared_dicts = sqlite_sync_driver._compiled_statement(stmt_dicts, custom_cfg)
+    assert coercion_calls == 4
+    assert prepared_dicts == [
+        ("3.50", sample_uuid.hex),
+        ("4.50", sample_uuid.hex),
+    ]
+
+    override_calls = 0
+
+    class CustomDriver(SqliteDriver):
+        def prepare_driver_parameters(
+            self,
+            parameters: Any,
+            statement_config: StatementConfig,
+            is_many: bool = False,
+            prepared_statement: Any | None = None,
+        ) -> Any:
+            nonlocal override_calls
+            override_calls += 1
+            return super().prepare_driver_parameters(
+                parameters, statement_config, is_many=is_many, prepared_statement=prepared_statement
+            )
+
+    custom_driver = CustomDriver(
+        connection=sqlite_sync_driver.connection,
+        statement_config=custom_cfg,
+        driver_features=sqlite_sync_driver.driver_features,
+    )
+    stmt_override = SQL("INSERT INTO items VALUES (?, ?, ?)", list_rows, statement_config=custom_cfg, is_many=True)
+    stmt_override.compile()
+    custom_driver._compiled_statement(stmt_override, custom_cfg)
+    assert override_calls == 1
+
+
+def test_declared_parameters_execute_many_copies_only_when_default_missing() -> None:
+    declarations = (
+        ParameterDeclaration(name="id", type_str="int", required=True),
+        ParameterDeclaration(name="note", type_str="str", required=False),
+    )
+    row_complete = {"id": 1, "note": "present"}
+    row_missing = {"id": 2}
+    stmt = SQL(
+        "INSERT INTO items VALUES (:id, :note)",
+        [row_complete, row_missing],
+        is_many=True,
+        declared_parameters=declarations,
+    )
+    _check_declared_parameters(stmt)
+    rows = stmt.positional_parameters
+    assert rows[0] is row_complete
+    assert rows[1] is not row_missing
+    assert rows[1] == {"id": 2, "note": None}
+    assert "note" not in row_missing
+
 
 
 

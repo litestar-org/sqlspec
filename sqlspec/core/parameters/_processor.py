@@ -30,7 +30,7 @@ from sqlspec.core.parameters._types import (
 )
 from sqlspec.core.parameters._validator import ParameterValidator, unescape_qmark_operator
 from sqlspec.exceptions import SQLSpecError
-from sqlspec.utils.dispatch import TypeDispatcher
+from sqlspec.utils.dispatch import _NO_MATCH, TypeDispatcher
 
 _OCCURRENCE_KEYED_STYLE_VALUES: "frozenset[str]" = frozenset({
     ParameterStyle.QMARK.value,
@@ -53,6 +53,9 @@ _EXECUTE_MANY_SAMPLE_SIZE: Final[int] = 3
 _FALLBACK_CACHE_MAX_SIZE: Final[int] = 256
 
 _TYPE_COERCION_DISPATCHERS: Final[dict[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]] = {}
+_TYPE_COERCION_DISPATCHERS_BY_ID: Final[
+    dict[int, tuple[tuple[TypeCoercionFallback, ...], TypeDispatcher[Callable[[Any], Any]]]]
+] = {}
 _TYPE_COERCION_FALLBACKS_CACHE: Final[
     dict[int, tuple[dict[type, Callable[[Any], Any]], int, tuple[TypeCoercionFallback, ...]]]
 ] = {}
@@ -958,13 +961,24 @@ def type_coercion_dispatcher(
     fallback_items: "tuple[TypeCoercionFallback, ...]",
 ) -> "TypeDispatcher[Callable[[Any], Any]]":
     """Return the process-wide dispatcher registered for the fallback items."""
+    items_id = id(fallback_items)
+    cached_by_id = _TYPE_COERCION_DISPATCHERS_BY_ID.get(items_id)
+    if cached_by_id is not None and cached_by_id[0] is fallback_items:
+        return cached_by_id[1]
+
     dispatcher = _TYPE_COERCION_DISPATCHERS.get(fallback_items)
     if dispatcher is not None:
+        if len(_TYPE_COERCION_DISPATCHERS_BY_ID) >= _FALLBACK_CACHE_MAX_SIZE:
+            _TYPE_COERCION_DISPATCHERS_BY_ID.clear()
+        _TYPE_COERCION_DISPATCHERS_BY_ID[items_id] = (fallback_items, dispatcher)
         return dispatcher
 
     dispatcher = TypeDispatcher["Callable[[Any], Any]"]()
     dispatcher.register_all(fallback_items)
     _TYPE_COERCION_DISPATCHERS[fallback_items] = dispatcher
+    if len(_TYPE_COERCION_DISPATCHERS_BY_ID) >= _FALLBACK_CACHE_MAX_SIZE:
+        _TYPE_COERCION_DISPATCHERS_BY_ID.clear()
+    _TYPE_COERCION_DISPATCHERS_BY_ID[items_id] = (fallback_items, dispatcher)
     return dispatcher
 
 
@@ -1054,9 +1068,22 @@ def _coerce_sequence_if_needed(
     seq_value: "Sequence[Any]",
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
+    dispatcher: "TypeDispatcher[Callable[[Any], Any]] | None" = None,
 ) -> "Sequence[Any] | list[Any]":
+    if dispatcher is None and fallback_items:
+        dispatcher = type_coercion_dispatcher(fallback_items)
+    dispatcher_cache = dispatcher._cache if dispatcher is not None else None
     updated_seq: list[Any] | None = None
     for idx, item in enumerate(seq_value):
+        if updated_seq is None:
+            if item is None:
+                continue
+            item_type = type(item)
+            if item_type is not TypedParameter and item_type not in type_coercion_map:
+                if dispatcher_cache is None or dispatcher_cache.get(item_type) is _NO_MATCH:
+                    continue
+                if dispatcher is not None and dispatcher.resolve_type(item_type) is None:
+                    continue
         coerced_value = _coerce_parameter_value(item, type_coercion_map, fallback_items)
         if updated_seq is None:
             if coerced_value is item:
@@ -1072,9 +1099,22 @@ def _coerce_mapping_if_needed(
     mapping: "Mapping[Any, Any]",
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
+    dispatcher: "TypeDispatcher[Callable[[Any], Any]] | None" = None,
 ) -> "Mapping[Any, Any] | dict[Any, Any]":
+    if dispatcher is None and fallback_items:
+        dispatcher = type_coercion_dispatcher(fallback_items)
+    dispatcher_cache = dispatcher._cache if dispatcher is not None else None
     updated_mapping: dict[Any, Any] | None = None
     for key, val in mapping.items():
+        if updated_mapping is None:
+            if val is None:
+                continue
+            val_type = type(val)
+            if val_type is not TypedParameter and val_type not in type_coercion_map:
+                if dispatcher_cache is None or dispatcher_cache.get(val_type) is _NO_MATCH:
+                    continue
+                if dispatcher is not None and dispatcher.resolve_type(val_type) is None:
+                    continue
         coerced_value = _coerce_parameter_value(val, type_coercion_map, fallback_items)
         if updated_mapping is None:
             if coerced_value is val:
@@ -1090,26 +1130,29 @@ def _coerce_parameter_set(
     param_set: object,
     type_coercion_map: "dict[type, Callable[[Any], Any]]",
     fallback_items: "tuple[TypeCoercionFallback, ...]",
+    dispatcher: "TypeDispatcher[Callable[[Any], Any]] | None" = None,
 ) -> object:
     param_type = type(param_set)
     if param_type is list:
-        return _coerce_sequence_if_needed(cast("list[Any]", param_set), type_coercion_map, fallback_items)
+        return _coerce_sequence_if_needed(cast("list[Any]", param_set), type_coercion_map, fallback_items, dispatcher)
     if param_type is tuple:
         seq_value = cast("tuple[Any, ...]", param_set)
-        coerced_seq = _coerce_sequence_if_needed(seq_value, type_coercion_map, fallback_items)
+        coerced_seq = _coerce_sequence_if_needed(seq_value, type_coercion_map, fallback_items, dispatcher)
         if coerced_seq is seq_value:
             return seq_value
         return tuple(cast("list[Any]", coerced_seq))
     if param_type is dict:
-        return _coerce_mapping_if_needed(cast("dict[Any, Any]", param_set), type_coercion_map, fallback_items)
+        return _coerce_mapping_if_needed(
+            cast("dict[Any, Any]", param_set), type_coercion_map, fallback_items, dispatcher
+        )
     if isinstance(param_set, Sequence) and not isinstance(param_set, (str, bytes)):
         seq_fallback = param_set
-        coerced_seq = _coerce_sequence_if_needed(seq_fallback, type_coercion_map, fallback_items)
+        coerced_seq = _coerce_sequence_if_needed(seq_fallback, type_coercion_map, fallback_items, dispatcher)
         if coerced_seq is seq_fallback:
             return param_set
         return coerced_seq
     if isinstance(param_set, Mapping):
-        coerced_mapping = _coerce_mapping_if_needed(param_set, type_coercion_map, fallback_items)
+        coerced_mapping = _coerce_mapping_if_needed(param_set, type_coercion_map, fallback_items, dispatcher)
         if coerced_mapping is param_set:
             return param_set
         return coerced_mapping
@@ -1122,13 +1165,14 @@ def _coerce_parameters_payload(
     fallback_items: "tuple[TypeCoercionFallback, ...]",
     is_many: bool,
 ) -> object:
+    dispatcher = type_coercion_dispatcher(fallback_items) if fallback_items else None
     param_type = type(parameters)
     if param_type is list:
         seq_params = cast("list[Any]", parameters)
         if is_many:
             updated_many: list[Any] | None = None
             for idx, param_set in enumerate(seq_params):
-                coerced_set = _coerce_parameter_set(param_set, type_coercion_map, fallback_items)
+                coerced_set = _coerce_parameter_set(param_set, type_coercion_map, fallback_items, dispatcher)
                 if updated_many is None:
                     if coerced_set is param_set:
                         continue
@@ -1137,23 +1181,28 @@ def _coerce_parameters_payload(
             if updated_many is None:
                 return seq_params
             return updated_many
-        return _coerce_sequence_if_needed(seq_params, type_coercion_map, fallback_items)
+        return _coerce_sequence_if_needed(seq_params, type_coercion_map, fallback_items, dispatcher)
     if param_type is tuple:
         tuple_params = cast("tuple[Any, ...]", parameters)
         if is_many:
-            return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in tuple_params]
-        coerced_tuple = _coerce_sequence_if_needed(tuple_params, type_coercion_map, fallback_items)
+            return [
+                _coerce_parameter_set(param_set, type_coercion_map, fallback_items, dispatcher)
+                for param_set in tuple_params
+            ]
+        coerced_tuple = _coerce_sequence_if_needed(tuple_params, type_coercion_map, fallback_items, dispatcher)
         return list(coerced_tuple)
     if param_type is dict:
         dict_params = cast("dict[Any, Any]", parameters)
-        return _coerce_mapping_if_needed(dict_params, type_coercion_map, fallback_items)
+        return _coerce_mapping_if_needed(dict_params, type_coercion_map, fallback_items, dispatcher)
     if is_many and isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        return [_coerce_parameter_set(param_set, type_coercion_map, fallback_items) for param_set in parameters]
+        return [
+            _coerce_parameter_set(param_set, type_coercion_map, fallback_items, dispatcher) for param_set in parameters
+        ]
     if isinstance(parameters, Sequence) and not isinstance(parameters, (str, bytes)):
-        coerced_sequence = _coerce_sequence_if_needed(parameters, type_coercion_map, fallback_items)
+        coerced_sequence = _coerce_sequence_if_needed(parameters, type_coercion_map, fallback_items, dispatcher)
         return list(coerced_sequence)
     if isinstance(parameters, Mapping):
-        coerced_mapping = _coerce_mapping_if_needed(parameters, type_coercion_map, fallback_items)
+        coerced_mapping = _coerce_mapping_if_needed(parameters, type_coercion_map, fallback_items, dispatcher)
         return dict(coerced_mapping)
     return _coerce_parameter_value(parameters, type_coercion_map, fallback_items)
 
