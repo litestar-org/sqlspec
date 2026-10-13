@@ -1,6 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 import logging
+import sys
 from abc import abstractmethod
 from inspect import isawaitable
 from time import perf_counter
@@ -248,13 +249,21 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
             if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
-                result = await self._run_with_exception_handler(
-                    exc_handler,
-                    self._dispatch_statement_with_cursor,
-                    connection,
-                    statement,
-                    has_execution_parameters=bool(execution_parameters),
-                )
+                if sys.exc_info()[1] is None:
+                    async with exc_handler:
+                        result = await self._dispatch_statement_with_cursor(
+                            connection,
+                            statement,
+                            has_execution_parameters=bool(execution_parameters),
+                        )
+                else:
+                    result = await self._run_with_exception_handler(
+                        exc_handler,
+                        self._dispatch_statement_with_cursor,
+                        connection,
+                        statement,
+                        has_execution_parameters=bool(execution_parameters),
+                    )
                 self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result
@@ -1535,13 +1544,21 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
-            result = await self._run_with_exception_handler(
-                exc_handler,
-                self._dispatch_statement_with_cursor,
-                connection,
-                statement,
-                has_execution_parameters=has_execution_parameters,
-            )
+            if sys.exc_info()[1] is None:
+                async with exc_handler:
+                    result = await self._dispatch_statement_with_cursor(
+                        connection,
+                        statement,
+                        has_execution_parameters=has_execution_parameters,
+                    )
+            else:
+                result = await self._run_with_exception_handler(
+                    exc_handler,
+                    self._dispatch_statement_with_cursor,
+                    connection,
+                    statement,
+                    has_execution_parameters=has_execution_parameters,
+                )
         except Exception as exc:  # pragma: no cover
             _raise_database_exception(exc_handler, exc)
         if exc_handler.pending_exception is not None:
@@ -1569,9 +1586,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
-        result = await self._run_with_exception_handler(
-            exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
-        )
+        if sys.exc_info()[1] is None:
+            async with exc_handler:
+                result = await self._execute_cache_hit_with_cursor(sql, params, cached)
+        else:
+            result = await self._run_with_exception_handler(
+                exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
+            )
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
@@ -1619,9 +1640,13 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
-            result = await self._run_with_exception_handler(
-                exc_handler, self._execute_cached_statement_with_cursor, statement
-            )
+            if sys.exc_info()[1] is None:
+                async with exc_handler:
+                    result = await self._execute_cached_statement_with_cursor(statement)
+            else:
+                result = await self._run_with_exception_handler(
+                    exc_handler, self._execute_cached_statement_with_cursor, statement
+                )
 
             self._check_pending_exception(exc_handler)
             assert result is not None

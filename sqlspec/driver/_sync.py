@@ -1,6 +1,7 @@
 """Synchronous driver protocol implementation."""
 
 import logging
+import sys
 from abc import abstractmethod
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, Self, TypeVar, cast, final, overload
@@ -212,13 +213,21 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
             if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
-                result = self._run_with_exception_handler(
-                    exc_handler,
-                    self._dispatch_statement_with_cursor,
-                    connection,
-                    statement,
-                    has_execution_parameters=bool(execution_parameters),
-                )
+                if sys.exc_info()[1] is None:
+                    with exc_handler:
+                        result = self._dispatch_statement_with_cursor(
+                            connection,
+                            statement,
+                            has_execution_parameters=bool(execution_parameters),
+                        )
+                else:
+                    result = self._run_with_exception_handler(
+                        exc_handler,
+                        self._dispatch_statement_with_cursor,
+                        connection,
+                        statement,
+                        has_execution_parameters=bool(execution_parameters),
+                    )
                 self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result
@@ -1516,13 +1525,21 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
-            result = self._run_with_exception_handler(
-                exc_handler,
-                self._dispatch_statement_with_cursor,
-                connection,
-                statement,
-                has_execution_parameters=has_execution_parameters,
-            )
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    result = self._dispatch_statement_with_cursor(
+                        connection,
+                        statement,
+                        has_execution_parameters=has_execution_parameters,
+                    )
+            else:
+                result = self._run_with_exception_handler(
+                    exc_handler,
+                    self._dispatch_statement_with_cursor,
+                    connection,
+                    statement,
+                    has_execution_parameters=has_execution_parameters,
+                )
         except Exception as exc:  # pragma: no cover
             _raise_database_exception(exc_handler, exc)
         if exc_handler.pending_exception is not None:
@@ -1548,7 +1565,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQLResult or DMLResult.
         """
         exc_handler = self.handle_database_exceptions()
-        result = self._run_with_exception_handler(exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached)
+        result: SQLResult | None = None
+        if sys.exc_info()[1] is None:
+            with exc_handler:
+                result = self._execute_cache_hit_with_cursor(sql, params, cached)
+        else:
+            result = self._run_with_exception_handler(
+                exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
+            )
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
@@ -1577,10 +1601,15 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         will hit the fast path in _compiled_statement (is_processed check).
         """
         exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
         try:
-            result = self._run_with_exception_handler(
-                exc_handler, self._execute_cached_statement_with_cursor, statement
-            )
+            if sys.exc_info()[1] is None:
+                with exc_handler:
+                    result = self._execute_cached_statement_with_cursor(statement)
+            else:
+                result = self._run_with_exception_handler(
+                    exc_handler, self._execute_cached_statement_with_cursor, statement
+                )
             self._check_pending_exception(exc_handler)
             assert result is not None
             return result

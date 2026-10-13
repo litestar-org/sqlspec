@@ -31,6 +31,7 @@ from sqlspec.core import (
 )
 from sqlspec.core.filters import LimitOffsetFilter
 from sqlspec.core.parameters._processor import ParameterProcessor
+from sqlspec.driver._async import AsyncDriverAdapterBase
 from sqlspec.driver._query_cache import CachedQuery, QueryCache
 from sqlspec.driver._sync import SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
@@ -1439,6 +1440,72 @@ async def test_fast_path_select_lazy_statement_materialization_async(aiosqlite_a
     assert stmt2.operation_type == "SELECT"
     assert stmt1._processed_state.execution_parameters == (1,)
     assert stmt2._processed_state.execution_parameters == (2,)
+
+
+def test_fast_path_ambient_exception_isolation_sync(cached_sync_cursor: Any, monkeypatch: Any) -> None:
+    driver, _cursor, _statements, _fallback = cached_sync_cursor
+    sql = "SELECT ? AS value"
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+    )
+
+    helper_calls = 0
+    original_helper = driver._run_with_exception_handler
+
+    def tracked_helper(exc_handler: Any, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal helper_calls
+        helper_calls += 1
+        return original_helper(exc_handler, fn, *args, **kwargs)
+
+    monkeypatch.setattr(driver, "_run_with_exception_handler", tracked_helper)
+
+    res_normal = SyncDriverAdapterBase._execute_cache_hit(driver, sql, ("normal",), cached)
+    assert res_normal.one() == {"value": "normal"}
+    assert helper_calls == 0
+
+    try:
+        raise ValueError("ambient")
+    except ValueError:
+        res_ambient = SyncDriverAdapterBase._execute_cache_hit(driver, sql, ("ambient",), cached)
+        assert res_ambient.one() == {"value": "ambient"}
+        assert helper_calls == 1
+
+
+@pytest.mark.anyio
+async def test_fast_path_ambient_exception_isolation_async(cached_async_cursor: Any, monkeypatch: Any) -> None:
+    driver, _cursor, _statements, _fallback = cached_async_cursor
+    sql = "SELECT ? AS value"
+    cached = _make_cached(
+        compiled_sql=sql,
+        param_count=1,
+        operation_type="SELECT",
+        operation_profile=OperationProfile(returns_rows=True, modifies_rows=False),
+    )
+
+    helper_calls = 0
+    original_helper = driver._run_with_exception_handler
+
+    async def tracked_helper(exc_handler: Any, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal helper_calls
+        helper_calls += 1
+        return await original_helper(exc_handler, fn, *args, **kwargs)
+
+    monkeypatch.setattr(driver, "_run_with_exception_handler", tracked_helper)
+
+    res_normal = await AsyncDriverAdapterBase._execute_cache_hit(driver, sql, ("normal",), cached)
+    assert res_normal.one() == {"value": "normal"}
+    assert helper_calls == 0
+
+    try:
+        raise ValueError("ambient")
+    except ValueError:
+        res_ambient = await AsyncDriverAdapterBase._execute_cache_hit(driver, sql, ("ambient",), cached)
+        assert res_ambient.one() == {"value": "ambient"}
+        assert helper_calls == 1
+
 
 
 
