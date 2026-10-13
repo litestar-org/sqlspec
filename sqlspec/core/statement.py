@@ -402,7 +402,17 @@ class SQL:
             return mixed[1]
         if self._named_parameters:
             return self._named_parameters
-        return self._positional_parameters or []
+        if self._positional_parameters:
+            return self._positional_parameters
+        if self._is_cache_direct and self._processed_state is not Empty:
+            exec_params = self._processed_state.execution_parameters
+            if isinstance(exec_params, dict):
+                return exec_params
+            if isinstance(exec_params, tuple):
+                return list(exec_params)
+            if isinstance(exec_params, list):
+                return exec_params
+        return []
 
     @property
     def positional_parameters(self) -> "list[Any]":

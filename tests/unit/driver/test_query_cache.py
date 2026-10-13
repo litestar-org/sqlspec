@@ -489,7 +489,7 @@ def cached_sync_cursor(sqlite_sync_driver: Any, monkeypatch: Any) -> Generator[A
     cursor = Mock(spec=["execute", "fetchall", "rowcount", "description"])
     cursor.rowcount = 0
 
-    def execute(sql: str, params: Any) -> None:
+    def execute(sql: str, params: Any = ()) -> None:
         raw_cursor.execute(sql, params)
         cursor.description = raw_cursor.description
         cursor.rowcount = raw_cursor.rowcount
@@ -621,7 +621,7 @@ def cached_async_cursor(
     cursor = Mock(spec=["execute", "fetchall", "rowcount", "description"])
     cursor.rowcount = 0
 
-    def execute(sql: str, params: Any) -> None:
+    def execute(sql: str, params: Any = ()) -> None:
         raw_cursor.execute(sql, params)
         cursor.description = raw_cursor.description
         cursor.rowcount = raw_cursor.rowcount
@@ -977,3 +977,113 @@ def test_cache_statement_command_not_cached(sqlite_sync_driver: Any) -> None:
     command_stmt.compile()
     sqlite_sync_driver._cache_statement(command_stmt)
     assert sqlite_sync_driver._stmt_cache.get("VACUUM") is None
+
+
+def test_fast_path_shapes_sync(sqlite_sync_driver: Any, monkeypatch: Any) -> None:
+    """Parameterless and scalar/varargs positional calls route through _cached_execution while StatementFilter bypasses it."""
+    from sqlspec.core.filters import LimitOffsetFilter
+
+    sqlite_sync_driver._stmt_cache_enabled = True
+    sqlite_sync_driver.execute("CREATE TABLE t_shapes (id INTEGER, label TEXT)")
+    sqlite_sync_driver.execute("INSERT INTO t_shapes (id, label) VALUES (?, ?)", (1, "one"))
+
+    cache_hits: list[str] = []
+    original_hit = sqlite_sync_driver._execute_cache_hit
+
+    def tracked_hit(sql: str, params: Any, cached: CachedQuery) -> Any:
+        cache_hits.append(sql)
+        return original_hit(sql, params, cached)
+
+    monkeypatch.setattr(sqlite_sync_driver, "_execute_cache_hit", tracked_hit)
+
+    r1_no_param = sqlite_sync_driver.execute("SELECT 1 AS v")
+    r2_no_param = sqlite_sync_driver.execute("SELECT 1 AS v")
+    assert r1_no_param.get_data() == r2_no_param.get_data() == [{"v": 1}]
+    assert "SELECT 1 AS v" in cache_hits
+
+    cache_hits.clear()
+    assert sqlite_sync_driver.select_value("SELECT ? AS v", 42) == 42
+    assert sqlite_sync_driver.select_value("SELECT ? AS v", 99) == 99
+    assert "SELECT ? AS v" in cache_hits
+
+    cache_hits.clear()
+    assert sqlite_sync_driver.select_value("SELECT ? AS s", "hello") == "hello"
+    assert sqlite_sync_driver.select_value("SELECT ? AS s", "world") == "world"
+    assert "SELECT ? AS s" in cache_hits
+
+    cache_hits.clear()
+    assert sqlite_sync_driver.select_value("SELECT ? AS b", b"bytes") == b"bytes"
+    assert sqlite_sync_driver.select_value("SELECT ? AS b", b"more") == b"more"
+    assert "SELECT ? AS b" in cache_hits
+
+    cache_hits.clear()
+    assert sqlite_sync_driver.select_value("SELECT ? AS n", None) is None
+    assert sqlite_sync_driver.select_value("SELECT ? AS n", None) is None
+    assert "SELECT ? AS n" in cache_hits
+
+    cache_hits.clear()
+    assert sqlite_sync_driver.select_one("SELECT ? AS a, ? AS b", 1, "two") == {"a": 1, "b": "two"}
+    assert sqlite_sync_driver.select_one("SELECT ? AS a, ? AS b", 3, "four") == {"a": 3, "b": "four"}
+    assert "SELECT ? AS a, ? AS b" in cache_hits
+
+    cache_hits.clear()
+    r1_filtered = sqlite_sync_driver.execute("SELECT id, label FROM t_shapes", LimitOffsetFilter(10, 0))
+    r2_filtered = sqlite_sync_driver.execute("SELECT id, label FROM t_shapes", LimitOffsetFilter(10, 0))
+    assert r1_filtered.get_data() == r2_filtered.get_data() == [{"id": 1, "label": "one"}]
+    assert cache_hits == []
+
+
+@pytest.mark.anyio
+async def test_fast_path_shapes_async(aiosqlite_async_driver: Any, monkeypatch: Any) -> None:
+    """Async parameterless and scalar/varargs positional calls route through _cached_execution while StatementFilter bypasses it."""
+    from sqlspec.core.filters import LimitOffsetFilter
+
+    aiosqlite_async_driver._stmt_cache_enabled = True
+    await aiosqlite_async_driver.execute("CREATE TABLE t_shapes (id INTEGER, label TEXT)")
+    await aiosqlite_async_driver.execute("INSERT INTO t_shapes (id, label) VALUES (?, ?)", (1, "one"))
+
+    cache_hits: list[str] = []
+    original_hit = aiosqlite_async_driver._execute_cache_hit
+
+    async def tracked_hit(sql: str, params: Any, cached: CachedQuery) -> Any:
+        cache_hits.append(sql)
+        return await original_hit(sql, params, cached)
+
+    monkeypatch.setattr(aiosqlite_async_driver, "_execute_cache_hit", tracked_hit)
+
+    r1_no_param = await aiosqlite_async_driver.execute("SELECT 1 AS v")
+    r2_no_param = await aiosqlite_async_driver.execute("SELECT 1 AS v")
+    assert r1_no_param.get_data() == r2_no_param.get_data() == [{"v": 1}]
+    assert "SELECT 1 AS v" in cache_hits
+
+    cache_hits.clear()
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS v", 42) == 42
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS v", 99) == 99
+    assert "SELECT ? AS v" in cache_hits
+
+    cache_hits.clear()
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS s", "hello") == "hello"
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS s", "world") == "world"
+    assert "SELECT ? AS s" in cache_hits
+
+    cache_hits.clear()
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS b", b"bytes") == b"bytes"
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS b", b"more") == b"more"
+    assert "SELECT ? AS b" in cache_hits
+
+    cache_hits.clear()
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS n", None) is None
+    assert await aiosqlite_async_driver.select_value("SELECT ? AS n", None) is None
+    assert "SELECT ? AS n" in cache_hits
+
+    cache_hits.clear()
+    assert await aiosqlite_async_driver.select_one("SELECT ? AS a, ? AS b", 1, "two") == {"a": 1, "b": "two"}
+    assert await aiosqlite_async_driver.select_one("SELECT ? AS a, ? AS b", 3, "four") == {"a": 3, "b": "four"}
+    assert "SELECT ? AS a, ? AS b" in cache_hits
+
+    cache_hits.clear()
+    r1_filtered = await aiosqlite_async_driver.execute("SELECT id, label FROM t_shapes", LimitOffsetFilter(10, 0))
+    r2_filtered = await aiosqlite_async_driver.execute("SELECT id, label FROM t_shapes", LimitOffsetFilter(10, 0))
+    assert r1_filtered.get_data() == r2_filtered.get_data() == [{"id": 1, "label": "one"}]
+    assert cache_hits == []
+

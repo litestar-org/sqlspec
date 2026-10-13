@@ -1892,6 +1892,30 @@ def parameter_value_needs_processing(
     return type_coercion_dispatcher(fallback_items).get(value) is not None
 
 
+def _resolve_fast_params(
+    parameters: "tuple[Any, ...]", kwargs: "dict[str, Any]"
+) -> "tuple[Any, ...] | list[Any] | dict[str, Any] | None":
+    """Normalize execute(*parameters, **kwargs) arguments for fast-path cache lookup."""
+    if kwargs:
+        if not parameters:
+            return kwargs
+        return None
+    param_len = len(parameters)
+    if param_len == 0:
+        return ()
+    if param_len == 1:
+        first = parameters[0]
+        if isinstance(first, (tuple, list, dict)):
+            return first
+        if is_statement_filter(first):
+            return None
+        return parameters
+    for item in parameters:
+        if is_statement_filter(item) or isinstance(item, (tuple, list, dict)):
+            return None
+    return parameters
+
+
 def _raise_database_exception(
     exc_handler: "AsyncExceptionHandler | SyncExceptionHandler", exc: Exception | None
 ) -> None:

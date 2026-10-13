@@ -29,6 +29,7 @@ from sqlspec.driver._common import (
     StackExecutionObserver,
     SyncExceptionHandler,
     _raise_database_exception,
+    _resolve_fast_params,
     describe_stack_statement,
     handle_single_row_error,
     validate_savepoint_name,
@@ -479,11 +480,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
-        fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
-        if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
-            fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
-        elif not parameters and kwargs:
-            fast_params = kwargs
+        fast_params = _resolve_fast_params(parameters, kwargs)
         if (
             self._stmt_cache_enabled
             and (statement_config is None or statement_config is self.statement_config)
@@ -1605,7 +1602,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 )
                 if can_use_cursor_fast_path:
                     assert execute is not None
-                    execute(cached.compiled_sql, params)
+                    if params:
+                        execute(cached.compiled_sql, params)
+                    else:
+                        execute(cached.compiled_sql)
                     if returns_rows:
                         assert fetchall is not None
                         fetched_data = fetchall()

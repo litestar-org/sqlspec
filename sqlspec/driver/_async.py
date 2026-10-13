@@ -30,6 +30,7 @@ from sqlspec.driver._common import (
     ExecutionResult,
     StackExecutionObserver,
     _raise_database_exception,
+    _resolve_fast_params,
     describe_stack_statement,
     handle_single_row_error,
     validate_savepoint_name,
@@ -1594,11 +1595,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None",
         kwargs: "dict[str, Any]",
     ) -> "SQLResult":
-        fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
-        if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
-            fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
-        elif not parameters and kwargs:
-            fast_params = kwargs
+        fast_params = _resolve_fast_params(parameters, kwargs)
         if (
             self._stmt_cache_enabled
             and (statement_config is None or statement_config is self.statement_config)
@@ -1713,7 +1710,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                 )
                 if can_use_cursor_fast_path:
                     assert execute is not None
-                    execute_result = execute(cached.compiled_sql, params)
+                    execute_result = execute(cached.compiled_sql, params) if params else execute(cached.compiled_sql)
                     if isawaitable(execute_result):
                         await execute_result
                     if cached.operation_profile.returns_rows:
