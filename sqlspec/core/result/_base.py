@@ -67,7 +67,6 @@ class StatementResult:
     DELETE, and script operations.
 
     Attributes:
-        statement: The original SQL statement that was executed.
         data: The result data from the operation.
         rows_affected: Number of rows affected by the operation.
         last_inserted_id: Last inserted ID from INSERT operations.

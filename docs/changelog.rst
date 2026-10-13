@@ -9,47 +9,80 @@ important operational fixes.
 Recent Updates
 ==============
 
-v0.67.0 - Spanner graph and hybrid search, ADK artifact stores, and Python 3.11+ baseline
------------------------------------------------------------------------------------------
+v0.67.0 - Enterprise ADBC drivers, Spanner graph and hybrid search, hot-path execution, and Python 3.11+
+--------------------------------------------------------------------------------------------------------
 
 **Added:**
 
-* Spanner and Spangres SQLGlot dialects support ``CREATE PROPERTY GRAPH`` and
-  ``CREATE OR REPLACE PROPERTY GRAPH`` DDL (with ``NODE TABLES``, ``EDGE TABLES``,
-  ``SOURCE KEY``, ``DESTINATION KEY``, ``LABEL``, and ``PROPERTIES`` clauses) as
-  well as ``GRAPH_TABLE`` queries with ``MATCH`` path patterns and ``COLUMNS``
-  projections.
-  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
-* Added ``sql.hybrid_rrf(...)`` on the ``SQL`` builder factory to generate
-  Reciprocal Rank Fusion (RRF) hybrid search queries combining full-text BM25
-  scoring and vector distance ranking on Spanner and Spangres.
-  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
-* Added Google ADK artifact store base classes (``BaseAsyncADKArtifactStore``
-  and ``BaseSyncADKArtifactStore``) and Spanner implementations
-  (``SpannerSyncADKArtifactStore`` and ``SpannerAsyncADKArtifactStore``) with
-  optional Cloud Storage URI offloading for large payloads.
-  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
-* Spanner event queue stores add a composite queue index
-  ``(channel, status, available_at)`` with ``FORCE_INDEX`` query hints, row
-  deletion TTL policies, and single-statement ``THEN RETURN`` claim execution.
-  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
-* Added Python 3.15 support across package metadata and CI test workflows.
-  (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
-* Added pure-Go GizmoData ADBC driver support in ``sqlspec.adapters.adbc`` and
-  extension stores (``ADBCStore``, ``AdbcEventQueueStore``, ``AdbcADKStore``,
-  and ``AdbcADKMemoryStore``) for Oracle (``adbc-driver-oracle``), IBM Db2
-  (``adbc-driver-db2``), native GizmoSQL (``adbc-driver-gizmosql`` with
-  ``auth_type="external"`` OAuth SSO), and DuckDB Quack (``adbc-driver-quack``).
+* ``sqlspec.adapters.adbc`` adds pure-Go GizmoData ADBC driver support for
+  Oracle (``adbc-driver-oracle``), IBM Db2 (``adbc-driver-db2``), native
+  GizmoSQL (``adbc-driver-gizmosql`` with automatic preference over
+  ``adbc-driver-flightsql``, ``gizmosql://`` URIs, and
+  ``gizmosql_auth_type="external"`` browser OAuth/SSO), and DuckDB Quack
+  (``adbc-driver-quack`` with ``quack://`` / ``quack+tls://`` URIs and
+  ``adbc.quack.token`` bearer authentication), including dialect resolution,
+  parameter binding (``:1`` positional colon for Oracle, ``?`` qmark for Db2),
+  savepoints, SQLSTATE/vendor exception mapping, and default
+  ``enable_lowercase_column_names=True`` normalization for Oracle and Db2.
   (`#839 <https://github.com/litestar-org/sqlspec/pull/839>`_)
+* ``ADBCStore`` (Litestar sessions), ``AdbcEventQueueStore`` (event channels),
+  ``AdbcADKStore``, and ``AdbcADKMemoryStore`` (Google ADK sessions and memory)
+  add Oracle (``oracle``) and IBM Db2 (``db2``) backend support with idempotent
+  DDL guards (PL/SQL ``SQLCODE`` blocks for Oracle and ``SYSCAT`` catalog probes
+  for Db2) and dialect-specific timestamps, types, and search predicates.
+  (`#839 <https://github.com/litestar-org/sqlspec/pull/839>`_)
+* Spanner and Spangres SQLGlot dialects support ``CREATE [OR REPLACE] PROPERTY
+  GRAPH [IF NOT EXISTS]`` and ``DROP PROPERTY GRAPH [IF EXISTS]`` DDL (with
+  ``NODE TABLES``, ``EDGE TABLES``, ``SOURCE KEY``, ``DESTINATION KEY``,
+  ``LABEL``, and ``PROPERTIES`` clauses), ``GRAPH_TABLE`` queries with ``MATCH``
+  path patterns and ``COLUMNS`` projections via ``graph_table()``, ``CREATE
+  VECTOR INDEX [IF NOT EXISTS] ... STORING (...)``, ``DROP VECTOR INDEX [IF
+  EXISTS]``, ``DROP SEARCH INDEX [IF EXISTS]``, ``HIDDEN`` generated column
+  constraints (``TOKENLIST AS (TOKENIZE_FULLTEXT(...)) HIDDEN``), and
+  ``approx_cosine_distance(..., options=...)``, ``snippet()``, and
+  ``score_ngrams()`` expression helpers.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* ``SpannerSyncADKMemoryStore`` and ``SpannerAsyncADKMemoryStore`` add vector
+  embedding columns (``ARRAY<FLOAT32>``) with ``CREATE VECTOR INDEX`` DDL,
+  optional ``CREATE PROPERTY GRAPH`` DDL overlays, batched ``UNNEST``
+  deduplication on ``insert_memory_entries()``, and 4-mode ``search_entries()``
+  supporting Hybrid Reciprocal Rank Fusion (RRF) combining
+  ``APPROX_COSINE_DISTANCE`` and ``SEARCH``/``SCORE``, vector similarity search,
+  full-text ``SCORE`` ranking, and case-insensitive substring fallback.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added ``SpannerSyncADKArtifactStore`` and ``SpannerAsyncADKArtifactStore``
+  implementations of ``BaseSyncADKArtifactStore`` and
+  ``BaseAsyncADKArtifactStore`` with composite primary keys
+  ``(app_name, user_id, session_id, filename, version)``, user-scoped
+  ``session_id`` normalization, and optional ``ROW DELETION POLICY`` TTL
+  cleanup.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* ``SpannerSyncEventQueueStore`` and ``SpannerAsyncEventQueueStore`` add
+  snapshot-read candidate polling (``provide_session(transaction=False)``),
+  automatic ``Aborted`` retry wrapping via ``run_in_transaction()``, native
+  ``ROW DELETION POLICY`` / ``TTL INTERVAL`` retention (``cleanup_on_ack=False``),
+  optional ``shard_id`` hash-shard prefixing (``shard_count > 1`` on
+  ``EventsConfig``), covering queue indexes (``STORING`` on GoogleSQL,
+  ``INCLUDE`` on ``spangres``), full ``spangres`` DDL generation, and
+  ``database.update_ddl()`` execution for ``create_table()`` and
+  ``drop_table()``.
+  (`#834 <https://github.com/litestar-org/sqlspec/pull/834>`_)
+* Added Python 3.15 support across package metadata, CI test matrices, and
+  ``cibuildwheel`` MyPyC wheel builds.
+  (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
 
 **Changed:**
 
-* Upgraded the minimum supported Python version to 3.11+ and modernized runtime
-  typing, ``datetime.UTC``, and ``asyncio.timeout`` usage across the codebase.
+* Upgraded the minimum supported Python version to 3.11+ (``requires-python =
+  ">=3.11, <4.0"``), removed the ``tomli`` fallback in favor of stdlib
+  ``tomllib``, and modernized ``enum.StrEnum``, ``datetime.UTC``, builtin
+  ``TimeoutError``, and stdlib ``typing`` usage across the codebase.
   (`#835 <https://github.com/litestar-org/sqlspec/pull/835>`_)
 * Standardized driver session lifecycles, statement compilation caching, SQLGlot
-  builder immutability, migration version tracking, and ADK/Litestar/Events
-  store contracts across all 20 database adapters.
+  builder immutability, migration version tracking, ``driver_features``
+  type-system coverage, PEP 562 lazy package exports, and MyPyC compilation
+  across all 20 database adapters (``core``, ``type_converter``, ``pool``, and
+  ``_typing`` modules).
   (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
 * Unified DuckDB row materialization across ``execute()``, ``select()``, and
   ``fetch*`` methods to consistently return DuckDB-native ``fetchall()`` Python
@@ -68,9 +101,15 @@ v0.67.0 - Spanner graph and hybrid search, ADK artifact stores, and Python 3.11+
 
 **Fixed:**
 
-* Hardened parameter conversion, arrow batch streaming, transaction rollback and
-  cleanup handling, exception mapping, and dialect generation across core,
-  storage, migrations, extensions, and database adapters.
+* Hardened parameter conversion, Arrow batch streaming (``adbc_ingest`` stream
+  forwarding and ``mssql_python`` batch streaming), transaction and savepoint
+  rollback recovery, ``SlotPooledStatement`` cloning on ``SQLResult.statement``,
+  ``sqlglot >= 30.22.0`` single-table ``MappingSchema`` column qualification,
+  dialect transform isolation (``Spanner``, ``Spangres``, ``DB2``, ``PGVector``,
+  and ``ParadeDB``), self-referential table dependency ordering and composite
+  foreign key introspection, Windows ``file:///D:/...`` storage URI
+  normalization, and exception mapping across core, storage, migrations,
+  extensions, and database adapters.
   (`#837 <https://github.com/litestar-org/sqlspec/pull/837>`_)
 * Prevented unparsed or ``COMMAND``/``UNKNOWN`` fallback compilations from
   populating the driver statement cache, and cached parsed target-table metadata
