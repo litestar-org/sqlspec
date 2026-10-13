@@ -994,7 +994,54 @@ def test_build_arrow_result_from_reader_reader_format() -> None:
 @pytest.mark.skipif(not PYARROW_INSTALLED, reason="pyarrow not installed")
 def test_build_arrow_result_from_reader_batches_format() -> None:
     reader = pa.table({"id": pa.array(range(5))}).to_reader()
-    result = build_arrow_result_from_reader(SQL("select 1"), reader, return_format="batches")
+    result = build_arrow_result_from_reader(SQL("select 1"), reader, return_format="reader")
+    assert result is not None
+    reader2 = pa.table({"id": pa.array(range(5))}).to_reader()
+    result2 = build_arrow_result_from_reader(SQL("select 1"), reader2, return_format="batches")
 
-    assert isinstance(result.data, list)
-    assert result.rows_affected == 5
+    assert isinstance(result2.data, list)
+    assert result2.rows_affected == 5
+
+
+@pytest.mark.parametrize(
+    ("op_type", "rows_affected", "expected"),
+    [
+        ("MERGE", 2, True),
+        ("UPSERT", 1, True),
+        ("DDL", 0, True),
+        ("DDL", -1, True),
+        ("PRAGMA", 0, True),
+        ("COPY", 5, True),
+        ("COPY_FROM", 5, True),
+        ("COPY_TO", 5, True),
+        ("COMMAND", 0, True),
+        ("COMMAND", -1, True),
+    ],
+)
+def test_sql_result_is_success_non_dml_and_merge_operations(
+    op_type: OperationType, rows_affected: int, expected: bool
+) -> None:
+    stmt = SQL("SELECT 1")
+    res = SQLResult(statement=stmt, data=[], rows_affected=rows_affected, operation_type=op_type)
+    assert res.is_success() is expected
+
+
+def test_sql_result_schema_cache_avoids_rematerialization_and_preserves_prior_dicts() -> None:
+    @dataclass
+    class Item:
+        id: int
+        name: str
+
+    stmt = SQL("SELECT id, name FROM items")
+    raw_tuples: list[Any] = [(1, "A"), (2, "B")]
+    res = SQLResult(statement=stmt, data=raw_tuples, rows_affected=2, column_names=["id", "name"], row_format="tuple")
+
+    dicts_before = res.get_data()
+    assert res._materialized_dicts is dicts_before
+    first_item = res.get_first(schema_type=Item)
+    assert first_item == Item(id=1, name="A")
+    assert res._materialized_dicts is dicts_before
+
+    items = res.get_data(schema_type=Item)
+    assert len(items) == 2
+    assert res._materialized_dicts is dicts_before

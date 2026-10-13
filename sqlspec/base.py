@@ -71,27 +71,15 @@ class SQLSpec:
         if self._loader is not None:
             self._loader.set_observability_runtime(self._loader_runtime)
 
-    @overload
-    def add_config(self, config: "SyncConfigT") -> "SyncConfigT": ...
+    async def __aenter__(self) -> Self:
+        """Async context manager entry."""
+        return self
 
-    @overload
-    def add_config(self, config: "AsyncConfigT") -> "AsyncConfigT": ...
-
-    def add_config(self, config: "SyncConfigT | AsyncConfigT") -> "SyncConfigT | AsyncConfigT":
-        """Add a configuration instance to the registry.
-
-        Args:
-            config: The configuration instance to add.
-
-        Returns:
-            The same configuration instance (it IS the handle).
-        """
-        config_id = id(config)
-        if config_id in self._configs:
-            logger.debug("Configuration for %s already exists. Overwriting.", config.__class__.__name__)
-        config.attach_observability(self._observability_config)
-        self._configs[config_id] = config
-        return config
+    async def __aexit__(
+        self, _exc_type: "type[BaseException] | None", _exc_val: "BaseException | None", _exc_tb: "TracebackType | None"
+    ) -> None:
+        """Async context manager exit with automatic cleanup."""
+        await self.close_all_pools()
 
     @property
     def configs(self) -> "dict[int, DatabaseConfigProtocol[Any, Any, Any]]":
@@ -112,15 +100,33 @@ class SQLSpec:
         return self._ensure_loader()
 
     @overload
+    def add_config(self, config: "SyncConfigT") -> "SyncConfigT": ...
+    @overload
+    def add_config(self, config: "AsyncConfigT") -> "AsyncConfigT": ...
+    def add_config(self, config: "SyncConfigT | AsyncConfigT") -> "SyncConfigT | AsyncConfigT":
+        """Add a configuration instance to the registry.
+
+        Args:
+            config: The configuration instance to add.
+
+        Returns:
+            The same configuration instance (it IS the handle).
+        """
+        config_id = id(config)
+        if config_id in self._configs:
+            logger.debug("Configuration for %s already exists. Overwriting.", config.__class__.__name__)
+        config.attach_observability(self._observability_config)
+        self._configs[config_id] = config
+        return config
+
+    @overload
     def get_connection(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "ConnectionT": ...
-
     @overload
     def get_connection(
         self, config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "Awaitable[ConnectionT]": ...
-
     def get_connection(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
@@ -141,12 +147,10 @@ class SQLSpec:
     def get_session(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "DriverT": ...
-
     @overload
     def get_session(
         self, config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "Awaitable[DriverT]": ...
-
     def get_session(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
@@ -181,7 +185,6 @@ class SQLSpec:
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractContextManager[ConnectionT]": ...
-
     @overload
     def provide_connection(
         self,
@@ -189,7 +192,6 @@ class SQLSpec:
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[ConnectionT]": ...
-
     def provide_connection(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
@@ -225,7 +227,6 @@ class SQLSpec:
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractContextManager[DriverT]": ...
-
     @overload
     def provide_session(
         self,
@@ -233,7 +234,6 @@ class SQLSpec:
         *args: Any,
         **kwargs: Any,
     ) -> "AbstractAsyncContextManager[DriverT]": ...
-
     def provide_session(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
@@ -270,7 +270,6 @@ class SQLSpec:
     def get_pool(self, config: "SyncDatabaseConfig[ConnectionT, PoolT, DriverT]") -> "type[PoolT]": ...
     @overload
     def get_pool(self, config: "AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]") -> "Awaitable[type[PoolT]]": ...
-
     def get_pool(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
@@ -293,12 +292,10 @@ class SQLSpec:
     def close_pool(
         self, config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> None: ...
-
     @overload
     def close_pool(
         self, config: "NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]"
     ) -> "Awaitable[None]": ...
-
     def close_pool(
         self,
         config: "NoPoolSyncConfig[ConnectionT, DriverT] | SyncDatabaseConfig[ConnectionT, PoolT, DriverT] | NoPoolAsyncConfig[ConnectionT, DriverT] | AsyncDatabaseConfig[ConnectionT, PoolT, DriverT]",
@@ -325,7 +322,7 @@ class SQLSpec:
         cleanup_tasks = []
         sync_configs: list[DatabaseConfigProtocol[Any, Any, Any]] = []
 
-        for config in self._configs.values():
+        for config in tuple(self._configs.values()):
             if config.supports_connection_pooling:
                 try:
                     if config.is_async:
@@ -357,32 +354,18 @@ class SQLSpec:
             }
             logger.debug("Pool cleanup completed.", extra=summary)
 
-    async def __aenter__(self) -> Self:
-        """Async context manager entry."""
-        return self
-
-    async def __aexit__(
-        self, _exc_type: "type[BaseException] | None", _exc_val: "BaseException | None", _exc_tb: "TracebackType | None"
-    ) -> None:
-        """Async context manager exit with automatic cleanup."""
-        await self.close_all_pools()
-
     @overload
     def event_channel(self, config: "type[SyncConfigT]") -> "SyncEventChannel": ...
-
     @overload
     def event_channel(self, config: "type[AsyncConfigT]") -> "AsyncEventChannel": ...
-
     @overload
     def event_channel(
         self, config: "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]"
     ) -> "SyncEventChannel": ...
-
     @overload
     def event_channel(
         self, config: "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]"
     ) -> "AsyncEventChannel": ...
-
     def event_channel(
         self,
         config: "type[SyncConfigT | AsyncConfigT] | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]",
@@ -399,7 +382,7 @@ class SQLSpec:
         """
         if isinstance(config, type):
             config_obj: DatabaseConfigProtocol[Any, Any, Any] | None = None
-            for registered_config in self._configs.values():
+            for registered_config in tuple(self._configs.values()):
                 if isinstance(registered_config, config):
                     config_obj = registered_config
                     break
@@ -420,7 +403,7 @@ class SQLSpec:
         loader_metrics = self._loader_runtime.metrics_snapshot()
         if loader_metrics:
             diagnostics.add_metric_snapshot(loader_metrics)
-        for config in self._configs.values():
+        for config in tuple(self._configs.values()):
             runtime = config.get_observability_runtime()
             diagnostics.add_lifecycle_snapshot(runtime.diagnostics_key, runtime.lifecycle_snapshot())
             metrics_snapshot = runtime.metrics_snapshot()
@@ -471,6 +454,7 @@ class SQLSpec:
         sql_cache_size: int | None = None,
         fragment_cache_size: int | None = None,
         optimized_cache_size: int | None = None,
+        compiled_cache_enabled: bool | None = None,
         sql_cache_enabled: bool | None = None,
         fragment_cache_enabled: bool | None = None,
         optimized_cache_enabled: bool | None = None,
@@ -481,6 +465,7 @@ class SQLSpec:
             sql_cache_size: Size of the statement/builder cache.
             fragment_cache_size: Size of the expression/parameter/file cache.
             optimized_cache_size: Size of the optimized expression cache.
+            compiled_cache_enabled: Master switch for namespaced and compiled SQL caches.
             sql_cache_enabled: Enable/disable statement and builder cache.
             fragment_cache_enabled: Enable/disable expression/parameter/file cache.
             optimized_cache_enabled: Enable/disable optimized expression cache.
@@ -488,6 +473,9 @@ class SQLSpec:
         current_config = get_cache_config()
         update_cache_config(
             CacheConfig(
+                compiled_cache_enabled=compiled_cache_enabled
+                if compiled_cache_enabled is not None
+                else current_config.compiled_cache_enabled,
                 sql_cache_size=sql_cache_size if sql_cache_size is not None else current_config.sql_cache_size,
                 fragment_cache_size=fragment_cache_size
                 if fragment_cache_size is not None
@@ -627,8 +615,6 @@ class SQLSpec:
     def _ensure_loader(self) -> SQLFileLoader:
         if self._loader is None:
             self._loader = SQLFileLoader(runtime=self._loader_runtime)
-        else:
-            self._loader.set_observability_runtime(self._loader_runtime)
         return self._loader
 
     async def _driver_from_async_connection(
@@ -655,7 +641,7 @@ class SQLSpec:
         cleaned_count = 0
         failed_configs: list[str] = []
 
-        for config in self._configs.values():
+        for config in tuple(self._configs.values()):
             if config.supports_connection_pooling and not config.is_async:
                 failure = self._safe_close_pool(config)
                 if failure is None:

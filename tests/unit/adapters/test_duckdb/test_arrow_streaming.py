@@ -217,3 +217,28 @@ def test_load_from_arrow_quotes_qualified_and_special_identifiers() -> None:
 
         rows = driver.execute('SELECT id, name FROM "custom schema"."target table" ORDER BY id').get_data()
         assert rows == [{"id": 1, "name": "one"}, {"id": 2, "name": "two"}]
+
+
+def test_select_to_arrow_reader_survives_interleaved_driver_queries() -> None:
+    """A RecordBatchReader returned outside a transaction must use an isolated cursor."""
+    with _seed_driver() as driver:
+        result = driver.select_to_arrow(
+            "SELECT id, name FROM arrow_streaming ORDER BY id", return_format="reader", batch_size=2
+        )
+        driver.execute("SELECT 42")
+        batches = list(result.data)
+        assert sum(batch.num_rows for batch in batches) == 5
+
+
+def test_load_from_arrow_overwrite_rolls_back_truncate_on_insert_failure() -> None:
+    """When overwrite=True fails during INSERT, the preceding TRUNCATE must be rolled back."""
+    with _seed_driver() as driver:
+        driver.execute("CREATE OR REPLACE TABLE atomic_target (id INTEGER NOT NULL)")
+        driver.execute("INSERT INTO atomic_target VALUES (1), (2)")
+        bad_table = pa.table({"id": [10, None]})
+
+        with pytest.raises(Exception):
+            driver.load_from_arrow("atomic_target", bad_table, overwrite=True)
+
+        rows = driver.execute("SELECT id FROM atomic_target ORDER BY id").get_data()
+        assert rows == [{"id": 1}, {"id": 2}]

@@ -1,21 +1,28 @@
 # pyright: reportCallIssue=false
 from collections.abc import Callable
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
+import oracledb
 import pytest
 
-from sqlspec import StatementStack
+from sqlspec import SQL, StatementStack
 from sqlspec.adapters.oracledb._typing import OracleAsyncConnection, OracleSyncConnection
 from sqlspec.adapters.oracledb.core import (
+    _coerce_sync_row_values,  # pyright: ignore[reportPrivateUsage]
+    build_insert_statement,
     build_pipeline_stack_result,
+    create_mapped_exception,
     default_statement_config,
     normalize_execute_many_parameters_async,
     normalize_execute_many_parameters_sync,
 )
 from sqlspec.adapters.oracledb.data_dictionary import OracledbAsyncDataDictionary
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
+from sqlspec.adapters.oracledb.events._hub import OracleAsyncAQHub, OracleSyncAQHub
 from sqlspec.data_dictionary import VersionInfo
 from sqlspec.driver import StackExecutionObserver
+from sqlspec.exceptions import DatabaseConnectionError, DataError, OperationalError, SQLParsingError
 
 pytest.importorskip("oracledb")
 
@@ -261,3 +268,119 @@ def test_normalize_execute_many_normalize_execute_many_parameters_passes_empty_t
     normalizer: Callable[[object], object],
 ) -> None:
     assert normalizer([]) == []
+
+
+def test_dml_returning_into_avoids_fetchall_and_uses_pipeline_add_execute() -> None:
+    """DML RETURNING INTO with cursor.description=None must not call fetchall or pipeline.add_fetchall."""
+    driver = _make_sync_pipeline_driver()
+    stmt = SQL(
+        "INSERT INTO items (name) VALUES (:name) RETURNING id INTO :out_id",
+        {"name": "a", "out_id": 1},
+        statement_config=default_statement_config,
+    )
+
+    cursor = MagicMock()
+    cursor.description = None
+    cursor.rowcount = 1
+    cursor.fetchall.side_effect = oracledb.InterfaceError("DPY-1003")
+
+    exec_result = driver.dispatch_execute(cursor, stmt)
+    assert exec_result.rowcount_override == 1
+    cursor.fetchall.assert_not_called()
+
+    stack = StatementStack().push_execute("INSERT INTO items (name) VALUES (:name) RETURNING id INTO :out_id")
+    compiled = driver._prepare_pipeline_operation(stack.operations[0])
+    assert compiled.returns_rows is False
+
+    pipeline = MagicMock()
+    driver._add_pipeline_operation(pipeline, compiled)
+    pipeline.add_execute.assert_called_once()
+    pipeline.add_fetchall.assert_not_called()
+
+
+async def test_aq_hubs_reset_session_on_database_error_and_sync_pool_hook() -> None:
+    """AQ hubs reset cached session/queues on OracleDatabaseError and _pool_destroying_hook is synchronous."""
+    sync_config = MagicMock()
+    sync_hub = OracleSyncAQHub(
+        sync_config, queue_name_template="AQ_{channel}", visibility=1, default_visibility=1, wait_ceiling=5
+    )
+    fake_queue = MagicMock()
+    fake_queue.deqone.side_effect = oracledb.DatabaseError("DPY-4011: connection closed")
+    sync_hub._queues["ch1"] = fake_queue
+    sync_hub._session_driver = MagicMock()
+    sync_hub._session_cm = MagicMock()
+
+    assert sync_hub.dequeue("ch1", 0) is None
+    assert sync_hub._queues == {}
+    assert sync_hub._session_driver is None
+
+    async_config = MagicMock()
+    async_hub = OracleAsyncAQHub(
+        async_config, queue_name_template="AQ_{channel}", visibility=1, default_visibility=1, wait_ceiling=5
+    )
+    fake_async_queue = MagicMock()
+    fake_async_queue.deqone = AsyncMock(side_effect=oracledb.DatabaseError("DPY-4011"))
+    async_hub._queues["ch1"] = fake_async_queue
+    async_hub._session_driver = MagicMock()
+    async_hub._session_cm = MagicMock()
+
+    assert await async_hub.dequeue("ch1", 0) is None
+    assert async_hub._queues == {}
+    assert async_hub._session_driver is None
+
+    async_hub._queues["ch1"] = fake_async_queue
+    hook_ret = async_hub._pool_destroying_hook({})
+    assert hook_ret is None
+    assert async_hub._queues == {}
+
+
+def test_build_insert_statement_quotes_identifiers_and_sync_driver_has_no_native_pipeline_exec() -> None:
+    """build_insert_statement quotes reserved identifiers and OracleSyncDriver omits _execute_stack_native."""
+    sql = build_insert_statement("my_schema.my_table", ["id", "date", "level"])
+    assert sql == 'INSERT INTO my_schema.my_table (id, "date", "level") VALUES (:1, :2, :3)'
+    assert "_execute_stack_native" not in OracleSyncDriver.__dict__
+
+
+def test_create_mapped_exception_maps_ora_and_dpy_codes_and_lob_errors_propagate() -> None:
+    """Map ORA-00942, ORA-12899, ORA-03113, DPY-* and propagate LOB read errors."""
+    err_942 = MagicMock()
+    err_942.code = 942
+    err_942.full_code = "ORA-00942"
+    assert isinstance(create_mapped_exception(oracledb.DatabaseError(err_942)), (OperationalError, SQLParsingError))
+
+    err_12899 = MagicMock()
+    err_12899.code = 12899
+    err_12899.full_code = "ORA-12899"
+    assert isinstance(create_mapped_exception(oracledb.DatabaseError(err_12899)), DataError)
+
+    err_3113 = MagicMock()
+    err_3113.code = 3113
+    err_3113.full_code = "ORA-03113"
+    assert isinstance(create_mapped_exception(oracledb.DatabaseError(err_3113)), DatabaseConnectionError)
+
+    err_dpy = MagicMock()
+    err_dpy.code = 0
+    err_dpy.full_code = "DPY-4011"
+    assert isinstance(create_mapped_exception(oracledb.OperationalError(err_dpy)), DatabaseConnectionError)
+
+    broken_lob = MagicMock()
+    broken_lob.read.side_effect = oracledb.DatabaseError("ORA-01555: snapshot too old")
+    with pytest.raises(oracledb.DatabaseError):
+        _coerce_sync_row_values((broken_lob,))
+
+
+def test_dispatch_execute_script_filters_named_binds_per_statement() -> None:
+    """Multi-statement script only binds variables referenced in each individual statement."""
+    driver = _make_sync_pipeline_driver()
+    cursor = MagicMock()
+    stmt = SQL(
+        "INSERT INTO t1 VALUES (:a); INSERT INTO t2 VALUES (:b);",
+        {"a": 1, "b": 2},
+        statement_config=default_statement_config,
+    )
+
+    driver.dispatch_execute_script(cursor, stmt)
+
+    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_args_list[0].args[1] == {"a": 1}
+    assert cursor.execute.call_args_list[1].args[1] == {"b": 2}

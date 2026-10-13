@@ -36,6 +36,7 @@ class DB2Tokenizer(tokens.Tokenizer):
     KEYWORDS = {
         **tokens.Tokenizer.KEYWORDS,
         "BLOB": TokenType.BLOB,
+        "XML": TokenType.XML,
         "VARCHAR_FORMAT": TokenType.VAR,
         "POSSTR": TokenType.VAR,
         "CURRENT TIMESTAMP": TokenType.CURRENT_TIMESTAMP,

@@ -3,7 +3,7 @@
 import ssl
 import threading
 from collections.abc import Mapping
-from typing import NotRequired, get_args, get_origin, get_type_hints
+from typing import Any, NotRequired, get_args, get_origin, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
@@ -254,5 +254,43 @@ def test_pool_discards_connection_after_rollback_failure() -> None:
             pool.release(connection)
         broken.close.assert_called_once()
         assert pool.acquire() is replacement
+    finally:
+        pool.close()
+
+
+def test_pool_checked_out_tracks_acquire_and_release_and_retires_unbuffered() -> None:
+    conn = MagicMock(server_status=0, unbuffered_active=False)
+    unbuffered_conn = MagicMock(server_status=0, unbuffered_active=True)
+    factory = MagicMock(side_effect=[conn, unbuffered_conn])
+    pool = PyMysqlConnectionPool({}, connection_factory=factory)
+    try:
+        assert pool.checked_out() == 0
+        acquired: Any = pool.acquire()
+        assert acquired is conn
+        assert pool.checked_out() == 1
+        pool.release(acquired)
+        assert pool.checked_out() == 0
+
+        acquired.unbuffered_active = True
+        reacquired: Any = pool.acquire()
+        assert reacquired is acquired
+        pool.release(reacquired)
+        acquired.close.assert_called_once()
+        assert pool.checked_out() == 0
+    finally:
+        pool.close()
+
+
+def test_pool_new_connection_closes_connection_when_hook_raises() -> None:
+    raw_conn = MagicMock(server_status=0)
+
+    def _bad_hook(_conn: object) -> None:
+        raise RuntimeError("hook boom")
+
+    pool = PyMysqlConnectionPool({}, on_connection_create=_bad_hook, connection_factory=lambda: raw_conn)
+    try:
+        with pytest.raises(RuntimeError, match="hook boom"):
+            pool.acquire()
+        raw_conn.close.assert_called_once()
     finally:
         pool.close()

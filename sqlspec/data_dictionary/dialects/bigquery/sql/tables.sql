@@ -62,8 +62,15 @@ WITH RECURSIVE dependency_tree AS (
       AND NOT EXISTS (
           SELECT 1
           FROM {kcu_table} kcu
-          JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
+          JOIN {rc_table} rc
+            ON kcu.constraint_name = rc.constraint_name
+            AND kcu.constraint_schema = rc.constraint_schema
+          JOIN {kcu_table} pk_kcu
+            ON rc.unique_constraint_name = pk_kcu.constraint_name
+            AND rc.unique_constraint_schema = pk_kcu.constraint_schema
+            AND kcu.ordinal_position = pk_kcu.ordinal_position
           WHERE kcu.table_name = t.table_name
+            AND pk_kcu.table_name <> t.table_name
             AND (:schema_name IS NULL OR kcu.table_schema = :schema_name)
       )
 
@@ -74,14 +81,31 @@ WITH RECURSIVE dependency_tree AS (
         dt.level + 1,
         ARRAY_CONCAT(dt.path, [kcu.table_name])
     FROM {kcu_table} kcu
-    JOIN {rc_table} rc ON kcu.constraint_name = rc.constraint_name
+    JOIN {rc_table} rc
+      ON kcu.constraint_name = rc.constraint_name
+      AND kcu.constraint_schema = rc.constraint_schema
     JOIN {kcu_table} pk_kcu
       ON rc.unique_constraint_name = pk_kcu.constraint_name
+      AND rc.unique_constraint_schema = pk_kcu.constraint_schema
       AND kcu.ordinal_position = pk_kcu.ordinal_position
     JOIN dependency_tree dt ON pk_kcu.table_name = dt.table_name
-    WHERE kcu.table_name NOT IN UNNEST(dt.path)
+    WHERE pk_kcu.table_name <> kcu.table_name
+      AND kcu.table_name NOT IN UNNEST(dt.path)
       AND (:schema_name IS NULL OR kcu.table_schema = :schema_name)
+),
+dependency_levels AS (
+    SELECT
+        table_name,
+        MAX(level) AS dependency_level
+    FROM dependency_tree
+    GROUP BY table_name
 )
-SELECT DISTINCT table_name
-FROM dependency_tree
-ORDER BY level, table_name;
+SELECT
+    t.table_name,
+    COALESCE(dl.dependency_level, 0) AS dependency_level,
+    COALESCE(dl.dependency_level, 0) AS level
+FROM {tables_table} t
+LEFT JOIN dependency_levels dl ON dl.table_name = t.table_name
+WHERE t.table_type = 'BASE TABLE'
+  AND (:schema_name IS NULL OR t.table_schema = :schema_name)
+ORDER BY dependency_level, t.table_name;

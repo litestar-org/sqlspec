@@ -26,23 +26,6 @@ _ADAPTER_NAME = "db2"
 _IBM_DB_DBI: "Any | None" = None
 
 
-def _require_ibm_db_dbi() -> Any:
-    """Return the ``ibm_db_dbi`` module, importing it on first use.
-
-    Returns:
-        Any: The ``ibm_db_dbi`` module.
-
-    Raises:
-        MissingDependencyError: When ibm_db is not installed.
-    """
-    global _IBM_DB_DBI
-    if _IBM_DB_DBI is None:
-        _IBM_DB_DBI = import_optional("ibm_db_dbi")
-        if _IBM_DB_DBI is None:
-            raise MissingDependencyError(package="ibm_db", install_package="db2")
-    return _IBM_DB_DBI
-
-
 class Db2SyncConnectionPool:
     """Thread-local connection manager for IBM Db2."""
 
@@ -94,15 +77,6 @@ class Db2SyncConnectionPool:
         """Get sanitized database name for logging."""
         return str(self._connection_parameters.get("database", "unknown"))
 
-    def _create_connection(self) -> Any:
-        """Open a new connection and register it in the shutdown registry."""
-        connection = self.new_connection()
-
-        with self._registry_lock:
-            self._connection_registry.add(connection)
-
-        return connection
-
     def new_connection(self) -> Any:
         """Open a standalone connection configured like a pooled one.
 
@@ -128,6 +102,58 @@ class Db2SyncConnectionPool:
                 with contextlib.suppress(Exception):
                     connection.close()
                 raise
+
+        return connection
+
+    @contextmanager
+    def get_connection(self) -> "Generator[Any, None, None]":
+        """Context manager to yield a thread-local connection.
+
+        Yields:
+            A thread-local Db2 database connection.
+        """
+        connection = self._get_thread_connection()
+        try:
+            yield connection
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._close_thread_connection()
+            raise
+
+    def close(self) -> None:
+        """Close every connection this pool opened across all threads."""
+        self._close_thread_connection()
+        with self._registry_lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+            self._generation += 1
+        for connection in orphaned:
+            with contextlib.suppress(Exception):
+                connection.close()
+
+    def acquire(self) -> Any:
+        """Acquire a thread-local connection."""
+        return self._get_thread_connection()
+
+    def release(self, connection: Any) -> None:
+        """Release connection back to the thread-local pool."""
+        _ = connection
+
+    def size(self) -> int:
+        """Return the total number of active connections registered across all threads."""
+        with self._registry_lock:
+            return len(self._connection_registry)
+
+    def checked_out(self) -> int:
+        """Return the number of checked out connections from the perspective of this thread."""
+        return 0
+
+    def _create_connection(self) -> Any:
+        """Open a new connection and register it in the shutdown registry."""
+        connection = self.new_connection()
+
+        with self._registry_lock:
+            self._connection_registry.add(connection)
 
         return connection
 
@@ -216,49 +242,6 @@ class Db2SyncConnectionPool:
                 del self._thread_local.created_at
             if "last_used" in thread_state:
                 del self._thread_local.last_used
-
-    @contextmanager
-    def get_connection(self) -> "Generator[Any, None, None]":
-        """Context manager to yield a thread-local connection.
-
-        Yields:
-            A thread-local Db2 database connection.
-        """
-        connection = self._get_thread_connection()
-        try:
-            yield connection
-        except Exception:
-            with contextlib.suppress(Exception):
-                self._close_thread_connection()
-            raise
-
-    def close(self) -> None:
-        """Close every connection this pool opened across all threads."""
-        self._close_thread_connection()
-        with self._registry_lock:
-            orphaned = list(self._connection_registry)
-            self._connection_registry.clear()
-            self._generation += 1
-        for connection in orphaned:
-            with contextlib.suppress(Exception):
-                connection.close()
-
-    def acquire(self) -> Any:
-        """Acquire a thread-local connection."""
-        return self._get_thread_connection()
-
-    def release(self, connection: Any) -> None:
-        """Release connection back to the thread-local pool."""
-        _ = connection
-
-    def size(self) -> int:
-        """Return the total number of active connections registered across all threads."""
-        with self._registry_lock:
-            return len(self._connection_registry)
-
-    def checked_out(self) -> int:
-        """Return the number of checked out connections from the perspective of this thread."""
-        return 0
 
 
 class _Db2PooledConnection:
@@ -471,7 +454,10 @@ class Db2AsyncConnectionPool:
                 record.last_used = time.monotonic()
                 self._idle.append(record)
         finally:
-            self._semaphore.release()
+            if self._semaphore_instance is not None:
+                self._semaphore_instance.release()
+                if self._closed and not self._checked_out:
+                    self._semaphore_instance = None
 
     def get_connection(self) -> "Db2AsyncPoolConnectionContext":
         """Return an async context manager that acquires and releases a pooled connection.
@@ -491,6 +477,8 @@ class Db2AsyncConnectionPool:
         self._idle = []
         for record in idle:
             await self._close_connection(record.connection)
+        if not self._checked_out:
+            self._semaphore_instance = None
 
     def size(self) -> int:
         """Return the number of open connections owned by the pool."""
@@ -562,3 +550,20 @@ class Db2AsyncConnectionPool:
         """Close a connection, suppressing driver errors."""
         with contextlib.suppress(Exception):
             await connection.close()
+
+
+def _require_ibm_db_dbi() -> Any:
+    """Return the ``ibm_db_dbi`` module, importing it on first use.
+
+    Returns:
+        Any: The ``ibm_db_dbi`` module.
+
+    Raises:
+        MissingDependencyError: When ibm_db is not installed.
+    """
+    global _IBM_DB_DBI
+    if _IBM_DB_DBI is None:
+        _IBM_DB_DBI = import_optional("ibm_db_dbi")
+        if _IBM_DB_DBI is None:
+            raise MissingDependencyError(package="ibm_db", install_package="db2")
+    return _IBM_DB_DBI

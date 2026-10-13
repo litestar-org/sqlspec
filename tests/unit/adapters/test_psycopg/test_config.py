@@ -322,11 +322,16 @@ async def test_psycopg_async_pool_preserves_conninfo_with_explicit_connection_kw
 
 
 def test_psycopg_sync_pool_forwards_lifecycle_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sync pool creation should route psycopg-pool lifecycle options to the pool."""
+    """Sync pool creation should route psycopg-pool lifecycle options to the pool and chain custom configure."""
+    seen: list[str] = []
+
+    def custom_configure(_: object) -> None:
+        seen.append("user")
+
     connection_config: PsycopgPoolParams = {
         "dbname": "app",
         "connection_class": Connection,
-        "configure": _configure_sync,
+        "configure": custom_configure,
         "check": _check_sync,
         "reset": _reset_sync,
         "close_returns": True,
@@ -337,12 +342,20 @@ def test_psycopg_sync_pool_forwards_lifecycle_options(monkeypatch: pytest.Monkey
     _CapturedSyncPool.calls.clear()
     monkeypatch.setattr(psycopg_config, "ConnectionPool", _CapturedSyncPool)
 
-    PsycopgSyncConfig(connection_config=connection_config)._create_pool()  # pyright: ignore[reportPrivateUsage]
+    config = PsycopgSyncConfig(
+        connection_config=connection_config, driver_features={"on_connection_create": lambda _: seen.append("internal")}
+    )
+    config._create_pool()  # pyright: ignore[reportPrivateUsage]
 
     _conninfo, pool_kwargs = _CapturedSyncPool.calls[-1]
     assert pool_kwargs["kwargs"] == {"dbname": "app"}
     assert pool_kwargs["connection_class"] is Connection
-    assert pool_kwargs["configure"] is _configure_sync
+    assert callable(pool_kwargs["configure"])
+    conn = MagicMock()
+    conn.autocommit = True
+    conn.execute.return_value.fetchall.return_value = []
+    pool_kwargs["configure"](conn)
+    assert seen == ["internal", "user"]
     assert pool_kwargs["check"] is _check_sync
     assert pool_kwargs["reset"] is _reset_sync
     assert pool_kwargs["close_returns"] is True
@@ -352,10 +365,18 @@ def test_psycopg_sync_pool_forwards_lifecycle_options(monkeypatch: pytest.Monkey
 
 @pytest.mark.anyio
 async def test_psycopg_async_pool_forwards_lifecycle_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Async pool creation should route psycopg-pool lifecycle options to the pool."""
+    """Async pool creation should route psycopg-pool lifecycle options to the pool and chain custom configure."""
+    seen: list[str] = []
+
+    async def custom_configure(_: object) -> None:
+        seen.append("user")
+
+    async def internal_hook(_: object) -> None:
+        seen.append("internal")
+
     connection_config: PsycopgPoolParams = {
         "dbname": "app",
-        "configure": _configure_async,
+        "configure": custom_configure,
         "check": _check_async,
         "reset": _reset_async,
         "close_returns": True,
@@ -367,11 +388,22 @@ async def test_psycopg_async_pool_forwards_lifecycle_options(monkeypatch: pytest
     _CapturedAsyncPool.open_calls = 0
     monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", _CapturedAsyncPool)
 
-    await PsycopgAsyncConfig(connection_config=connection_config)._create_pool()  # pyright: ignore[reportPrivateUsage]
+    config = PsycopgAsyncConfig(
+        connection_config=connection_config, driver_features={"on_connection_create": internal_hook}
+    )
+    await config._create_pool()  # pyright: ignore[reportPrivateUsage]
 
     _conninfo, pool_kwargs = _CapturedAsyncPool.calls[-1]
     assert pool_kwargs["kwargs"] == {"dbname": "app"}
-    assert pool_kwargs["configure"] is _configure_async
+    assert callable(pool_kwargs["configure"])
+    conn = AsyncMock()
+    conn.autocommit = True
+    cursor = MagicMock()
+    cursor.fetchall = AsyncMock(return_value=[])
+    conn.execute = AsyncMock(return_value=cursor)
+    configure_fn = cast("Any", pool_kwargs["configure"])
+    await configure_fn(conn)
+    assert seen == ["internal", "user"]
     assert pool_kwargs["check"] is _check_async
     assert pool_kwargs["reset"] is _reset_async
     assert pool_kwargs["close_returns"] is True
@@ -595,3 +627,61 @@ def test_async_config_normalizes_aliases() -> None:
     assert config.connection_config["dbname"] == "override"
     assert "connection_string" not in config.connection_config
     assert "db" not in config.connection_config
+
+
+def test_psycopg_sync_configure_connection_supports_dict_row_and_rolls_back_after_hook() -> None:
+    """_configure_connection should handle dict_row probe results and roll back after user hooks when autocommit=False."""
+    events: list[str] = []
+    connection = MagicMock()
+    connection.autocommit = False
+    connection.execute.return_value.fetchall.return_value = [{"extname": "pg_textsearch"}]
+    connection.rollback.side_effect = lambda: events.append("rollback")
+
+    config = PsycopgSyncConfig(
+        driver_features={
+            "enable_pgvector": False,
+            "enable_paradedb": False,
+            "enable_pg_textsearch": True,
+            "on_connection_create": lambda _: events.append("hook"),
+        }
+    )
+
+    config._configure_connection(connection)  # pyright: ignore[reportPrivateUsage]
+
+    assert config.pg_textsearch_available is True
+    assert config.statement_config.dialect == "pg_textsearch"
+    assert events == ["hook", "rollback"]
+
+
+@pytest.mark.anyio
+async def test_psycopg_async_configure_connection_supports_dict_row_and_rolls_back_after_hook() -> None:
+    """_configure_async_connection should handle dict_row probe results and roll back after user hooks when autocommit=False."""
+    events: list[str] = []
+    connection = AsyncMock()
+    connection.autocommit = False
+    cursor = MagicMock()
+    cursor.fetchall = AsyncMock(return_value=[{"extname": "pg_textsearch"}])
+    connection.execute = AsyncMock(return_value=cursor)
+
+    async def record_rollback() -> None:
+        events.append("rollback")
+
+    async def record_hook(_: object) -> None:
+        events.append("hook")
+
+    connection.rollback = AsyncMock(side_effect=record_rollback)
+
+    config = PsycopgAsyncConfig(
+        driver_features={
+            "enable_pgvector": False,
+            "enable_paradedb": False,
+            "enable_pg_textsearch": True,
+            "on_connection_create": record_hook,
+        }
+    )
+
+    await config._configure_async_connection(connection)  # pyright: ignore[reportPrivateUsage]
+
+    assert config.pg_textsearch_available is True
+    assert config.statement_config.dialect == "pg_textsearch"
+    assert events == ["hook", "rollback"]

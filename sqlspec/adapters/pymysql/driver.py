@@ -18,6 +18,7 @@ from sqlspec.adapters.pymysql.core import (
     PymysqlStreamSource,
     build_insert_statement,
     build_load_data_statement,
+    can_use_local_infile_records,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -35,7 +36,6 @@ from sqlspec.adapters.pymysql.core import (
 from sqlspec.adapters.pymysql.data_dictionary import PyMysqlDataDictionary
 from sqlspec.core import ArrowResult, get_cache_config, register_driver_profile
 from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -115,28 +115,18 @@ class PyMysqlDriver(SyncDriverAdapterBase):
             "Callable[[Any], Any]", features.get("json_deserializer", from_json)
         )
 
-    def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
-    ) -> "SQLResult":
-        if (
-            "%" in cached.compiled_sql
-            and escape_literal_percent(
-                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
-            )
-            != cached.compiled_sql
-        ):
-            statement = self._cached_statement(
-                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-            )
-            return self._execute_cached_statement(statement)
-        return super()._execute_cache_hit(sql, params, cached)
+    @property
+    def data_dictionary(self) -> "PyMysqlDataDictionary":
+        if self._data_dictionary is None:
+            self._data_dictionary = PyMysqlDataDictionary()
+        return self._data_dictionary
 
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
-        if statement.returns_rows():
+        if statement.returns_rows() or cursor.description is not None:
             fetched_data = cursor.fetchall()
             description = cursor.description or None
             row_plan = resolve_row_plan(description, PYMYSQL_JSON_TYPE_CODES)
@@ -185,7 +175,8 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         last_cursor = cursor
 
         for stmt in statements:
-            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            stmt_sql = escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+            cursor.execute(stmt_sql, normalize_execute_parameters(prepared_parameters))
             successful_count += 1
 
         return self.create_execution_result(
@@ -196,22 +187,28 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         try:
             self.connection.begin()
         except PyMysqlMySQLError as exc:
-            msg = f"Failed to begin MySQL transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from exc
 
     def commit(self) -> None:
         try:
             self.connection.commit()
         except PyMysqlMySQLError as exc:
-            msg = f"Failed to commit MySQL transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from exc
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except PyMysqlMySQLError as exc:
-            msg = f"Failed to rollback MySQL transaction: {exc}"
-            raise SQLSpecError(msg) from exc
+            mapped = create_mapped_exception(exc, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from exc
 
     def with_cursor(self, connection: "PyMysqlConnection") -> "PyMysqlCursor":
         return PyMysqlCursor(connection)
@@ -270,14 +267,16 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             needs_preparation = self._arrow_rows_need_preparation(arrow_table)
-            use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
+            use_infile = bool(
+                self.driver_features.get("enable_local_infile_bulk_load")
+            ) and can_use_local_infile_records(arrow_table, records)
             if use_infile:
                 payload = encode_records_for_local_infile(records)
                 fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
                 try:
                     with os.fdopen(fd, "wb") as tmp:
                         tmp.write(payload)
-                    load_sql = build_load_data_statement(table, columns)
+                    load_sql = build_load_data_statement(table, columns, escape_percent=True)
                     exc_handler = self.handle_database_exceptions()
                     with exc_handler, self.with_cursor(self.connection) as cursor:
                         cursor.execute(load_sql, (tmp_name,))
@@ -315,12 +314,6 @@ class PyMysqlDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    @property
-    def data_dictionary(self) -> "PyMysqlDataDictionary":
-        if self._data_dictionary is None:
-            self._data_dictionary = PyMysqlDataDictionary()
-        return self._data_dictionary
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect PyMySQL rows for the direct execution path."""
         description = cursor.description or None
@@ -331,6 +324,22 @@ class PyMysqlDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from PyMySQL cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if (
+            "%" in cached.compiled_sql
+            and escape_literal_percent(
+                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
+            )
+            != cached.compiled_sql
+        ):
+            statement = self._cached_statement(
+                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return self._execute_cached_statement(statement)
+        return super()._execute_cache_hit(sql, params, cached)
 
     def _connection_in_transaction(self) -> bool:
         try:

@@ -1,12 +1,13 @@
 """psycopg adapter compiled helpers."""
 
 import contextlib
-import datetime
+import datetime as dt
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, Final, LiteralString, NamedTuple, cast
 
 from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
 from sqlspec.adapters.psycopg._typing import psycopg_errors as pg_errors
+from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
 from sqlspec.core import (
     SQL,
     DriverParameterProfile,
@@ -52,6 +53,11 @@ if TYPE_CHECKING:
     from sqlspec.core import ParameterStyleConfig, StackOperation
 
 __all__ = (
+    "TRANSACTION_STATUS_ACTIVE",
+    "TRANSACTION_STATUS_IDLE",
+    "TRANSACTION_STATUS_INERROR",
+    "TRANSACTION_STATUS_INTRANS",
+    "TRANSACTION_STATUS_UNKNOWN",
     "PipelineCursorEntry",
     "PreparedStackOperation",
     "PsycopgAsyncStreamSource",
@@ -68,6 +74,7 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "escape_literal_percent",
     "execute_with_optional_parameters",
     "execute_with_optional_parameters_async",
     "is_postgres_extension_active",
@@ -105,10 +112,8 @@ class PipelineCursorEntry(NamedTuple):
 def pipeline_supported() -> bool:
     """Return True when libpq pipeline support is available."""
     try:
-        from sqlspec.adapters.psycopg._typing import psycopg_module as psycopg
-
         capabilities = psycopg.capabilities
-    except (ImportError, AttributeError):
+    except AttributeError:
         return False
     try:
         return bool(capabilities.has_pipeline())
@@ -310,21 +315,6 @@ class PsycopgAsyncStreamSource:
         await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    async def _start(self) -> None:
-        transaction = self._driver.connection.transaction()
-        await transaction.__aenter__()
-        self._transaction = transaction
-        try:
-            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
-            cursor.itersize = self._chunk_size
-            await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
-            self._cursor = cursor
-        except BaseException as exc:
-            self._transaction = None
-            with contextlib.suppress(Exception):
-                await transaction.__aexit__(type(exc), exc, exc.__traceback__)
-            raise
-
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
@@ -349,6 +339,21 @@ class PsycopgAsyncStreamSource:
                     await transaction.__aexit__(RuntimeError, RuntimeError("stream failed"), None)
                 else:
                     await transaction.__aexit__(None, None, None)
+
+    async def _start(self) -> None:
+        transaction = self._driver.connection.transaction()
+        await transaction.__aenter__()
+        self._transaction = transaction
+        try:
+            cursor = self._driver.connection.cursor(name=f"sqlspec_stream_{uuid4().hex}")
+            cursor.itersize = self._chunk_size
+            await execute_with_optional_parameters_async(cursor, self._sql, self._parameters)
+            self._cursor = cursor
+        except BaseException as exc:
+            self._transaction = None
+            with contextlib.suppress(Exception):
+                await transaction.__aexit__(type(exc), exc, exc.__traceback__)
+            raise
 
 
 def resolve_rowcount(cursor: Any) -> int:
@@ -398,7 +403,11 @@ def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int 
 
 
 def build_pipeline_execution_result(
-    statement: "SQL", cursor: Any, *, column_name_resolver: "Callable[[Any], list[str]] | None" = None
+    statement: "SQL",
+    cursor: Any,
+    *,
+    column_name_resolver: "Callable[[Any], list[str]] | None" = None,
+    column_types_resolver: "Callable[[Any], dict[str, str] | None] | None" = None,
 ) -> "ExecutionResult":
     """Build an ExecutionResult for psycopg pipeline execution.
 
@@ -406,17 +415,19 @@ def build_pipeline_execution_result(
         statement: SQL statement executed by the pipeline.
         cursor: Psycopg cursor holding the pipeline result.
         column_name_resolver: Optional cached column-name resolver.
+        column_types_resolver: Optional cursor column-type resolver.
 
     Returns:
         ExecutionResult representing the pipeline operation.
     """
 
-    if statement.returns_rows():
+    if statement.returns_rows() or cursor.description is not None:
         fetched_data = cast("list[Any] | None", cursor.fetchall()) or []
         if column_name_resolver is None:
             fetched_data, column_names = collect_rows(fetched_data, cursor.description)
         else:
             column_names = column_name_resolver(cursor.description)
+        column_types = column_types_resolver(cursor.description) if column_types_resolver is not None else None
         row_format = resolve_row_format(fetched_data)
         return ExecutionResult(
             cursor_result=cursor,
@@ -424,6 +435,7 @@ def build_pipeline_execution_result(
             special_data=None,
             selected_data=fetched_data,
             column_names=column_names,
+            column_types=column_types,
             data_row_count=len(fetched_data),
             statement_count=None,
             successful_statements=None,
@@ -452,7 +464,11 @@ def build_pipeline_execution_result(
 
 
 async def build_async_pipeline_execution_result(
-    statement: "SQL", cursor: Any, *, column_name_resolver: "Callable[[Any], list[str]] | None" = None
+    statement: "SQL",
+    cursor: Any,
+    *,
+    column_name_resolver: "Callable[[Any], list[str]] | None" = None,
+    column_types_resolver: "Callable[[Any], dict[str, str] | None] | None" = None,
 ) -> "ExecutionResult":
     """Build an ExecutionResult for psycopg async pipeline execution.
 
@@ -460,17 +476,19 @@ async def build_async_pipeline_execution_result(
         statement: SQL statement executed by the pipeline.
         cursor: Psycopg cursor holding the pipeline result.
         column_name_resolver: Optional cached column-name resolver.
+        column_types_resolver: Optional cursor column-type resolver.
 
     Returns:
         ExecutionResult representing the pipeline operation.
     """
 
-    if statement.returns_rows():
+    if statement.returns_rows() or cursor.description is not None:
         fetched_data = cast("list[Any] | None", await cursor.fetchall()) or []
         if column_name_resolver is None:
             fetched_data, column_names = collect_rows(fetched_data, cursor.description)
         else:
             column_names = column_name_resolver(cursor.description)
+        column_types = column_types_resolver(cursor.description) if column_types_resolver is not None else None
         row_format = resolve_row_format(fetched_data)
         return ExecutionResult(
             cursor_result=cursor,
@@ -478,6 +496,7 @@ async def build_async_pipeline_execution_result(
             special_data=None,
             selected_data=fetched_data,
             column_names=column_names,
+            column_types=column_types,
             data_row_count=len(fetched_data),
             statement_count=None,
             successful_statements=None,
@@ -506,27 +525,8 @@ async def build_async_pipeline_execution_result(
 
 
 _EXCEPTION_MAPPING: Final[dict[type[Any], tuple[str, type[SQLSpecError], str]]] = {}
+
 _EXCEPTION_MAPPING_CACHE: Final[dict[type[Any], tuple[str, type[SQLSpecError], str]]] = {}
-
-
-def _register_exception_mappings() -> None:
-    _EXCEPTION_MAPPING.update({
-        pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
-        pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
-        pg_errors.NotNullViolation: ("23502", NotNullViolationError, "not-null constraint violation"),
-        pg_errors.CheckViolation: ("23514", CheckViolationError, "check constraint violation"),
-        pg_errors.IntegrityError: ("23000", IntegrityError, "integrity constraint violation"),
-        pg_errors.DeadlockDetected: ("40P01", DeadlockError, "deadlock detected"),
-        pg_errors.SerializationFailure: ("40001", SerializationConflictError, "serialization failure"),
-        pg_errors.QueryCanceled: ("57014", OperationCancelledError, "query canceled"),
-        pg_errors.InsufficientPrivilege: ("42501", PermissionDeniedError, "insufficient privilege"),
-        pg_errors.AdminShutdown: ("57P01", ConnectionTimeoutError, "admin shutdown"),
-        pg_errors.CannotConnectNow: ("57P03", ConnectionTimeoutError, "cannot connect now"),
-        pg_errors.SyntaxError: ("42601", SQLParsingError, "SQL syntax error"),
-    })
-
-
-_register_exception_mappings()
 
 
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpecError:
@@ -560,7 +560,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
             return _create_postgres_error(error, mapped_error_code, termination_class, description)
         return _create_postgres_error(error, mapped_error_code, error_class, description)
 
-    # Priority 2: Fall back to SQLSTATE code mapping using centralized utility
     sqlstate_attr = error.sqlstate if has_sqlstate(error) else None
     error_code = sqlstate_attr if sqlstate_attr is not None else None
     if error_code:
@@ -571,8 +570,42 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         if exc_class:
             return _create_postgres_error(error, error_code, exc_class, "database error")
 
-    # Priority 3: Default fallback
     return _create_postgres_error(error, error_code, SQLSpecError, "database error")
+
+
+def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
+    """Escape literal percent characters before driver-side interpolation."""
+    if not parameters or "%" not in sql:
+        return sql
+    keep = {info.position for info in validator.extract_parameters(sql)}
+    segments: list[str] = []
+    index = 0
+    while index < len(sql):
+        if sql[index : index + 2] == "%%":
+            segments.append("%%")
+            index += 2
+            continue
+        char = sql[index]
+        segments.append("%%" if char == "%" and index not in keep else char)
+        index += 1
+    return "".join(segments)
+
+
+def _register_exception_mappings() -> None:
+    _EXCEPTION_MAPPING.update({
+        pg_errors.UniqueViolation: ("23505", UniqueViolationError, "unique constraint violation"),
+        pg_errors.ForeignKeyViolation: ("23503", ForeignKeyViolationError, "foreign key constraint violation"),
+        pg_errors.NotNullViolation: ("23502", NotNullViolationError, "not-null constraint violation"),
+        pg_errors.CheckViolation: ("23514", CheckViolationError, "check constraint violation"),
+        pg_errors.IntegrityError: ("23000", IntegrityError, "integrity constraint violation"),
+        pg_errors.DeadlockDetected: ("40P01", DeadlockError, "deadlock detected"),
+        pg_errors.SerializationFailure: ("40001", SerializationConflictError, "serialization failure"),
+        pg_errors.QueryCanceled: ("57014", OperationCancelledError, "query canceled"),
+        pg_errors.InsufficientPrivilege: ("42501", PermissionDeniedError, "insufficient privilege"),
+        pg_errors.AdminShutdown: ("57P01", ConnectionTimeoutError, "admin shutdown"),
+        pg_errors.CannotConnectNow: ("57P03", ConnectionTimeoutError, "cannot connect now"),
+        pg_errors.SyntaxError: ("42601", SQLParsingError, "SQL syntax error"),
+    })
 
 
 def _compose_table_identifier(table: str) -> "PsycopgComposed":
@@ -591,12 +624,7 @@ def _identity(value: Any) -> Any:
 def _custom_type_coercions() -> "dict[type, Callable[[Any], Any]]":
     """Return custom type coercions for psycopg."""
 
-    return {
-        datetime.datetime: _identity,
-        datetime.date: _identity,
-        datetime.time: _identity,
-        **build_uuid_coercions(native=True),
-    }
+    return {dt.datetime: _identity, dt.date: _identity, dt.time: _identity, **build_uuid_coercions(native=True)}
 
 
 def _parameter_config(
@@ -622,11 +650,6 @@ def _parameter_config(
     updated_type_map[tuple] = build_json_tuple_converter(serializer)
 
     return base_config.replace(type_coercion_map=updated_type_map)
-
-
-driver_profile = build_profile()
-
-default_statement_config = build_statement_config()
 
 
 def _create_postgres_error(
@@ -662,19 +685,8 @@ def _resolve_exception_mapping(error_type: type[Any]) -> "tuple[str, type[SQLSpe
     return None
 
 
-def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
-    """Escape literal percent characters before driver-side interpolation."""
-    if not parameters or "%" not in sql:
-        return sql
-    keep = {info.position for info in validator.extract_parameters(sql)}
-    segments: list[str] = []
-    index = 0
-    while index < len(sql):
-        if sql[index : index + 2] == "%%":
-            segments.append("%%")
-            index += 2
-            continue
-        char = sql[index]
-        segments.append("%%" if char == "%" and index not in keep else char)
-        index += 1
-    return "".join(segments)
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()
+
+_register_exception_mappings()

@@ -89,3 +89,42 @@ def test_transpile_spangres_ttl_to_googlesql() -> None:
     rendered = parse_one(OFFICIAL_TTL_DDL, dialect="spangres").sql(dialect="spanner")
     assert "ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL 3 DAY))" in rendered
     assert "TTL INTERVAL" not in rendered
+
+
+def test_spangres_ddl_and_dql_parity() -> None:
+    """Verify Spangres supports vector/search indexes, change streams, property graphs, GRAPH_TABLE, and SEARCH."""
+    statements = [
+        (
+            "CREATE VECTOR INDEX IF NOT EXISTS idx_emb ON docs (embedding) "
+            "STORING (user_id) WHERE embedding IS NOT NULL "
+            "OPTIONS (distance_type = 'COSINE')"
+        ),
+        "DROP VECTOR INDEX IF EXISTS idx_emb",
+        "CREATE SEARCH INDEX idx_fts ON docs (tokens) STORING (title)",
+        "DROP SEARCH INDEX IF EXISTS idx_fts",
+        "CREATE CHANGE STREAM cs_docs FOR docs(title, body)",
+        "ALTER CHANGE STREAM cs_docs SET OPTIONS (retention_period = '36h')",
+        "DROP CHANGE STREAM cs_docs",
+        "CREATE PROPERTY GRAPH fin_graph NODE TABLES (Account KEY (id))",
+        "CREATE OR REPLACE PROPERTY GRAPH fin_graph NODE TABLES (Account KEY (id))",
+        "DROP PROPERTY GRAPH IF EXISTS fin_graph",
+        "SELECT id FROM GRAPH_TABLE(fin_graph MATCH (a:Account) WHERE a.id = 1 COLUMNS (a.id AS id))",
+        "SELECT id FROM docs WHERE SEARCH(tokens, 'query')",
+    ]
+    for sql in statements:
+        parsed = parse_one(sql, dialect="spangres")
+        assert not isinstance(parsed, exp.Command)
+        assert parsed.sql(dialect="spangres") == sql
+
+
+def test_transpile_googlesql_create_table_with_non_spanner_property_to_spangres() -> None:
+    """Verify GoogleSQL table-level PRIMARY KEY is moved into schema and not duplicated in Spangres."""
+    parsed = parse_one(
+        "CREATE TABLE items (id INT64, name STRING(64)) PRIMARY KEY (id), INTERLEAVE IN PARENT parent_items",
+        dialect="spanner",
+    )
+    assert isinstance(parsed, exp.Create)
+    props = parsed.args["properties"]
+    props.append("expressions", exp.Property(this=exp.var(" extra_prop"), value=exp.Literal.string("val")))
+    rendered = parsed.sql(dialect="spangres")
+    assert rendered.count("PRIMARY KEY") == 1

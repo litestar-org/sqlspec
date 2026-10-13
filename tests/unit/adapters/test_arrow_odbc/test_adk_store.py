@@ -109,7 +109,7 @@ def _session_store_with_capture(
 
 
 def test_arrow_odbc_list_sessions_binds_order_and_page(monkeypatch: "pytest.MonkeyPatch") -> None:
-    """SQL Server row limiting binds the offset before the row count."""
+    """SQL Server row limiting inlines the validated integer offset and row count."""
     store, calls = _session_store_with_capture(monkeypatch)
 
     store.list_sessions("app", "u1", order_by="create_time", descending=False, limit=10, offset=20)
@@ -119,9 +119,9 @@ def test_arrow_odbc_list_sessions_binds_order_and_page(monkeypatch: "pytest.Monk
         "SELECT id, app_name, user_id, state, create_time, update_time "
         "FROM [dbo].[adk_session] WHERE app_name = ? AND user_id = ? "
         "ORDER BY create_time ASC, id ASC "
-        "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+        "OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY"
     )
-    assert params == ("app", "u1", 20, 10)
+    assert params == ("app", "u1")
 
 
 def test_arrow_odbc_list_sessions_defaults_to_recent_first_without_a_page(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -142,8 +142,8 @@ def test_arrow_odbc_list_sessions_pages_an_unfiltered_listing(monkeypatch: "pyte
     store.list_sessions("app", limit=5)
 
     sql, params = calls[0]
-    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY")
-    assert params == ("app", 0, 5)
+    assert _normalized(sql).endswith("ORDER BY update_time DESC, id DESC OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY")
+    assert params == ("app",)
 
 
 def test_arrow_odbc_list_sessions_zero_limit_never_queries(monkeypatch: "pytest.MonkeyPatch") -> None:

@@ -1101,3 +1101,44 @@ def test_with_total_count_with_union_all_custom_alias(mock_driver: "MockSyncDriv
 
     count_str = str(modified_sql)
     assert "row_total" in count_str.lower()
+
+
+def test_count_query_clears_offset_on_simple_select_with_offset(mock_driver: "MockSyncDriver") -> None:
+    """_count_query strips both LIMIT and OFFSET when building COUNT(*)."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id, name FROM users WHERE active = 1 LIMIT 10 OFFSET 20"),
+        statement_config=mock_driver.statement_config,
+    )
+    sql.compile()
+
+    count_sql = mock_driver._count_query(sql)
+    compiled_str = count_sql.sql.upper()
+    assert "LIMIT" not in compiled_str
+    assert "OFFSET" not in compiled_str
+    assert "COUNT(*)" in compiled_str
+
+
+def test_with_total_count_reuses_parsed_expression(
+    mock_driver: "MockSyncDriver", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_with_total_count reuses sql_statement.expression instead of re-parsing raw_sql."""
+    sql = mock_driver.prepare_statement(
+        SQL("SELECT id, name FROM users WHERE active = 1"), statement_config=mock_driver.statement_config
+    )
+    sql.compile()
+    assert sql.expression is not None
+
+    def fail_parse_one(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("sqlglot.parse_one should not be called when expression is present")
+
+    monkeypatch.setattr("sqlglot.parse_one", fail_parse_one)
+    modified_sql = mock_driver._with_total_count(sql)
+    assert "_total_count" in modified_sql.sql.lower()
+
+
+def test_extract_total_from_rows_handles_mixed_row_representations(mock_driver: "MockSyncDriver") -> None:
+    """_extract_total_from_rows handles mixed dict/mapping rows and missing alias safely."""
+    rows: list[Any] = [{"id": 1}, UserDict({"id": 2, "_total_count": 5})]
+    clean_rows, total = mock_driver._extract_total_from_rows(rows)
+    assert total == 5
+    assert clean_rows == [{"id": 1}, {"id": 2}]

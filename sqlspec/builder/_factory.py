@@ -47,6 +47,7 @@ from sqlspec.builder._parsing_utils import (
     _coerce_column,
     _cube_expression,
     _grouping_sets_expression,
+    _normalize_dialect,
     _normalize_order_by,
     _normalize_partition_by,
     _resolve_dialect,
@@ -57,7 +58,7 @@ from sqlspec.builder._parsing_utils import (
 from sqlspec.builder._select import Case, Select, SubqueryBuilder, WindowFunctionBuilder
 from sqlspec.builder._update import Update
 from sqlspec.builder._values import Values
-from sqlspec.core import SQL
+from sqlspec.core import SQL, StatementConfig
 from sqlspec.core.explain import ExplainFormat, ExplainOptions
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.logging import get_logger
@@ -177,8 +178,9 @@ class SQLFactory:
             SQLBuilderError: If the SQL is not a SELECT/CTE/DML+RETURNING statement.
         """
 
+        resolved_dialect = _normalize_dialect(_resolve_dialect(dialect, self.dialect))
         try:
-            parsed_expr = sqlglot.parse_one(statement, read=_resolve_dialect(dialect, self.dialect))
+            parsed_expr = sqlglot.parse_one(statement, read=resolved_dialect)
         except Exception as e:
             msg = f"Failed to parse SQL: {e}"
             raise SQLBuilderError(msg) from e
@@ -187,11 +189,13 @@ class SQLFactory:
         if actual_type_str == "SELECT" or (
             actual_type_str == "WITH" and parsed_expr.this and isinstance(parsed_expr.this, exp.Select)
         ):
-            builder = Select(dialect=_resolve_dialect(dialect, self.dialect))
+            builder = Select(dialect=resolved_dialect)
             builder.set_expression(parsed_expr)
             return builder
 
         if actual_type_str in {"INSERT", "UPDATE", "DELETE"} and parsed_expr.args.get("returning") is not None:
+            if resolved_dialect is not None:
+                return SQL(parsed_expr, statement_config=StatementConfig(dialect=resolved_dialect))
             return SQL(parsed_expr)
 
         msg = (
@@ -200,6 +204,156 @@ class SQLFactory:
             f"Use sql.{actual_type_str.lower()}() instead."
         )
         raise SQLBuilderError(msg)
+
+    @property
+    def merge_(self) -> "Merge":
+        """Create a new MERGE builder (property shorthand).
+
+        Property that returns a new Merge builder instance using the factory's
+        default dialect. Cleaner syntax alternative to merge() method.
+
+        Returns:
+            New Merge builder instance
+        """
+        return Merge(dialect=self.dialect)
+
+    @property
+    def case_(self) -> "Case":
+        """Create a CASE expression builder.
+
+        Returns:
+            Case builder instance for CASE expression building.
+        """
+        return Case()
+
+    @property
+    def row_number_(self) -> "WindowFunctionBuilder":
+        """Create a ROW_NUMBER() window function builder."""
+        return WindowFunctionBuilder("row_number")
+
+    @property
+    def rank_(self) -> "WindowFunctionBuilder":
+        """Create a RANK() window function builder."""
+        return WindowFunctionBuilder("rank")
+
+    @property
+    def dense_rank_(self) -> "WindowFunctionBuilder":
+        """Create a DENSE_RANK() window function builder."""
+        return WindowFunctionBuilder("dense_rank")
+
+    @property
+    def lag_(self) -> "WindowFunctionBuilder":
+        """Create a LAG() window function builder."""
+        return WindowFunctionBuilder("lag")
+
+    @property
+    def lead_(self) -> "WindowFunctionBuilder":
+        """Create a LEAD() window function builder."""
+        return WindowFunctionBuilder("lead")
+
+    @property
+    def count_over_(self) -> "WindowFunctionBuilder":
+        """Create a COUNT(*) OVER() window function builder.
+
+        Returns a WindowFunctionBuilder pre-configured with COUNT(*) for fluent chaining.
+        Useful for pagination queries where you want to get the total count in the same query.
+
+        Returns:
+            WindowFunctionBuilder configured for COUNT(*) OVER()
+        """
+        return WindowFunctionBuilder("count", exp.Star())
+
+    @property
+    def sum_over_(self) -> "WindowFunctionBuilder":
+        """Create a SUM() OVER() window function builder."""
+        return WindowFunctionBuilder("sum")
+
+    @property
+    def avg_over_(self) -> "WindowFunctionBuilder":
+        """Create an AVG() OVER() window function builder."""
+        return WindowFunctionBuilder("avg")
+
+    @property
+    def max_over_(self) -> "WindowFunctionBuilder":
+        """Create a MAX() OVER() window function builder."""
+        return WindowFunctionBuilder("max")
+
+    @property
+    def min_over_(self) -> "WindowFunctionBuilder":
+        """Create a MIN() OVER() window function builder."""
+        return WindowFunctionBuilder("min")
+
+    @property
+    def exists_(self) -> "SubqueryBuilder":
+        """Create an EXISTS subquery builder."""
+        return SubqueryBuilder("exists")
+
+    @property
+    def in_(self) -> "SubqueryBuilder":
+        """Create an IN subquery builder."""
+        return SubqueryBuilder("in")
+
+    @property
+    def any_(self) -> "SubqueryBuilder":
+        """Create an ANY subquery builder."""
+        return SubqueryBuilder("any")
+
+    @property
+    def all_(self) -> "SubqueryBuilder":
+        """Create an ALL subquery builder."""
+        return SubqueryBuilder("all")
+
+    @property
+    def inner_join_(self) -> "JoinBuilder":
+        """Create an INNER JOIN builder."""
+        return create_join_builder("inner join")
+
+    @property
+    def left_join_(self) -> "JoinBuilder":
+        """Create a LEFT JOIN builder."""
+        return create_join_builder("left join")
+
+    @property
+    def right_join_(self) -> "JoinBuilder":
+        """Create a RIGHT JOIN builder."""
+        return create_join_builder("right join")
+
+    @property
+    def full_join_(self) -> "JoinBuilder":
+        """Create a FULL OUTER JOIN builder."""
+        return create_join_builder("full join")
+
+    @property
+    def cross_join_(self) -> "JoinBuilder":
+        """Create a CROSS JOIN builder."""
+        return create_join_builder("cross join")
+
+    @property
+    def lateral_join_(self) -> "JoinBuilder":
+        """Create a LATERAL JOIN builder.
+
+        Returns:
+            JoinBuilder configured for LATERAL JOIN
+        """
+        return create_join_builder("lateral join", lateral=True)
+
+    @property
+    def left_lateral_join_(self) -> "JoinBuilder":
+        """Create a LEFT LATERAL JOIN builder.
+
+        Returns:
+            JoinBuilder configured for LEFT LATERAL JOIN
+        """
+        return create_join_builder("left join", lateral=True)
+
+    @property
+    def cross_lateral_join_(self) -> "JoinBuilder":
+        """Create a CROSS LATERAL JOIN builder.
+
+        Returns:
+            JoinBuilder configured for CROSS LATERAL JOIN
+        """
+        return create_join_builder("cross join", lateral=True)
 
     def select(
         self, *columns_or_sql: Union[str, exp.Expr, Column, "SQL", "Case"], dialect: DialectType = None
@@ -339,18 +493,6 @@ class SQLFactory:
         options = ExplainOptions(analyze=analyze, verbose=verbose, format=fmt)
 
         return Explain(statement, dialect=builder_dialect, options=options)
-
-    @property
-    def merge_(self) -> "Merge":
-        """Create a new MERGE builder (property shorthand).
-
-        Property that returns a new Merge builder instance using the factory's
-        default dialect. Cleaner syntax alternative to merge() method.
-
-        Returns:
-            New Merge builder instance
-        """
-        return Merge(dialect=self.dialect)
 
     def upsert(self, table: str, dialect: DialectType = None) -> "Merge | Insert":
         """Create an upsert builder (MERGE or INSERT ON CONFLICT).
@@ -603,144 +745,6 @@ class SQLFactory:
             Column object that supports method chaining and operator overloading.
         """
         return Column(name, table)
-
-    @property
-    def case_(self) -> "Case":
-        """Create a CASE expression builder.
-
-        Returns:
-            Case builder instance for CASE expression building.
-        """
-        return Case()
-
-    @property
-    def row_number_(self) -> "WindowFunctionBuilder":
-        """Create a ROW_NUMBER() window function builder."""
-        return WindowFunctionBuilder("row_number")
-
-    @property
-    def rank_(self) -> "WindowFunctionBuilder":
-        """Create a RANK() window function builder."""
-        return WindowFunctionBuilder("rank")
-
-    @property
-    def dense_rank_(self) -> "WindowFunctionBuilder":
-        """Create a DENSE_RANK() window function builder."""
-        return WindowFunctionBuilder("dense_rank")
-
-    @property
-    def lag_(self) -> "WindowFunctionBuilder":
-        """Create a LAG() window function builder."""
-        return WindowFunctionBuilder("lag")
-
-    @property
-    def lead_(self) -> "WindowFunctionBuilder":
-        """Create a LEAD() window function builder."""
-        return WindowFunctionBuilder("lead")
-
-    @property
-    def count_over_(self) -> "WindowFunctionBuilder":
-        """Create a COUNT(*) OVER() window function builder.
-
-        Returns a WindowFunctionBuilder pre-configured with COUNT(*) for fluent chaining.
-        Useful for pagination queries where you want to get the total count in the same query.
-
-        Returns:
-            WindowFunctionBuilder configured for COUNT(*) OVER()
-        """
-        return WindowFunctionBuilder("count", exp.Star())
-
-    @property
-    def sum_over_(self) -> "WindowFunctionBuilder":
-        """Create a SUM() OVER() window function builder."""
-        return WindowFunctionBuilder("sum")
-
-    @property
-    def avg_over_(self) -> "WindowFunctionBuilder":
-        """Create an AVG() OVER() window function builder."""
-        return WindowFunctionBuilder("avg")
-
-    @property
-    def max_over_(self) -> "WindowFunctionBuilder":
-        """Create a MAX() OVER() window function builder."""
-        return WindowFunctionBuilder("max")
-
-    @property
-    def min_over_(self) -> "WindowFunctionBuilder":
-        """Create a MIN() OVER() window function builder."""
-        return WindowFunctionBuilder("min")
-
-    @property
-    def exists_(self) -> "SubqueryBuilder":
-        """Create an EXISTS subquery builder."""
-        return SubqueryBuilder("exists")
-
-    @property
-    def in_(self) -> "SubqueryBuilder":
-        """Create an IN subquery builder."""
-        return SubqueryBuilder("in")
-
-    @property
-    def any_(self) -> "SubqueryBuilder":
-        """Create an ANY subquery builder."""
-        return SubqueryBuilder("any")
-
-    @property
-    def all_(self) -> "SubqueryBuilder":
-        """Create an ALL subquery builder."""
-        return SubqueryBuilder("all")
-
-    @property
-    def inner_join_(self) -> "JoinBuilder":
-        """Create an INNER JOIN builder."""
-        return create_join_builder("inner join")
-
-    @property
-    def left_join_(self) -> "JoinBuilder":
-        """Create a LEFT JOIN builder."""
-        return create_join_builder("left join")
-
-    @property
-    def right_join_(self) -> "JoinBuilder":
-        """Create a RIGHT JOIN builder."""
-        return create_join_builder("right join")
-
-    @property
-    def full_join_(self) -> "JoinBuilder":
-        """Create a FULL OUTER JOIN builder."""
-        return create_join_builder("full join")
-
-    @property
-    def cross_join_(self) -> "JoinBuilder":
-        """Create a CROSS JOIN builder."""
-        return create_join_builder("cross join")
-
-    @property
-    def lateral_join_(self) -> "JoinBuilder":
-        """Create a LATERAL JOIN builder.
-
-        Returns:
-            JoinBuilder configured for LATERAL JOIN
-        """
-        return create_join_builder("lateral join", lateral=True)
-
-    @property
-    def left_lateral_join_(self) -> "JoinBuilder":
-        """Create a LEFT LATERAL JOIN builder.
-
-        Returns:
-            JoinBuilder configured for LEFT LATERAL JOIN
-        """
-        return create_join_builder("left join", lateral=True)
-
-    @property
-    def cross_lateral_join_(self) -> "JoinBuilder":
-        """Create a CROSS LATERAL JOIN builder.
-
-        Returns:
-            JoinBuilder configured for CROSS LATERAL JOIN
-        """
-        return create_join_builder("cross join", lateral=True)
 
     @staticmethod
     def raw(sql_fragment: str, **parameters: Any) -> "exp.Expr | SQL":
@@ -1263,16 +1267,17 @@ class SQLFactory:
             )
         )
 
-    def truncate(self, table_name: str) -> "Truncate":
+    def truncate(self, table_name: str, dialect: DialectType = None) -> "Truncate":
         """Create a TRUNCATE TABLE builder.
 
         Args:
             table_name: Name of the table to truncate
+            dialect: Optional SQL dialect
 
         Returns:
             TruncateTable builder instance
         """
-        return Truncate(table_name, dialect=self.dialect)
+        return Truncate(table_name, dialect=_resolve_dialect(dialect, self.dialect))
 
     @staticmethod
     def case() -> "Case":

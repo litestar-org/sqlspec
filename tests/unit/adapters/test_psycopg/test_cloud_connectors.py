@@ -6,7 +6,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from psycopg import Connection
+from psycopg import Connection, Cursor
+from psycopg.rows import dict_row
 
 import sqlspec.adapters.psycopg.config as psycopg_config
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -222,22 +223,50 @@ def test_alloydb_connector_cleanup(mock_alloydb_module: MagicMock) -> None:
     assert config._alloydb_connector is None
 
 
-@pytest.mark.anyio
-async def test_async_config_does_not_validate_or_route_alloydb(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PsycopgAsyncConfig should remain unaffected by sync-only AlloyDB support."""
-    _CapturedAsyncPool.calls.clear()
-    _CapturedAsyncPool.open_calls = 0
-    monkeypatch.setattr(psycopg_config, "AsyncConnectionPool", _CapturedAsyncPool)
+def test_alloydb_connection_class_forwards_connect_options(
+    monkeypatch: pytest.MonkeyPatch, mock_alloydb_module: MagicMock
+) -> None:
+    """_AlloyDBPsycopgConnection.connect should forward autocommit, prepare_threshold, row_factory, and cursor_factory."""
+    mock_connector = MagicMock()
+    expected_connection = MagicMock()
+    mock_connector.connect.return_value = expected_connection
+    mock_alloydb_module.return_value = mock_connector
+    _CapturedSyncPool.calls.clear()
+    monkeypatch.setattr(psycopg_config, "ConnectionPool", _CapturedSyncPool)
 
-    config = PsycopgAsyncConfig(
-        connection_config={"dbname": "app"},
-        driver_features={"enable_alloydb": True, "alloydb_instance_uri": "invalid-format"},
+    with patch("sqlspec.adapters.psycopg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
+        config = PsycopgSyncConfig(
+            connection_config={"user": "testuser", "password": "testpass", "dbname": "app"},
+            driver_features={
+                "enable_alloydb": True,
+                "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
+            },
+        )
+        config._create_pool()
+
+    _conninfo, pool_kwargs = _CapturedSyncPool.calls[-1]
+    connection_class = pool_kwargs["connection_class"]
+
+    conn = connection_class.connect(
+        "ignored", autocommit=True, prepare_threshold=0, row_factory=dict_row, cursor_factory=Cursor
     )
+    assert conn is expected_connection
+    assert expected_connection.autocommit is True
+    assert expected_connection.prepare_threshold == 0
+    assert expected_connection.row_factory is dict_row
+    assert expected_connection.cursor_factory is Cursor
 
-    await config._create_pool()
 
-    conninfo, pool_kwargs = _CapturedAsyncPool.calls[-1]
-    assert conninfo == ""
-    assert pool_kwargs["kwargs"] == {"dbname": "app"}
-    assert "connection_class" not in pool_kwargs
-    assert config.driver_features["enable_alloydb"] is True
+def test_async_config_rejects_enable_alloydb() -> None:
+    """PsycopgAsyncConfig should raise ImproperConfigurationError when enable_alloydb is True."""
+    with pytest.raises(
+        ImproperConfigurationError,
+        match="Google AlloyDB connector integration \\(enable_alloydb\\) is only supported on PsycopgSyncConfig",
+    ):
+        PsycopgAsyncConfig(
+            connection_config={"dbname": "app"},
+            driver_features={
+                "enable_alloydb": True,
+                "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
+            },
+        )

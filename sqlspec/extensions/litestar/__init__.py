@@ -1,3 +1,5 @@
+"""Litestar framework integration for SQLSpec."""
+
 from sqlspec.extensions.litestar._utils import get_sqlspec_scope_state, set_sqlspec_scope_state
 from sqlspec.extensions.litestar.channels import SQLSpecChannelsBackend
 from sqlspec.extensions.litestar.cli import database_group

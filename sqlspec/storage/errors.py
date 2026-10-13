@@ -38,6 +38,9 @@ class StorageError:
 
 
 def raise_storage_error(error: Exception, *, backend: str, operation: str, path: str | None) -> NoReturn:
+    if isinstance(error, (FileNotFoundInStorageError, StorageOperationFailedError)):
+        raise error
+
     is_missing = _is_missing_error(error)
     normalized = _storage_error(error, backend=backend, operation=operation, path=path)
 
@@ -74,7 +77,7 @@ async def execute_async_storage_operation(
 
 
 def _is_missing_error(error: Exception) -> bool:
-    if isinstance(error, FileNotFoundError):
+    if isinstance(error, (FileNotFoundError, FileNotFoundInStorageError)):
         return True
 
     if isinstance(error, OSError) and error.errno in {errno.ENOENT, errno.ENOTDIR}:

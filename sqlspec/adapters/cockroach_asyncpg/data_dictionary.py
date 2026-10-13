@@ -3,6 +3,8 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from mypy_extensions import mypyc_attr
+
 from sqlspec.data_dictionary import (
     ColumnMetadata,
     DDLResult,
@@ -55,6 +57,7 @@ _COCKROACH_METADATA_DOMAINS = (
 _COCKROACH_SUPPORTED_DOMAINS = frozenset(_COCKROACH_METADATA_DOMAINS) - {"crdb_internal", "system"}
 
 
+@mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
     """CockroachDB async data dictionary (AsyncPG)."""
 
@@ -73,15 +76,6 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
         _ = driver
         requested_domains = ("system",) if domains is None else tuple(domains)
         return tuple(unsupported_system_metadata_capability(domain) for domain in requested_domains)
-
-    async def _select_domain(
-        self, driver: "CockroachAsyncpgDriver", domain: str, query_name: str, **parameters: Any
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
-        rows = await driver.select(query.sql, **parameters)
-        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
 
     async def get_schemas(self, driver: "CockroachAsyncpgDriver") -> MetadataResult:
         """Get schema metadata."""
@@ -175,7 +169,7 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
         return system_metadata_gated_result(metadata_request, capability)
 
     async def get_version(self, driver: "CockroachAsyncpgDriver") -> "VersionInfo | None":
-        driver_id = id(driver)
+        driver_id = id(getattr(driver, "connection", None) or driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -278,6 +272,15 @@ class CockroachAsyncpgDataDictionary(AsyncDataDictionaryBase):
             schema_name=schema_name,
             schema_type=ForeignKeyMetadata,
         )
+
+    async def _select_domain(
+        self, driver: "CockroachAsyncpgDriver", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = await driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _cockroach_metadata_capability(domain), rows)
 
 
 def _cockroach_metadata_capability(domain: str) -> MetadataCapability:

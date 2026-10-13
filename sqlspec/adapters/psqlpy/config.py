@@ -1,7 +1,7 @@
 """Psqlpy database configuration."""
 
 import sys
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -18,6 +18,7 @@ from sqlspec.core.config_runtime import (
     resolve_runtime_statement_config,
 )
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
+from sqlspec.exceptions import MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.utils.config_tools import normalize_connection_config
 
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
 __all__ = ("PsqlpyConfig", "PsqlpyConnectionParams", "PsqlpyCursor", "PsqlpyDriverFeatures", "PsqlpyPoolParams")
+
+_MAX_INITIALIZED_CONNECTION_IDS: Final[int] = 4096
 
 
 class PsqlpyConnectionParams(TypedDict):
@@ -107,7 +110,7 @@ class PsqlpyDriverFeatures(TypedDict):
     json_deserializer: Custom JSON deserializer retained alongside the serializer for parity with asyncpg.
     on_connection_create: Async callback executed when a connection is acquired from pool.
      Receives the raw psqlpy connection for low-level driver configuration.
-     Called exactly once per physical connection using WeakSet tracking.
+     Called once per tracked connection instance.
     enable_events: Enable database event channel support.
      Defaults to True when extension_config["events"] is configured.
      Provides pub/sub capabilities via LISTEN/NOTIFY or table-backed fallback.
@@ -190,7 +193,10 @@ class PsqlpyConnectionContext(AsyncPoolConnectionContext):
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
         if self._ctx:
-            return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            try:
+                return await self._ctx.__aexit__(exc_type, exc_val, exc_tb)  # type: ignore[no-any-return]
+            finally:
+                self._ctx = None
         return None
 
 
@@ -229,10 +235,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
     ) -> None:
         """Initialize Psqlpy configuration.
 
-        Extracts the 'on_connection_create' hook from driver_features before
-        storing them. Initializes a set to track initialized connection IDs
-        because psqlpy connections do not support weak references.
-
         Args:
             connection_config: Connection and pool configuration parameters.
             connection_instance: Existing connection pool instance to use.
@@ -249,13 +251,14 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
-        self._user_connection_hook: Callable[[PsqlpyConnection], Awaitable[None]] | None = features_dict.pop(
-            "on_connection_create", None
+        self._user_connection_hook: Callable[[PsqlpyConnection], Awaitable[None]] | None = features_dict.get(
+            "on_connection_create"
         )
         self._initialized_connection_ids: set[int] = set()
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
+        self._pg_textsearch_probe_error: Exception | None = None
 
         super().__init__(
             connection_config=connection_config,
@@ -273,47 +276,6 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         """Return True if the pg_textsearch extension is available."""
         return bool(self._pg_textsearch_available)
 
-    async def _ensure_connection(self, connection: "PsqlpyConnection") -> None:
-        """Ensure connection callback has been called exactly once for this connection.
-
-        Detects PostgreSQL extensions on first connection and updates dialect accordingly.
-        """
-        if self._pgvector_available is None:
-            detected_extensions: set[str] = set()
-            extensions = build_postgres_extension_probe_names(self.driver_features)
-            if extensions:
-                try:
-                    result = await connection.fetch(
-                        "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions]
-                    )
-                    rows = result.result() if result else []
-                    detected_extensions = {r["extname"] for r in rows}
-                except Exception:
-                    detected_extensions = set()
-            self.statement_config, self._pgvector_available, self._paradedb_available = (
-                resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
-            )
-            self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
-
-        conn_id = id(connection)
-        if conn_id not in self._initialized_connection_ids:
-            if self._user_connection_hook is not None:
-                await self._user_connection_hook(connection)
-            self._initialized_connection_ids.add(conn_id)
-
-    async def _create_pool(self) -> "ConnectionPool":
-        """Create the actual async connection pool."""
-        return ConnectionPool(**build_connection_config(self.connection_config))
-
-    async def _close_pool(self) -> None:
-        """Close the actual async connection pool."""
-        if not self.connection_instance:
-            return
-
-        self.connection_instance.close()
-        self.connection_instance = None
-        self._initialized_connection_ids.clear()
-
     async def create_connection(self) -> "PsqlpyConnection":
         """Create a single async connection (not from pool).
 
@@ -325,7 +287,9 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             pool = await self.create_pool()
             self.connection_instance = pool
 
-        return await pool.connection()
+        connection = await pool.connection()
+        await self._ensure_connection(connection)
+        return connection
 
     def provide_session(
         self, *_args: Any, statement_config: "StatementConfig | None" = None, **_kwargs: Any
@@ -384,3 +348,56 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         """Return LISTEN/NOTIFY defaults for Psqlpy adapters."""
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    async def _ensure_connection(self, connection: "PsqlpyConnection") -> None:
+        """Ensure connection callback has been called once for this connection.
+
+        Detects PostgreSQL extensions on first connection and updates dialect accordingly.
+        """
+        if self._pgvector_available is None:
+            detected_extensions: set[str] = set()
+            extensions = build_postgres_extension_probe_names(self.driver_features)
+            probe_succeeded = True
+            if extensions:
+                try:
+                    result = await connection.fetch(
+                        "SELECT extname FROM pg_extension WHERE extname = ANY($1::text[])", [extensions]
+                    )
+                    rows = result.result() if result else []
+                    detected_extensions = {r["extname"] for r in rows}
+                except Exception as exc:
+                    probe_succeeded = False
+                    self._pg_textsearch_probe_error = exc
+            if probe_succeeded:
+                self.statement_config, self._pgvector_available, self._paradedb_available = (
+                    resolve_postgres_extension_state(self.statement_config, self.driver_features, detected_extensions)
+                )
+                self._pg_textsearch_available = is_postgres_extension_active(self.driver_features, "pg_textsearch")
+                self._pg_textsearch_probe_error = None
+
+        conn_id = id(connection)
+        if conn_id not in self._initialized_connection_ids:
+            if self._user_connection_hook is not None:
+                await self._user_connection_hook(connection)
+            if len(self._initialized_connection_ids) >= _MAX_INITIALIZED_CONNECTION_IDS:
+                self._initialized_connection_ids.clear()
+            self._initialized_connection_ids.add(conn_id)
+
+    def _ensure_pg_textsearch_available(self) -> None:
+        """Raise MissingDependencyError if pg_textsearch is required but unavailable."""
+        if not self.pg_textsearch_available:
+            msg = "PostgreSQL extension 'pg_textsearch' is required for BM25 hybrid search but is not installed or enabled."
+            raise MissingDependencyError(msg) from self._pg_textsearch_probe_error
+
+    async def _create_pool(self) -> "ConnectionPool":
+        """Create the actual async connection pool."""
+        return ConnectionPool(**build_connection_config(self.connection_config))
+
+    async def _close_pool(self) -> None:
+        """Close the actual async connection pool."""
+        if not self.connection_instance:
+            return
+
+        self.connection_instance.close()
+        self.connection_instance = None
+        self._initialized_connection_ids.clear()

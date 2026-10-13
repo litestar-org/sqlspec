@@ -1,18 +1,18 @@
 -- name: by_schema
 -- dialect: spanner
 SELECT
-    tc.CONSTRAINT_CATALOG,
-    tc.CONSTRAINT_SCHEMA,
-    tc.CONSTRAINT_NAME,
-    tc.TABLE_NAME,
-    tc.CONSTRAINT_TYPE,
-    kcu.COLUMN_NAME,
-    kcu.ORDINAL_POSITION,
-    rc.UNIQUE_CONSTRAINT_NAME,
-    rc.MATCH_OPTION,
-    rc.UPDATE_RULE,
-    rc.DELETE_RULE,
-    cc.CHECK_CLAUSE
+    tc.CONSTRAINT_CATALOG AS constraint_catalog,
+    tc.CONSTRAINT_SCHEMA AS constraint_schema,
+    tc.CONSTRAINT_NAME AS constraint_name,
+    tc.TABLE_NAME AS table_name,
+    tc.CONSTRAINT_TYPE AS constraint_type,
+    kcu.COLUMN_NAME AS column_name,
+    kcu.ORDINAL_POSITION AS ordinal_position,
+    rc.UNIQUE_CONSTRAINT_NAME AS unique_constraint_name,
+    rc.MATCH_OPTION AS match_option,
+    rc.UPDATE_RULE AS update_rule,
+    rc.DELETE_RULE AS delete_rule,
+    cc.CHECK_CLAUSE AS check_clause
 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS tc
 LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS kcu
   ON tc.CONSTRAINT_CATALOG = kcu.CONSTRAINT_CATALOG
@@ -33,18 +33,18 @@ ORDER BY tc.TABLE_NAME, tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;
 -- name: by_table
 -- dialect: spanner
 SELECT
-    tc.CONSTRAINT_CATALOG,
-    tc.CONSTRAINT_SCHEMA,
-    tc.CONSTRAINT_NAME,
-    tc.TABLE_NAME,
-    tc.CONSTRAINT_TYPE,
-    kcu.COLUMN_NAME,
-    kcu.ORDINAL_POSITION,
-    rc.UNIQUE_CONSTRAINT_NAME,
-    rc.MATCH_OPTION,
-    rc.UPDATE_RULE,
-    rc.DELETE_RULE,
-    cc.CHECK_CLAUSE
+    tc.CONSTRAINT_CATALOG AS constraint_catalog,
+    tc.CONSTRAINT_SCHEMA AS constraint_schema,
+    tc.CONSTRAINT_NAME AS constraint_name,
+    tc.TABLE_NAME AS table_name,
+    tc.CONSTRAINT_TYPE AS constraint_type,
+    kcu.COLUMN_NAME AS column_name,
+    kcu.ORDINAL_POSITION AS ordinal_position,
+    rc.UNIQUE_CONSTRAINT_NAME AS unique_constraint_name,
+    rc.MATCH_OPTION AS match_option,
+    rc.UPDATE_RULE AS update_rule,
+    rc.DELETE_RULE AS delete_rule,
+    cc.CHECK_CLAUSE AS check_clause
 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS tc
 LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS kcu
   ON tc.CONSTRAINT_CATALOG = kcu.CONSTRAINT_CATALOG

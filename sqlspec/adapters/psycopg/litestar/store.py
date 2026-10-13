@@ -95,7 +95,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (key,))
+                await cur.execute(cast("Any", sql), (key,))
                 row = await cur.fetchone()
 
             if row is None:
@@ -109,7 +109,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
                     SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE session_id = %s
                     """
-                    await conn.execute(update_sql.encode(), (new_expires_at, key))
+                    await conn.execute(cast("Any", update_sql), (new_expires_at, key))
                     await conn.commit()
 
             return bytes(row["data"])
@@ -137,7 +137,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            await conn.execute(sql.encode(), (key, data, expires_at))
+            await conn.execute(cast("Any", sql), (key, data, expires_at))
             await conn.commit()
 
     async def delete(self, key: str) -> None:
@@ -150,7 +150,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            await conn.execute(sql.encode(), (key,))
+            await conn.execute(cast("Any", sql), (key,))
             await conn.commit()
 
     async def delete_all(self) -> None:
@@ -159,7 +159,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
-            await conn.execute(sql.encode())
+            await conn.execute(cast("Any", sql))
             await conn.commit()
         self._log_delete_all()
 
@@ -180,7 +180,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode(), (key,))
+            await cur.execute(cast("Any", sql), (key,))
             result = await cur.fetchone()
             return result is not None
 
@@ -201,7 +201,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
         conn_context = self._config.provide_connection()
         async with conn_context as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(sql.encode(), (key,))
+                await cur.execute(cast("Any", sql), (key,))
                 row = await cur.fetchone()
 
             if row is None or row["expires_at"] is None:
@@ -225,7 +225,7 @@ class PsycopgAsyncStore(BaseSQLSpecStore["PsycopgAsyncConfig"]):
 
         conn_context = self._config.provide_connection()
         async with conn_context as conn, conn.cursor() as cur:
-            await cur.execute(sql.encode())
+            await cur.execute(cast("Any", sql))
             await conn.commit()
             count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             if count > 0:
@@ -421,7 +421,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
         with self._config.provide_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (key,))
+                cur.execute(cast("Any", sql), (key,))
                 row = cur.fetchone()
 
             if row is None:
@@ -435,7 +435,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
                     SET expires_at = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE session_id = %s
                     """
-                    conn.execute(update_sql.encode(), (new_expires_at, key))
+                    conn.execute(cast("Any", update_sql), (new_expires_at, key))
                     conn.commit()
 
             return bytes(row["data"])
@@ -456,7 +456,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql.encode(), (key, data, expires_at))
+            conn.execute(cast("Any", sql), (key, data, expires_at))
             conn.commit()
 
     def _delete(self, key: str) -> None:
@@ -464,7 +464,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE session_id = %s"
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql.encode(), (key,))
+            conn.execute(cast("Any", sql), (key,))
             conn.commit()
 
     def _delete_all(self) -> None:
@@ -472,7 +472,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         sql = f"DELETE FROM {self._table_name}"
 
         with self._config.provide_connection() as conn:
-            conn.execute(sql.encode())
+            conn.execute(cast("Any", sql))
             conn.commit()
         self._log_delete_all()
 
@@ -485,7 +485,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode(), (key,))
+            cur.execute(cast("Any", sql), (key,))
             result = cur.fetchone()
             return result is not None
 
@@ -498,7 +498,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
 
         with self._config.provide_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(sql.encode(), (key,))
+                cur.execute(cast("Any", sql), (key,))
                 row = cur.fetchone()
 
             if row is None or row["expires_at"] is None:
@@ -518,7 +518,7 @@ class PsycopgSyncStore(BaseSQLSpecStore["PsycopgSyncConfig"]):
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
         with self._config.provide_connection() as conn, conn.cursor() as cur:
-            cur.execute(sql.encode())
+            cur.execute(cast("Any", sql))
             conn.commit()
             count = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             if count > 0:

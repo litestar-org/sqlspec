@@ -21,7 +21,8 @@ dependency_tree AS (
     FROM table_inventory AS ti
     WHERE NOT EXISTS (
         SELECT 1
-        FROM pragma_foreign_key_list(ti.table_name, COALESCE(:schema_name, 'main'))
+        FROM pragma_foreign_key_list(ti.table_name, COALESCE(:schema_name, 'main')) AS fk
+        WHERE fk."table" <> ti.table_name
     )
 
     UNION ALL
@@ -33,17 +34,25 @@ dependency_tree AS (
     FROM table_inventory AS ti
     JOIN pragma_foreign_key_list(ti.table_name, COALESCE(:schema_name, 'main')) AS fk
     JOIN dependency_tree AS dt ON fk."table" = dt.table_name
-    WHERE instr(dt.path, '/' || ti.table_name || '/') = 0
+    WHERE fk."table" <> ti.table_name
+      AND instr(dt.path, '/' || ti.table_name || '/') = 0
+),
+dependency_levels AS (
+    SELECT
+        table_name,
+        MAX(level) AS dependency_level
+    FROM dependency_tree
+    GROUP BY table_name
 )
-SELECT DISTINCT
+SELECT
     ti.schema_name,
     ti.table_name,
     ti.table_type,
-    COALESCE(dt.level, 0) AS dependency_level,
-    COALESCE(dt.level, 0) AS level,
+    COALESCE(dl.dependency_level, 0) AS dependency_level,
+    COALESCE(dl.dependency_level, 0) AS level,
     ti.ncol,
     ti.wr,
     ti.strict
 FROM table_inventory AS ti
-LEFT JOIN dependency_tree AS dt ON dt.table_name = ti.table_name
-ORDER BY COALESCE(dt.level, 0), ti.table_name;
+LEFT JOIN dependency_levels AS dl ON dl.table_name = ti.table_name
+ORDER BY COALESCE(dl.dependency_level, 0), ti.table_name;

@@ -1,6 +1,6 @@
 """Characterization tests for the SQL Server statements of the arrow-odbc extension stores."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pyarrow as pa
@@ -9,9 +9,10 @@ import pytest
 pytest.importorskip("arrow_odbc")
 
 from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig
-from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore
+from sqlspec.adapters.arrow_odbc.adk.store import ArrowOdbcADKMemoryStore, ArrowOdbcADKStore, _datetime_value
 from sqlspec.adapters.arrow_odbc.events.store import ArrowOdbcEventQueueStore
 from sqlspec.adapters.arrow_odbc.litestar import ArrowOdbcStore
+from sqlspec.adapters.arrow_odbc.litestar.store import _TsqlSessionSql
 from tests.unit.adapters.test_arrow_odbc._db2_fakes import (
     EMPTY_RESULT,
     ISO_TIMESTAMP,
@@ -508,3 +509,110 @@ def test_tsql_adk_memory_create_tables_and_insert_without_owner() -> None:
         "INSERT INTO [dbo].[adk_memory] ( id, session_id, app_name, user_id, scope, event_id, author, timestamp, "
         "content_json, content_text, metadata_json, inserted_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
+
+
+async def test_tsql_session_get_parses_string_expiry_and_deletes_expired_in_same_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expired string timestamps trigger in-session deletion without opening a nested session."""
+    expired_iso = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    connection = FakeArrowOdbcConnection(
+        result=EMPTY_RESULT,
+        responder=ScriptedResponder((
+            "SELECT data, expires_at FROM sess",
+            pa.table({"data": ["dg=="], "expires_at": [expired_iso]}),
+        )),
+    )
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        connection_instance=as_connection(connection),
+        extension_config={"litestar": {"session_table": "sess"}},
+    )
+    store = ArrowOdbcStore(config)
+    session_entries = 0
+    original_provide_session = ArrowOdbcConfig.provide_session
+
+    def counting_provide_session(self: ArrowOdbcConfig, *args: Any, **kwargs: Any) -> Any:
+        nonlocal session_entries
+        session_entries += 1
+        return original_provide_session(self, *args, **kwargs)
+
+    monkeypatch.setattr(ArrowOdbcConfig, "provide_session", counting_provide_session)
+
+    assert await store.get("k") is None
+    assert session_entries == 1
+    assert normalized_calls(connection) == [
+        ("SELECT data, expires_at FROM sess WHERE session_id = ?", ["k"]),
+        ("DELETE FROM sess WHERE session_id = ?", ["k"]),
+    ]
+    assert connection.commit_calls == 1
+
+
+def test_tsql_adk_append_event_and_update_state_rolls_back_when_session_missing() -> None:
+    """append_event_and_update_state rolls back when the target session does not exist."""
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT)
+    store = ArrowOdbcADKStore(_tsql_adk_config(connection))
+
+    with pytest.raises(ValueError, match="Session s1 not found"):
+        store.append_event_and_update_state(_ADK_EVENT, "app", "u", "s1", {"a": 3})
+
+    assert connection.rollback_calls == 1
+    assert connection.commit_calls == 0
+
+
+def test_tsql_adk_memory_delete_missing_table_returns_zero_and_search_escapes_wildcards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Memory store deletes return 0 on missing table and search_entries escapes LIKE wildcards."""
+    monkeypatch.setattr("sqlspec.adapters.arrow_odbc.driver.ArrowOdbcError", FakeOdbcError)
+    missing_error = FakeOdbcError("State: 42S02, Native error: 208, Message: Invalid object name 'dbo.adk_memory'.")
+    missing_store = ArrowOdbcADKMemoryStore(_tsql_adk_config(FakeArrowOdbcConnection(error=missing_error)))
+    assert missing_store.delete_entries_by_session("s1") == 0
+    assert missing_store.delete_entries_older_than(7) == 0
+
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT)
+    store = ArrowOdbcADKMemoryStore(_tsql_adk_config(connection))
+    store.search_entries("100%_done[now]", "app", "u", limit=5)
+    _, params = normalized_calls(connection)[0]
+    assert params == ["app", "u", "%100[%]_done[[]now]_%".replace("_done", "[_]done").replace("]_", "]")]
+
+
+def test_schema_qualified_tables_across_tsql_stores() -> None:
+    """Schema-qualified table names produce valid schema/table splits and bare constraint/index names."""
+    connection = FakeArrowOdbcConnection(result=EMPTY_RESULT)
+    config = ArrowOdbcConfig(
+        connection_config={"connection_string": MSSQL_CONNECTION_STRING},
+        connection_instance=as_connection(connection),
+        extension_config={"events": {"queue_table": "custom.app_events"}},
+    )
+    adk_store = ArrowOdbcADKStore(config)
+    adk_store._session_table = "custom.adk_session"  # pyright: ignore[reportPrivateUsage]
+    memory_store = ArrowOdbcADKMemoryStore(config)
+    memory_store._memory_table = "custom.adk_memory"  # pyright: ignore[reportPrivateUsage]
+    litestar_store = ArrowOdbcStore(config)
+    litestar_store._sql = _TsqlSessionSql("custom.sess")  # pyright: ignore[reportPrivateUsage]
+    event_store = ArrowOdbcEventQueueStore(config)
+
+    session_ddl = adk_store._sessions_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    assert "[custom].[adk_session]" in session_ddl
+    assert "[pk_adk_session_row_id]" in session_ddl
+
+    memory_ddl = memory_store._memory_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    assert "[custom].[adk_memory]" in memory_ddl
+    assert "[pk_adk_memory_id]" in memory_ddl
+
+    litestar_ddl = litestar_store._table_ddl()  # pyright: ignore[reportPrivateUsage]
+    assert "SCHEMA_ID(N'custom')" in litestar_ddl
+    assert "IX_sess_expires_at" in litestar_ddl
+
+    event_ddls = event_store.create_statements()
+    assert "OBJECT_ID(N'[custom].[app_events]', N'U')" in event_ddls[0]
+    assert "OBJECT_ID(N'[custom].[app_events]')" in event_ddls[1]
+    assert "idx_custom_app_events_channel_status" in event_ddls[1]
+
+
+def test_datetime_value_accepts_date_and_rejects_invalid_types() -> None:
+    """_datetime_value converts datetime.date to midnight UTC and raises TypeError on invalid types."""
+    assert _datetime_value(date(2026, 5, 10)) == datetime(2026, 5, 10, 0, 0, tzinfo=UTC)
+    with pytest.raises(TypeError, match="Unsupported datetime value"):
+        _datetime_value(12345)

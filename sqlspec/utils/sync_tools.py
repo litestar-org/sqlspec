@@ -32,6 +32,23 @@ if module_available("uvloop"):
 else:
     uvloop = None  # type: ignore[assignment,unused-ignore]
 
+__all__ = (
+    "ASYNC_THREAD_LIMIT_ENV",
+    "DEFAULT_ASYNC_THREAD_LIMIT",
+    "NO_VALUE",
+    "CapacityLimiter",
+    "NoValue",
+    "async_",
+    "await_",
+    "enable_default_async_thread_pool",
+    "ensure_async_",
+    "get_default_async_executor",
+    "get_next",
+    "run_",
+    "set_default_async_executor",
+    "shutdown_default_async_executor",
+    "with_ensure_async_",
+)
 
 ReturnT = TypeVar("ReturnT")
 ParamSpecT = ParamSpec("ParamSpecT")
@@ -62,6 +79,16 @@ class CapacityLimiter:
         self._semaphore_instance: asyncio.Semaphore | None = None
         self._pid: int | None = None
 
+    async def __aenter__(self) -> None:
+        """Async context manager entry."""
+        await self.acquire()
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        """Async context manager exit."""
+        self.release()
+
     @property
     def _semaphore(self) -> asyncio.Semaphore:
         """Lazy initialization of asyncio.Semaphore with per-process tracking.
@@ -76,14 +103,6 @@ class CapacityLimiter:
             self._pid = current_pid
         return self._semaphore_instance
 
-    async def acquire(self) -> None:
-        """Acquire a token from the semaphore."""
-        await self._semaphore.acquire()
-
-    def release(self) -> None:
-        """Release a token back to the semaphore."""
-        self._semaphore.release()
-
     @property
     def total_tokens(self) -> int:
         """Get the total number of tokens available."""
@@ -95,15 +114,13 @@ class CapacityLimiter:
         self._semaphore_instance = None
         self._pid = None
 
-    async def __aenter__(self) -> None:
-        """Async context manager entry."""
-        await self.acquire()
+    async def acquire(self) -> None:
+        """Acquire a token from the semaphore."""
+        await self._semaphore.acquire()
 
-    async def __aexit__(
-        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
-    ) -> None:
-        """Async context manager exit."""
-        self.release()
+    def release(self) -> None:
+        """Release a token back to the semaphore."""
+        self._semaphore.release()
 
 
 _default_async_executor: concurrent.futures.ThreadPoolExecutor | None = None
@@ -335,6 +352,12 @@ def _resolve_managed_async_thread_limit() -> int:
     return max(1, max_workers)
 
 
+def _run_in_new_loop(partial_f: "Callable[[], Coroutine[Any, Any, ReturnT]]") -> "ReturnT":
+    if uvloop and sys.platform != "win32":
+        return uvloop.run(partial_f())  # pyright: ignore[reportUnknownMemberType]
+    return asyncio.run(partial_f())
+
+
 class _RunWrapper(Generic[ParamSpecT, ReturnT]):
     __slots__ = ("__dict__", "_function")
 
@@ -351,13 +374,16 @@ class _RunWrapper(Generic[ParamSpecT, ReturnT]):
 
         if loop is not None:
             if loop.is_running():
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, partial_f())
+                ctx = contextvars.copy_context()
+                executor = get_default_async_executor()
+                if executor is not None:
+                    future = executor.submit(ctx.run, _run_in_new_loop, partial_f)
                     return future.result()
-            return asyncio.run(partial_f())
-        if uvloop and sys.platform != "win32":
-            return uvloop.run(partial_f())  # pyright: ignore[reportUnknownMemberType]
-        return asyncio.run(partial_f())
+                with concurrent.futures.ThreadPoolExecutor() as fallback_executor:
+                    future = fallback_executor.submit(ctx.run, _run_in_new_loop, partial_f)
+                    return future.result()
+            return _run_in_new_loop(partial_f)
+        return _run_in_new_loop(partial_f)
 
 
 class _AwaitWrapper(Generic[ParamSpecT, ReturnT]):
@@ -382,20 +408,12 @@ class _AwaitWrapper(Generic[ParamSpecT, ReturnT]):
             typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
             return portal.call(typed_partial)
         if loop.is_running():
-            try:
-                current_task = asyncio.current_task(loop=loop)
-            except RuntimeError:
-                current_task = None
-
-            if current_task is not None:
-                if self._raise_sync_error:
-                    msg = "await_ cannot be called from within an async task running on the same event loop. Use 'await' instead."
-                    raise RuntimeError(msg)
-                portal = get_global_portal()
-                typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
-                return portal.call(typed_partial)
-            future = asyncio.run_coroutine_threadsafe(partial_f(), loop)
-            return future.result()
+            if self._raise_sync_error:
+                msg = "await_ cannot be called from within an async task running on the same event loop. Use 'await' instead."
+                raise RuntimeError(msg)
+            portal = get_global_portal()
+            typed_partial = cast("Callable[[], Coroutine[Any, Any, ReturnT]]", partial_f)
+            return portal.call(typed_partial)
         if self._raise_sync_error:
             msg = "Cannot run async function"
             raise RuntimeError(msg)
@@ -431,7 +449,6 @@ class _AsyncWrapper(Generic[ParamSpecT, ReturnT]):
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
         call = functools.partial(ctx.run, self._function, *args, **kwargs)
-        # Equivalent to run_in_executor(), without Python 3.14's deprecated debug-loop coroutine probe.
         return await asyncio.wrap_future(executor.submit(call), loop=loop)
 
 

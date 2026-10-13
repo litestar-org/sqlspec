@@ -1,3 +1,5 @@
+"""Oracle dialect static configuration and reflection helpers."""
+
 import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
@@ -8,9 +10,21 @@ if TYPE_CHECKING:
     from sqlspec.data_dictionary import TableMetadata, VersionInfo
 
 __all__ = (
+    "ORACLE_CONFIG",
+    "ORACLE_DYNAMIC_FEATURES",
+    "ORACLE_FEATURE_FLAGS",
+    "ORACLE_FEATURE_VERSIONS",
     "ORACLE_JSON_STORAGE_BLOB_JSON",
     "ORACLE_JSON_STORAGE_BLOB_PLAIN",
     "ORACLE_JSON_STORAGE_NATIVE",
+    "ORACLE_MIN_JSON_BLOB_VERSION",
+    "ORACLE_MIN_JSON_NATIVE_COMPATIBLE",
+    "ORACLE_MIN_JSON_NATIVE_VERSION",
+    "ORACLE_MIN_OSON_VERSION",
+    "ORACLE_MIN_UPDATE_FROM_VERSION",
+    "ORACLE_TYPE_MAPPINGS",
+    "ORACLE_VERSION_PARTS_COUNT",
+    "ORACLE_VERSION_PATTERN",
     "extract_oracle_version_value",
     "list_oracle_available_features",
     "merge_oracle_table_lists",

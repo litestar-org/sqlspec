@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 from sqlspec import SQL
 from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
+from sqlspec.adapters.oracledb.core import coerce_large_parameters_async, coerce_large_parameters_sync
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
@@ -60,6 +61,11 @@ _ADK_METADATA_TABLE_DDL_TEMPLATE = (
     "                key VARCHAR2(128) PRIMARY KEY,\n"
     "                value VARCHAR2(512) NOT NULL\n"
     "            )';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -78,16 +84,31 @@ _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
     "                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL{2}\n"
     "            ){3}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_user\n"
     "                ON {5}(app_name, user_id)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_update_time\n"
     "                ON {7}(update_time DESC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -106,26 +127,51 @@ _ADK_EVENTS_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                CONSTRAINT fk_{2}_session FOREIGN KEY (session_id)\n"
     "                    REFERENCES {3}(id) ON DELETE CASCADE\n"
     "            ){4}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{5}_session\n"
     "                ON {6}(session_id, timestamp ASC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{7}_invocation\n"
     "                ON {8}(invocation_id)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{9}_timestamp\n"
     "                ON {10}(timestamp ASC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{11}_app_timestamp\n"
     "                ON {12}(app_name, timestamp ASC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -138,6 +184,11 @@ _ADK_APP_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                {1},\n"
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
     "            ){2}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -152,6 +203,11 @@ _ADK_USER_STATES_TABLE_DDL_FOR_TYPE_TEMPLATE = (
     "                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,\n"
     "                PRIMARY KEY (app_name, user_id)\n"
     "            ){2}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "        "
 )
@@ -163,6 +219,11 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_2 = (
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{0}_fts\n"
     "                ON {1}(content_text) INDEXTYPE IS CTXSYS.CONTEXT';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "            "
 )
@@ -183,21 +244,41 @@ _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE_3 = (
     "                content_text CLOB NOT NULL,\n"
     "                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL\n"
     "            ){3}';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{4}_app_scope_user_time\n"
     "                ON {5}(app_name, scope, user_id, timestamp DESC)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{6}_scope\n"
     "                ON {7}(app_name, scope)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "\n"
     "        BEGIN\n"
     "            EXECUTE IMMEDIATE 'CREATE INDEX idx_{8}_session\n"
     "                ON {9}(session_id)';\n"
+    "        EXCEPTION\n"
+    "            WHEN OTHERS THEN\n"
+    "                IF SQLCODE != -955 THEN\n"
+    "                    RAISE;\n"
+    "                END IF;\n"
     "        END;\n"
     "        {10}\n"
     "        "
@@ -406,8 +487,9 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
         async with self._config.provide_connection() as conn:
+            coerced_params = await coerce_large_parameters_async(conn, params)
             with conn.cursor() as cursor:
-                await cursor.execute(sql, params)
+                await cursor.execute(sql, coerced_params)
                 await conn.commit()
 
         result = await self.get_session(app_name, user_id, session_id)
@@ -499,10 +581,11 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
+            coerced_params = await coerce_large_parameters_async(
+                conn, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+            )
             with conn.cursor() as cursor:
-                await cursor.execute(
-                    sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
-                )
+                await cursor.execute(sql, coerced_params)
                 await conn.commit()
 
     async def list_sessions(
@@ -600,19 +683,20 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """
 
         async with self._config.provide_connection() as conn:
+            coerced_params = await coerce_large_parameters_async(
+                conn,
+                {
+                    "id": event_record["id"],
+                    "app_name": event_record["app_name"],
+                    "user_id": event_record["user_id"],
+                    "session_id": event_record["session_id"],
+                    "invocation_id": event_record["invocation_id"],
+                    "timestamp": event_record["timestamp"],
+                    "event_data": await self._serialize_event_data(event_record["event_data"]),
+                },
+            )
             with conn.cursor() as cursor:
-                await cursor.execute(
-                    sql,
-                    {
-                        "id": event_record["id"],
-                        "app_name": event_record["app_name"],
-                        "user_id": event_record["user_id"],
-                        "session_id": event_record["session_id"],
-                        "invocation_id": event_record["invocation_id"],
-                        "timestamp": event_record["timestamp"],
-                        "event_data": await self._serialize_event_data(event_record["event_data"]),
-                    },
-                )
+                await cursor.execute(sql, coerced_params)
                 await conn.commit()
 
     async def append_event_and_update_state(
@@ -654,38 +738,39 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
 
         app_upsert_sql = f"""
         MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name FROM DUAL) source
         ON (target.app_name = source.app_name)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, state, update_time)
-            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, :state, SYSTIMESTAMP)
         """
 
         user_upsert_sql = f"""
         MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name, :user_id AS user_id FROM DUAL) source
         ON (target.app_name = source.app_name AND target.user_id = source.user_id)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, source.user_id, :state, SYSTIMESTAMP)
         """
 
         async with self._config.provide_connection() as conn:
             with conn.cursor() as cursor:
                 try:
-                    await cursor.execute(
-                        update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+                    update_params = await coerce_large_parameters_async(
+                        conn, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
                     )
+                    await cursor.execute(update_sql, update_params)
                     await cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
                     row = await cursor.fetchone()
                     if row is None:
                         _raise_session_not_found(session_id)
-                    await cursor.execute(
-                        insert_sql,
+                    insert_params = await coerce_large_parameters_async(
+                        conn,
                         {
                             "id": event_record["id"],
                             "app_name": event_record["app_name"],
@@ -696,19 +781,22 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
                             "event_data": await self._serialize_event_data(event_record["event_data"]),
                         },
                     )
+                    await cursor.execute(insert_sql, insert_params)
                     if app_state is not None:
-                        await cursor.execute(
-                            app_upsert_sql, {"app_name": app_name, "state": await self._serialize_state(app_state)}
+                        app_params = await coerce_large_parameters_async(
+                            conn, {"app_name": app_name, "state": await self._serialize_state(app_state)}
                         )
+                        await cursor.execute(app_upsert_sql, app_params)
                     if user_state is not None:
-                        await cursor.execute(
-                            user_upsert_sql,
+                        user_params = await coerce_large_parameters_async(
+                            conn,
                             {
                                 "app_name": app_name,
                                 "user_id": user_id,
                                 "state": await self._serialize_state(user_state),
                             },
                         )
+                        await cursor.execute(user_upsert_sql, user_params)
                     await conn.commit()
                 except Exception:
                     await conn.rollback()
@@ -889,38 +977,42 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
         """Insert or replace app-scoped state for an application."""
         sql = f"""
         MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name FROM DUAL) source
         ON (target.app_name = source.app_name)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, state, update_time)
-            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, :state, SYSTIMESTAMP)
         """
 
         async with self._config.provide_connection() as conn:
+            coerced_params = await coerce_large_parameters_async(
+                conn, {"app_name": app_name, "state": await self._serialize_state(state)}
+            )
             with conn.cursor() as cursor:
-                await cursor.execute(sql, {"app_name": app_name, "state": await self._serialize_state(state)})
+                await cursor.execute(sql, coerced_params)
                 await conn.commit()
 
     async def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
         sql = f"""
         MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name, :user_id AS user_id FROM DUAL) source
         ON (target.app_name = source.app_name AND target.user_id = source.user_id)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, source.user_id, :state, SYSTIMESTAMP)
         """
 
         async with self._config.provide_connection() as conn:
+            coerced_params = await coerce_large_parameters_async(
+                conn, {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(state)}
+            )
             with conn.cursor() as cursor:
-                await cursor.execute(
-                    sql, {"app_name": app_name, "user_id": user_id, "state": await self._serialize_state(state)}
-                )
+                await cursor.execute(sql, coerced_params)
                 await conn.commit()
 
     async def get_metadata(self, key: str) -> "str | None":
@@ -1110,7 +1202,7 @@ class OracleAsyncADKStore(BaseAsyncADKStore["OracleAsyncConfig"]):
             state_column = "state BLOB NOT NULL"
 
         owner_id_column_sql = (
-            _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
+            _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl.replace("'", "''"))
             if self._owner_id_column_ddl
             else ""
         )
@@ -1416,7 +1508,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
             params = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_data}
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, params)
+            coerced_params = coerce_large_parameters_sync(conn, params)
+            cursor.execute(sql, coerced_params)
             conn.commit()
 
         result = self.get_session(app_name, user_id, session_id)
@@ -1506,7 +1599,10 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id})
+            params = coerce_large_parameters_sync(
+                conn, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+            )
+            cursor.execute(sql, params)
             conn.commit()
 
     def list_sessions(
@@ -1598,8 +1694,8 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(
-                sql,
+            params = coerce_large_parameters_sync(
+                conn,
                 {
                     "id": event_record["id"],
                     "app_name": event_record["app_name"],
@@ -1610,6 +1706,7 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                     "event_data": self._serialize_event_data(event_record["event_data"]),
                 },
             )
+            cursor.execute(sql, params)
             conn.commit()
 
     def append_event_and_update_state(
@@ -1647,37 +1744,38 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
 
         app_upsert_sql = f"""
         MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name FROM DUAL) source
         ON (target.app_name = source.app_name)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, state, update_time)
-            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, :state, SYSTIMESTAMP)
         """
 
         user_upsert_sql = f"""
         MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name, :user_id AS user_id FROM DUAL) source
         ON (target.app_name = source.app_name AND target.user_id = source.user_id)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, source.user_id, :state, SYSTIMESTAMP)
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
             try:
-                cursor.execute(
-                    update_sql, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
+                update_params = coerce_large_parameters_sync(
+                    conn, {"state": state_data, "app_name": app_name, "user_id": user_id, "id": session_id}
                 )
+                cursor.execute(update_sql, update_params)
                 cursor.execute(select_sql, {"app_name": app_name, "user_id": user_id, "id": session_id})
                 row = cursor.fetchone()
                 if row is None:
                     _raise_session_not_found(session_id)
-                cursor.execute(
-                    insert_sql,
+                insert_params = coerce_large_parameters_sync(
+                    conn,
                     {
                         "id": event_record["id"],
                         "app_name": event_record["app_name"],
@@ -1688,13 +1786,17 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
                         "event_data": self._serialize_event_data(event_record["event_data"]),
                     },
                 )
+                cursor.execute(insert_sql, insert_params)
                 if app_state is not None:
-                    cursor.execute(app_upsert_sql, {"app_name": app_name, "state": self._serialize_state(app_state)})
-                if user_state is not None:
-                    cursor.execute(
-                        user_upsert_sql,
-                        {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(user_state)},
+                    app_params = coerce_large_parameters_sync(
+                        conn, {"app_name": app_name, "state": self._serialize_state(app_state)}
                     )
+                    cursor.execute(app_upsert_sql, app_params)
+                if user_state is not None:
+                    user_params = coerce_large_parameters_sync(
+                        conn, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(user_state)}
+                    )
+                    cursor.execute(user_upsert_sql, user_params)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -1869,34 +1971,38 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         """Insert or replace app-scoped state for an application."""
         sql = f"""
         MERGE INTO {self._app_state_table} target
-        USING (SELECT :app_name AS app_name, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name FROM DUAL) source
         ON (target.app_name = source.app_name)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, state, update_time)
-            VALUES (source.app_name, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, :state, SYSTIMESTAMP)
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"app_name": app_name, "state": self._serialize_state(state)})
+            params = coerce_large_parameters_sync(conn, {"app_name": app_name, "state": self._serialize_state(state)})
+            cursor.execute(sql, params)
             conn.commit()
 
     def upsert_user_state(self, app_name: str, user_id: str, state: "dict[str, Any]") -> None:
         """Insert or replace user-scoped state for an application user."""
         sql = f"""
         MERGE INTO {self._user_state_table} target
-        USING (SELECT :app_name AS app_name, :user_id AS user_id, :state AS state FROM DUAL) source
+        USING (SELECT :app_name AS app_name, :user_id AS user_id FROM DUAL) source
         ON (target.app_name = source.app_name AND target.user_id = source.user_id)
         WHEN MATCHED THEN
-            UPDATE SET target.state = source.state, target.update_time = SYSTIMESTAMP
+            UPDATE SET target.state = :state, target.update_time = SYSTIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (app_name, user_id, state, update_time)
-            VALUES (source.app_name, source.user_id, source.state, SYSTIMESTAMP)
+            VALUES (source.app_name, source.user_id, :state, SYSTIMESTAMP)
         """
 
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
-            cursor.execute(sql, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(state)})
+            params = coerce_large_parameters_sync(
+                conn, {"app_name": app_name, "user_id": user_id, "state": self._serialize_state(state)}
+            )
+            cursor.execute(sql, params)
             conn.commit()
 
     def get_metadata(self, key: str) -> "str | None":
@@ -2079,10 +2185,9 @@ class OracleSyncADKStore(BaseSyncADKStore["OracleSyncConfig"]):
         else:
             state_column = "state BLOB NOT NULL"
 
+        escaped_owner_id_ddl = self._owner_id_column_ddl.replace("'", "''") if self._owner_id_column_ddl else ""
         owner_id_column_sql = (
-            _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
-            if self._owner_id_column_ddl
-            else ""
+            _ADK_SESSIONS_TABLE_DDL_FOR_TYPE_TEMPLATE.format(escaped_owner_id_ddl) if escaped_owner_id_ddl else ""
         )
         table_clauses = _adk_table_feature_clause(
             self._config,
@@ -2276,6 +2381,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
 
     def __init__(self, config: "OracleAsyncConfig") -> None:
         super().__init__(config)
+        validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory: bool = bool(adk_config.get("in_memory", False))
 
@@ -2318,7 +2424,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 for entry in entries:
                     content_json = await self._serialize_json_field(entry["content_json"])
                     metadata_json = await self._serialize_json_field(entry["metadata_json"])
-                    params = {
+                    params: dict[str, Any] = {
                         "id": entry["id"],
                         "session_id": entry["session_id"],
                         "app_name": entry["app_name"],
@@ -2333,7 +2439,8 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                         "inserted_at": entry["inserted_at"],
                     }
                     if self._owner_id_column_name:
-                        params["owner_id"] = str(owner_id) if owner_id is not None else None
+                        params["owner_id"] = owner_id
+                    params = await coerce_large_parameters_async(conn, params)
                     if await self._execute_insert_entry(cursor, sql, params):
                         inserted_count += 1
                 await conn.commit()
@@ -2448,10 +2555,9 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                 metadata_json BLOB
             """
 
+        escaped_owner_id_ddl = self._owner_id_column_ddl.replace("'", "''") if self._owner_id_column_ddl else ""
         owner_id_line = (
-            _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
-            if self._owner_id_column_ddl
-            else ""
+            _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE.format(escaped_owner_id_ddl) if escaped_owner_id_ddl else ""
         )
         table_clauses = _adk_table_feature_clause(
             self._config,
@@ -2480,7 +2586,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [
+        statements = [
             f"""
             BEGIN
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_session';
@@ -2493,7 +2599,7 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             """,
             f"""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_app_user_time';
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_app_scope_user_time';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -1418 THEN
@@ -2503,6 +2609,31 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
             """,
             f"""
             BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_scope';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+        ]
+        if self._use_fts:
+            statements.append(
+                f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_fts';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """
+            )
+        statements.append(
+            f"""
+            BEGIN
                 EXECUTE IMMEDIATE 'DROP TABLE {self._memory_table}';
             EXCEPTION
                 WHEN OTHERS THEN
@@ -2510,8 +2641,9 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
                         RAISE;
                     END IF;
             END;
-            """,
-        ]
+            """
+        )
+        return statements
 
     async def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""
@@ -2607,6 +2739,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
 
     def __init__(self, config: "OracleSyncConfig") -> None:
         super().__init__(config)
+        validate_oracle_identifier(self._memory_table, "table name")
         adk_config = _adk_config(config)
         self._in_memory = bool(adk_config.get("in_memory", False))
 
@@ -2650,7 +2783,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             for entry in entries:
                 content_json = self._serialize_json_field(entry["content_json"])
                 metadata_json = self._serialize_json_field(entry["metadata_json"])
-                params = {
+                params: dict[str, Any] = {
                     "id": entry["id"],
                     "session_id": entry["session_id"],
                     "app_name": entry["app_name"],
@@ -2665,7 +2798,8 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                     "inserted_at": entry["inserted_at"],
                 }
                 if self._owner_id_column_name:
-                    params["owner_id"] = str(owner_id) if owner_id is not None else None
+                    params["owner_id"] = owner_id
+                params = coerce_large_parameters_sync(conn, params)
                 if self._execute_insert_entry(cursor, sql, params):
                     inserted_count += 1
             conn.commit()
@@ -2779,10 +2913,9 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                 metadata_json BLOB
             """
 
+        escaped_owner_id_ddl = self._owner_id_column_ddl.replace("'", "''") if self._owner_id_column_ddl else ""
         owner_id_line = (
-            _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE.format(self._owner_id_column_ddl)
-            if self._owner_id_column_ddl
-            else ""
+            _ADK_MEMORY_TABLE_DDL_FOR_TYPE_TEMPLATE.format(escaped_owner_id_ddl) if escaped_owner_id_ddl else ""
         )
         table_clauses = _adk_table_feature_clause(
             self._config,
@@ -2811,7 +2944,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         )
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [
+        statements = [
             f"""
             BEGIN
                 EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_session';
@@ -2824,7 +2957,7 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             """,
             f"""
             BEGIN
-                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_app_user_time';
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_app_scope_user_time';
             EXCEPTION
                 WHEN OTHERS THEN
                     IF SQLCODE != -1418 THEN
@@ -2834,6 +2967,31 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
             """,
             f"""
             BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_scope';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """,
+        ]
+        if self._use_fts:
+            statements.append(
+                f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'DROP INDEX idx_{self._memory_table}_fts';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -1418 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """
+            )
+        statements.append(
+            f"""
+            BEGIN
                 EXECUTE IMMEDIATE 'DROP TABLE {self._memory_table}';
             EXCEPTION
                 WHEN OTHERS THEN
@@ -2841,8 +2999,9 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
                         RAISE;
                     END IF;
             END;
-            """,
-        ]
+            """
+        )
+        return statements
 
     def _execute_insert_entry(self, cursor: Any, sql: str, params: "dict[str, Any]") -> bool:
         """Execute an insert and skip duplicate key errors."""

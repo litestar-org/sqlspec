@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlspec.adapters.sqlite.core import default_statement_config
 from sqlspec.core import SQL
+from sqlspec.driver import SyncDriverAdapterBase
 from tests.conftest import requires_interpreted
 
 
@@ -111,3 +112,28 @@ def test_dispatch_script_no_double_prepare_sub_statement_returns_processed_cache
     assert sub_statement.is_processed is True
     assert getattr(sub_statement, "_is_cache_direct") is True
     assert sub_statement.get_processed_state().execution_parameters == (1,)
+
+
+def test_dispatch_execute_script_releases_sub_statement_when_statement_fails(
+    sqlite_sync_driver: Any, monkeypatch: Any
+) -> None:
+    released: list[SQL] = []
+    original_release = sqlite_sync_driver._release_pooled_statement
+
+    def track_release(stmt: SQL) -> None:
+        released.append(stmt)
+        original_release(stmt)
+
+    def failing_dispatch_execute(self: Any, cursor: Any, statement: SQL) -> Any:
+        if "FAIL_HERE" in statement.raw_sql:
+            raise RuntimeError("boom")
+        return None
+
+    monkeypatch.setattr(sqlite_sync_driver, "_release_pooled_statement", track_release)
+    monkeypatch.setattr(type(sqlite_sync_driver), "dispatch_execute", failing_dispatch_execute)
+    script_stmt = sqlite_sync_driver.prepare_statement(SQL("SELECT 1; SELECT 'FAIL_HERE';")).as_script()
+    try:
+        SyncDriverAdapterBase.dispatch_execute_script(sqlite_sync_driver, None, script_stmt)
+    except RuntimeError:
+        pass
+    assert len(released) == 2

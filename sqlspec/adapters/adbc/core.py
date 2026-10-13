@@ -1,6 +1,6 @@
 """ADBC adapter compiled helpers."""
 
-import datetime
+import datetime as dt
 import decimal
 from collections.abc import Sized
 from functools import lru_cache, partial
@@ -11,20 +11,13 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-import sqlspec.adapters.adbc._typing as _adbc_typing
-from sqlspec.adapters.adbc.type_converter import get_adbc_type_converter
+from sqlspec.adapters.adbc.type_converter import ADBCOutputConverter, get_adbc_type_converter
 from sqlspec.core import (
     DriverParameterProfile,
     ParameterStyle,
     StatementConfig,
     build_null_pruning_transform,
     build_statement_config_from_profile,
-)
-from sqlspec.core.config_runtime import (
-    build_postgres_extension_probe_names,
-    is_postgres_extension_active,
-    resolve_postgres_extension_state,
-    resolve_runtime_statement_config,
 )
 from sqlspec.core.parameters import type_coercion_dispatcher
 from sqlspec.exceptions import (
@@ -46,7 +39,7 @@ from sqlspec.exceptions import (
     _classify_timeout_or_cancellation,
     map_sqlstate_to_exception,
 )
-from sqlspec.typing import PGVECTOR_INSTALLED, Empty
+from sqlspec.typing import PGVECTOR_INSTALLED, Empty, import_optional_attr
 from sqlspec.utils.module_loader import import_string
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -60,10 +53,8 @@ if TYPE_CHECKING:
     from sqlspec.utils.dispatch import TypeDispatcher
 
 __all__ = (
-    "_prepare_batch_with_casts",
     "apply_driver_features",
     "build_connection_config",
-    "build_postgres_extension_probe_names",
     "build_profile",
     "collect_rows",
     "create_mapped_exception",
@@ -73,14 +64,16 @@ __all__ = (
     "driver_kind_from_driver_name",
     "driver_kind_from_uri",
     "driver_profile",
+    "enforce_strict_type_coercion",
     "get_statement_config",
     "handle_postgres_rollback",
     "is_postgres_dialect",
-    "is_postgres_extension_active",
     "is_shared_object_driver",
+    "normalize_connection_aliases",
     "normalize_driver_path",
     "normalize_postgres_empty_parameters",
     "normalize_script_rowcount",
+    "prepare_batch_with_casts",
     "prepare_parameters_with_casts",
     "prepare_postgres_parameters",
     "prepare_postgres_uuid_bindings",
@@ -93,14 +86,31 @@ __all__ = (
     "resolve_driver_name_from_config",
     "resolve_many_rowcount",
     "resolve_parameter_casts",
-    "resolve_parameter_styles",
-    "resolve_postgres_extension_state",
     "resolve_rowcount",
-    "resolve_runtime_statement_config",
 )
 
 COLUMN_CACHE_MAX_SIZE: int = 256
 _UUID_TYPES: Final[tuple[type[Any], ...]] = tuple(build_uuid_coercions())
+_STRICT_COERCION_ALLOWED_TYPES: Final[tuple[type[Any], ...]] = (
+    type(None),
+    bool,
+    int,
+    float,
+    str,
+    bytes,
+    bytearray,
+    memoryview,
+    decimal.Decimal,
+    dt.date,
+    dt.time,
+    dt.datetime,
+    dt.timedelta,
+    UUID,
+    list,
+    tuple,
+    dict,
+    *_UUID_TYPES,
+)
 
 DIALECT_PATTERNS: "dict[str, tuple[str, ...]]" = {
     "postgres": ("postgres", "postgresql"),
@@ -117,7 +127,10 @@ DIALECT_PARAMETER_STYLES: "dict[str, tuple[ParameterStyle, list[ParameterStyle]]
     "postgresql": (ParameterStyle.NUMERIC, [ParameterStyle.NUMERIC]),
     "bigquery": (ParameterStyle.NAMED_AT, [ParameterStyle.NAMED_AT]),
     "sqlite": (ParameterStyle.QMARK, [ParameterStyle.QMARK]),
-    "duckdb": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR]),
+    "duckdb": (
+        ParameterStyle.QMARK,
+        [ParameterStyle.QMARK, ParameterStyle.NUMERIC, ParameterStyle.NAMED_DOLLAR, ParameterStyle.NAMED_COLON],
+    ),
     "mysql": (ParameterStyle.POSITIONAL_PYFORMAT, [ParameterStyle.POSITIONAL_PYFORMAT, ParameterStyle.NAMED_PYFORMAT]),
     "snowflake": (ParameterStyle.QMARK, [ParameterStyle.QMARK, ParameterStyle.NUMERIC]),
 }
@@ -161,15 +174,6 @@ _DRIVER_PATH_KEYWORDS_TO_DIALECT: "tuple[tuple[str, str], ...]" = (
     ("gizmosql", "duckdb"),
     ("flightsql", "sqlite"),
     ("grpc", "sqlite"),
-)
-
-_PARAMETER_STYLES_BY_KEYWORD: "tuple[tuple[str, tuple[tuple[str, ...], str]], ...]" = (
-    ("postgresql", (("numeric",), "numeric")),
-    ("sqlite", (("qmark", "named_colon"), "qmark")),
-    ("duckdb", (("qmark", "numeric"), "qmark")),
-    ("gizmosql", (("qmark", "numeric"), "qmark")),
-    ("bigquery", (("named_at",), "named_at")),
-    ("snowflake", (("qmark", "numeric"), "qmark")),
 )
 
 _BIGQUERY_DB_KWARGS_OPTIONS: "tuple[tuple[str, str], ...]" = (
@@ -321,8 +325,9 @@ def normalize_driver_path(driver_name: str) -> str:
 
 def driver_from_uri(uri: str) -> "str | None":
     """Resolve a default driver connect path from a URI."""
+    lowered = uri.lower()
     for prefix, driver_path in _URI_PREFIX_DRIVER:
-        if uri.startswith(prefix):
+        if lowered.startswith(prefix):
             return driver_path
     return None
 
@@ -343,10 +348,10 @@ def driver_kind_from_driver_name(driver_name: str) -> "str | None":
 def driver_kind_from_uri(uri: str) -> "str | None":
     """Return a canonical driver kind based on URI scheme."""
     lowered = uri.lower()
-    if lowered.startswith(("gizmosql://", "gizmo://", "grpc+tls://")):
+    if lowered.startswith(("gizmosql://", "gizmo://")):
         return "gizmosql"
     for prefix, driver_path in _URI_PREFIX_DRIVER:
-        if uri.startswith(prefix):
+        if lowered.startswith(prefix):
             return driver_kind_from_driver_name(driver_path)
     return None
 
@@ -440,40 +445,22 @@ def resolve_dialect_from_config(connection_config: "Mapping[str, Any]") -> str:
     )
     if isinstance(uri, str):
         lowered_uri = uri.lower()
-        if lowered_uri.startswith(("gizmosql://", "gizmo://", "grpc+tls://")):
+        if lowered_uri.startswith(("gizmosql://", "gizmo://")):
+            return "duckdb"
+        if driver_name is None and lowered_uri.startswith("grpc+tls://"):
             return "duckdb"
 
     return resolve_dialect_from_driver_path(resolve_driver_name_from_config(connection_config))
 
 
-def resolve_parameter_styles(driver_path: str | None, logger: Any | None = None) -> "tuple[tuple[str, ...], str]":
-    """Resolve supported and default parameter styles from a driver path.
-
-    Args:
-        driver_path: Import path for the ADBC driver connect function.
-        logger: Optional logger for diagnostics.
-
-    Returns:
-        Tuple of (supported_parameter_styles, default_parameter_style)
-    """
-    if isinstance(driver_path, str):
-        lowered = driver_path.lower()
-        for keyword, styles in _PARAMETER_STYLES_BY_KEYWORD:
-            if keyword in lowered:
-                return styles
-    if logger is not None:
-        logger.debug("Error resolving parameter styles, using defaults")
-    return (("qmark",), "qmark")
-
-
-def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build a normalized connection configuration dictionary.
+def normalize_connection_aliases(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Normalize URI and file-path aliases in an ADBC connection config mapping.
 
     Args:
         connection_config: Raw connection configuration mapping.
 
     Returns:
-        Normalized connection configuration dictionary.
+        Dictionary with normalized ``uri`` / ``path`` keys.
     """
     config = dict(connection_config)
 
@@ -503,11 +490,7 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         )
         if db_path is not None:
             config["uri"] = db_path
-            uri = db_path
-            if driver_kind is None:
-                driver_kind = "sqlite"
-
-    if driver_kind == "duckdb" and "path" not in config:
+    elif driver_kind == "duckdb" and "path" not in config:
         duck_path = (
             config.pop("database", None)
             or config.pop("db", None)
@@ -517,9 +500,33 @@ def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str
         if duck_path is not None:
             config["path"] = duck_path
 
-    if isinstance(uri, str) and driver_kind == "sqlite" and uri.startswith("sqlite://"):
+    return config
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection configuration dictionary.
+    """
+    config = normalize_connection_aliases(connection_config)
+
+    driver_name = config.get("driver_name")
+    uri = config.get("uri")
+    driver_kind: str | None = None
+    if isinstance(driver_name, str):
+        driver_kind = driver_kind_from_driver_name(driver_name)
+    if driver_kind is None and isinstance(uri, str):
+        driver_kind = driver_kind_from_uri(uri)
+    if driver_kind is None and "uri" in config:
+        driver_kind = "sqlite"
+
+    if isinstance(uri, str) and driver_kind == "sqlite" and uri.lower().startswith("sqlite://"):
         config["uri"] = uri[9:]
-    if isinstance(uri, str) and driver_kind == "duckdb" and uri.startswith("duckdb://"):
+    if isinstance(uri, str) and driver_kind == "duckdb" and uri.lower().startswith("duckdb://"):
         config["path"] = uri[9:]
         config.pop("uri", None)
 
@@ -599,32 +606,6 @@ def handle_postgres_rollback(dialect: str, cursor: Any, logger: Any | None = Non
         _log_rollback(logger)
 
 
-def _try_rollback(rollback: "Callable[[], Any]") -> bool:
-    """Run a rollback callable and report whether it succeeded.
-
-    Args:
-        rollback: Zero-argument callable performing the rollback.
-
-    Returns:
-        True if the rollback completed without raising.
-    """
-    try:
-        rollback()
-    except Exception:
-        return False
-    return True
-
-
-def _log_rollback(logger: "Any | None") -> None:
-    """Record that a PostgreSQL rollback completed.
-
-    Args:
-        logger: Optional logger for diagnostics.
-    """
-    if logger is not None:
-        logger.debug("PostgreSQL rollback executed after transaction failure")
-
-
 def normalize_postgres_empty_parameters(dialect: str, parameters: Any) -> Any:
     """Normalize empty parameter payloads for PostgreSQL drivers.
 
@@ -650,10 +631,12 @@ def prepare_postgres_parameters(
 ) -> Any:
     """Prepare Postgres parameters with cast-aware coercion."""
     postgres_compatible = normalize_postgres_empty_parameters(dialect, parameters)
-    converter = get_adbc_type_converter(dialect)
+    converter = get_adbc_type_converter(dialect, json_serializer=json_serializer)
     if isinstance(postgres_compatible, (list, tuple)) and hasattr(converter, "convert_sequence"):
         seq = [
-            converter.convert_sequence(item) if isinstance(item, (list, tuple)) else item
+            converter.convert_sequence(item, json_serializer=json_serializer)
+            if isinstance(item, (list, tuple))
+            else item
             for item in postgres_compatible
         ]
         postgres_compatible = tuple(seq) if isinstance(postgres_compatible, tuple) else seq
@@ -740,7 +723,7 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if "deadlock" in error_msg:
         return _create_adbc_error(error, DeadlockError, "deadlock detected")
     if "serialization" in error_msg or "concurrent update" in error_msg:
-        return _create_adbc_error(error, DeadlockError, "serialization failure")
+        return _create_adbc_error(error, SerializationConflictError, "serialization failure")
 
     if message_class := _classify_timeout_or_cancellation(error_msg):
         return _create_adbc_error(error, message_class, "query terminated")
@@ -755,35 +738,6 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
         return _create_adbc_error(error, DatabaseConnectionError, "connection error")
 
     return _create_adbc_error(error, SQLSpecError, "database error")
-
-
-def _identity(value: Any) -> Any:
-    return value
-
-
-def _convert_array_for_postgres_adbc(value: Any) -> Any:
-    """Convert array values for PostgreSQL compatibility."""
-
-    if isinstance(value, tuple):
-        return list(value)
-    return value
-
-
-_BASE_TYPE_COERCION_MAP: Final[dict[type, Any]] = {
-    datetime.datetime: _identity,
-    datetime.date: _identity,
-    datetime.time: _identity,
-    decimal.Decimal: float,
-    bool: _identity,
-    int: _identity,
-    float: _identity,
-    bytes: _identity,
-    tuple: _convert_array_for_postgres_adbc,
-    list: _convert_array_for_postgres_adbc,
-    dict: _identity,
-    UUID: _identity,
-    **build_uuid_coercions(native=True),
-}
 
 
 def build_profile() -> "DriverParameterProfile":
@@ -802,10 +756,10 @@ def build_profile() -> "DriverParameterProfile":
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
-            datetime.datetime: _identity,
-            datetime.date: _identity,
-            datetime.time: _identity,
-            decimal.Decimal: float,
+            dt.datetime: _identity,
+            dt.date: _identity,
+            dt.time: _identity,
+            decimal.Decimal: _identity,
             bool: _identity,
             int: _identity,
             float: _identity,
@@ -842,6 +796,7 @@ def get_statement_config(detected_dialect: str) -> StatementConfig:
     if detected_dialect == "duckdb":
         parameter_overrides["preserve_parameter_format"] = False
         parameter_overrides["supported_execution_parameter_styles"] = {ParameterStyle.QMARK, ParameterStyle.NUMERIC}
+        parameter_overrides["ast_transformer"] = _transform_duckdb_copy_parameters
 
     if is_postgres_dialect(detected_dialect):
         parameter_overrides["ast_transformer"] = build_null_pruning_transform(dialect=sqlglot_dialect)
@@ -880,6 +835,25 @@ def apply_driver_features(
         statement_config = _apply_adbc_json_serializer(statement_config, json_serializer)
 
     return statement_config, processed_features
+
+
+def enforce_strict_type_coercion(parameters: Any, *, is_many: bool = False) -> None:
+    """Validate parameter values when ``strict_type_coercion`` is enabled.
+
+    Args:
+        parameters: Parameter payload to validate.
+        is_many: Whether the payload represents an execute-many batch.
+
+    Raises:
+        SQLSpecError: If any parameter value is not a supported SQL/Arrow scalar or container type.
+    """
+    if parameters is None:
+        return
+    if is_many and isinstance(parameters, (list, tuple)):
+        for row in parameters:
+            _validate_strict_parameter_payload(row)
+        return
+    _validate_strict_parameter_payload(parameters)
 
 
 def resolve_column_names(description: "list[Any] | None", cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
@@ -1005,6 +979,34 @@ def prepare_parameters_with_casts(
     return parameters
 
 
+def prepare_batch_with_casts(
+    parameter_sets: Any,
+    parameter_casts: "dict[int, str]",
+    statement_config: "StatementConfig",
+    *,
+    dialect: str,
+    json_serializer: "Callable[[Any], str]",
+) -> Any:
+    """Prepare an execute-many batch while sharing converter setup across rows."""
+    if not isinstance(parameter_sets, (list, tuple)):
+        return normalize_postgres_empty_parameters(dialect, parameter_sets)
+
+    postgres_compatible = [normalize_postgres_empty_parameters(dialect, row) for row in parameter_sets]
+    if not parameter_casts:
+        return postgres_compatible
+
+    json_encoder = statement_config.parameter_config.json_serializer or json_serializer
+    converter = get_adbc_type_converter(dialect)
+    type_map = statement_config.parameter_config.type_coercion_map
+    dispatcher = type_coercion_dispatcher(tuple(type_map.items())) if type_map else None
+    return [
+        _prepare_parameter_sequence_with_casts(row, parameter_casts, type_map, dispatcher, converter, json_encoder)
+        if isinstance(row, (list, tuple))
+        else row
+        for row in postgres_compatible
+    ]
+
+
 def prepare_postgres_uuid_bindings(
     compiled_sql: str, prepared_parameters: Any, *, is_many: bool, dialect: str
 ) -> "tuple[str, object]":
@@ -1045,6 +1047,61 @@ def prepare_postgres_uuid_bindings(
     else:
         converted_parameters = _convert_uuid_row(prepared_parameters, effective_scalars, effective_arrays, 1)
     return rewritten_sql, converted_parameters
+
+
+def _try_rollback(rollback: "Callable[[], Any]") -> bool:
+    """Run a rollback callable and report whether it succeeded.
+
+    Args:
+        rollback: Zero-argument callable performing the rollback.
+
+    Returns:
+        True if the rollback completed without raising.
+    """
+    try:
+        rollback()
+    except Exception:
+        return False
+    return True
+
+
+def _log_rollback(logger: "Any | None") -> None:
+    """Record that a PostgreSQL rollback completed.
+
+    Args:
+        logger: Optional logger for diagnostics.
+    """
+    if logger is not None:
+        logger.debug("PostgreSQL rollback executed after transaction failure")
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _convert_array_for_postgres_adbc(value: Any) -> Any:
+    """Convert array values for PostgreSQL compatibility."""
+
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+_BASE_TYPE_COERCION_MAP: Final[dict[type, Any]] = {
+    dt.datetime: _identity,
+    dt.date: _identity,
+    dt.time: _identity,
+    decimal.Decimal: _identity,
+    bool: _identity,
+    int: _identity,
+    float: _identity,
+    bytes: _identity,
+    tuple: _convert_array_for_postgres_adbc,
+    list: _convert_array_for_postgres_adbc,
+    dict: _identity,
+    UUID: _identity,
+    **build_uuid_coercions(native=True),
+}
 
 
 def _parameter_ordinal(parameter: exp.Parameter) -> "int | None":
@@ -1284,6 +1341,89 @@ def _normalize_adbc_driver_features(processed_features: "dict[str, Any]") -> "di
     return processed_features
 
 
+def _validate_strict_parameter_value(value: Any) -> None:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_strict_parameter_value(item)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _validate_strict_parameter_value(item)
+        return
+    if not isinstance(value, _STRICT_COERCION_ALLOWED_TYPES):
+        msg = f"Unsupported parameter type for strict_type_coercion: {type(value).__name__}"
+        raise SQLSpecError(msg)
+
+
+def _validate_strict_parameter_payload(parameters: Any) -> None:
+    if isinstance(parameters, (list, tuple)):
+        for item in parameters:
+            _validate_strict_parameter_value(item)
+    elif isinstance(parameters, dict):
+        for item in parameters.values():
+            _validate_strict_parameter_value(item)
+    else:
+        _validate_strict_parameter_value(parameters)
+
+
+def _transform_duckdb_copy_parameters(
+    expression: Any, parameters: Any, _parameter_profile: Any = None, is_many: bool = False
+) -> "tuple[Any, Any]":
+    """Inline bound file-target placeholders in DuckDB ``COPY ... TO/FROM`` statements."""
+    if is_many or not isinstance(expression, exp.Copy) or not isinstance(parameters, (list, tuple)) or not parameters:
+        return expression, parameters
+
+    files = expression.args.get("files")
+    if not isinstance(files, list) or not files:
+        return expression, parameters
+
+    this_node = expression.this
+    prefix_count = (
+        len(list(this_node.find_all(exp.Placeholder, exp.Parameter))) if isinstance(this_node, exp.Expression) else 0
+    )
+
+    inlined_indices: set[int] = set()
+    new_files: list[Any] = list(files)
+    file_qmark_offset = 0
+    for idx, file_expr in enumerate(new_files):
+        placeholder_node: exp.Expression | None = None
+        if isinstance(file_expr, (exp.Placeholder, exp.Parameter)):
+            placeholder_node = file_expr
+        elif isinstance(file_expr, exp.Table) and isinstance(file_expr.this, (exp.Placeholder, exp.Parameter)):
+            placeholder_node = file_expr.this
+
+        if placeholder_node is None:
+            continue
+
+        param_idx: int | None = None
+        if isinstance(placeholder_node, exp.Parameter):
+            ordinal = _parameter_ordinal(placeholder_node)
+            if ordinal is not None:
+                param_idx = ordinal - 1
+        elif isinstance(placeholder_node, exp.Placeholder):
+            raw_val = placeholder_node.this
+            if raw_val is not None and str(raw_val).lstrip("$").isdigit():
+                param_idx = int(str(raw_val).lstrip("$")) - 1
+
+        if param_idx is None:
+            param_idx = prefix_count + file_qmark_offset
+            file_qmark_offset += 1
+
+        if 0 <= param_idx < len(parameters):
+            new_files[idx] = exp.Literal.string(str(parameters[param_idx]))
+            inlined_indices.add(param_idx)
+
+    if not inlined_indices:
+        return expression, parameters
+
+    transformed_copy = expression.copy()
+    transformed_copy.set("files", new_files)
+    remaining = [val for idx, val in enumerate(parameters) if idx not in inlined_indices]
+    if not remaining:
+        return transformed_copy, []
+    return transformed_copy, tuple(remaining) if isinstance(parameters, tuple) else remaining
+
+
 def _apply_adbc_json_serializer(
     statement_config: "StatementConfig", json_serializer: "Callable[[Any], str]"
 ) -> "StatementConfig":
@@ -1328,7 +1468,10 @@ def _prepare_parameter_sequence_with_casts(
             else:
                 result.append(param)
         elif isinstance(param, dict):
-            result.append(converter.convert_dict(param))
+            if isinstance(converter, ADBCOutputConverter):
+                result.append(converter.convert_dict(param, json_serializer=json_encoder))
+            else:
+                result.append(converter.convert_dict(param))
         elif isinstance(param, (list, tuple)):
             if type_map and dispatcher is not None:
                 exact_converter = type_map.get(type(param))
@@ -1339,9 +1482,15 @@ def _prepare_parameter_sequence_with_casts(
                     if converter_func is not None:
                         param = converter_func(param)
                     elif hasattr(converter, "convert_sequence"):
-                        param = converter.convert_sequence(param)
+                        if isinstance(converter, ADBCOutputConverter):
+                            param = converter.convert_sequence(param, json_serializer=json_encoder)
+                        else:
+                            param = converter.convert_sequence(param)
             elif hasattr(converter, "convert_sequence"):
-                param = converter.convert_sequence(param)
+                if isinstance(converter, ADBCOutputConverter):
+                    param = converter.convert_sequence(param, json_serializer=json_encoder)
+                else:
+                    param = converter.convert_sequence(param)
             result.append(param)
         else:
             if type_map and dispatcher is not None:
@@ -1356,38 +1505,12 @@ def _prepare_parameter_sequence_with_casts(
     return tuple(result) if isinstance(parameters, tuple) else result
 
 
-def _prepare_batch_with_casts(
-    parameter_sets: Any,
-    parameter_casts: "dict[int, str]",
-    statement_config: "StatementConfig",
-    *,
-    dialect: str,
-    json_serializer: "Callable[[Any], str]",
-) -> Any:
-    """Prepare an execute-many batch while sharing converter setup across rows."""
-    if not isinstance(parameter_sets, (list, tuple)):
-        return normalize_postgres_empty_parameters(dialect, parameter_sets)
-
-    postgres_compatible = [normalize_postgres_empty_parameters(dialect, row) for row in parameter_sets]
-    if not parameter_casts:
-        return postgres_compatible
-
-    json_encoder = statement_config.parameter_config.json_serializer or json_serializer
-    converter = get_adbc_type_converter(dialect)
-    type_map = statement_config.parameter_config.type_coercion_map
-    dispatcher = type_coercion_dispatcher(tuple(type_map.items())) if type_map else None
-    return [
-        _prepare_parameter_sequence_with_casts(row, parameter_casts, type_map, dispatcher, converter, json_encoder)
-        if isinstance(row, (list, tuple))
-        else row
-        for row in postgres_compatible
-    ]
+_prepare_batch_with_casts = prepare_batch_with_casts
 
 
 def _resolve_flightsql_db_kwargs_keys() -> "tuple[str, str]":
-    try:
-        database_options = _adbc_typing.AdbcFlightSqlDatabaseOptions
-    except ImportError:
+    database_options = import_optional_attr("adbc_driver_flightsql", "DatabaseOptions")
+    if database_options is None:
         return _FLIGHTSQL_TLS_SKIP_VERIFY_KEY, _FLIGHTSQL_AUTHORIZATION_HEADER_KEY
     return database_options.TLS_SKIP_VERIFY.value, database_options.AUTHORIZATION_HEADER.value
 

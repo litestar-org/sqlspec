@@ -10,10 +10,14 @@ from sqlspec.adapters.cockroach_psycopg._typing import (
     CockroachPsycopgSyncSessionContext,
     CockroachSyncConnection,
 )
+from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgAdaptersMap as AdaptersMap
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgAsyncConnectionPool as AsyncConnectionPool
 from sqlspec.adapters.cockroach_psycopg._typing import CockroachPsycopgConnectionPool as ConnectionPool
 from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_crdb as psycopg_crdb
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_set_json_dumps as set_json_dumps
+from sqlspec.adapters.cockroach_psycopg._typing import cockroach_psycopg_set_json_loads as set_json_loads
 from sqlspec.adapters.cockroach_psycopg.core import (
+    CockroachPsycopgRetryConfig,
     apply_driver_features,
     build_connection_config,
     build_statement_config,
@@ -46,10 +50,12 @@ if TYPE_CHECKING:
 
 __all__ = (
     "CockroachPsycopgAsyncConfig",
+    "CockroachPsycopgAsyncConnectionContext",
     "CockroachPsycopgConnectionConfig",
     "CockroachPsycopgDriverFeatures",
     "CockroachPsycopgPoolConfig",
     "CockroachPsycopgSyncConfig",
+    "CockroachPsycopgSyncConnectionContext",
     "build_connection_config",
 )
 
@@ -242,57 +248,8 @@ class CockroachPsycopgSyncConfig(
             observability_config=observability_config,
             **kwargs,
         )
-
-    def _create_pool(self) -> "ConnectionPool":
-        all_config = dict(self.connection_config)
-
-        pool_parameters = {
-            "min_size": all_config.pop("min_size", 4),
-            "max_size": all_config.pop("max_size", None),
-            "name": all_config.pop("name", None),
-            "timeout": all_config.pop("timeout", 30.0),
-            "max_waiting": all_config.pop("max_waiting", 0),
-            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
-            "max_idle": all_config.pop("max_idle", 600.0),
-            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
-            "reconnect_failed": all_config.pop("reconnect_failed", None),
-            "num_workers": all_config.pop("num_workers", 3),
-            "check": all_config.pop("check", None),
-            "reset": all_config.pop("reset", None),
-            "open": all_config.pop("open", True),
-            "close_returns": all_config.pop("close_returns", False),
-        }
-
-        pool_parameters["configure"] = all_config.pop("configure", self._configure_connection)
-        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
-
-        conninfo = all_config.pop("conninfo", None)
-        kwargs = all_config.pop("kwargs", {})
-        all_config.update(kwargs)
-        _apply_cluster_option(all_config)
-        if conninfo:
-            return ConnectionPool(
-                conninfo, kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
-            )
-
-        return ConnectionPool("", kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters)
-
-    def _configure_connection(self, conn: "CockroachSyncConnection") -> None:
-        autocommit_setting = self.connection_config.get("autocommit")
-        if autocommit_setting is not None:
-            conn.autocommit = autocommit_setting
-
-        # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
-            self._user_connection_hook(conn)
-
-    def _close_pool(self) -> None:
-        if not self.connection_instance:
-            return
-        try:
-            self.connection_instance.close()
-        finally:
-            self.connection_instance = None
+            self.driver_features["on_connection_create"] = self._user_connection_hook
 
     def create_connection(self) -> "CockroachSyncConnection":
         """Open a standalone connection owned by the caller.
@@ -344,16 +301,81 @@ class CockroachPsycopgSyncConfig(
         namespace = super().get_signature_namespace()
         namespace.update({
             "CockroachPsycopgConnectionConfig": CockroachPsycopgConnectionConfig,
+            "CockroachPsycopgConnectionPool": ConnectionPool,
+            "CockroachPsycopgDriverFeatures": CockroachPsycopgDriverFeatures,
             "CockroachPsycopgPoolConfig": CockroachPsycopgPoolConfig,
-            "CockroachSyncConnection": CockroachSyncConnection,
+            "CockroachPsycopgRetryConfig": CockroachPsycopgRetryConfig,
+            "CockroachPsycopgSyncConfig": CockroachPsycopgSyncConfig,
+            "CockroachPsycopgSyncConnectionContext": CockroachPsycopgSyncConnectionContext,
             "CockroachPsycopgSyncDriver": CockroachPsycopgSyncDriver,
             "CockroachPsycopgSyncExceptionHandler": CockroachPsycopgSyncExceptionHandler,
             "CockroachPsycopgSyncSessionContext": CockroachPsycopgSyncSessionContext,
+            "CockroachSyncConnection": CockroachSyncConnection,
         })
         return namespace
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    def _create_pool(self) -> "ConnectionPool":
+        all_config = dict(self.connection_config)
+
+        pool_parameters = {
+            "min_size": all_config.pop("min_size", 4),
+            "max_size": all_config.pop("max_size", None),
+            "name": all_config.pop("name", None),
+            "timeout": all_config.pop("timeout", 30.0),
+            "max_waiting": all_config.pop("max_waiting", 0),
+            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_idle": all_config.pop("max_idle", 600.0),
+            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "reconnect_failed": all_config.pop("reconnect_failed", None),
+            "num_workers": all_config.pop("num_workers", 3),
+            "check": all_config.pop("check", None),
+            "reset": all_config.pop("reset", None),
+            "open": all_config.pop("open", True),
+            "close_returns": all_config.pop("close_returns", False),
+        }
+
+        pool_parameters["configure"] = all_config.pop("configure", self._configure_connection)
+        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
+
+        conninfo = all_config.pop("conninfo", None)
+        kwargs = all_config.pop("kwargs", {})
+        extra = all_config.pop("extra", {})
+        all_config.update(kwargs)
+        all_config.update(extra)
+        _apply_cluster_option(all_config)
+        if conninfo:
+            return ConnectionPool(
+                conninfo, kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters
+            )
+
+        return ConnectionPool("", kwargs=all_config, connection_class=psycopg_crdb.CrdbConnection, **pool_parameters)
+
+    def _configure_connection(self, conn: "CockroachSyncConnection") -> None:
+        autocommit_setting = self.connection_config.get("autocommit")
+        if autocommit_setting is not None:
+            conn.autocommit = autocommit_setting
+
+        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
+            serializer = self.driver_features.get("json_serializer")
+            deserializer = self.driver_features.get("json_deserializer")
+            if serializer is not None:
+                set_json_dumps(serializer, conn)
+            if deserializer is not None:
+                set_json_loads(deserializer, conn)
+
+        if self._user_connection_hook is not None:
+            self._user_connection_hook(conn)
+
+    def _close_pool(self) -> None:
+        if not self.connection_instance:
+            return
+        try:
+            self.connection_instance.close()
+        finally:
+            self.connection_instance = None
 
 
 class CockroachPsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -366,13 +388,9 @@ class CockroachPsycopgAsyncConnectionContext(AsyncPoolConnectionContext):
         self._ctx: Any = None
 
     async def __aenter__(self) -> "CockroachAsyncConnection":
-        if self._config.connection_instance is None:
-            self._config.connection_instance = await self._config.create_pool()
-        if self._config.connection_instance:
-            self._ctx = self._config.connection_instance.connection()
-            return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
-        msg = "Connection pool is not initialized"
-        raise ImproperConfigurationError(msg)
+        pool = await self._config.provide_pool()
+        self._ctx = pool.connection()
+        return cast("CockroachAsyncConnection", await self._ctx.__aenter__())
 
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
@@ -390,10 +408,7 @@ class _CockroachPsycopgAsyncSessionConnectionHandler(AsyncPoolSessionFactory):
         self._ctx: Any = None
 
     async def acquire_connection(self) -> "CockroachAsyncConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        pool = await self._config.provide_pool()
         ctx = pool.connection()
         self._ctx = ctx
         return cast("CockroachAsyncConnection", await ctx.__aenter__())
@@ -469,64 +484,8 @@ class CockroachPsycopgAsyncConfig(
             observability_config=observability_config,
             **kwargs,
         )
-
-    async def _create_pool(self) -> "AsyncConnectionPool":
-        all_config = dict(self.connection_config)
-
-        pool_parameters = {
-            "min_size": all_config.pop("min_size", 4),
-            "max_size": all_config.pop("max_size", None),
-            "name": all_config.pop("name", None),
-            "timeout": all_config.pop("timeout", 30.0),
-            "max_waiting": all_config.pop("max_waiting", 0),
-            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
-            "max_idle": all_config.pop("max_idle", 600.0),
-            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
-            "reconnect_failed": all_config.pop("reconnect_failed", None),
-            "num_workers": all_config.pop("num_workers", 3),
-            "check": all_config.pop("check", None),
-            "reset": all_config.pop("reset", None),
-            "close_returns": all_config.pop("close_returns", False),
-        }
-        open_pool = all_config.pop("open", True)
-        pool_parameters["open"] = False if open_pool is True else open_pool
-
-        pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
-        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
-
-        conninfo = all_config.pop("conninfo", None)
-        kwargs = all_config.pop("kwargs", {})
-        all_config.update(kwargs)
-        _apply_cluster_option(all_config)
-        if conninfo:
-            pool = AsyncConnectionPool(
-                conninfo, kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
-            )
-        else:
-            pool = AsyncConnectionPool(
-                "", kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
-            )
-
-        if open_pool is True:
-            await pool.open()
-        return cast("AsyncConnectionPool", pool)
-
-    async def _configure_async_connection(self, conn: "CockroachAsyncConnection") -> None:
-        autocommit_setting = self.connection_config.get("autocommit")
-        if autocommit_setting is not None:
-            await conn.set_autocommit(autocommit_setting)
-
-        # Call user-provided callback after internal setup
         if self._user_connection_hook is not None:
-            await self._user_connection_hook(conn)
-
-    async def _close_pool(self) -> None:
-        if not self.connection_instance:
-            return
-        try:
-            await self.connection_instance.close()
-        finally:
-            self.connection_instance = None
+            self.driver_features["on_connection_create"] = self._user_connection_hook
 
     async def create_connection(self) -> "CockroachAsyncConnection":
         """Open a standalone connection owned by the caller.
@@ -578,16 +537,88 @@ class CockroachPsycopgAsyncConfig(
         namespace = super().get_signature_namespace()
         namespace.update({
             "CockroachAsyncConnection": CockroachAsyncConnection,
+            "CockroachPsycopgAsyncConfig": CockroachPsycopgAsyncConfig,
+            "CockroachPsycopgAsyncConnectionContext": CockroachPsycopgAsyncConnectionContext,
+            "CockroachPsycopgAsyncConnectionPool": AsyncConnectionPool,
             "CockroachPsycopgAsyncDriver": CockroachPsycopgAsyncDriver,
             "CockroachPsycopgAsyncExceptionHandler": CockroachPsycopgAsyncExceptionHandler,
             "CockroachPsycopgAsyncSessionContext": CockroachPsycopgAsyncSessionContext,
             "CockroachPsycopgConnectionConfig": CockroachPsycopgConnectionConfig,
+            "CockroachPsycopgDriverFeatures": CockroachPsycopgDriverFeatures,
             "CockroachPsycopgPoolConfig": CockroachPsycopgPoolConfig,
+            "CockroachPsycopgRetryConfig": CockroachPsycopgRetryConfig,
         })
         return namespace
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    async def _create_pool(self) -> "AsyncConnectionPool":
+        all_config = dict(self.connection_config)
+
+        pool_parameters = {
+            "min_size": all_config.pop("min_size", 4),
+            "max_size": all_config.pop("max_size", None),
+            "name": all_config.pop("name", None),
+            "timeout": all_config.pop("timeout", 30.0),
+            "max_waiting": all_config.pop("max_waiting", 0),
+            "max_lifetime": all_config.pop("max_lifetime", 3600.0),
+            "max_idle": all_config.pop("max_idle", 600.0),
+            "reconnect_timeout": all_config.pop("reconnect_timeout", 300.0),
+            "reconnect_failed": all_config.pop("reconnect_failed", None),
+            "num_workers": all_config.pop("num_workers", 3),
+            "check": all_config.pop("check", None),
+            "reset": all_config.pop("reset", None),
+            "close_returns": all_config.pop("close_returns", False),
+        }
+        open_pool = all_config.pop("open", True)
+        pool_parameters["open"] = False if open_pool is True else open_pool
+
+        pool_parameters["configure"] = all_config.pop("configure", self._configure_async_connection)
+        pool_parameters = {k: v for k, v in pool_parameters.items() if v is not None}
+
+        conninfo = all_config.pop("conninfo", None)
+        kwargs = all_config.pop("kwargs", {})
+        extra = all_config.pop("extra", {})
+        all_config.update(kwargs)
+        all_config.update(extra)
+        _apply_cluster_option(all_config)
+        if conninfo:
+            pool = AsyncConnectionPool(
+                conninfo, kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+            )
+        else:
+            pool = AsyncConnectionPool(
+                "", kwargs=all_config, connection_class=psycopg_crdb.AsyncCrdbConnection, **pool_parameters
+            )
+
+        if open_pool is True:
+            await pool.open()
+        return cast("AsyncConnectionPool", pool)
+
+    async def _configure_async_connection(self, conn: "CockroachAsyncConnection") -> None:
+        autocommit_setting = self.connection_config.get("autocommit")
+        if autocommit_setting is not None:
+            await conn.set_autocommit(autocommit_setting)
+
+        if isinstance(getattr(conn, "adapters", None), AdaptersMap):
+            serializer = self.driver_features.get("json_serializer")
+            deserializer = self.driver_features.get("json_deserializer")
+            if serializer is not None:
+                set_json_dumps(serializer, conn)
+            if deserializer is not None:
+                set_json_loads(deserializer, conn)
+
+        if self._user_connection_hook is not None:
+            await self._user_connection_hook(conn)
+
+    async def _close_pool(self) -> None:
+        if not self.connection_instance:
+            return
+        try:
+            await self.connection_instance.close()
+        finally:
+            self.connection_instance = None
 
 
 _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({

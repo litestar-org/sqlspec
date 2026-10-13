@@ -1,14 +1,15 @@
 """CockroachDB psycopg adapter compiled helpers."""
 
-import random
 import re
+import secrets
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
 from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
-from sqlspec.adapters.psycopg.core import apply_driver_features, build_statement_config, driver_profile
+from sqlspec.adapters.psycopg.core import apply_driver_features as psycopg_apply_driver_features
+from sqlspec.adapters.psycopg.core import build_statement_config, driver_profile
 from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
 from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from sqlspec.adapters.cockroach_psycopg.config import CockroachPsycopgPoolConfig
+    from sqlspec.core import StatementConfig
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
@@ -36,14 +38,15 @@ __all__ = (
     "validate_follower_read_staleness",
 )
 
-# Retry configuration defaults (module-level for mypyc compatibility)
 _DEFAULT_MAX_RETRIES: Final[int] = 10
 _DEFAULT_BASE_DELAY_MS: Final[float] = 50.0
 _DEFAULT_MAX_DELAY_MS: Final[float] = 5000.0
 _DEFAULT_ENABLE_LOGGING: Final[bool] = True
+_MAX_CAUSE_CHAIN_DEPTH: Final[int] = 16
+_SYSTEM_RANDOM: Final[secrets.SystemRandom] = secrets.SystemRandom()
+_LITERAL_PERCENT_PATTERN: Final[re.Pattern[str]] = re.compile(r"%(?!s)")
 
 
-# Keep this in sync with cockroach_asyncpg.core.CockroachAsyncpgRetryConfig.
 @mypyc_attr(allow_interpreted_subclasses=False)
 class CockroachPsycopgRetryConfig:
     """CockroachDB psycopg transaction retry configuration."""
@@ -57,6 +60,15 @@ class CockroachPsycopgRetryConfig:
         max_delay_ms: float = _DEFAULT_MAX_DELAY_MS,
         enable_logging: bool = _DEFAULT_ENABLE_LOGGING,
     ) -> None:
+        if max_retries < 0:
+            msg = "max_retries must be non-negative"
+            raise ImproperConfigurationError(msg)
+        if base_delay_ms < 0:
+            msg = "base_delay_ms must be non-negative"
+            raise ImproperConfigurationError(msg)
+        if max_delay_ms < 0:
+            msg = "max_delay_ms must be non-negative"
+            raise ImproperConfigurationError(msg)
         self.max_retries = max_retries
         self.base_delay_ms = base_delay_ms
         self.max_delay_ms = max_delay_ms
@@ -71,6 +83,20 @@ class CockroachPsycopgRetryConfig:
             max_delay_ms=float(driver_features.get("retry_delay_max_ms", _DEFAULT_MAX_DELAY_MS)),
             enable_logging=bool(driver_features.get("enable_retry_logging", _DEFAULT_ENABLE_LOGGING)),
         )
+
+
+def apply_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
+    """Apply CockroachDB psycopg driver feature defaults to statement config."""
+    raw = dict(driver_features) if driver_features else {}
+    updated_statement_config, features = psycopg_apply_driver_features(statement_config, raw)
+    for pg_only_key in ("enable_pgvector", "enable_paradedb", "enable_pg_textsearch"):
+        if pg_only_key not in raw:
+            features.pop(pg_only_key, None)
+    features.setdefault("enable_events", True)
+    features.setdefault("events_backend", "poll_queue")
+    return updated_statement_config, features
 
 
 def build_connection_config(
@@ -138,15 +164,20 @@ def is_retryable_error(error: BaseException) -> bool:
     """
     seen: set[int] = set()
     current: BaseException | None = error
-    while current is not None and id(current) not in seen:
+    depth = 0
+    while current is not None and id(current) not in seen and depth < _MAX_CAUSE_CHAIN_DEPTH:
         seen.add(id(current))
+        depth += 1
         if isinstance(current, SerializationConflictError):
             return True
         if has_sqlstate(current) and str(current.sqlstate) == "40001":
             return True
         if not isinstance(current, SQLSpecError):
             return False
-        current = cast("BaseException | None", cast("Any", current).__cause__)
+        next_exc = cast("BaseException | None", cast("Any", current).__cause__)
+        if next_exc is None and not getattr(current, "__suppress_context__", False):
+            next_exc = cast("BaseException | None", cast("Any", current).__context__)
+        current = next_exc
     return False
 
 
@@ -160,7 +191,7 @@ def calculate_backoff_seconds(attempt: int, config: "CockroachPsycopgRetryConfig
     capped_ms: float = min(config.base_delay_ms * (2**attempt), config.max_delay_ms)
     if capped_ms <= 0.0:
         return 0.0
-    return random.uniform(capped_ms / 2.0, capped_ms) / 1000.0  # noqa: S311
+    return _SYSTEM_RANDOM.uniform(capped_ms / 2.0, capped_ms) / 1000.0
 
 
 _STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")
@@ -204,6 +235,8 @@ def build_native_export(
     format_sql = {"csv": "CSV", "parquet": "PARQUET"}[file_format]
     if not parameters:
         query = query.replace("%", "%%")
+    elif "%" in query:
+        query = _LITERAL_PERCENT_PATTERN.sub("%%", query)
     values: list[Any] = [uri]
     command = "EXPORT INTO " + format_sql + " " + "%s"
     if file_format == "csv" and "nullas" in options:

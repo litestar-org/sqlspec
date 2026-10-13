@@ -28,7 +28,7 @@ from uuid import uuid4 as _stdlib_uuid4
 from uuid import uuid5 as _stdlib_uuid5
 
 from sqlspec.typing import NANOID_INSTALLED, UUID_UTILS_INSTALLED
-from sqlspec.utils.module_loader import import_optional
+from sqlspec.utils.module_loader import import_optional, module_available
 
 __all__ = (
     "NAMESPACE_DNS",
@@ -64,10 +64,13 @@ def uuid_from_string(value: str) -> "UUID":
     Returns:
         A standard-library UUID suitable for native database drivers.
     """
-    module = _uuid_utils_native_mod
+    module = _get_uuid_utils_native_mod()
     if module is None:
         return UUID(value)
-    return UUID(int=module.UUID(value).int)
+    try:
+        return UUID(int=module.UUID(value).int)
+    except ValueError:
+        return UUID(value)
 
 
 def uuid_from_bytes(value: bytes) -> "UUID":
@@ -110,7 +113,7 @@ def uuid3(name: str, namespace: "UUID | None" = None) -> "UUID":
     Returns:
         A deterministic UUID based on namespace and name.
     """
-    module = _uuid_utils_mod
+    module = _get_uuid_utils_mod()
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid3(namespace_value, name)
@@ -126,7 +129,7 @@ def uuid4() -> "UUID":
     Returns:
         A randomly generated UUID.
     """
-    module = _uuid_utils_mod
+    module = _get_uuid_utils_mod()
     if module is None:
         return _stdlib_uuid4()
     return cast("UUID", module.uuid4())
@@ -145,7 +148,7 @@ def uuid5(name: str, namespace: "UUID | None" = None) -> "UUID":
     Returns:
         A deterministic UUID based on namespace and name.
     """
-    module = _uuid_utils_mod
+    module = _get_uuid_utils_mod()
     namespace_value = NAMESPACE_DNS if namespace is None else namespace
     if module is None:
         return _stdlib_uuid5(namespace_value, name)
@@ -165,7 +168,7 @@ def uuid6() -> "UUID":
     Returns:
         A time-ordered UUID, or a random UUID if time-ordered generation unavailable.
     """
-    module = _uuid_utils_mod
+    module = _get_uuid_utils_mod()
     if module is not None:
         return cast("UUID", module.uuid6())
 
@@ -195,7 +198,7 @@ def uuid7() -> "UUID":
     Returns:
         A time-ordered UUID, or a random UUID if time-ordered generation unavailable.
     """
-    module = _uuid_utils_mod
+    module = _get_uuid_utils_mod()
     if module is not None:
         return cast("UUID", module.uuid7())
 
@@ -226,7 +229,7 @@ def nanoid() -> str:
         A 21-character Nano ID string, or 32-character UUID hex if
         fastnanoid unavailable.
     """
-    module = _fastnanoid_mod
+    module = _get_fastnanoid_mod()
     if module is None:
         warnings.warn(
             "fastnanoid not installed, falling back to uuid4.hex for Nano ID generation. "
@@ -236,6 +239,24 @@ def nanoid() -> str:
         )
         return _nanoid_impl()
     return cast("str", module.generate())
+
+
+def _get_uuid_utils_mod() -> "Any | None":
+    if _uuid_utils_mod is not None and module_available("uuid_utils"):
+        return _uuid_utils_mod
+    return import_optional("uuid_utils.compat") if module_available("uuid_utils") else None
+
+
+def _get_uuid_utils_native_mod() -> "Any | None":
+    if _uuid_utils_native_mod is not None and module_available("uuid_utils"):
+        return _uuid_utils_native_mod
+    return import_optional("uuid_utils") if module_available("uuid_utils") else None
+
+
+def _get_fastnanoid_mod() -> "Any | None":
+    if _fastnanoid_mod is not None and module_available("fastnanoid"):
+        return _fastnanoid_mod
+    return import_optional("fastnanoid") if module_available("fastnanoid") else None
 
 
 def _nanoid_impl() -> str:

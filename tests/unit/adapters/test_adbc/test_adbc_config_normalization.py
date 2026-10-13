@@ -3,9 +3,10 @@
 from typing import Any, get_type_hints
 from unittest.mock import MagicMock
 
+import pytest
 from adbc_driver_bigquery import DatabaseOptions
 
-from sqlspec.adapters.adbc import AdbcConfig
+from sqlspec.adapters.adbc import AdbcConfig, AdbcDriver
 from sqlspec.adapters.adbc.config import AdbcConnectionParams
 from sqlspec.adapters.adbc.core import (
     build_connection_config,
@@ -13,6 +14,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_driver_name_from_config,
 )
 from sqlspec.core import ParameterStyle
+from sqlspec.exceptions import SQLSpecError
 
 
 def _resolve_driver_name(config: AdbcConfig) -> str:
@@ -482,3 +484,50 @@ def test_flightsql_native_shortcuts_preserve_explicit_options() -> None:
         "adbc.flight.sql.rpc.call_header.x-token": "explicit",
         "adbc.flight.sql.rpc.timeout_seconds.query": "9",
     }
+
+
+def test_adbc_config_respects_connection_instance_without_closing() -> None:
+    """connection_instance must be reused by create_connection and not closed on context exit."""
+    conn = MagicMock()
+    conn.adbc_get_info.return_value = {"vendor_name": "sqlite", "driver_name": "sqlite"}
+    config = AdbcConfig(connection_config={"driver_name": "sqlite"}, connection_instance=conn)
+
+    assert config.create_connection() is conn
+    with config.provide_connection() as yielded:
+        assert yielded is conn
+    conn.close.assert_not_called()
+
+    with config.provide_session() as session:
+        assert session.connection is conn
+    conn.close.assert_not_called()
+
+
+def test_adbc_config_skips_extension_connection_when_all_probes_disabled(monkeypatch: Any) -> None:
+    """When all PostgreSQL extension probes are disabled, _detect_extensions_if_needed must not connect."""
+    config = AdbcConfig(
+        connection_config={"driver_name": "postgres", "uri": "postgresql://localhost/test"},
+        driver_features={"enable_pgvector": False, "enable_paradedb": False, "enable_pg_textsearch": False},
+    )
+
+    def fail_connect(_self: AdbcConfig) -> None:
+        raise AssertionError("create_connection should not be called when all probes are disabled")
+
+    monkeypatch.setattr(AdbcConfig, "create_connection", fail_connect)
+    config._detect_extensions_if_needed()  # pyright: ignore[reportPrivateUsage]
+    assert config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
+    assert config._paradedb_available is False  # pyright: ignore[reportPrivateUsage]
+    assert config.pg_textsearch_available is False
+
+
+def test_adbc_driver_standalone_applies_features_and_enforces_strict_coercion() -> None:
+    """Standalone AdbcDriver populates default driver_features, aligns dialect, and honors strict_type_coercion."""
+    conn = MagicMock()
+    conn.adbc_get_info.return_value = {"vendor_name": "duckdb", "driver_name": "duckdb"}
+
+    driver = AdbcDriver(conn, driver_features={"strict_type_coercion": True})
+    assert driver.dialect == "duckdb"
+    assert str(driver.statement_config.dialect) == "duckdb"
+    assert "json_serializer" in driver.driver_features
+
+    with pytest.raises(SQLSpecError):
+        driver.prepare_driver_parameters([object()], driver.statement_config)

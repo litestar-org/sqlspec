@@ -828,11 +828,7 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         return id(self)
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, type(self)):
-            return False
-        return bool(
-            self.connection_instance == other.connection_instance and self.migration_config == other.migration_config
-        )
+        return self is other
 
     def __repr__(self) -> str:
         parts = ", ".join([
@@ -1612,7 +1608,9 @@ class NoPoolSyncConfig(_SyncMigrationMixin, DatabaseConfigProtocol[ConnectionT, 
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
+        self._reject_unexpected_kwargs(kwargs)
         self._init_config_state(
             connection_config=connection_config,
             connection_instance=connection_instance,
@@ -1668,7 +1666,9 @@ class NoPoolAsyncConfig(_AsyncMigrationMixin, DatabaseConfigProtocol[ConnectionT
         bind_key: "str | None" = None,
         extension_config: "ExtensionConfigs | None" = None,
         observability_config: "ObservabilityConfig | None" = None,
+        **kwargs: Any,
     ) -> None:
+        self._reject_unexpected_kwargs(kwargs)
         self._init_config_state(
             connection_config=connection_config,
             connection_instance=connection_instance,

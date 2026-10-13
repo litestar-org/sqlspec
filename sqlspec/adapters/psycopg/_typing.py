@@ -8,7 +8,6 @@ import contextlib
 from typing import TYPE_CHECKING, Any, Protocol
 
 import psycopg as psycopg_module
-from psycopg import AsyncConnection, AsyncCursor, Connection, Cursor
 from psycopg import AsyncConnection as PsycopgNativeAsyncConnection
 from psycopg import AsyncCursor as PsycopgNativeAsyncCursor
 from psycopg import Connection as PsycopgConnection
@@ -47,15 +46,15 @@ if TYPE_CHECKING:
     from sqlspec.builder import QueryBuilder
     from sqlspec.core import SQL, Statement, StatementConfig
 
-    PsycopgSyncConnection: TypeAlias = Connection[PsycopgDictRow]
-    PsycopgAsyncConnection: TypeAlias = AsyncConnection[PsycopgDictRow]
-    PsycopgSyncRawCursor: TypeAlias = Cursor[PsycopgDictRow]
-    PsycopgAsyncRawCursor: TypeAlias = AsyncCursor[PsycopgDictRow]
+    PsycopgSyncConnection: TypeAlias = PsycopgConnection[PsycopgDictRow]
+    PsycopgAsyncConnection: TypeAlias = PsycopgNativeAsyncConnection[PsycopgDictRow]
+    PsycopgSyncRawCursor: TypeAlias = PsycopgCursor[PsycopgDictRow]
+    PsycopgAsyncRawCursor: TypeAlias = PsycopgNativeAsyncCursor[PsycopgDictRow]
 else:
-    PsycopgSyncConnection = Connection
-    PsycopgAsyncConnection = AsyncConnection
-    PsycopgSyncRawCursor = Cursor
-    PsycopgAsyncRawCursor = AsyncCursor
+    PsycopgSyncConnection = PsycopgConnection
+    PsycopgAsyncConnection = PsycopgNativeAsyncConnection
+    PsycopgSyncRawCursor = PsycopgCursor
+    PsycopgAsyncRawCursor = PsycopgNativeAsyncCursor
 
 
 __all__ = (
@@ -95,6 +94,9 @@ __all__ = (
     "psycopg_module",
     "psycopg_sql",
 )
+
+_psycopg_sync_driver_cls: "type[PsycopgSyncDriver] | None" = None
+_psycopg_async_driver_cls: "type[PsycopgAsyncDriver] | None" = None
 
 
 class PsycopgSyncCursor:
@@ -201,11 +203,10 @@ class PsycopgSyncSessionContext:
         self._driver: PsycopgSyncDriver | None = None
 
     def __enter__(self) -> "PsycopgSyncDriver":
-        from sqlspec.adapters.psycopg.driver import PsycopgSyncDriver
-
+        driver_cls = _resolve_psycopg_sync_driver()
         self._connection = self._acquire_connection()
         statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = PsycopgSyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -213,9 +214,15 @@ class PsycopgSyncSessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        try:
+            if self._driver is not None and getattr(self._driver, "_transaction_active", False):
+                with contextlib.suppress(Exception):
+                    self._driver.rollback()
+        finally:
+            self._driver = None
+            if self._connection is not None:
+                self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
         return None
 
 
@@ -257,11 +264,10 @@ class PsycopgAsyncSessionContext:
         self._driver: PsycopgAsyncDriver | None = None
 
     async def __aenter__(self) -> "PsycopgAsyncDriver":
-        from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver
-
+        driver_cls = _resolve_psycopg_async_driver()
         self._connection = await self._acquire_connection()
         statement_config = self._statement_config() if callable(self._statement_config) else self._statement_config
-        self._driver = PsycopgAsyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -269,9 +275,15 @@ class PsycopgAsyncSessionContext:
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
-        if self._connection is not None:
-            await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
-            self._connection = None
+        try:
+            if self._driver is not None and getattr(self._driver, "_transaction_active", False):
+                with contextlib.suppress(Exception):
+                    await self._driver.rollback()
+        finally:
+            self._driver = None
+            if self._connection is not None:
+                await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
+                self._connection = None
         return None
 
 
@@ -292,3 +304,23 @@ def __getattr__(name: str) -> Any:
         msg = f"Cannot import {attribute!r} from {module_name!r}"
         raise ImportError(msg)
     return value
+
+
+def _resolve_psycopg_sync_driver() -> "type[PsycopgSyncDriver]":
+    global _psycopg_sync_driver_cls
+    cls = _psycopg_sync_driver_cls
+    if cls is None:
+        cls = import_optional_attr("sqlspec.adapters.psycopg.driver", "PsycopgSyncDriver")
+        assert cls is not None
+        _psycopg_sync_driver_cls = cls
+    return cls
+
+
+def _resolve_psycopg_async_driver() -> "type[PsycopgAsyncDriver]":
+    global _psycopg_async_driver_cls
+    cls = _psycopg_async_driver_cls
+    if cls is None:
+        cls = import_optional_attr("sqlspec.adapters.psycopg.driver", "PsycopgAsyncDriver")
+        assert cls is not None
+        _psycopg_async_driver_cls = cls
+    return cls

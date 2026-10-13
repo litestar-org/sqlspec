@@ -14,6 +14,9 @@ from sqlglot import exp, parse_one
 
 from sqlspec.core import (
     SQL,
+    ParameterStyle,
+    ParameterStyleConfig,
+    StatementConfig,
     StatementFilter,
     TypedParameter,
     hash_expression,
@@ -558,3 +561,21 @@ def test_hash_parameters_edge_cases() -> None:
     named_with_typed = {"complex": typed_param_with_dict}
     result = hash_parameters(named_parameters=named_with_typed)
     assert isinstance(result, int)
+
+
+def test_hash_parameters_distinguishes_differences_after_third_element() -> None:
+    batch1 = [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
+    batch2 = [(1, "a"), (2, "b"), (3, "c"), (4, "DIFFERENT")]
+    assert hash_parameters(original_parameters=batch1) != hash_parameters(original_parameters=batch2)
+
+
+def test_hash_sql_statement_includes_statement_config() -> None:
+    cfg1 = StatementConfig(
+        parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.QMARK), enable_parsing=True
+    )
+    cfg2 = StatementConfig(
+        parameter_config=ParameterStyleConfig(default_parameter_style=ParameterStyle.NUMERIC), enable_parsing=False
+    )
+    stmt1 = SQL("SELECT 1", statement_config=cfg1)
+    stmt2 = SQL("SELECT 1", statement_config=cfg2)
+    assert hash_sql_statement(stmt1) != hash_sql_statement(stmt2)

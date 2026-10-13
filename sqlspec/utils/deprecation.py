@@ -179,6 +179,30 @@ class _DeprecatedFactory(Generic[P, T]):
         self._kind: Literal["function", "method", "classmethod", "property"] | None = kind
 
     def __call__(self, func: "Callable[P, T]") -> "Callable[P, T]":
+        if isinstance(func, property):
+            if func.fget is None:
+                return cast("Callable[P, T]", func)
+            wrapped_fget = _DeprecatedWrapper(
+                func.fget,
+                self._version,
+                self._removal_in,
+                self._alternative,
+                self._info,
+                self._pending,
+                self._kind or "property",
+            )
+            return cast("Callable[P, T]", property(wrapped_fget, func.fset, func.fdel, func.__doc__))
+        if isinstance(func, classmethod):
+            wrapped_cm = _DeprecatedWrapper(
+                func.__func__,
+                self._version,
+                self._removal_in,
+                self._alternative,
+                self._info,
+                self._pending,
+                self._kind or "classmethod",
+            )
+            return cast("Callable[P, T]", classmethod(wrapped_cm))
         kind: DeprecatedKind = self._kind or _infer_deprecated_kind(func)
         return _DeprecatedWrapper(
             func, self._version, self._removal_in, self._alternative, self._info, self._pending, kind

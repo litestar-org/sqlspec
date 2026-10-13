@@ -437,7 +437,22 @@ class SyncEventChannel:
                         event = self._backend.dequeue(channel, poll_interval)
                 except Exception as error:
                     _end_event_span(self._runtime, span, error=error)
-                    raise
+                    self._runtime.increment_metric("events.dequeue.error")
+                    log_with_context(
+                        logger,
+                        logging.WARNING,
+                        "event.listen",
+                        adapter_name=self._adapter_name,
+                        backend_name=self._backend_name,
+                        channel=channel,
+                        listener_id=listener_id,
+                        mode="sync",
+                        error_type=type(error).__name__,
+                        status="dequeue_error",
+                    )
+                    if not stop_event.is_set() and poll_interval > 0:
+                        stop_event.wait(poll_interval)
+                    continue
                 if event is None:
                     _end_event_span(self._runtime, span, result="empty")
                     continue
@@ -447,6 +462,10 @@ class SyncEventChannel:
                     if auto_ack:
                         self._backend.ack(event.event_id)
                 except Exception as error:
+                    self._runtime.increment_metric("events.handler.error")
+                    if auto_ack and hasattr(self._backend, "nack"):
+                        with suppress(Exception):
+                            self._backend.nack(event.event_id)
                     log_with_context(
                         logger,
                         logging.WARNING,
@@ -714,7 +733,22 @@ class AsyncEventChannel:
                     event = await self._backend.dequeue(channel, poll_interval)
                 except Exception as error:
                     _end_event_span(self._runtime, span, error=error)
-                    raise
+                    self._runtime.increment_metric("events.dequeue.error")
+                    log_with_context(
+                        logger,
+                        logging.WARNING,
+                        "event.listen",
+                        adapter_name=self._adapter_name,
+                        backend_name=self._backend_name,
+                        channel=channel,
+                        listener_id=listener_id,
+                        mode="async",
+                        error_type=type(error).__name__,
+                        status="dequeue_error",
+                    )
+                    if not stop_event.is_set() and poll_interval > 0:
+                        await asyncio.sleep(poll_interval)
+                    continue
                 if event is None:
                     _end_event_span(self._runtime, span, result="empty")
                     continue
@@ -726,6 +760,10 @@ class AsyncEventChannel:
                     if auto_ack:
                         await self._backend.ack(event.event_id)
                 except Exception as error:
+                    self._runtime.increment_metric("events.handler.error")
+                    if auto_ack and hasattr(self._backend, "nack"):
+                        with suppress(Exception):
+                            await self._backend.nack(event.event_id)
                     log_with_context(
                         logger,
                         logging.WARNING,

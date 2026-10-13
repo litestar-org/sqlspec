@@ -46,7 +46,6 @@ def session_to_record(session: "Session") -> StoredSession:
         app_name=session.app_name,
         user_id=session.user_id,
         state=filter_temp_state(session.state),
-        # create_time is not exposed by ADK Session; a re-upsert of a restored session will reset this timestamp.
         create_time=datetime.now(UTC),
         update_time=datetime.fromtimestamp(session.last_update_time, tz=UTC),
     )

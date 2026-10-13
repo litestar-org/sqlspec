@@ -37,12 +37,15 @@ from sqlspec.driver import (
     rows_to_dicts,
     validate_savepoint_name,
 )
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import MissingDependencyError, SQLSpecError
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from sqlspec.core import SQLResult
+    from sqlspec.driver._common import CachedQuery
 
 __all__ = (
     "Db2AsyncCursor",
@@ -162,6 +165,30 @@ class Db2SyncDriver(SyncDriverAdapterBase):
         self._restore_autocommit = False
         self._migration_schema_restore: str | None = None
 
+    @property
+    def data_dictionary(self) -> "Db2SyncDataDictionary":
+        """Return the Db2 data dictionary bound to this driver.
+
+        Returns:
+            The lazily created data dictionary instance.
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = Db2SyncDataDictionary()
+        return self._data_dictionary
+
+    def prepare_driver_parameters(
+        self,
+        parameters: Any,
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: "SQL | None" = None,
+    ) -> Any:
+        """Prepare parameters and normalize non-many sequence parameters to tuples for ibm_db_dbi."""
+        prepared = super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+        if not is_many:
+            return normalize_execute_parameters(prepared)
+        return prepared
+
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
@@ -194,11 +221,12 @@ class Db2SyncDriver(SyncDriverAdapterBase):
 
     def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
+        statement_params = _resolve_script_statement_params(statements, prepared_parameters)
 
         successful_count = 0
-        for stmt in statements:
-            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+        for stmt, params in zip(statements, statement_params, strict=False):
+            cursor.execute(stmt, params)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -254,39 +282,6 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             self._transaction_active = False
             self._restore_connection_autocommit()
 
-    def _release_open_work(self, *, autocommit_baseline: bool) -> None:
-        """Roll back work left open before the connection is returned to its pool.
-
-        A transaction started by this driver is always rolled back; on a connection whose
-        autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
-        failure is logged and not raised, so it never masks an error from the session body.
-
-        Args:
-            autocommit_baseline: Autocommit mode the connection was opened in.
-        """
-        if not self._transaction_active and autocommit_baseline:
-            return
-        try:
-            self.rollback()
-        except SQLSpecError as exc:
-            log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
-
-    def _restore_connection_autocommit(self) -> None:
-        """Switch autocommit back on when ``begin()`` turned it off.
-
-        Raises:
-            SQLSpecError: When the driver reports an error.
-        """
-        restore_autocommit = self._restore_autocommit
-        self._restore_autocommit = False
-        if not restore_autocommit:
-            return
-        try:
-            self.connection.set_autocommit(True)
-        except Db2Error as exc:
-            msg = f"Failed to restore Db2 autocommit: {exc}"
-            raise SQLSpecError(msg) from exc
-
     def with_cursor(self, connection: Any) -> "Db2SyncCursor":
         return Db2SyncCursor(connection)
 
@@ -339,17 +334,6 @@ class Db2SyncDriver(SyncDriverAdapterBase):
             cursor.execute("SELECT 1 FROM SYSCAT.SCHEMATA WHERE SCHEMANAME = ?", (normalize_identifier(schema, "db2"),))
             return cursor.fetchone() is not None
 
-    @property
-    def data_dictionary(self) -> "Db2SyncDataDictionary":
-        """Return the Db2 data dictionary bound to this driver.
-
-        Returns:
-            The lazily created data dictionary instance.
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = Db2SyncDataDictionary()
-        return self._data_dictionary
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         column_names = resolve_column_names(
             cursor.description or None, self._column_name_cache, lowercase=self._lowercase_columns
@@ -359,9 +343,54 @@ class Db2SyncDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         return resolve_rowcount(cursor)
 
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Normalize cached fast-path parameters to a tuple before calling ibm_db_dbi."""
+        return super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+
+    def _release_open_work(self, *, autocommit_baseline: bool) -> None:
+        """Roll back work left open before the connection is returned to its pool.
+
+        A transaction started by this driver is always rolled back; on a connection whose
+        autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
+        failure is logged and not raised, so it never masks an error from the session body.
+
+        Args:
+            autocommit_baseline: Autocommit mode the connection was opened in.
+        """
+        if not self._transaction_active and autocommit_baseline:
+            return
+        try:
+            self.rollback()
+        except SQLSpecError as exc:
+            log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+
+    def _restore_connection_autocommit(self) -> None:
+        """Switch autocommit back on when ``begin()`` turned it off.
+
+        Raises:
+            SQLSpecError: When the driver reports an error.
+        """
+        if not self._restore_autocommit:
+            return
+        try:
+            self.connection.set_autocommit(True)
+        except Db2Error as exc:
+            msg = f"Failed to restore Db2 autocommit: {exc}"
+            raise SQLSpecError(msg) from exc
+        self._restore_autocommit = False
+
     def _connection_in_transaction(self) -> bool:
-        """Return whether a transaction opened by this driver remains active."""
-        return self._transaction_active
+        """Return whether a transaction remains active on the connection."""
+        if self._transaction_active:
+            return True
+        if self._restore_autocommit:
+            return False
+        try:
+            return not connection_autocommit_enabled(self.connection)
+        except (MissingDependencyError, Db2Error, AttributeError, KeyError, TypeError, ValueError):
+            return False
 
 
 class Db2AsyncExceptionHandler(BaseAsyncExceptionHandler):
@@ -467,6 +496,30 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
         self._restore_autocommit = False
         self._migration_schema_restore: str | None = None
 
+    @property
+    def data_dictionary(self) -> "Db2AsyncDataDictionary":
+        """Return the Db2 async data dictionary bound to this driver.
+
+        Returns:
+            The lazily created data dictionary instance.
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = Db2AsyncDataDictionary()
+        return self._data_dictionary
+
+    def prepare_driver_parameters(
+        self,
+        parameters: Any,
+        statement_config: "StatementConfig",
+        is_many: bool = False,
+        prepared_statement: "SQL | None" = None,
+    ) -> Any:
+        """Prepare parameters and normalize non-many sequence parameters to tuples for ibm_db_dbi."""
+        prepared = super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
+        if not is_many:
+            return normalize_execute_parameters(prepared)
+        return prepared
+
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
@@ -499,11 +552,12 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
 
     async def dispatch_execute_script(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        statements = self.split_script_statements(sql, self.statement_config, strip_trailing_semicolon=True)
+        statement_params = _resolve_script_statement_params(statements, prepared_parameters)
 
         successful_count = 0
-        for stmt in statements:
-            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+        for stmt, params in zip(statements, statement_params, strict=False):
+            await cursor.execute(stmt, params)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -559,39 +613,6 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             self._transaction_active = False
             await self._restore_connection_autocommit()
 
-    async def _release_open_work(self, *, autocommit_baseline: bool) -> None:
-        """Roll back work left open before the connection is returned to its pool.
-
-        A transaction started by this driver is always rolled back; on a connection whose
-        autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
-        failure is logged and not raised, so it never masks an error from the session body.
-
-        Args:
-            autocommit_baseline: Autocommit mode the connection was opened in.
-        """
-        if not self._transaction_active and autocommit_baseline:
-            return
-        try:
-            await self.rollback()
-        except SQLSpecError as exc:
-            log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
-
-    async def _restore_connection_autocommit(self) -> None:
-        """Switch autocommit back on when ``begin()`` turned it off.
-
-        Raises:
-            SQLSpecError: When the driver reports an error.
-        """
-        restore_autocommit = self._restore_autocommit
-        self._restore_autocommit = False
-        if not restore_autocommit:
-            return
-        try:
-            await self.connection.set_autocommit(True)
-        except Db2Error as exc:
-            msg = f"Failed to restore Db2 autocommit: {exc}"
-            raise SQLSpecError(msg) from exc
-
     def with_cursor(self, connection: Any) -> "Db2AsyncCursor":
         return Db2AsyncCursor(connection)
 
@@ -646,17 +667,6 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
             )
             return await cursor.fetchone() is not None
 
-    @property
-    def data_dictionary(self) -> "Db2AsyncDataDictionary":
-        """Return the Db2 async data dictionary bound to this driver.
-
-        Returns:
-            The lazily created data dictionary instance.
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = Db2AsyncDataDictionary()
-        return self._data_dictionary
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         column_names = resolve_column_names(
             cursor.description or None, self._column_name_cache, lowercase=self._lowercase_columns
@@ -666,9 +676,78 @@ class Db2AsyncDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         return resolve_rowcount(cursor)
 
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        """Normalize cached fast-path parameters to a tuple before calling ibm_db_dbi."""
+        return await super()._execute_cache_hit(sql, normalize_execute_parameters(params) or (), cached)
+
+    async def _release_open_work(self, *, autocommit_baseline: bool) -> None:
+        """Roll back work left open before the connection is returned to its pool.
+
+        A transaction started by this driver is always rolled back; on a connection whose
+        autocommit baseline is off, any pending unit of work is rolled back as well. A rollback
+        failure is logged and not raised, so it never masks an error from the session body.
+
+        Args:
+            autocommit_baseline: Autocommit mode the connection was opened in.
+        """
+        if not self._transaction_active and autocommit_baseline:
+            return
+        try:
+            await self.rollback()
+        except SQLSpecError as exc:
+            log_with_context(logger, logging.DEBUG, "db2.session.rollback_failed", error=str(exc))
+
+    async def _restore_connection_autocommit(self) -> None:
+        """Switch autocommit back on when ``begin()`` turned it off.
+
+        Raises:
+            SQLSpecError: When the driver reports an error.
+        """
+        if not self._restore_autocommit:
+            return
+        try:
+            await self.connection.set_autocommit(True)
+        except Db2Error as exc:
+            msg = f"Failed to restore Db2 autocommit: {exc}"
+            raise SQLSpecError(msg) from exc
+        self._restore_autocommit = False
+
     def _connection_in_transaction(self) -> bool:
-        """Return whether a transaction opened by this driver remains active."""
-        return self._transaction_active
+        """Return whether a transaction remains active on the connection."""
+        if self._transaction_active:
+            return True
+        if self._restore_autocommit:
+            return False
+        try:
+            return not connection_autocommit_enabled(self.connection)
+        except (MissingDependencyError, Db2Error, AttributeError, KeyError, TypeError, ValueError):
+            return False
+
+
+def _resolve_script_statement_params(
+    statements: "list[str]", prepared_parameters: Any
+) -> "list[tuple[Any, ...] | None]":
+    """Resolve positional parameter tuples for each statement in a split script."""
+    if len(statements) <= 1:
+        return [normalize_execute_parameters(prepared_parameters) for _ in statements]
+    if not prepared_parameters:
+        return [None for _ in statements]
+    if isinstance(prepared_parameters, (list, tuple)):
+        offset = 0
+        resolved: list[tuple[Any, ...] | None] = []
+        for stmt in statements:
+            count = stmt.count("?")
+            if count > 0:
+                slice_params = tuple(prepared_parameters[offset : offset + count])
+                offset += count
+                resolved.append(slice_params or None)
+            else:
+                resolved.append(None)
+        return resolved
+    normalized = normalize_execute_parameters(prepared_parameters)
+    return [normalized if index == 0 else None for index in range(len(statements))]
 
 
 register_driver_profile("db2", driver_profile)

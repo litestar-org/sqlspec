@@ -40,30 +40,6 @@ class DecodedCursor:
         self.backward = backward
 
 
-def _float(value: str) -> float:
-    result = float(value)
-    if not math.isfinite(result):
-        msg = "Non-finite cursor float"
-        raise ValueError(msg)
-    return result
-
-
-def _decimal(value: str) -> Decimal:
-    result = Decimal(value)
-    if not result.is_finite() or abs(result.adjusted()) > _DECIMAL_MAX_EXPONENT:
-        msg = "Out-of-range cursor decimal"
-        raise ValueError(msg)
-    return result
-
-
-def _timedelta(value: str) -> timedelta:
-    days, seconds, microseconds = (int(part) for part in value.split(":"))
-    if abs(days) > _TIMEDELTA_MAX_DAYS:
-        msg = "Out-of-range cursor timedelta"
-        raise ValueError(msg)
-    return timedelta(days=days, seconds=seconds, microseconds=microseconds)
-
-
 _ENCODERS: dict[type, tuple[str, Callable[[Any], str]]] = {
     float: ("f", repr),
     str: ("s", str),
@@ -74,17 +50,6 @@ _ENCODERS: dict[type, tuple[str, Callable[[Any], str]]] = {
     date: ("da", lambda value: value.isoformat()),
     time: ("t", lambda value: value.isoformat()),
     timedelta: ("td", lambda value: f"{value.days}:{value.seconds}:{value.microseconds}"),
-}
-_DECODERS: dict[str, Callable[[str], Any]] = {
-    "f": _float,
-    "s": str,
-    "y": lambda value: base64.b64decode(value, validate=True),
-    "d": _decimal,
-    "u": UUID,
-    "dt": datetime.fromisoformat,
-    "da": date.fromisoformat,
-    "t": time.fromisoformat,
-    "td": _timedelta,
 }
 
 
@@ -129,32 +94,6 @@ def order_fingerprint(parts: Sequence[tuple[str, str, str | None]]) -> str:
     ).hexdigest()[:16]
 
 
-def _encode_value(value: Any) -> list[Any]:
-    if value is None:
-        return ["n", None]
-    if type(value) is bool:
-        return ["b", value]
-    for value_type in type(value).__mro__:
-        if value_type is int:
-            result = int(value)
-            if abs(result) >= 2**127:
-                msg = "Out-of-range cursor integer"
-                raise ValueError(msg)
-            return ["i", result]
-        if value_type in _ENCODERS:
-            tag, encoder = _ENCODERS[value_type]
-            encoded = encoder(value)
-            if tag in {"f", "d", "td"}:
-                _DECODERS[tag](encoded)
-            return [tag, encoded]
-    msg = f"Cannot encode cursor value of type {type(value).__name__}; register it with register_cursor_type()"
-    raise TypeError(msg)
-
-
-def _b64(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-
 def encode_cursor(
     values: Sequence[Any], fingerprint: str, *, backward: bool = False, secret: bytes | None = None
 ) -> str:
@@ -182,23 +121,6 @@ def encode_cursor(
         msg = "Cursor token exceeds maximum length"
         raise ValueError(msg)
     return token
-
-
-def _decode_value(entry: Any) -> Any:
-    if not isinstance(entry, list) or len(entry) != _ENTRY_LENGTH or not isinstance(entry[0], str):
-        msg = "Invalid cursor entry"
-        raise ValueError(msg)
-    tag, value = entry
-    if tag == "n" and value is None:
-        return None
-    if tag == "b" and type(value) is bool:
-        return value
-    if tag == "i" and type(value) is int and abs(value) < 2**127:
-        return value
-    if tag in _DECODERS and isinstance(value, str):
-        return _DECODERS[tag](value)
-    msg = "Invalid cursor value"
-    raise ValueError(msg)
 
 
 def decode_cursor(token: object, fingerprint: str, key_count: int, *, secret: bytes | None = None) -> DecodedCursor:
@@ -261,3 +183,83 @@ def decode_cursor(token: object, fingerprint: str, key_count: int, *, secret: by
         msg = "Invalid pagination cursor: malformed token"
         raise InvalidCursorError(msg) from exc
     return DecodedCursor(values, payload["d"] == "b")
+
+
+def _float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        msg = "Non-finite cursor float"
+        raise ValueError(msg)
+    return result
+
+
+def _decimal(value: str) -> Decimal:
+    result = Decimal(value)
+    if not result.is_finite() or abs(result.adjusted()) > _DECIMAL_MAX_EXPONENT:
+        msg = "Out-of-range cursor decimal"
+        raise ValueError(msg)
+    return result
+
+
+def _timedelta(value: str) -> timedelta:
+    days, seconds, microseconds = (int(part) for part in value.split(":"))
+    if abs(days) > _TIMEDELTA_MAX_DAYS:
+        msg = "Out-of-range cursor timedelta"
+        raise ValueError(msg)
+    return timedelta(days=days, seconds=seconds, microseconds=microseconds)
+
+
+_DECODERS: dict[str, Callable[[str], Any]] = {
+    "f": _float,
+    "s": str,
+    "y": lambda value: base64.b64decode(value, validate=True),
+    "d": _decimal,
+    "u": UUID,
+    "dt": datetime.fromisoformat,
+    "da": date.fromisoformat,
+    "t": time.fromisoformat,
+    "td": _timedelta,
+}
+
+
+def _encode_value(value: Any) -> list[Any]:
+    if value is None:
+        return ["n", None]
+    if type(value) is bool:
+        return ["b", value]
+    for value_type in type(value).__mro__:
+        if value_type is int:
+            result = int(value)
+            if abs(result) >= 2**127:
+                msg = "Out-of-range cursor integer"
+                raise ValueError(msg)
+            return ["i", result]
+        if value_type in _ENCODERS:
+            tag, encoder = _ENCODERS[value_type]
+            encoded = encoder(value)
+            if tag in {"f", "d", "td"}:
+                _DECODERS[tag](encoded)
+            return [tag, encoded]
+    msg = f"Cannot encode cursor value of type {type(value).__name__}; register it with register_cursor_type()"
+    raise TypeError(msg)
+
+
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _decode_value(entry: Any) -> Any:
+    if not isinstance(entry, list) or len(entry) != _ENTRY_LENGTH or not isinstance(entry[0], str):
+        msg = "Invalid cursor entry"
+        raise ValueError(msg)
+    tag, value = entry
+    if tag == "n" and value is None:
+        return None
+    if tag == "b" and type(value) is bool:
+        return value
+    if tag == "i" and type(value) is int and abs(value) < 2**127:
+        return value
+    if tag in _DECODERS and isinstance(value, str):
+        return _DECODERS[tag](value)
+    msg = "Invalid cursor value"
+    raise ValueError(msg)

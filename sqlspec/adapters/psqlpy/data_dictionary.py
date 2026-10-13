@@ -91,15 +91,6 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
         requested_domains = tuple(_POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
         return tuple(_postgres_system_metadata_capability(domain) for domain in requested_domains)
 
-    async def _select_domain(
-        self, driver: "PsqlpyDriver", domain: str, query_name: str, **parameters: Any
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
-        rows = await driver.select(query.sql, **parameters)
-        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
-
     async def get_schemas(self, driver: "PsqlpyDriver") -> MetadataResult:
         """Get schema metadata."""
         return await self._select_domain(driver, "schemas", "list")
@@ -212,7 +203,7 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
         Performs an inline cache check first to avoid a cross-module method call
         that causes mypyc segfaults. If not cached, fetches from the database.
         """
-        driver_id = id(driver)
+        driver_id = id(getattr(driver, "connection", None) or driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -323,6 +314,15 @@ class PsqlpyDataDictionary(AsyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+
+    async def _select_domain(
+        self, driver: "PsqlpyDriver", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = await driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
 
 
 def _postgres_metadata_capability(domain: str) -> MetadataCapability:

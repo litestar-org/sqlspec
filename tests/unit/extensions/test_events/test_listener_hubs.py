@@ -189,10 +189,13 @@ class _PsqlpyDriver:
     def __init__(self, listener: _PsqlpyListener) -> None:
         self.listener = listener
 
-    async def execute_script(self, statement: Any) -> None:
+    async def execute(self, statement: Any) -> None:
         channel, payload = statement.parameters
         if self.listener.listen_called and not self.listener.drop_ready_payloads:
             await self.listener.emit(channel, payload)
+
+    async def execute_script(self, statement: Any) -> None:
+        await self.execute(statement)
 
     async def commit(self) -> None:
         return None

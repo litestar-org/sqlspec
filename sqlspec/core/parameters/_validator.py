@@ -16,7 +16,7 @@ PARAMETER_REGEX: Final[re.Pattern[str]] = re.compile(
     r"""
     (?P<dquote>"(?:[^"\\]|\\.)*") |
     (?P<squote>'(?:[^'\\]|\\.)*') |
-    (?P<dollar_quoted_string>\$(?P<dollar_quote_tag_inner>\w*)?\$[\s\S]*?\$\4\$) |
+    (?P<dollar_quoted_string>\$(?P<dollar_quote_tag_inner>\w*)\$[\s\S]*?\$(?P=dollar_quote_tag_inner)\$) |
     (?P<line_comment>--[^\r\n]*) |
     (?P<block_comment>/\*(?:[^*]|\*(?!/))*\*/) |
     (?P<pg_q_operator>\?\?|\?\||\?&) |
@@ -103,16 +103,6 @@ _NON_OPERAND_KEYWORDS: Final[frozenset[str]] = frozenset([
 ])
 
 
-def _follows_operand(sql: str, start: int) -> bool:
-    head = sql[:start].rstrip()
-    if not head:
-        return False
-    if head[-1] in ")]\"'":
-        return True
-    match = _PRECEDING_WORD.search(head)
-    return bool(match and match.group(1).lower() not in _NON_OPERAND_KEYWORDS)
-
-
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ParameterValidator:
     """Extracts placeholder metadata and dialect compatibility information."""
@@ -146,6 +136,25 @@ class ParameterValidator:
             "max_size": self._cache_max_size,
         }
 
+    def extract_parameters(self, sql: str) -> "list[ParameterInfo]":
+        """Extract ordered parameter metadata from SQL text."""
+        if self._cache_max_size <= 0:
+            return self._extract_parameters_uncached(sql)
+
+        cache_key = sql
+        cached_result = self._parameter_cache.get(cache_key)
+        if cached_result is not None:
+            self._parameter_cache.move_to_end(cache_key)
+            self._cache_hits += 1
+            return cached_result
+        self._cache_misses += 1
+
+        parameters = self._extract_parameters_uncached(sql)
+        if len(self._parameter_cache) >= self._cache_max_size:
+            self._parameter_cache.popitem(last=False)
+        self._parameter_cache[cache_key] = parameters
+        return parameters
+
     @staticmethod
     def _extract_parameter_style(match: re.Match[str]) -> "tuple[ParameterStyle | None, str | None]":
         """Map a regex match to a placeholder style and optional name."""
@@ -166,25 +175,6 @@ class ParameterValidator:
         if match.group("named_dollar_param"):
             return ParameterStyle.NAMED_DOLLAR, match.group("dollar_param_name")
         return None, None
-
-    def extract_parameters(self, sql: str) -> "list[ParameterInfo]":
-        """Extract ordered parameter metadata from SQL text."""
-        if self._cache_max_size <= 0:
-            return self._extract_parameters_uncached(sql)
-
-        cache_key = sql
-        cached_result = self._parameter_cache.get(cache_key)
-        if cached_result is not None:
-            self._parameter_cache.move_to_end(cache_key)
-            self._cache_hits += 1
-            return cached_result
-        self._cache_misses += 1
-
-        parameters = self._extract_parameters_uncached(sql)
-        if len(self._parameter_cache) >= self._cache_max_size:
-            self._parameter_cache.popitem(last=False)
-        self._parameter_cache[cache_key] = parameters
-        return parameters
 
     def _extract_parameters_uncached(self, sql: str) -> "list[ParameterInfo]":
         parameters: list[ParameterInfo] = []
@@ -248,3 +238,13 @@ def unescape_qmark_operator(
             )
         )
     return "".join(segments), shifted
+
+
+def _follows_operand(sql: str, start: int) -> bool:
+    head = sql[:start].rstrip()
+    if not head:
+        return False
+    if head[-1] in ")]\"'":
+        return True
+    match = _PRECEDING_WORD.search(head)
+    return bool(match and match.group(1).lower() not in _NON_OPERAND_KEYWORDS)

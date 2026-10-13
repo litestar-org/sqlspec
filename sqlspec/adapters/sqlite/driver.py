@@ -35,7 +35,6 @@ from sqlspec.driver._common import (
 from sqlspec.driver._exception_handler import BaseSyncExceptionHandler
 from sqlspec.driver._stream import SyncRowStream
 from sqlspec.driver._sync import SyncDriverAdapterBase
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -111,6 +110,17 @@ class SqliteDriver(SyncDriverAdapterBase):
         self._data_dictionary: SqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
 
+    @property
+    def data_dictionary(self) -> "SqliteDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = SqliteDataDictionary()
+        return self._data_dictionary
+
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
 
@@ -130,11 +140,12 @@ class SqliteDriver(SyncDriverAdapterBase):
             data, column_names, row_count = collect_rows(fetched_data, cursor.description)
             row_format = resolve_row_format(data)
             affected_rows = resolve_rowcount(cursor)
+            effective_rowcount = affected_rows or (row_count if statement.operation_type == "INSERT" else 0)
             last_inserted_id = resolve_lastrowid(
                 self.connection,
                 cursor,
                 statement.operation_type,
-                affected_rows,
+                effective_rowcount,
                 statement.expression,
                 self._rowid_target_cache,
             )
@@ -252,19 +263,11 @@ class SqliteDriver(SyncDriverAdapterBase):
         try:
             if not self.connection.in_transaction:
                 stmt = f"BEGIN {transaction_mode}" if transaction_mode else "BEGIN"
-                self.connection.execute(stmt)
+                cursor = self.connection.execute(stmt)
+                with contextlib.suppress(Exception):
+                    cursor.close()
         except sqlite3.Error as e:
-            msg = f"Failed to begin transaction: {e}"
-            raise SQLSpecError(msg) from e
-
-    def _in_autocommit_mode(self) -> bool:
-        """Report whether the connection runs in sqlite3's autocommit mode.
-
-        Under that mode ``Connection.commit`` and ``Connection.rollback`` are
-        no-ops, so a manually started transaction has to be ended with an
-        explicit statement.
-        """
-        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and getattr(self.connection, "autocommit", None) is True
+            raise create_mapped_exception(e) from e
 
     def commit(self) -> None:
         """Commit the current transaction.
@@ -275,12 +278,13 @@ class SqliteDriver(SyncDriverAdapterBase):
         try:
             if self._in_autocommit_mode():
                 if self.connection.in_transaction:
-                    self.connection.execute("COMMIT")
+                    cursor = self.connection.execute("COMMIT")
+                    with contextlib.suppress(Exception):
+                        cursor.close()
                 return
             self.connection.commit()
         except sqlite3.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
 
     def rollback(self) -> None:
         """Rollback the current transaction.
@@ -291,12 +295,16 @@ class SqliteDriver(SyncDriverAdapterBase):
         try:
             if self._in_autocommit_mode():
                 if self.connection.in_transaction:
-                    self.connection.execute("ROLLBACK")
+                    cursor = self.connection.execute("ROLLBACK")
+                    with contextlib.suppress(Exception):
+                        cursor.close()
+                self._rowid_target_cache.clear()
                 return
             self.connection.rollback()
+            self._rowid_target_cache.clear()
         except sqlite3.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+            self._rowid_target_cache.clear()
+            raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "SqliteConnection") -> "SqliteCursor":
         """Create context manager for SQLite cursor.
@@ -369,7 +377,11 @@ class SqliteDriver(SyncDriverAdapterBase):
         owns_transaction = not self.connection.in_transaction
         try:
             if owns_transaction:
-                self.connection.execute("BEGIN IMMEDIATE")
+                transaction_mode = cast(
+                    "Literal['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE']",
+                    self.driver_features.get("default_transaction_mode") or "IMMEDIATE",
+                )
+                self.begin(mode=transaction_mode)
             if overwrite:
                 statement = f"DELETE FROM {format_identifier(table)}"
                 with self.with_cursor(self.connection) as cursor:
@@ -413,17 +425,6 @@ class SqliteDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
-    @property
-    def data_dictionary(self) -> "SqliteDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = SqliteDataDictionary()
-        return self._data_dictionary
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect SQLite rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
@@ -431,6 +432,15 @@ class SqliteDriver(SyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from SQLite cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    def _in_autocommit_mode(self) -> bool:
+        """Report whether the connection runs in sqlite3's autocommit mode.
+
+        Under that mode ``Connection.commit`` and ``Connection.rollback`` are
+        no-ops, so a manually started transaction has to be ended with an
+        explicit statement.
+        """
+        return SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT and getattr(self.connection, "autocommit", None) is True
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
@@ -465,13 +475,14 @@ class SqliteDriver(SyncDriverAdapterBase):
 
             fetched_data = cursor.fetchall()
             affected_rows = resolve_rowcount(cursor)
+            effective_rowcount = affected_rows or (len(fetched_data) if cached.operation_type == "INSERT" else 0)
             last_inserted_id = None
             if cached.operation_type != "SELECT":
                 last_inserted_id = resolve_lastrowid(
                     self.connection,
                     cursor,
                     cached.operation_type,
-                    affected_rows,
+                    effective_rowcount,
                     cached.processed_state.parsed_expression,
                     self._rowid_target_cache,
                 )
@@ -497,8 +508,6 @@ class SqliteDriver(SyncDriverAdapterBase):
                     cursor.close()
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
-        msg = "unreachable"
-        raise AssertionError(msg)
 
     def _invalidate_rowid_target_cache(self, operation_type: "OperationType") -> None:
         if operation_type not in {"SELECT", "INSERT", "UPDATE", "DELETE"}:

@@ -136,7 +136,6 @@ def parse_comment(expression: exp.Expr) -> tuple[exp.Expr, dict[str, str]]:
     for comment in expression.comments:
         stripped = comment.strip()
         if _is_sqlcommenter_comment(stripped):
-            # Parse key='value' pairs
             for pair in stripped.split(","):
                 eq_idx = pair.find("='")
                 if eq_idx == -1:
@@ -207,7 +206,6 @@ def _decode(raw: str) -> str:
 def _is_sqlcommenter_comment(comment: str) -> bool:
     """Check whether a comment string looks like a sqlcommenter payload."""
     stripped = comment.strip()
-    # sqlcommenter comments have key='value' pairs
     return "='" in stripped and stripped.endswith("'")
 
 

@@ -72,6 +72,11 @@ class BigQueryMetadataScope:
         self.dataset = _clean_bigquery_identifier_part(dataset)
         self.region = _clean_bigquery_identifier_part(region)
 
+    @property
+    def schema_name(self) -> str | None:
+        """Return the dataset name used by schema bind parameters."""
+        return self.dataset
+
     @classmethod
     def from_schema(
         cls, schema: str | None, *, project: str | None = None, dataset: str | None = None, region: str | None = None
@@ -100,11 +105,6 @@ class BigQueryMetadataScope:
                 msg = "BigQuery schema must be a dataset or project.dataset qualifier."
                 raise ValueError(msg)
         return cls(project=project or schema_project, dataset=dataset or schema_dataset, region=region)
-
-    @property
-    def schema_name(self) -> str | None:
-        """Return the dataset name used by schema bind parameters."""
-        return self.dataset
 
     def dataset_prefix(self) -> str:
         """Return a quoted dataset prefix for legacy INFORMATION_SCHEMA SQL."""
@@ -184,9 +184,10 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
 
     def get_tables(self, driver: "BigQueryDriver", schema: "str | None" = None) -> "list[TableMetadata]":
         """Get tables sorted by topological dependency order using BigQuery catalog."""
-        scope = BigQueryMetadataScope.from_schema(schema)
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
         self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="tables")
-        tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(schema)
+        tables_table, kcu_table, rc_table = format_bigquery_information_schema_tables(resolved_schema)
 
         query_text = self.get_query_text("tables", "by_schema").format(
             tables_table=tables_table, kcu_table=kcu_table, rc_table=rc_table
@@ -197,8 +198,9 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ColumnMetadata]":
         """Get column information for a table or schema."""
-        scope = BigQueryMetadataScope.from_schema(schema)
-        schema_prefix = format_bigquery_schema_prefix(schema)
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
+        schema_prefix = format_bigquery_schema_prefix(resolved_schema)
         if table is None:
             self._log_schema_introspect(driver, schema_name=scope.schema_name, table_name=None, operation="columns")
             query_text = self.get_query_text("columns", "by_schema").format(schema_prefix=schema_prefix)
@@ -212,7 +214,8 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[IndexMetadata]":
         """Get index metadata for a table or schema."""
-        scope = BigQueryMetadataScope.from_schema(schema)
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
         if scope.dataset is None:
             return []
         if table is None:
@@ -240,7 +243,8 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         self, driver: "BigQueryDriver", table: "str | None" = None, schema: "str | None" = None
     ) -> "list[ForeignKeyMetadata]":
         """Get foreign key metadata."""
-        scope = BigQueryMetadataScope.from_schema(schema)
+        resolved_schema = _resolve_bigquery_schema(driver, schema)
+        scope = BigQueryMetadataScope.from_schema(resolved_schema)
         if table is None:
             self._log_schema_introspect(
                 driver, schema_name=scope.schema_name, table_name=None, operation="foreign_keys"
@@ -267,6 +271,26 @@ class BigQueryDataDictionary(SyncDataDictionaryBase):
         requested_domains = tuple(domains) if domains is not None else _DEFAULT_METADATA_DOMAINS
         capabilities = tuple(_bigquery_capability_for_domain(domain) for domain in requested_domains)
         return MetadataCapabilityProfile(self.dialect, adapter=type(self).__name__, capabilities=capabilities)
+
+
+def _resolve_bigquery_schema(driver: "BigQueryDriver", schema: "str | None") -> "str | None":
+    if schema is not None:
+        return schema
+    default_job_config = getattr(driver, "_default_query_job_config", None)
+    if default_job_config is None:
+        return None
+    default_dataset = getattr(default_job_config, "default_dataset", None)
+    if default_dataset is None:
+        return None
+    if isinstance(default_dataset, str):
+        return default_dataset or None
+    project = getattr(default_dataset, "project", None)
+    dataset_id = getattr(default_dataset, "dataset_id", None)
+    if project and dataset_id:
+        return f"{project}.{dataset_id}"
+    if dataset_id:
+        return str(dataset_id)
+    return str(default_dataset)
 
 
 def _clean_bigquery_identifier_part(value: str | None) -> str | None:

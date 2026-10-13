@@ -1,3 +1,5 @@
+"""Registry for data dictionary dialect configurations."""
+
 import importlib
 from typing import TYPE_CHECKING
 

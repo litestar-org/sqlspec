@@ -20,13 +20,15 @@ from sqlspec.adapters.arrow_odbc import (
 )
 from sqlspec.adapters.arrow_odbc._typing import ArrowOdbcError
 from sqlspec.adapters.arrow_odbc.data_dictionary import ArrowOdbcDataDictionary
-from sqlspec.core import SQL, LimitOffsetFilter, OrderByFilter
+from sqlspec.adapters.arrow_odbc.driver import ArrowOdbcStreamSource, _reader_to_table
+from sqlspec.core import SQL, ArrowResult, LimitOffsetFilter, OrderByFilter
 from sqlspec.data_dictionary import DDLResult, MetadataFidelity, MetadataSource, MetadataSupport
 from sqlspec.exceptions import (
     DatabaseConnectionError,
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     NotNullViolationError,
     OperationalError,
     PermissionDeniedError,
@@ -291,7 +293,8 @@ def test_arrow_odbc_data_dictionary_catalog_support_is_explicitly_unavailable_wi
     assert catalog.source == MetadataSource.DRIVER_METADATA
     assert catalog.warnings
     assert profile.get("columns").support == MetadataSupport.SUPPORTED
-    assert profile.get("columns").fidelity == MetadataFidelity.PARTIAL
+    assert profile.get("columns").fidelity == MetadataFidelity.NATIVE
+    assert profile.get("columns").source == MetadataSource.CATALOG
     assert profile.get("ddl").support == MetadataSupport.UNSUPPORTED
 
 
@@ -802,14 +805,14 @@ def test_arrow_odbc_type_helper_public_import() -> None:
 
 
 def test_arrow_odbc_driver_slots_default_values() -> None:
-    """Slot defaults match the previous driver_features.get() fallbacks."""
+    """Slot defaults match apply_driver_features defaults."""
     connection = FakeConnection()
     driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={})
 
     assert driver._chunk_size_val == 65_536
-    assert driver._max_batch_bytes is None
-    assert driver._max_text_size_val is None
-    assert driver._max_binary_size_val is None
+    assert driver._max_batch_bytes == 512 * 1024 * 1024
+    assert driver._max_text_size_val == 1024 * 1024
+    assert driver._max_binary_size_val == 1024 * 1024
     assert driver._use_concurrent_fetch is True
     assert driver._query_timeout_sec_val is None
 
@@ -1033,3 +1036,244 @@ def test_mssql_pagination_after_output_transformer(parameter_transformer: bool) 
     call = connection.read_calls[-1]
     assert call["query"] == "/* trace */ SELECT TOP (2) id FROM t WHERE id > ?"
     assert call["parameters"] == ["7"]
+
+
+@pytest.mark.parametrize(
+    ("dbms_name", "expected_begin", "expected_commit", "expected_rollback"),
+    [
+        ("Microsoft SQL Server", "BEGIN TRANSACTION", "COMMIT TRANSACTION", "ROLLBACK TRANSACTION"),
+        ("PostgreSQL Unicode", "BEGIN", "COMMIT", "ROLLBACK"),
+        ("SQLite", "BEGIN", "COMMIT", "ROLLBACK"),
+    ],
+)
+def test_autocommit_transactions_emit_dialect_sql_statements(
+    dbms_name: str, expected_begin: str, expected_commit: str, expected_rollback: str
+) -> None:
+    """Under autocommit=True, begin/commit/rollback emit dialect-appropriate SQL statements."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": dbms_name, "connection_autocommit": True}
+    )
+
+    driver.begin()
+    assert driver._transaction_active is True
+    driver.commit()
+    assert driver._transaction_active is False
+
+    driver.begin()
+    driver.rollback()
+    assert driver._transaction_active is False
+
+    assert connection.executed == [
+        (expected_begin, None),
+        (expected_commit, None),
+        (expected_begin, None),
+        (expected_rollback, None),
+    ]
+    assert connection.commit_calls == 0
+    assert connection.rollback_calls == 0
+
+
+@pytest.mark.parametrize("dbms_name", ["IBM DB2", "Oracle in OraClient21Home1"])
+def test_autocommit_transactions_rejected_for_db2_and_oracle(dbms_name: str) -> None:
+    """Db2 and Oracle reject explicit begin() when connection_autocommit=True."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": dbms_name, "connection_autocommit": True}
+    )
+
+    with pytest.raises(ImproperConfigurationError, match="autocommit"):
+        driver.begin()
+
+
+@pytest.mark.parametrize(
+    "dbms_name", ["Microsoft SQL Server", "PostgreSQL Unicode", "SQLite", "IBM DB2", "Oracle in OraClient21Home1"]
+)
+def test_manual_commit_transactions_use_odbc_end_tran_without_sql_begin(dbms_name: str) -> None:
+    """Under connection_autocommit=False, begin() is a state no-op and commit/rollback use ODBC API."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection),
+        driver_features={"dbms_name": dbms_name, "connection_autocommit": False},
+    )
+
+    driver.begin()
+    assert driver._transaction_active is True
+    assert connection.executed == []
+
+    driver.commit()
+    assert driver._transaction_active is False
+    assert connection.commit_calls == 1
+
+    driver.begin()
+    driver.rollback()
+    assert driver._transaction_active is False
+    assert connection.rollback_calls == 1
+    assert connection.executed == []
+
+
+def test_arrow_exception_mapped_in_exception_handler_and_stream_source() -> None:
+    """pyarrow.ArrowException during batch reading or streaming is mapped to SQLSpecError."""
+
+    class ArrowBrokenReader:
+        schema = pa.schema([("id", pa.int64())])
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __iter__(self) -> Iterator[pa.RecordBatch]:
+            return self
+
+        def __next__(self) -> pa.RecordBatch:
+            msg = "State: 22018, Native error: 0, Message: invalid character value for cast"
+            raise pa.ArrowInvalid(msg)
+
+        def close(self) -> None:
+            self.closed = True
+
+    raw_reader = ArrowBrokenReader()
+
+    class BrokenStreamConnection(FakeConnection):
+        def read_arrow_batches(self, **kwargs: Any) -> Any:
+            self.read_calls.append(kwargs)
+            return raw_reader
+
+    connection = BrokenStreamConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+    source = ArrowOdbcStreamSource(driver, "SELECT id FROM items", None, 10)
+    source.start()
+
+    with pytest.raises(DataError):
+        source.fetch_chunk()
+
+    source.close()
+    assert raw_reader.closed is True
+
+
+def test_select_to_storage_writes_arrow_table_to_destination(tmp_path: Any) -> None:
+    """select_to_storage exports query results via the Arrow storage pipeline."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+    destination = str(tmp_path / "export.parquet")
+
+    job = driver.select_to_storage("SELECT x FROM items", destination, format_hint="parquet")
+
+    assert job.status == "completed"
+    assert job.telemetry["rows_processed"] == 3
+
+
+@pytest.mark.parametrize("binary_val", [b"raw", bytearray(b"raw"), memoryview(b"raw")])
+def test_binary_parameter_raises_data_error(binary_val: Any) -> None:
+    """Passing raw binary parameters raises DataError instead of binding repr() text."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+
+    with pytest.raises(DataError, match="Binary parameter binding is not supported"):
+        driver.execute("INSERT INTO blobs (payload) VALUES (?)", (binary_val,))
+
+
+def test_execute_statement_forwards_query_timeout_sec() -> None:
+    """_execute_statement passes query_timeout_sec when configured in driver_features."""
+    recorded: list[tuple[str, Any, Any]] = []
+
+    class TimeoutAwareConnection(FakeConnection):
+        def execute(self, query: str, parameters: Any = None, query_timeout_sec: Any = None) -> None:
+            recorded.append((query, parameters, query_timeout_sec))
+
+    connection = TimeoutAwareConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection), driver_features={"query_timeout_sec": 15})
+
+    driver.execute("DELETE FROM items WHERE x = ?", (1,))
+
+    assert recorded == [("DELETE FROM items WHERE x = ?", ["1"], 15)]
+
+
+def test_dispatch_execute_script_does_not_rebind_parameters_across_multiple_statements() -> None:
+    """Multi-statement execute_script does not pass the full parameter list to each split statement."""
+    connection = FakeConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection), driver_features={"dbms_name": "PostgreSQL Unicode"}
+    )
+
+    driver.execute_script("DELETE FROM items; DELETE FROM archive;")
+    assert connection.executed == [("DELETE FROM items", None), ("DELETE FROM archive", None)]
+
+
+def test_reader_to_table_preserves_schema_on_empty_iterable_reader() -> None:
+    """_reader_to_table preserves schema metadata when an iterable reader yields zero batches."""
+
+    class EmptyIterableReader:
+        schema = pa.Table.from_pydict({
+            "id": pa.array([], type=pa.int64()),
+            "name": pa.array([], type=pa.string()),
+        }).schema
+
+        def __iter__(self) -> Iterator[pa.RecordBatch]:
+            return iter(())
+
+    table = _reader_to_table(EmptyIterableReader())
+    assert table.num_rows == 0
+    assert table.column_names == ["id", "name"]
+
+
+def test_data_dictionary_dialect_and_lowercase_column_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Data dictionary tracks runtime dialect, normalizes probed columns, and disables concurrent fetch on probes."""
+
+    class UpperSchemaConnection(FakeConnection):
+        def read_arrow_batches(self, **kwargs: Any) -> FakeReader:
+            self.read_calls.append(kwargs)
+            empty_table = pa.Table.from_pydict({
+                "ITEM_ID": pa.array([], type=pa.int64()),
+                "ITEM_NAME": pa.array([], type=pa.string()),
+            })
+            return FakeReader(empty_table)
+
+    connection = UpperSchemaConnection()
+    driver = ArrowOdbcDriver(
+        cast("ArrowOdbcConnection", connection),
+        driver_features={"dbms_name": "IBM DB2", "enable_lowercase_column_names": True},
+    )
+
+    def fail_get_query(self: ArrowOdbcDataDictionary, domain: str, operation: str) -> Any:
+        raise SQLFileNotFoundError(f"{domain}/{operation}")
+
+    monkeypatch.setattr(ArrowOdbcDataDictionary, "get_query", fail_get_query)
+
+    assert driver.data_dictionary.dialect == "db2"
+    columns = driver.data_dictionary.get_columns(driver, table="items")
+    assert [col["column_name"] for col in columns] == ["item_id", "item_name"]
+    assert connection.read_calls[-1]["fetch_concurrently"] is False
+
+    profile = driver.data_dictionary.get_metadata_capabilities(driver, domains=("columns",))
+    assert profile.get("columns").fidelity == MetadataFidelity.PARTIAL
+
+
+def test_odbc_type_to_arrow_handles_wide_and_out_of_range_decimals() -> None:
+    """Decimals up to 38 use decimal128, 39..76 use decimal256, and out-of-range fall back to string."""
+    assert odbc_type_to_arrow("decimal", precision=18, scale=4) == pa.decimal128(18, 4)
+    assert odbc_type_to_arrow("decimal", precision=50, scale=10) == pa.decimal256(50, 10)
+    assert odbc_type_to_arrow("decimal", precision=100, scale=10) == pa.string()
+    assert odbc_type_to_arrow("numeric", precision=0, scale=0) == pa.string()
+    assert odbc_type_to_arrow("numeric", precision=10, scale=20) == pa.string()
+
+
+def test_load_from_arrow_streams_record_batch_reader_and_bulk_insert_unwraps_arrow_result() -> None:
+    """load_from_arrow passes RecordBatchReader directly to insert_into_table and bulk_insert_arrow unwraps ArrowResult."""
+    inserted_readers: list[tuple[str, Any]] = []
+
+    class StreamingInsertConnection(FakeConnection):
+        def insert_into_table(self, **kwargs: Any) -> None:
+            inserted_readers.append((kwargs["table"], kwargs["reader"]))
+
+    connection = StreamingInsertConnection()
+    driver = ArrowOdbcDriver(cast("ArrowOdbcConnection", connection))
+    table = pa.table({"id": [1, 2]})
+    reader = pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
+
+    driver.load_from_arrow("items", reader)
+    assert len(inserted_readers) == 1
+    assert inserted_readers[0][1] is reader
+
+    arrow_result = ArrowResult(statement=SQL("SELECT 1"), data=table, rows_affected=2)
+    driver.bulk_insert_arrow("items", arrow_result)
+    assert connection.insert_calls == [("items", 65536, table)]

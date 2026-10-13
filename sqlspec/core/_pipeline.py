@@ -29,12 +29,6 @@ DEFAULT_PIPELINE_PARSE_CACHE_SIZE: Final[int] = 5000
 DEFAULT_PIPELINE_COUNT: Final[int] = 32
 
 
-def _is_truthy(value: "str | None") -> bool:
-    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
-
-
-_RECORD_PIPELINE_METRICS: Final[bool] = _is_truthy(os.environ.get(DEBUG_ENV_FLAG))
-
 _METRIC_KEYS: Final[tuple[str, ...]] = (
     "hits",
     "misses",
@@ -257,3 +251,10 @@ class _StatementPipeline:
         if self._metrics is None:
             return None
         return self._metrics.snapshot()
+
+
+def _is_truthy(value: "str | None") -> bool:
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
+_RECORD_PIPELINE_METRICS: Final[bool] = _is_truthy(os.environ.get(DEBUG_ENV_FLAG))

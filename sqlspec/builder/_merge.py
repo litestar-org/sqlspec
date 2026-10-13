@@ -18,7 +18,7 @@ from sqlglot.errors import ParseError
 
 from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._explain import ExplainMixin
-from sqlspec.builder._parsing_utils import _coerce_column, _resolve_dialect, extract_sql_object_expression
+from sqlspec.builder._parsing_utils import _coerce_column, _is_simple_identifier, extract_sql_object_expression
 from sqlspec.builder._select import is_explicitly_quoted
 from sqlspec.exceptions import DialectNotSupportedError, SQLBuilderError
 from sqlspec.utils.dispatch import TypeDispatcher
@@ -34,6 +34,8 @@ __all__ = ("Merge",)
 
 
 MERGE_UNSUPPORTED_DIALECTS = frozenset({"mysql", "sqlite", "duckdb"})
+_MERGE_SQL_KEYWORD_LITERALS = frozenset({"CURRENT_TIMESTAMP", "CURRENT_DATE", "CURRENT_TIME"})
+_MERGE_ARITHMETIC_NODES = (exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Mod, exp.Paren)
 _POSTGRES_TYPE_DISPATCHER = TypeDispatcher[str]()
 _ORACLE_TYPE_DISPATCHER = TypeDispatcher[str]()
 
@@ -75,43 +77,67 @@ class _MergeAssignmentMixin:
 
     __slots__ = ()
 
-    def _is_column_reference(self, value: str) -> bool:
-        """Check if value is a SQL expression rather than a literal string.
+    def _known_merge_qualifiers(self) -> set[str]:
+        qualifiers: set[str] = set()
+        builder = cast("SQLBuilderProtocol", self)
+        expr = builder.get_expression()
+        if not isinstance(expr, exp.Merge):
+            return qualifiers
+        for node in (expr.this, expr.args.get("using")):
+            if node is None:
+                continue
+            alias = node.alias
+            if alias:
+                qualifiers.add(alias.lower())
+            if isinstance(node, exp.Table) and node.name:
+                qualifiers.add(node.name.lower())
+            elif isinstance(node, exp.Alias) and isinstance(node.this, exp.Table) and node.this.name:
+                qualifiers.add(node.this.name.lower())
+        return qualifiers
 
-        Returns True for qualified column references, SQL keywords, functions, and expressions.
+    def _is_column_reference(self, value: str) -> bool:
+        """Check if value is a qualified MERGE column reference or CURRENT_* keyword.
+
+        Returns True only for CURRENT_TIMESTAMP/CURRENT_DATE/CURRENT_TIME keywords,
+        qualified column references matching the MERGE target/source tables or aliases,
+        or arithmetic expressions composed exclusively of such qualified columns.
         Returns False for plain literal strings that should be parameterized.
         """
         if not isinstance(value, str):
             return False
 
+        stripped = value.strip()
+        if not stripped:
+            return False
+
+        if stripped.upper() in _MERGE_SQL_KEYWORD_LITERALS:
+            return True
+
+        known_qualifiers = self._known_merge_qualifiers()
+        if not known_qualifiers:
+            return False
+
+        if _is_simple_identifier(stripped) and "." in stripped:
+            prefix = stripped.split(".", 1)[0].strip('"`[]').lower()
+            return prefix in known_qualifiers
+
         builder = cast("QueryBuilder", self)
         with contextlib.suppress(ParseError):
-            parsed: exp.Expr | None = exp.maybe_parse(value.strip(), dialect=builder.dialect)
+            parsed: exp.Expr | None = exp.maybe_parse(stripped, dialect=builder.dialect)
             if parsed is None:
                 return False
 
             if isinstance(parsed, exp.Column):
-                return parsed.table is not None and bool(parsed.table)
+                return bool(parsed.table) and parsed.table.lower() in known_qualifiers
 
-            return isinstance(
-                parsed,
-                (
-                    exp.Dot,
-                    exp.Add,
-                    exp.Sub,
-                    exp.Mul,
-                    exp.Div,
-                    exp.Mod,
-                    exp.Func,
-                    exp.Anonymous,
-                    exp.Null,
-                    exp.CurrentTimestamp,
-                    exp.CurrentDate,
-                    exp.CurrentTime,
-                    exp.Paren,
-                    exp.Case,
-                ),
-            )
+            if isinstance(parsed, _MERGE_ARITHMETIC_NODES):
+                columns = list(parsed.find_all(exp.Column))
+                if not columns:
+                    return False
+                for node in parsed.walk():
+                    if not isinstance(node, (*_MERGE_ARITHMETIC_NODES, exp.Column, exp.Identifier)):
+                        return False
+                return all(bool(col.table) and col.table.lower() in known_qualifiers for col in columns)
         return False
 
     def _process_assignment(self, target_column: str, value: Any) -> exp.Expr:
@@ -181,6 +207,41 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
     def get_expression(self) -> exp.Expr | None: ...
     def set_expression(self, expression: exp.Expr) -> None: ...
+    def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
+        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
+        source_expr: exp.Expr
+        if isinstance(source, str):
+            source_expr = exp.to_table(source, alias=alias)
+        elif isinstance(source, (dict, list)):
+            paren_expr = self._create_dict_source_expression(source, alias)
+            if alias and isinstance(paren_expr, exp.Paren):
+                source_expr = exp.Subquery(this=paren_expr.this, alias=exp.to_identifier(alias))
+            else:
+                source_expr = paren_expr
+        elif isinstance(source, QueryBuilder):
+            builder = cast("QueryBuilder", self)
+            subquery_expression_source = builder._embed_subquery(source, alias_hint=alias or "using_src")
+            if alias:
+                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(alias))
+            else:
+                source_expr = exp.paren(subquery_expression_source)
+        elif isinstance(source, exp.Expr):
+            if isinstance(source, exp.Select):
+                source_expr = exp.Subquery(this=source, alias=exp.to_identifier(alias)) if alias else exp.paren(source)
+            elif isinstance(source, exp.Paren) and alias:
+                inner = source.this
+                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(alias))
+            elif isinstance(source, exp.Subquery) and alias:
+                source.set("alias", exp.to_identifier(alias))
+                source_expr = source
+            else:
+                source_expr = exp.alias_(source, alias) if alias else source
+        else:
+            msg = f"Unsupported source type for USING clause: {type(source)}"
+            raise SQLBuilderError(msg)
+
+        current_expr.set("using", source_expr)
+        return self
 
     def _create_dict_source_expression(
         self, source: "dict[str, Any] | list[dict[str, Any]]", alias: "str | None"
@@ -463,47 +524,6 @@ class MergeUsingClauseMixin(_MergeAssignmentMixin):
 
         return exp.paren(select_expr)
 
-    def using(self, source: str | exp.Expr | Any, alias: str | None = None) -> Self:
-        current_expr = _ensure_merge_expression(cast("SQLBuilderProtocol", self))
-        source_expr: exp.Expr
-        if isinstance(source, str):
-            source_expr = exp.to_table(source, alias=alias)
-        elif isinstance(source, (dict, list)):
-            paren_expr = self._create_dict_source_expression(source, alias)
-            if alias and isinstance(paren_expr, exp.Paren):
-                source_expr = exp.Subquery(this=paren_expr.this, alias=exp.to_identifier(alias))
-            else:
-                source_expr = paren_expr
-        elif isinstance(source, QueryBuilder):
-            builder = cast("QueryBuilder", self)
-            for param_name, param_value in source.parameters.items():
-                builder.add_parameter(param_value, name=param_name)
-            subquery_expression_source = source.get_expression()
-            if not isinstance(subquery_expression_source, exp.Expr):
-                subquery_expression_source = exp.select()
-
-            if alias:
-                source_expr = exp.Subquery(this=subquery_expression_source, alias=exp.to_identifier(alias))
-            else:
-                source_expr = exp.paren(subquery_expression_source)
-        elif isinstance(source, exp.Expr):
-            if isinstance(source, exp.Select):
-                source_expr = exp.Subquery(this=source, alias=exp.to_identifier(alias)) if alias else exp.paren(source)
-            elif isinstance(source, exp.Paren) and alias:
-                inner = source.this
-                source_expr = exp.Subquery(this=inner, alias=exp.to_identifier(alias))
-            elif isinstance(source, exp.Subquery) and alias:
-                source.set("alias", exp.to_identifier(alias))
-                source_expr = source
-            else:
-                source_expr = exp.alias_(source, alias) if alias else source
-        else:
-            msg = f"Unsupported source type for USING clause: {type(source)}"
-            raise SQLBuilderError(msg)
-
-        current_expr.set("using", source_expr)
-        return self
-
 
 @trait
 class MergeOnClauseMixin:
@@ -604,16 +624,18 @@ class MergeNotMatchedClauseMixin(_MergeAssignmentMixin):
                 raise SQLBuilderError(msg)
             column_names = [str(column) for column in columns]
             if values is None:
-                using_alias = None
+                using_alias: str | None = None
                 using_expr = current_expr.args.get("using")
                 if using_expr is not None and isinstance(using_expr, (exp.Subquery, exp.Table)):
-                    using_alias = using_expr.alias
+                    using_alias = using_expr.alias or None
                 elif using_expr is not None:
                     try:
-                        using_alias = using_expr.alias
+                        using_alias = using_expr.alias or None
                     except AttributeError:
                         using_alias = None
-                column_values = [f"{using_alias}.{col}" for col in column_names] if using_alias else column_names
+                column_values = [
+                    exp.column(col, table=using_alias) if using_alias else exp.column(col) for col in column_names
+                ]
             else:
                 column_values = list(values)
                 if len(column_names) != len(column_values):
@@ -719,6 +741,28 @@ class Merge(
         if target_table:
             self.into(target_table)
 
+    def build(self, dialect: "DialectType" = None) -> "Any":
+        """Build MERGE statement with dialect validation.
+
+        Args:
+            dialect: Optional dialect override for SQL generation.
+
+        Returns:
+            Built statement object.
+        """
+        return super().build(dialect=dialect)
+
+    def _prepare_expression_for_build(self, dialect: "DialectType" = None, *, copy: bool = True) -> exp.Expr:
+        """Validate MERGE dialect support and apply dialect-specific expression lowering."""
+        self._validate_dialect_support(dialect)
+        expression = super()._prepare_expression_for_build(dialect=dialect, copy=copy)
+        resolved_dialect = self._build_dialect(dialect)
+        if resolved_dialect == "oracle":
+            if not copy:
+                expression = expression.copy()
+            self._move_oracle_when_conditions_on_expr(expression)
+        return expression
+
     def _create_base_expression(self) -> "exp.Merge":
         """Create a base MERGE expression.
 
@@ -727,11 +771,11 @@ class Merge(
         """
         return exp.Merge(this=None, using=None, on=None, whens=exp.Whens(expressions=[]))
 
-    def _validate_dialect_support(self) -> None:
-        """Validate that the current dialect supports MERGE statements."""
-        dialect = self.dialect_name
-        if dialect and dialect in MERGE_UNSUPPORTED_DIALECTS:
-            self._raise_dialect_not_supported(dialect)
+    def _validate_dialect_support(self, dialect: "DialectType" = None) -> None:
+        """Validate that the target dialect supports MERGE statements."""
+        resolved_dialect = self._build_dialect(dialect)
+        if resolved_dialect and resolved_dialect in MERGE_UNSUPPORTED_DIALECTS:
+            self._raise_dialect_not_supported(resolved_dialect)
 
     def _raise_dialect_not_supported(self, dialect: str) -> None:
         """Raise error with helpful alternatives for unsupported dialects.
@@ -756,45 +800,16 @@ class Merge(
         )
         raise DialectNotSupportedError(msg)
 
-    def build(self, dialect: "DialectType" = None) -> "Any":
-        """Build MERGE statement with dialect validation.
-
-        Args:
-            dialect: Optional dialect override for SQL generation.
-
-        Returns:
-            Built statement object.
-        """
-        self._validate_dialect_support()
-        target_dialect = _resolve_dialect(dialect, self.dialect)
-        if isinstance(target_dialect, str):
-            dialect_name = target_dialect
-        elif isinstance(target_dialect, type):
-            dialect_name = target_dialect.__name__
-        else:
-            dialect_name = None
-        if dialect_name:
-            dialect_name = dialect_name.lower()
-        original_expression = self._expression
-        if dialect_name == "oracle" and original_expression is not None:
-            self._expression = original_expression.copy()
-        try:
-            self._move_oracle_when_conditions(dialect_name)
-            return super().build(dialect=dialect)
-        finally:
-            self._expression = original_expression
-
     def _move_oracle_when_conditions(self, dialect_name: str | None) -> None:
-        """Normalize WHEN clause conditions for dialect quirks.
-
-        Oracle requires conditional logic on UPDATE/DELETE branches to live in the
-        clause-specific WHERE, not on the WHEN predicate. Move the condition down
-        when present so generated SQL matches Oracle syntax.
-        """
+        """Normalize WHEN clause conditions for dialect quirks on the builder's expression."""
         if dialect_name != "oracle":
             return
-
         merge_expr = self.get_expression()
+        if merge_expr is not None:
+            self._move_oracle_when_conditions_on_expr(merge_expr)
+
+    def _move_oracle_when_conditions_on_expr(self, merge_expr: exp.Expr) -> None:
+        """Normalize WHEN clause conditions for Oracle on a target MERGE expression."""
         if not isinstance(merge_expr, exp.Merge):
             return
 

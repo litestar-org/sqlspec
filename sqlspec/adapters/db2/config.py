@@ -34,7 +34,7 @@ from sqlspec.driver import (
 from sqlspec.extensions.events import EventRuntimeHints
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     from sqlspec.core import StatementConfig
     from sqlspec.observability import ObservabilityConfig
@@ -193,12 +193,16 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
             connection_config = {"database": "SAMPLE"}
         normalized_connection_config = build_connection_config(connection_config)
 
+        raw_driver_features = dict(driver_features) if driver_features else {}
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[Db2SyncConnection], None] | None = features_dict.pop(
             "on_connection_create", None
+        )
+        resolved_extension_config = _resolve_events_extension_config(
+            extension_config, raw_driver_features, features_dict
         )
 
         super().__init__(
@@ -208,10 +212,45 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
             statement_config=statement_config,
             driver_features=features_dict,
             bind_key=bind_key,
-            extension_config=extension_config,
+            extension_config=resolved_extension_config,
             observability_config=observability_config,
             **kwargs,
         )
+
+    def create_connection(self) -> "Db2SyncConnection":
+        """Open a standalone connection owned by the caller.
+
+        Returns:
+            Db2SyncConnection: A newly opened physical connection.
+        """
+        return self.provide_pool().new_connection()
+
+    def get_connection_string(self) -> str:
+        """Generate a valid IBM Db2 CLI DSN connection string."""
+        return build_dsn_string(self.connection_config)
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get namespace for dependency injection resolution."""
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "Db2SyncConfig": Db2SyncConfig,
+            "Db2SyncConnection": Db2SyncConnection,
+            "Db2SyncConnectionContext": Db2SyncConnectionContext,
+            "Db2ConnectionParams": Db2ConnectionParams,
+            "Db2SyncConnectionPool": Db2SyncConnectionPool,
+            "Db2SyncCursor": Db2SyncCursor,
+            "Db2SyncDriver": Db2SyncDriver,
+            "Db2DriverFeatures": Db2DriverFeatures,
+            "Db2SyncExceptionHandler": Db2SyncExceptionHandler,
+            "Db2PoolParams": Db2PoolParams,
+            "Db2RawCursor": Db2RawCursor,
+            "Db2SyncSessionContext": Db2SyncSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return runtime hints for Db2 event channels."""
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
     def _create_pool(self) -> "Db2SyncConnectionPool":
         """Create a new thread-local connection pool."""
@@ -248,6 +287,7 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
             prepare_driver=self._prepare_driver,
             autocommit_baseline=bool(self.connection_config.get("autocommit", True)),
             begin_transaction=transaction,
+            driver_type=self.driver_type,
         )
 
     def _close_pool(self) -> None:
@@ -255,41 +295,6 @@ class Db2SyncConfig(SyncDatabaseConfig[Db2SyncConnection, Db2SyncConnectionPool,
         if self.connection_instance:
             self.connection_instance.close()
             self.connection_instance = None
-
-    def create_connection(self) -> "Db2SyncConnection":
-        """Open a standalone connection owned by the caller.
-
-        Returns:
-            Db2SyncConnection: A newly opened physical connection.
-        """
-        return self.provide_pool().new_connection()
-
-    def get_connection_string(self) -> str:
-        """Generate a valid IBM Db2 CLI DSN connection string."""
-        return build_dsn_string(self.connection_config)
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get namespace for dependency injection resolution."""
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "Db2SyncConfig": Db2SyncConfig,
-            "Db2SyncConnection": Db2SyncConnection,
-            "Db2SyncConnectionContext": Db2SyncConnectionContext,
-            "Db2ConnectionParams": Db2ConnectionParams,
-            "Db2SyncConnectionPool": Db2SyncConnectionPool,
-            "Db2SyncCursor": Db2SyncCursor,
-            "Db2SyncDriver": Db2SyncDriver,
-            "Db2DriverFeatures": Db2DriverFeatures,
-            "Db2SyncExceptionHandler": Db2SyncExceptionHandler,
-            "Db2PoolParams": Db2PoolParams,
-            "Db2RawCursor": Db2RawCursor,
-            "Db2SyncSessionContext": Db2SyncSessionContext,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return runtime hints for Db2 event channels."""
-        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
 
 class Db2AsyncConnectionContext(AsyncPoolConnectionContext):
@@ -355,12 +360,16 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
         normalized_connection_config = build_connection_config(raw_connection_config)
         normalized_connection_config.update(pool_options)
 
+        raw_driver_features = dict(driver_features) if driver_features else {}
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
         self._user_connection_hook: Callable[[Db2AsyncConnection], Awaitable[None] | None] | None = features_dict.pop(
             "on_connection_create", None
+        )
+        resolved_extension_config = _resolve_events_extension_config(
+            extension_config, raw_driver_features, features_dict
         )
 
         super().__init__(
@@ -370,10 +379,46 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
             statement_config=statement_config,
             driver_features=features_dict,
             bind_key=bind_key,
-            extension_config=extension_config,
+            extension_config=resolved_extension_config,
             observability_config=observability_config,
             **kwargs,
         )
+
+    async def create_connection(self) -> "Db2AsyncConnection":
+        """Open a standalone connection owned by the caller.
+
+        Returns:
+            Db2AsyncConnection: A newly opened ``ibm_db_dbi.AsyncConnection``.
+        """
+        pool = await self.provide_pool()
+        return cast("Db2AsyncConnection", await pool.new_connection())
+
+    def get_connection_string(self) -> str:
+        """Generate a valid IBM Db2 CLI DSN connection string."""
+        return build_dsn_string(self.connection_config)
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get namespace for dependency injection resolution."""
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "Db2AsyncConfig": Db2AsyncConfig,
+            "Db2AsyncConnection": Db2AsyncConnection,
+            "Db2AsyncConnectionContext": Db2AsyncConnectionContext,
+            "Db2AsyncConnectionPool": Db2AsyncConnectionPool,
+            "Db2AsyncCursor": Db2AsyncCursor,
+            "Db2AsyncDriver": Db2AsyncDriver,
+            "Db2AsyncExceptionHandler": Db2AsyncExceptionHandler,
+            "Db2AsyncPoolParams": Db2AsyncPoolParams,
+            "Db2AsyncRawCursor": Db2AsyncRawCursor,
+            "Db2AsyncSessionContext": Db2AsyncSessionContext,
+            "Db2ConnectionParams": Db2ConnectionParams,
+            "Db2DriverFeatures": Db2DriverFeatures,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return runtime hints for Db2 event channels."""
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
 
     async def _create_pool(self) -> "Db2AsyncConnectionPool":
         """Create a new bounded asyncio connection pool."""
@@ -414,6 +459,7 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
             prepare_driver=self._prepare_driver,
             autocommit_baseline=bool(self.connection_config.get("autocommit", True)),
             begin_transaction=transaction,
+            driver_type=self.driver_type,
         )
 
     async def _close_pool(self) -> None:
@@ -422,38 +468,29 @@ class Db2AsyncConfig(AsyncDatabaseConfig[Db2AsyncConnection, Db2AsyncConnectionP
             await self.connection_instance.close()
             self.connection_instance = None
 
-    async def create_connection(self) -> "Db2AsyncConnection":
-        """Open a standalone connection owned by the caller.
 
-        Returns:
-            Db2AsyncConnection: A newly opened ``ibm_db_dbi.AsyncConnection``.
-        """
-        pool = await self.provide_pool()
-        return cast("Db2AsyncConnection", await pool.new_connection())
-
-    def get_connection_string(self) -> str:
-        """Generate a valid IBM Db2 CLI DSN connection string."""
-        return build_dsn_string(self.connection_config)
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get namespace for dependency injection resolution."""
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "Db2AsyncConfig": Db2AsyncConfig,
-            "Db2AsyncConnection": Db2AsyncConnection,
-            "Db2AsyncConnectionContext": Db2AsyncConnectionContext,
-            "Db2AsyncConnectionPool": Db2AsyncConnectionPool,
-            "Db2AsyncCursor": Db2AsyncCursor,
-            "Db2AsyncDriver": Db2AsyncDriver,
-            "Db2AsyncExceptionHandler": Db2AsyncExceptionHandler,
-            "Db2AsyncPoolParams": Db2AsyncPoolParams,
-            "Db2AsyncRawCursor": Db2AsyncRawCursor,
-            "Db2AsyncSessionContext": Db2AsyncSessionContext,
-            "Db2ConnectionParams": Db2ConnectionParams,
-            "Db2DriverFeatures": Db2DriverFeatures,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return runtime hints for Db2 event channels."""
-        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5)
+def _resolve_events_extension_config(
+    extension_config: "ExtensionConfigs | None",
+    raw_driver_features: "Mapping[str, Any]",
+    features_dict: "Mapping[str, Any]",
+) -> "ExtensionConfigs | None":
+    """Propagate Db2 event driver features into ``extension_config['events']``."""
+    if features_dict.get("enable_events") is False:
+        if extension_config and "events" in extension_config:
+            updated = cast("ExtensionConfigs", dict(extension_config))
+            updated.pop("events", None)
+            return updated
+        return extension_config
+    has_explicit_events_feature = bool(raw_driver_features.get("enable_events")) or (
+        "events_backend" in raw_driver_features
+    )
+    has_events_extension = bool(extension_config and "events" in extension_config)
+    if not has_explicit_events_feature and not has_events_extension:
+        return extension_config
+    resolved: dict[str, Any] = dict(extension_config) if extension_config else {}
+    events_cfg = dict(resolved.get("events") or {})
+    events_backend = features_dict.get("events_backend")
+    if events_backend:
+        events_cfg.setdefault("backend", events_backend)
+    resolved["events"] = events_cfg
+    return cast("ExtensionConfigs", resolved)

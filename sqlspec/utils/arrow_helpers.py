@@ -117,7 +117,10 @@ def convert_dict_to_arrow(
         if return_format == "reader":
             return pa.RecordBatchReader.from_batches(empty_table.schema, empty_table.to_batches())
 
-        if return_format in {"batch", "batches"}:
+        if return_format == "batches":
+            return []
+
+        if return_format == "batch":
             batches = empty_table.to_batches(max_chunksize=batch_size)
             return batches[0] if batches else pa.RecordBatch.from_pydict({})
 
@@ -592,14 +595,11 @@ class _DeferredCloseBatchIterator:
         self._close_callback = close_callback
         self._closed = False
 
+    def __del__(self) -> None:
+        self._finalize()
+
     def __iter__(self) -> "_DeferredCloseBatchIterator":
         return self
-
-    def _finalize(self) -> None:
-        if not self._closed:
-            self._closed = True
-            with contextlib.suppress(Exception):
-                self._close_callback()
 
     def __next__(self) -> Any:
         try:
@@ -610,3 +610,12 @@ class _DeferredCloseBatchIterator:
         except Exception:
             self._finalize()
             raise
+
+    def close(self) -> None:
+        self._finalize()
+
+    def _finalize(self) -> None:
+        if not self._closed:
+            self._closed = True
+            with contextlib.suppress(Exception):
+                self._close_callback()

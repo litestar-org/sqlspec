@@ -125,8 +125,7 @@ def hash_parameters(
         if isinstance(original_parameters, list):
             param_hash ^= hash(("original_count", len(original_parameters)))
             if original_parameters:
-                sample_size = min(3, len(original_parameters))
-                sample_hash = hash(repr(original_parameters[:sample_size]))
+                sample_hash = hash(repr(original_parameters))
                 param_hash ^= hash(("original_sample", sample_hash))
         else:
             param_hash ^= hash(("original", repr(original_parameters)))
@@ -176,6 +175,7 @@ def hash_sql_statement(statement: "SQL") -> str:
         hash(statement.dialect),
         hash(statement.is_many),
         hash(statement.is_script),
+        hash(statement.statement_config),
     ]
 
     return f"sql:{hash(tuple(state_components))}"

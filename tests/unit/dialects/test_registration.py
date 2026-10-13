@@ -78,10 +78,10 @@ def test_postgres_extension_operator_registration_is_idempotent() -> None:
     from sqlspec.dialects.postgres._operators import PGVECTOR_OPERATOR_TOKENS, register_postgres_extension_operators
 
     register_postgres_extension_operators()
-    factor_before = PostgresParser.FACTOR
+    json_operators_before = PostgresParser.JSON_OPERATORS
     register_postgres_extension_operators()
-    assert PostgresParser.FACTOR is factor_before
-    assert all(token in factor_before for token in PGVECTOR_OPERATOR_TOKENS.values())
+    assert PostgresParser.JSON_OPERATORS is json_operators_before
+    assert all(token in json_operators_before for token in PGVECTOR_OPERATOR_TOKENS.values())
 
 
 def test_spanner_property_parser_registration_is_idempotent() -> None:

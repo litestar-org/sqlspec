@@ -41,6 +41,17 @@ class GCPLogFormatter:
         """
         self._project_id = project_id or os.environ.get("GOOGLE_CLOUD_PROJECT")
 
+    def __hash__(self) -> int:
+        return hash((self.__class__.__name__, self._project_id))
+
+    def __repr__(self) -> str:
+        return f"GCPLogFormatter(project_id={self._project_id!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, GCPLogFormatter):
+            return NotImplemented
+        return self._project_id == other._project_id
+
     @property
     def project_id(self) -> str | None:
         """Get the configured GCP project ID."""
@@ -106,14 +117,3 @@ class GCPLogFormatter:
             entry.update(extra)
 
         return entry
-
-    def __hash__(self) -> int:
-        return hash((self.__class__.__name__, self._project_id))
-
-    def __repr__(self) -> str:
-        return f"GCPLogFormatter(project_id={self._project_id!r})"
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, GCPLogFormatter):
-            return NotImplemented
-        return self._project_id == other._project_id

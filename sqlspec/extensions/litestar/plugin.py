@@ -278,84 +278,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
             correlation_headers=len(self._correlation_headers),
         )
 
-    def _extract_extension_settings(self, config: "AnyDatabaseConfig") -> "dict[str, Any]":
-        """Extract Litestar settings from config.extension_config."""
-        litestar_config = config.extension_config.get("litestar", {})
-
-        connection_key = litestar_config.get("connection_key", DEFAULT_CONNECTION_KEY)
-        pool_key = litestar_config.get("pool_key", DEFAULT_POOL_KEY)
-        session_key = litestar_config.get("session_key", DEFAULT_SESSION_KEY)
-        commit_mode = litestar_config.get("commit_mode", DEFAULT_COMMIT_MODE)
-
-        if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
-            pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
-
-        correlation_header = str(litestar_config.get("correlation_header", DEFAULT_CORRELATION_HEADER)).lower()
-        configured_headers = _normalize_header_list(litestar_config.get("correlation_headers"))
-        auto_trace_headers = bool(litestar_config.get("auto_trace_headers", True))
-
-        disable_di = litestar_config.get("disable_di", False)
-
-        return {
-            "connection_key": connection_key,
-            "pool_key": pool_key,
-            "session_key": session_key,
-            "commit_mode": commit_mode,
-            "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
-            "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
-            "enable_correlation_middleware": litestar_config.get("enable_correlation_middleware", True),
-            "correlation_header": correlation_header,
-            "correlation_headers": _build_correlation_headers(
-                primary=correlation_header, configured=configured_headers, auto_trace_headers=auto_trace_headers
-            ),
-            "disable_di": disable_di,
-            "manage_lifespan": litestar_config.get("manage_lifespan", not disable_di),
-            "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
-        }
-
-    def _config_state(self, config: "AnyDatabaseConfig", settings: "dict[str, Any]") -> PluginConfigState:
-        """Create plugin state with handlers for the given configuration."""
-        state = PluginConfigState(
-            config=config,
-            connection_key=settings["connection_key"],
-            pool_key=settings["pool_key"],
-            session_key=settings["session_key"],
-            commit_mode=settings["commit_mode"],
-            extra_commit_statuses=settings.get("extra_commit_statuses"),
-            extra_rollback_statuses=settings.get("extra_rollback_statuses"),
-            enable_correlation_middleware=settings["enable_correlation_middleware"],
-            correlation_header=settings["correlation_header"],
-            enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
-            disable_di=settings["disable_di"],
-            manage_lifespan=settings["manage_lifespan"],
-        )
-        state.correlation_headers = tuple(settings["correlation_headers"])
-
-        if state.manage_lifespan:
-            state.lifespan_handler = lifespan_handler_maker(config, state.pool_key)
-        if not state.disable_di:
-            self._setup_di_handlers(state)
-        return state
-
-    def _setup_di_handlers(self, state: PluginConfigState) -> None:
-        """Build the dependency providers and before-send handler for the plugin state."""
-        connection_key = state.connection_key
-        pool_key = state.pool_key
-        commit_mode = state.commit_mode
-        config = state.config
-
-        state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
-        state.pool_provider = pool_provider_maker(config, pool_key)
-        state.session_provider = session_provider_maker(config, connection_key)
-
-        if commit_mode == "manual":
-            state.before_send_handler = manual_handler_maker(connection_key)
-        else:
-            commit_on_redirect = commit_mode == "autocommit_include_redirect"
-            state.before_send_handler = autocommit_handler_maker(
-                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
-            )
-
     @property
     def config(self) -> "list[AnyDatabaseConfig]":
         """Return the plugin configurations.
@@ -443,10 +365,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         app_config.exception_handlers.setdefault(NotFoundError, not_found_error_handler)
         app_config.exception_handlers.setdefault(IntegrityError, integrity_error_handler)
 
-        # Inject sqlspec's DEFAULT_TYPE_ENCODERS into Litestar's response serializer
-        # (user-supplied encoders win on conflict). Litestar's per-handler
-        # resolve_type_encoders() merges these with route/controller/router-level
-        # overrides automatically — no bidirectional thread needed.
         app_config.type_encoders = {**DEFAULT_TYPE_ENCODERS, **(app_config.type_encoders or {})}
         sqlspec_decoders = _build_litestar_type_decoders()
         if sqlspec_decoders:
@@ -522,21 +440,16 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
     def get_config(
         self, name: "type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]"
     ) -> "SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]": ...
-
     @overload
     def get_config(
         self, name: "type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]"
     ) -> "AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]": ...
-
     @overload
     def get_config(self, name: "SyncConfigT") -> "SyncConfigT": ...
-
     @overload
     def get_config(self, name: "AsyncConfigT") -> "AsyncConfigT": ...
-
     @overload
     def get_config(self, name: str) -> "AnyDatabaseConfig": ...
-
     def get_config(
         self, name: "type[DatabaseConfigProtocol[Any, Any, Any]] | str | Any"
     ) -> "DatabaseConfigProtocol[Any, Any, Any]":
@@ -562,54 +475,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state = self._registry_state(name) or self._dependency_state(name)
         return cast("DatabaseConfigProtocol[Any, Any, Any]", state.config)  # type: ignore[redundant-cast]
 
-    def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
-        """Ensure a connection exists in scope, creating one from the pool if needed (sync)."""
-        connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
-        if connection is not None:
-            return connection
-
-        pool = state.get(plugin_state.pool_key)
-        if pool is None:
-            self._raise_missing_connection(plugin_state.connection_key)
-
-        cm = plugin_state.config.provide_connection(pool)
-        connection = cm.__enter__()  # type: ignore[union-attr]
-        set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
-        return connection
-
-    async def _ensure_connection_async(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
-        """Ensure a connection exists in scope, creating one from the pool if needed (async)."""
-        connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
-        if connection is not None:
-            return connection
-
-        pool = state.get(plugin_state.pool_key)
-        if pool is None:
-            self._raise_missing_connection(plugin_state.connection_key)
-
-        cm = plugin_state.config.provide_connection(pool)
-        connection = await cm.__aenter__()  # type: ignore[union-attr]
-        set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
-        return connection
-
-    def _create_session(
-        self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
-    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
-        """Create a session from a connection and store it in scope."""
-        session_scope_key = f"{plugin_state.session_key}_instance"
-
-        session = get_sqlspec_scope_state(scope, session_scope_key)
-        if session is not None:
-            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
-
-        session = plugin_state.config.driver_type(
-            connection=connection,
-            statement_config=plugin_state.config.statement_config,
-            driver_features=plugin_state.config.driver_features,
-        )
-        set_sqlspec_scope_state(scope, session_scope_key, session)
-        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
-
     @overload
     def provide_request_session(
         self,
@@ -617,7 +482,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "DriverT": ...
-
     @overload
     def provide_request_session(
         self,
@@ -625,12 +489,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "DriverT": ...
-
     @overload
     def provide_request_session(
         self, key: str, state: "State", scope: "Scope"
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase": ...
-
     def provide_request_session(
         self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig]", state: "State", scope: "Scope"
     ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
@@ -661,7 +523,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "DriverT": ...
-
     @overload
     def provide_request_session_sync(
         self,
@@ -669,10 +530,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "DriverT": ...
-
     @overload
     def provide_request_session_sync(self, key: str, state: "State", scope: "Scope") -> "SyncDriverAdapterBase": ...
-
     def provide_request_session_sync(
         self,
         key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]",
@@ -705,7 +564,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "DriverT": ...
-
     @overload
     async def provide_request_session_async(
         self,
@@ -713,12 +571,10 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "DriverT": ...
-
     @overload
     async def provide_request_session_async(
         self, key: str, state: "State", scope: "Scope"
     ) -> "AsyncDriverAdapterBase": ...
-
     async def provide_request_session_async(
         self,
         key: "str | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
@@ -751,7 +607,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "ConnectionT": ...
-
     @overload
     def provide_request_connection(
         self,
@@ -759,10 +614,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "ConnectionT": ...
-
     @overload
     def provide_request_connection(self, key: str, state: "State", scope: "Scope") -> Any: ...
-
     def provide_request_connection(
         self, key: "str | AnyDatabaseConfig | type[AnyDatabaseConfig]", state: "State", scope: "Scope"
     ) -> Any:
@@ -793,7 +646,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "ConnectionT": ...
-
     @overload
     def provide_request_connection_sync(
         self,
@@ -801,10 +653,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "ConnectionT": ...
-
     @overload
     def provide_request_connection_sync(self, key: str, state: "State", scope: "Scope") -> Any: ...
-
     def provide_request_connection_sync(
         self,
         key: "str | SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any] | type[SyncDatabaseConfig[Any, Any, Any] | NoPoolSyncConfig[Any, Any]]",
@@ -836,7 +686,6 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "ConnectionT": ...
-
     @overload
     async def provide_request_connection_async(
         self,
@@ -844,10 +693,8 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         state: "State",
         scope: "Scope",
     ) -> "ConnectionT": ...
-
     @overload
     async def provide_request_connection_async(self, key: str, state: "State", scope: "Scope") -> Any: ...
-
     async def provide_request_connection_async(
         self,
         key: "str | AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any] | type[AsyncDatabaseConfig[Any, Any, Any] | NoPoolAsyncConfig[Any, Any]]",
@@ -871,6 +718,134 @@ class SQLSpecPlugin(InitPluginProtocol, CLIPlugin):
         """
         plugin_state = self._get_plugin_state(key)
         return await self._ensure_connection_async(plugin_state, state, scope)
+
+    def _extract_extension_settings(self, config: "AnyDatabaseConfig") -> "dict[str, Any]":
+        """Extract Litestar settings from config.extension_config."""
+        litestar_config = config.extension_config.get("litestar", {})
+
+        connection_key = litestar_config.get("connection_key", DEFAULT_CONNECTION_KEY)
+        pool_key = litestar_config.get("pool_key", DEFAULT_POOL_KEY)
+        session_key = litestar_config.get("session_key", DEFAULT_SESSION_KEY)
+        commit_mode = litestar_config.get("commit_mode", DEFAULT_COMMIT_MODE)
+
+        if not config.supports_connection_pooling and pool_key == DEFAULT_POOL_KEY:
+            pool_key = f"_{DEFAULT_POOL_KEY}_{id(config)}"
+
+        correlation_header = str(litestar_config.get("correlation_header", DEFAULT_CORRELATION_HEADER)).lower()
+        configured_headers = _normalize_header_list(litestar_config.get("correlation_headers"))
+        auto_trace_headers = bool(litestar_config.get("auto_trace_headers", True))
+
+        disable_di = litestar_config.get("disable_di", False)
+
+        return {
+            "connection_key": connection_key,
+            "pool_key": pool_key,
+            "session_key": session_key,
+            "commit_mode": commit_mode,
+            "extra_commit_statuses": litestar_config.get("extra_commit_statuses"),
+            "extra_rollback_statuses": litestar_config.get("extra_rollback_statuses"),
+            "enable_correlation_middleware": litestar_config.get("enable_correlation_middleware", True),
+            "correlation_header": correlation_header,
+            "correlation_headers": _build_correlation_headers(
+                primary=correlation_header, configured=configured_headers, auto_trace_headers=auto_trace_headers
+            ),
+            "disable_di": disable_di,
+            "manage_lifespan": litestar_config.get("manage_lifespan", not disable_di),
+            "enable_sqlcommenter_middleware": litestar_config.get("enable_sqlcommenter_middleware", True),
+        }
+
+    def _config_state(self, config: "AnyDatabaseConfig", settings: "dict[str, Any]") -> PluginConfigState:
+        """Create plugin state with handlers for the given configuration."""
+        state = PluginConfigState(
+            config=config,
+            connection_key=settings["connection_key"],
+            pool_key=settings["pool_key"],
+            session_key=settings["session_key"],
+            commit_mode=settings["commit_mode"],
+            extra_commit_statuses=settings.get("extra_commit_statuses"),
+            extra_rollback_statuses=settings.get("extra_rollback_statuses"),
+            enable_correlation_middleware=settings["enable_correlation_middleware"],
+            correlation_header=settings["correlation_header"],
+            enable_sqlcommenter_middleware=settings["enable_sqlcommenter_middleware"],
+            disable_di=settings["disable_di"],
+            manage_lifespan=settings["manage_lifespan"],
+        )
+        state.correlation_headers = tuple(settings["correlation_headers"])
+
+        if state.manage_lifespan:
+            state.lifespan_handler = lifespan_handler_maker(config, state.pool_key)
+        if not state.disable_di:
+            self._setup_di_handlers(state)
+        return state
+
+    def _setup_di_handlers(self, state: PluginConfigState) -> None:
+        """Build the dependency providers and before-send handler for the plugin state."""
+        connection_key = state.connection_key
+        pool_key = state.pool_key
+        commit_mode = state.commit_mode
+        config = state.config
+
+        state.connection_provider = connection_provider_maker(config, pool_key, connection_key)
+        state.pool_provider = pool_provider_maker(config, pool_key)
+        state.session_provider = session_provider_maker(config, connection_key)
+
+        if commit_mode == "manual":
+            state.before_send_handler = manual_handler_maker(connection_key)
+        else:
+            commit_on_redirect = commit_mode == "autocommit_include_redirect"
+            state.before_send_handler = autocommit_handler_maker(
+                connection_key, commit_on_redirect, state.extra_commit_statuses, state.extra_rollback_statuses
+            )
+
+    def _ensure_connection_sync(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
+        """Ensure a connection exists in scope, creating one from the pool if needed (sync)."""
+        connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
+        if connection is not None:
+            return connection
+
+        pool = state.get(plugin_state.pool_key)
+        if pool is None:
+            self._raise_missing_connection(plugin_state.connection_key)
+
+        cm = plugin_state.config.provide_connection(pool)
+        connection = cm.__enter__()  # type: ignore[union-attr]
+        set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_ctx", cm)
+        set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
+        return connection
+
+    async def _ensure_connection_async(self, plugin_state: PluginConfigState, state: "State", scope: "Scope") -> Any:
+        """Ensure a connection exists in scope, creating one from the pool if needed (async)."""
+        connection = get_sqlspec_scope_state(scope, plugin_state.connection_key)
+        if connection is not None:
+            return connection
+
+        pool = state.get(plugin_state.pool_key)
+        if pool is None:
+            self._raise_missing_connection(plugin_state.connection_key)
+
+        cm = plugin_state.config.provide_connection(pool)
+        connection = await cm.__aenter__()  # type: ignore[union-attr]
+        set_sqlspec_scope_state(scope, f"{plugin_state.connection_key}_ctx", cm)
+        set_sqlspec_scope_state(scope, plugin_state.connection_key, connection)
+        return connection
+
+    def _create_session(
+        self, plugin_state: PluginConfigState, connection: Any, scope: "Scope"
+    ) -> "SyncDriverAdapterBase | AsyncDriverAdapterBase":
+        """Create a session from a connection and store it in scope."""
+        session_scope_key = f"{plugin_state.session_key}_instance"
+
+        session = get_sqlspec_scope_state(scope, session_scope_key)
+        if session is not None:
+            return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
+
+        session = plugin_state.config.driver_type(
+            connection=connection,
+            statement_config=plugin_state.config.statement_config,
+            driver_features=plugin_state.config.driver_features,
+        )
+        set_sqlspec_scope_state(scope, session_scope_key, session)
+        return cast("SyncDriverAdapterBase | AsyncDriverAdapterBase", session)
 
     def _registry_state(self, name: Any) -> "PluginConfigState | None":
         """Resolve plugin state from registry identity, independent of Litestar registration.

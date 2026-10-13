@@ -1,7 +1,8 @@
 """CockroachDB AsyncPG adapter helpers."""
 
-import random
 import re
+import secrets
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from mypy_extensions import mypyc_attr
@@ -9,17 +10,20 @@ from sqlglot import tokenize
 from sqlglot.tokenizer_core import TokenType
 
 from sqlspec.adapters.asyncpg.core import build_connection_config as asyncpg_build_connection_config
+from sqlspec.adapters.asyncpg.core import configure_parameter_serializers
 from sqlspec.exceptions import ImproperConfigurationError, SerializationConflictError, SQLSpecError
+from sqlspec.utils.config_tools import normalize_connection_config
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_sqlstate
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
+    from sqlspec.core import StatementConfig
     from sqlspec.storage import StorageTelemetry
 
 __all__ = (
     "CockroachAsyncpgRetryConfig",
+    "apply_driver_features",
     "build_connection_config",
     "build_native_export",
     "build_native_import",
@@ -31,11 +35,13 @@ __all__ = (
     "validate_follower_read_staleness",
 )
 
-# Retry configuration defaults (module-level for mypyc compatibility)
 _DEFAULT_MAX_RETRIES: Final[int] = 10
 _DEFAULT_BASE_DELAY_MS: Final[float] = 50.0
 _DEFAULT_MAX_DELAY_MS: Final[float] = 5000.0
 _DEFAULT_ENABLE_LOGGING: Final[bool] = True
+_MAX_CAUSE_CHAIN_DEPTH: Final[int] = 16
+_SYSTEM_RANDOM: Final[secrets.SystemRandom] = secrets.SystemRandom()
+_CLUSTER_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._-]+")
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -51,6 +57,15 @@ class CockroachAsyncpgRetryConfig:
         max_delay_ms: float = _DEFAULT_MAX_DELAY_MS,
         enable_logging: bool = _DEFAULT_ENABLE_LOGGING,
     ) -> None:
+        if max_retries < 0:
+            msg = "max_retries must be non-negative"
+            raise ImproperConfigurationError(msg)
+        if base_delay_ms < 0:
+            msg = "base_delay_ms must be non-negative"
+            raise ImproperConfigurationError(msg)
+        if max_delay_ms < 0:
+            msg = "max_delay_ms must be non-negative"
+            raise ImproperConfigurationError(msg)
         self.max_retries = max_retries
         self.base_delay_ms = base_delay_ms
         self.max_delay_ms = max_delay_ms
@@ -67,12 +82,49 @@ class CockroachAsyncpgRetryConfig:
         )
 
 
-def build_connection_config(config: "dict[str, Any]") -> "dict[str, Any]":
+def apply_driver_features(
+    statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
+) -> "tuple[StatementConfig, dict[str, Any]]":
+    """Apply CockroachDB AsyncPG driver feature defaults to statement config."""
+    processed_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    serializer = processed_features.setdefault("json_serializer", to_json)
+    deserializer = processed_features.setdefault("json_deserializer", from_json)
+    processed_features.setdefault("enable_json_codecs", True)
+    processed_features["enable_pgvector"] = bool(driver_features and driver_features.get("enable_pgvector") is True)
+    processed_features.setdefault("enable_events", True)
+    processed_features.setdefault("events_backend", "poll_queue")
+    parameter_config = configure_parameter_serializers(
+        statement_config.parameter_config, serializer, deserializer=deserializer
+    )
+    statement_config = statement_config.replace(parameter_config=parameter_config)
+    return statement_config, processed_features
+
+
+def build_connection_config(config: "Mapping[str, Any] | None") -> "dict[str, Any]":
     """Prepare CockroachDB AsyncPG connection config, extracting multi-region server settings."""
-    result = asyncpg_build_connection_config(config)
+    normalized = normalize_connection_config(config)
+    extra = normalized.pop("extra", None)
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            if value is not None:
+                normalized.setdefault(key, value)
+    result = asyncpg_build_connection_config(normalized)
     server_settings = dict(result.get("server_settings") or {})
     if "application_name" in result:
         server_settings.setdefault("application_name", str(result.pop("application_name")))
+    if "cluster" in result:
+        cluster = result.pop("cluster")
+        if cluster:
+            name = str(cluster)
+            if _CLUSTER_NAME_PATTERN.fullmatch(name) is None:
+                msg = (
+                    f"CockroachDB cluster name {name!r} may contain only letters, "
+                    "digits, hyphens, underscores, and periods."
+                )
+                raise ImproperConfigurationError(msg)
+            routing = f"--cluster={name}"
+            existing = server_settings.get("options")
+            server_settings["options"] = f"{existing} {routing}" if existing else routing
     if "default_transaction_use_follower_reads" in result:
         val = result.pop("default_transaction_use_follower_reads")
         if not isinstance(val, bool):
@@ -114,15 +166,20 @@ def is_retryable_error(error: BaseException) -> bool:
     """
     seen: set[int] = set()
     current: BaseException | None = error
-    while current is not None and id(current) not in seen:
+    depth = 0
+    while current is not None and id(current) not in seen and depth < _MAX_CAUSE_CHAIN_DEPTH:
         seen.add(id(current))
+        depth += 1
         if isinstance(current, SerializationConflictError):
             return True
         if has_sqlstate(current) and str(current.sqlstate) == "40001":
             return True
         if not isinstance(current, SQLSpecError):
             return False
-        current = cast("BaseException | None", cast("Any", current).__cause__)
+        next_exc = cast("BaseException | None", cast("Any", current).__cause__)
+        if next_exc is None and not getattr(current, "__suppress_context__", False):
+            next_exc = cast("BaseException | None", cast("Any", current).__context__)
+        current = next_exc
     return False
 
 
@@ -136,7 +193,7 @@ def calculate_backoff_seconds(attempt: int, config: "CockroachAsyncpgRetryConfig
     capped_ms: float = min(config.base_delay_ms * (2**attempt), config.max_delay_ms)
     if capped_ms <= 0.0:
         return 0.0
-    return random.uniform(capped_ms / 2.0, capped_ms) / 1000.0  # noqa: S311
+    return _SYSTEM_RANDOM.uniform(capped_ms / 2.0, capped_ms) / 1000.0
 
 
 _STALENESS_LITERAL: Final[re.Pattern[str]] = re.compile(r"'[^'\\;]+'")

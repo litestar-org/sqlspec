@@ -314,15 +314,20 @@ class StoragePathTraversalError(StorageOperationFailedError):
 class SQLFileNotFoundError(SQLSpecError):
     """Raised when a SQL file cannot be found."""
 
-    def __init__(self, name: str, path: "str | None" = None) -> None:
+    def __init__(self, name: str, path: "str | None" = None, *, message: "str | None" = None) -> None:
         """Initialize the error.
 
         Args:
             name: Name of the SQL file.
             path: Optional path where the file was expected.
+            message: Optional pre-formatted error message override.
         """
-        message = f"SQL file '{name}' not found at path: {path}" if path else f"SQL file '{name}' not found"
-        super().__init__(message)
+        resolved_message = (
+            message
+            if message is not None
+            else (f"SQL file '{name}' not found at path: {path}" if path else f"SQL file '{name}' not found")
+        )
+        super().__init__(resolved_message)
         self.name = name
         self.path = path
 
@@ -330,24 +335,25 @@ class SQLFileNotFoundError(SQLSpecError):
 class SQLStatementNotFoundError(SQLFileNotFoundError):
     """Raised when a named SQL statement is not loaded."""
 
-    def __init__(self, name: str, normalized_name: str, query_count: int) -> None:
+    def __init__(self, name: str, normalized_name: str, query_count: int, *, message: "str | None" = None) -> None:
         """Initialize the error.
 
         Args:
             name: Name requested by the caller.
             normalized_name: Normalized statement name used for lookup.
             query_count: Number of SQL statements loaded in the registry.
+            message: Optional pre-formatted error message override.
         """
-        if query_count == 0:
-            message = f"SQL statement '{name}' not found. No SQL statements are loaded."
+        if message is not None:
+            resolved_message = message
+        elif query_count == 0:
+            resolved_message = f"SQL statement '{name}' not found. No SQL statements are loaded."
         else:
-            message = (
+            resolved_message = (
                 f"SQL statement '{name}' not found. {query_count} SQL statements are loaded. "
                 "Use list_queries() to inspect available statement names."
             )
-        SQLSpecError.__init__(self, message)
-        self.name = name
-        self.path = None
+        super().__init__(name, None, message=resolved_message)
         self.normalized_name = normalized_name
         self.query_count = query_count
 
@@ -370,11 +376,7 @@ class SQLFragmentNotFoundError(SQLStatementNotFoundError):
                 f"SQL fragment '{name}' not found. {fragment_count} SQL fragments are loaded. "
                 "Use list_fragments() to inspect available fragment names."
             )
-        SQLSpecError.__init__(self, message)
-        self.name = name
-        self.path = None
-        self.normalized_name = normalized_name
-        self.query_count = fragment_count
+        super().__init__(name, normalized_name, fragment_count, message=message)
 
 
 class SQLFileParseError(SQLSpecError):
@@ -436,12 +438,9 @@ class SquashValidationError(MigrationError):
     """
 
 
-# SQLSTATE class code length (first 2 characters of 5-character SQLSTATE)
 SQLSTATE_CLASS_CODE_LEN: Final[int] = 2
 
-# SQLSTATE to exception mapping for database-agnostic error translation
 SQLSTATE_EXCEPTION_MAP: Final[dict[str, type[SQLSpecError]]] = {
-    # Exact SQLSTATE matches (5 characters) - most specific
     "23505": UniqueViolationError,
     "23503": ForeignKeyViolationError,
     "23502": NotNullViolationError,
@@ -449,7 +448,6 @@ SQLSTATE_EXCEPTION_MAP: Final[dict[str, type[SQLSpecError]]] = {
     "40001": SerializationConflictError,
     "40P01": DeadlockError,
     "57014": OperationalError,
-    # Class-level matches (2 characters) - broader categories
     "02": NotFoundError,
     "08": DatabaseConnectionError,
     "22": DataError,
@@ -481,14 +479,11 @@ def map_sqlstate_to_exception(sqlstate: str | None) -> type[SQLSpecError] | None
     if not sqlstate:
         return None
 
-    # Cache global in local for faster access in mypyc
     exc_map = SQLSTATE_EXCEPTION_MAP
 
-    # Single lookup instead of in + []
     if exc_class := exc_map.get(sqlstate):
         return exc_class
 
-    # Class prefix lookup
     if len(sqlstate) >= SQLSTATE_CLASS_CODE_LEN and (exc_class := exc_map.get(sqlstate[:SQLSTATE_CLASS_CODE_LEN])):
         return exc_class
 

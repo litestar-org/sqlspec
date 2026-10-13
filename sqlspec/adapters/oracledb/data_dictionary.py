@@ -57,6 +57,7 @@ __all__ = (
     "OracleVersionInfo",
     "OracledbAsyncDataDictionary",
     "OracledbSyncDataDictionary",
+    "resolve_oracle_connection_compatible_major",
     "resolve_oracle_connection_major",
     "storage_type_from_version",
 )
@@ -124,6 +125,15 @@ class OracleVersionInfo(VersionInfo):
         self.compatible = compatible
         self.is_autonomous = is_autonomous
 
+    def __str__(self) -> str:
+        """String representation of version info."""
+        version_str = f"{self.major}.{self.minor}.{self.patch}"
+        if self.compatible:
+            version_str += f" (compatible={self.compatible})"
+        if self.is_autonomous:
+            version_str += " [Autonomous]"
+        return version_str
+
     @property
     def compatible_major(self) -> "int | None":
         """Get major version from compatible parameter."""
@@ -140,15 +150,6 @@ class OracleVersionInfo(VersionInfo):
     def supports_json_blob(self) -> bool:
         """Check if database supports BLOB with JSON validation."""
         return oracle_supports_json_blob(self.major)
-
-    def __str__(self) -> str:
-        """String representation of version info."""
-        version_str = f"{self.major}.{self.minor}.{self.patch}"
-        if self.compatible:
-            version_str += f" (compatible={self.compatible})"
-        if self.is_autonomous:
-            version_str += " [Autonomous]"
-        return version_str
 
 
 class JSONStorageType(StrEnum):
@@ -213,6 +214,18 @@ def resolve_oracle_connection_major(connection: Any, version_cache: "OracleVersi
         return None
     components = parse_oracle_version_components(str(version))
     return components[0] if components is not None else None
+
+
+def resolve_oracle_connection_compatible_major(
+    connection: Any, version_cache: "OracleVersionCache | None" = None
+) -> "int | None":
+    """Resolve an Oracle server compatible major version without issuing a metadata query."""
+    if version_cache is not None and version_cache.resolved and version_cache.version is not None:
+        return version_cache.version.compatible_major
+    cached_compatible = getattr(connection, "_sqlspec_oracle_compatible_major", None)
+    if isinstance(cached_compatible, int) and not isinstance(cached_compatible, bool):
+        return cached_compatible
+    return None
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)

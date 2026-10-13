@@ -10,12 +10,11 @@ from mypy_extensions import trait
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from sqlspec.builder._base import BuiltQuery, QueryBuilder
+from sqlspec.builder._base import QueryBuilder
 from sqlspec.builder._parsing_utils import _mark_explicit_table_quotes, _normalize_dialect
-from sqlspec.builder._select import Select
-from sqlspec.core import SQL, StatementConfig
+from sqlspec.core import SQL
 from sqlspec.exceptions import SQLBuilderError
-from sqlspec.utils.type_guards import has_sqlglot_expression, has_with_method
+from sqlspec.utils.type_guards import has_sqlglot_expression
 
 if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
@@ -75,16 +74,20 @@ CURRENT_DATE_KEYWORD = "CURRENT_DATE"
 CURRENT_TIME_KEYWORD = "CURRENT_TIME"
 
 
-def build_column_expression(col: "ColumnDefinition", dialect: "DialectType | None" = None) -> "exp.Expr":
+def build_column_expression(
+    col: "ColumnDefinition", dialect: "DialectType | None" = None, *, include_primary_key: bool = True
+) -> "exp.Expr":
     """Build SQLGlot expression for a column definition."""
-    col_def = exp.ColumnDef(this=exp.to_identifier(col.name), kind=_parse_column_type(col.name, col.dtype, dialect))
+    col_def = exp.ColumnDef(
+        this=_parse_ddl_identifier(col.name, dialect=dialect), kind=_parse_column_type(col.name, col.dtype, dialect)
+    )
 
     constraints: list[exp.ColumnConstraint] = []
 
     if col.not_null:
         constraints.append(exp.ColumnConstraint(kind=exp.NotNullColumnConstraint()))
 
-    if col.primary_key:
+    if col.primary_key and include_primary_key:
         constraints.append(exp.ColumnConstraint(kind=exp.PrimaryKeyColumnConstraint()))
 
     if col.unique:
@@ -124,7 +127,11 @@ def build_column_expression(col: "ColumnDefinition", dialect: "DialectType | Non
         )
 
     if col.collate:
-        constraints.append(exp.ColumnConstraint(kind=exp.CollateColumnConstraint(this=exp.to_identifier(col.collate))))
+        constraints.append(
+            exp.ColumnConstraint(
+                kind=exp.CollateColumnConstraint(this=_parse_ddl_identifier(col.collate, dialect=dialect))
+            )
+        )
 
     if constraints:
         col_def.set("constraints", constraints)
@@ -132,13 +139,19 @@ def build_column_expression(col: "ColumnDefinition", dialect: "DialectType | Non
     return col_def
 
 
-def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr | None":
+def build_constraint_expression(
+    constraint: "ConstraintDefinition", dialect: "DialectType | None" = None
+) -> "exp.Expr | None":
     """Build SQLGlot expression for a table constraint."""
     if constraint.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY:
-        pk_constraint = exp.PrimaryKey(expressions=[exp.to_identifier(col) for col in constraint.columns])
+        pk_constraint = exp.PrimaryKey(
+            expressions=[_parse_ddl_identifier(col, dialect=dialect) for col in constraint.columns]
+        )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[pk_constraint])
+            return exp.Constraint(
+                this=_parse_ddl_identifier(constraint.name, dialect=dialect), expressions=[pk_constraint]
+            )
         return pk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_FOREIGN_KEY:
@@ -156,37 +169,47 @@ def build_constraint_expression(constraint: "ConstraintDefinition") -> "exp.Expr
             reference_options.append(f"ON UPDATE {constraint.on_update}")
 
         fk_constraint = exp.ForeignKey(
-            expressions=[exp.to_identifier(col) for col in constraint.columns],
+            expressions=[_parse_ddl_identifier(col, dialect=dialect) for col in constraint.columns],
             reference=exp.Reference(
-                this=exp.to_table(constraint.references_table) if constraint.references_table else None,
-                expressions=[exp.to_identifier(col) for col in constraint.references_columns],
+                this=_parse_ddl_table(constraint.references_table, dialect=dialect)
+                if constraint.references_table
+                else None,
+                expressions=[_parse_ddl_identifier(col, dialect=dialect) for col in constraint.references_columns],
                 options=reference_options or None,
             ),
             options=fk_options or None,
         )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[fk_constraint])
+            return exp.Constraint(
+                this=_parse_ddl_identifier(constraint.name, dialect=dialect), expressions=[fk_constraint]
+            )
         return fk_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_UNIQUE:
-        unique_constraint = exp.UniqueKeyProperty(expressions=[exp.to_identifier(col) for col in constraint.columns])
+        unique_constraint = exp.UniqueKeyProperty(
+            expressions=[_parse_ddl_identifier(col, dialect=dialect) for col in constraint.columns]
+        )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[unique_constraint])
+            return exp.Constraint(
+                this=_parse_ddl_identifier(constraint.name, dialect=dialect), expressions=[unique_constraint]
+            )
         return unique_constraint
 
     if constraint.constraint_type == CONSTRAINT_TYPE_CHECK:
         check_expr = exp.Check(
             this=constraint.condition_expr
             if constraint.condition_expr is not None
-            else exp.maybe_parse(constraint.condition)
+            else exp.maybe_parse(constraint.condition, dialect=dialect)
             if constraint.condition
             else None
         )
 
         if constraint.name:
-            return exp.Constraint(this=exp.to_identifier(constraint.name), expressions=[check_expr])
+            return exp.Constraint(
+                this=_parse_ddl_identifier(constraint.name, dialect=dialect), expressions=[check_expr]
+            )
         return check_expr
 
     return None
@@ -202,6 +225,13 @@ class DDLBuilder(QueryBuilder):
         self._expression: exp.Expr | None = None
         self._expression_dialect: DialectType | None = None
 
+    def _prepare_expression_for_build(self, dialect: "DialectType" = None, *, copy: bool = True) -> exp.Expr:
+        target_dialect = _normalize_dialect(dialect or self.dialect)
+        self._expression_dialect = target_dialect
+        self.set_parameters({})
+        self._expression = self._create_base_expression()
+        return super()._prepare_expression_for_build(dialect=target_dialect, copy=copy)
+
     def _create_base_expression(self) -> exp.Expr:
         msg = "Subclasses must implement _create_base_expression."
         raise NotImplementedError(msg)
@@ -211,52 +241,33 @@ class DDLBuilder(QueryBuilder):
             self._raise_builder_error(message)
 
     def _resolve_select_query(self, query: object, context: str, *, require_select_type: bool = True) -> exp.Expr:
+        effective_dialect = self._expression_dialect or self.dialect_name
         select_parameters: dict[str, Any] | None = None
 
         if isinstance(query, SQL):
-            select_expr = query.expression
+            select_expr = (
+                query.expression.copy()
+                if query.expression is not None
+                else exp.maybe_parse(query.sql, dialect=effective_dialect)
+            )
             select_parameters = query.parameters
-        elif isinstance(query, Select):
-            select_expr = query.get_expression()
+        elif isinstance(query, QueryBuilder):
+            select_expr = query._prepare_expression_for_build(dialect=effective_dialect, copy=True)
             select_parameters = query.parameters
         elif isinstance(query, str):
-            select_expr = exp.maybe_parse(query)
+            select_expr = exp.maybe_parse(query, dialect=effective_dialect)
         elif isinstance(query, exp.Expr):
-            select_expr = query
+            select_expr = query.copy()
         else:
             self._raise_builder_error(f"Unsupported type for SELECT query in {context}.")
 
-        if select_expr is None or (require_select_type and not isinstance(select_expr, exp.Select)):
+        if select_expr is None or (require_select_type and not isinstance(select_expr, (exp.Select, exp.SetOperation))):
             self._raise_builder_error("SELECT query must be a valid SELECT expression.")
 
         if select_parameters:
-            for p_name, p_value in select_parameters.items():
-                self._parameters[p_name] = p_value
+            self.load_parameters(select_parameters)
 
         return select_expr
-
-    def _prepare_expression(self, dialect: "DialectType" = None) -> None:
-        target_dialect = _normalize_dialect(dialect or self.dialect)
-        if self._expression is not None and target_dialect != self._expression_dialect:
-            self._expression = None
-        self._expression_dialect = target_dialect
-        if self._expression is None:
-            self._expression = self._create_base_expression()
-
-    def build(self, dialect: "DialectType" = None) -> "BuiltQuery":
-        self._prepare_expression(dialect)
-        return super().build(dialect=self._expression_dialect)
-
-    def to_statement(self, config: "StatementConfig | None" = None) -> SQL:
-        """Build a SQL statement using the configured target dialect for column types."""
-        self._prepare_expression(config.dialect if config is not None else None)
-        if self._expression_dialect is not None:
-            config = (
-                config.replace(dialect=self._expression_dialect)
-                if config is not None
-                else StatementConfig(dialect=self._expression_dialect)
-            )
-        return super().to_statement(config)
 
 
 @trait
@@ -413,6 +424,15 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         self._like_table: str | None = None
         self._partition_by: str | None = None
 
+    @property
+    def columns(self) -> "list[ColumnDefinition]":
+        """Get the list of column definitions for this table.
+
+        Returns:
+            List of ColumnDefinition objects.
+        """
+        return self._columns
+
     def in_schema(self, schema_name: str) -> "Self":
         """Set the schema for the table."""
         self._schema = schema_name
@@ -437,15 +457,6 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         """Set partitioning specification."""
         self._partition_by = partition_spec
         return self
-
-    @property
-    def columns(self) -> "list[ColumnDefinition]":
-        """Get the list of column definitions for this table.
-
-        Returns:
-            List of ColumnDefinition objects.
-        """
-        return self._columns
 
     def column(
         self,
@@ -487,7 +498,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
         self._columns.append(column_def)
 
-        if primary_key and not self._has_primary_key_constraint():
+        if primary_key:
             self.primary_key_constraint([name])
 
         return self
@@ -501,6 +512,8 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
         existing_pk = self._find_primary_key_constraint()
         if existing_pk:
+            if name:
+                existing_pk.name = name
             for col in col_list:
                 if col not in existing_pk.columns:
                     existing_pk.columns.append(col)
@@ -609,16 +622,22 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         self._require(self._columns or self._like_table, "Table must have at least one column or use LIKE clause")
 
         effective_dialect = self._expression_dialect or self.dialect_name
+        has_table_level_pk = any(
+            c.constraint_type == CONSTRAINT_TYPE_PRIMARY_KEY and not self._is_redundant_single_column_primary_key(c)
+            for c in self._constraints
+        )
         column_defs: list[exp.Expr] = []
         for col in self._columns:
-            col_expr = build_column_expression(col, dialect=effective_dialect)
+            col_expr = build_column_expression(
+                col, dialect=effective_dialect, include_primary_key=not has_table_level_pk
+            )
             column_defs.append(col_expr)
 
         for constraint in self._constraints:
             if self._is_redundant_single_column_primary_key(constraint):
                 continue
 
-            constraint_expr = build_constraint_expression(constraint)
+            constraint_expr = build_constraint_expression(constraint, dialect=effective_dialect)
             if constraint_expr:
                 column_defs.append(constraint_expr)
 
@@ -632,7 +651,10 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         if self._tablespace:
             props.append(exp.Property(this=exp.to_identifier("TABLESPACE"), value=exp.to_identifier(self._tablespace)))
         if self._partition_by:
-            props.append(exp.Property(this=exp.to_identifier("PARTITION BY"), value=exp.convert(self._partition_by)))
+            partition_expr: exp.Expr = exp.maybe_parse(self._partition_by, dialect=effective_dialect) or exp.var(
+                self._partition_by
+            )
+            props.append(exp.PartitionedByProperty(this=partition_expr))
 
         for key, value in self._table_options.items():
             if key != "engine":
@@ -645,7 +667,7 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
         if self._temporary:
             props.append(exp.TemporaryProperty())
         if self._like_table:
-            props.append(exp.LikeProperty(this=exp.to_table(self._like_table)))
+            props.append(exp.LikeProperty(this=_parse_ddl_table(self._like_table, dialect=effective_dialect)))
         properties_node = _wrap_properties(props)
 
         create_target: exp.Expr = table_identifier if self._like_table and not column_defs else schema_expr
@@ -666,7 +688,11 @@ class CreateTable(DDLBuilder, _IfNotExistsDDLMixin):
 
     def _is_redundant_single_column_primary_key(self, constraint: "ConstraintDefinition") -> bool:
         """Check if constraint is a redundant single-column primary key."""
-        if constraint.constraint_type != CONSTRAINT_TYPE_PRIMARY_KEY or len(constraint.columns) != 1:
+        if (
+            constraint.constraint_type != CONSTRAINT_TYPE_PRIMARY_KEY
+            or len(constraint.columns) != 1
+            or constraint.name is not None
+        ):
             return False
 
         col_name = constraint.columns[0]
@@ -694,7 +720,10 @@ class _SingleObjectDropBuilder(DDLBuilder, _IfExistsDDLMixin, _CascadeRestrictDD
         self._cascade: bool | None = None
 
     def _build_drop_this(self) -> exp.Expr:
-        return exp.to_identifier(self._name)
+        effective_dialect = self._expression_dialect or self.dialect_name
+        if self._drop_kind == "SCHEMA":
+            return _parse_ddl_identifier(self._name, dialect=effective_dialect)
+        return _parse_ddl_table(self._name, dialect=effective_dialect)
 
     def _drop_expression_args(self) -> "dict[str, Any]":
         return {}
@@ -731,10 +760,6 @@ class DropTable(_SingleObjectDropBuilder):
         self._name = name
         return self
 
-    def _build_drop_this(self) -> exp.Expr:
-        effective_dialect = self._expression_dialect or self.dialect_name
-        return _parse_ddl_table(self._name, dialect=effective_dialect)
-
 
 class DropIndex(_SingleObjectDropBuilder):
     """Builder for DROP INDEX [IF EXISTS] ... [ON table] [CASCADE|RESTRICT]."""
@@ -763,7 +788,12 @@ class DropIndex(_SingleObjectDropBuilder):
         return self
 
     def _drop_expression_args(self) -> "dict[str, Any]":
-        return {"cluster": exp.OnProperty(this=exp.to_identifier(self._table_name)) if self._table_name else None}
+        effective_dialect = self._expression_dialect or self.dialect_name
+        return {
+            "cluster": exp.OnProperty(this=_parse_ddl_table(self._table_name, dialect=effective_dialect))
+            if self._table_name
+            else None
+        }
 
 
 class DropView(_SingleObjectDropBuilder):
@@ -890,10 +920,11 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
         """
         self._require(self._index_name and self._table_name, "Index name and table name must be set for CREATE INDEX.")
 
+        effective_dialect = self._expression_dialect or self.dialect_name
         cols: list[exp.Expr] = []
         for col in self._columns:
             if isinstance(col, str):
-                cols.append(exp.column(col))
+                cols.append(exp.Column(this=_parse_ddl_identifier(col, dialect=effective_dialect)))
             else:
                 cols.append(col)
 
@@ -914,8 +945,8 @@ class CreateIndex(DDLBuilder, _IfNotExistsDDLMixin):
             index_params.set("where", exp.Where(this=where_expr))
 
         index_expr = exp.Index(
-            this=exp.to_identifier(self._index_name),
-            table=exp.to_table(cast("str", self._table_name)),
+            this=_parse_ddl_identifier(self._index_name, dialect=effective_dialect),
+            table=_parse_ddl_table(cast("str", self._table_name), dialect=effective_dialect),
             params=index_params,
         )
 
@@ -953,10 +984,19 @@ class Truncate(DDLBuilder, _CascadeRestrictDDLMixin):
 
     def _create_base_expression(self) -> exp.Expr:
         self._require(self._table_name, "Table name must be set for TRUNCATE TABLE.")
+        effective_dialect = self._expression_dialect or self.dialect_name
         identity_expr = exp.Var(this=self._identity) if self._identity else None
-        option_expr = exp.Var(this="CASCADE") if self._cascade else None
+        option_expr = (
+            exp.Var(this="CASCADE")
+            if self._cascade is True
+            else exp.Var(this="RESTRICT")
+            if self._cascade is False
+            else None
+        )
         return exp.TruncateTable(
-            expressions=[exp.to_table(self._table_name)], option=option_expr, identity=identity_expr
+            expressions=[_parse_ddl_table(self._table_name, dialect=effective_dialect)],
+            option=option_expr,
+            identity=identity_expr,
         )
 
 
@@ -1028,15 +1068,19 @@ class CreateSchema(DDLBuilder, _IfNotExistsDDLMixin):
 
     def _create_base_expression(self) -> exp.Expr:
         self._require(self._schema_name, "Schema name must be set for CREATE SCHEMA.")
+        effective_dialect = self._expression_dialect or self.dialect_name
         props: list[exp.Property] = []
         if self._authorization:
             props.append(
-                exp.Property(this=exp.to_identifier("AUTHORIZATION"), value=exp.to_identifier(self._authorization))
+                exp.Property(
+                    this=exp.to_identifier("AUTHORIZATION"),
+                    value=_parse_ddl_identifier(self._authorization, dialect=effective_dialect),
+                )
             )
         properties_node = _wrap_properties(props)
         return exp.Create(
             kind="SCHEMA",
-            this=exp.to_identifier(self._schema_name),
+            this=_parse_ddl_identifier(self._schema_name, dialect=effective_dialect),
             exists=self._if_not_exists,
             properties=properties_node,
         )
@@ -1069,7 +1113,7 @@ class CreateTableAsSelect(DDLBuilder, _IfNotExistsDDLMixin):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "str | exp.Expr") -> Self:
+    def as_select(self, select_query: "str | exp.Expr | Any") -> Self:
         self._select_query = select_query
         return self
 
@@ -1078,17 +1122,15 @@ class CreateTableAsSelect(DDLBuilder, _IfNotExistsDDLMixin):
         if self._select_query is None:
             self._raise_builder_error("SELECT query must be set for CREATE TABLE AS SELECT.")
 
+        effective_dialect = self._expression_dialect or self.dialect_name
         select_expr = self._resolve_select_query(self._select_query, "CTAS", require_select_type=False)
-        if isinstance(self._select_query, Select):
-            with_ctes = self._select_query.with_ctes
-            if with_ctes and select_expr and isinstance(select_expr, exp.Select):
-                for alias, cte in with_ctes.items():
-                    if has_with_method(select_expr):
-                        select_expr = select_expr.with_(cte.this, as_=alias, copy=False)
 
-        create_target: exp.Expr = exp.to_table(cast("str", self._table_name))
+        create_target: exp.Expr = _parse_ddl_table(cast("str", self._table_name), dialect=effective_dialect)
         if self._columns:
-            create_target = exp.Schema(this=create_target, expressions=[exp.to_identifier(c) for c in self._columns])
+            create_target = exp.Schema(
+                this=create_target,
+                expressions=[_parse_ddl_identifier(c, dialect=effective_dialect) for c in self._columns],
+            )
 
         return exp.Create(kind="TABLE", this=create_target, exists=self._if_not_exists, expression=select_expr)
 
@@ -1120,7 +1162,7 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         self._view_name = view_name
         self._if_not_exists = False
         self._columns: list[str] = []
-        self._select_query: str | exp.Expr | None = None
+        self._select_query: Any = None
         self._with_data: bool | None = None
         self._refresh_mode: str | None = None
         self._storage_parameters: dict[str, Any] = {}
@@ -1136,7 +1178,7 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "str | exp.Expr") -> Self:
+    def as_select(self, select_query: "str | exp.Expr | Any") -> Self:
         self._select_query = select_query
         return self
 
@@ -1173,9 +1215,10 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         if self._select_query is None:
             self._raise_builder_error("SELECT query must be set for CREATE MATERIALIZED VIEW.")
 
+        effective_dialect = self._expression_dialect or self.dialect_name
         select_expr = self._resolve_select_query(self._select_query, "materialized view")
 
-        schema_expr = _build_optional_column_schema(self._columns)
+        schema_expr = _build_optional_column_schema(self._columns, dialect=effective_dialect)
 
         props: list[exp.Property] = []
         if self._refresh_mode:
@@ -1193,7 +1236,7 @@ class CreateMaterializedView(DDLBuilder, _IfNotExistsDDLMixin):
         props.extend(exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(hint)) for hint in self._hints)
         properties_node = _wrap_properties(props)
 
-        create_target: exp.Expr = exp.to_table(self._view_name)
+        create_target: exp.Expr = _parse_ddl_table(self._view_name, dialect=effective_dialect)
         if schema_expr is not None:
             create_target = exp.Schema(this=create_target, expressions=schema_expr.expressions)
 
@@ -1222,7 +1265,7 @@ class CreateView(DDLBuilder, _IfNotExistsDDLMixin):
         self._view_name = view_name
         self._if_not_exists = False
         self._columns: list[str] = []
-        self._select_query: str | exp.Expr | None = None
+        self._select_query: Any = None
         self._hints: list[str] = []
 
     def name(self, view_name: str) -> Self:
@@ -1233,7 +1276,7 @@ class CreateView(DDLBuilder, _IfNotExistsDDLMixin):
         self._columns = list(cols)
         return self
 
-    def as_select(self, select_query: "str | exp.Expr") -> Self:
+    def as_select(self, select_query: "str | exp.Expr | Any") -> Self:
         self._select_query = select_query
         return self
 
@@ -1246,16 +1289,17 @@ class CreateView(DDLBuilder, _IfNotExistsDDLMixin):
         if self._select_query is None:
             self._raise_builder_error("SELECT query must be set for CREATE VIEW.")
 
+        effective_dialect = self._expression_dialect or self.dialect_name
         select_expr = self._resolve_select_query(self._select_query, "view")
 
-        schema_expr = _build_optional_column_schema(self._columns)
+        schema_expr = _build_optional_column_schema(self._columns, dialect=effective_dialect)
 
         props: list[exp.Property] = [
             exp.Property(this=exp.to_identifier("HINT"), value=exp.convert(h)) for h in self._hints
         ]
         properties_node = _wrap_properties(props)
 
-        create_target: exp.Expr = exp.to_table(self._view_name)
+        create_target: exp.Expr = _parse_ddl_table(self._view_name, dialect=effective_dialect)
         if schema_expr is not None:
             create_target = exp.Schema(this=create_target, expressions=schema_expr.expressions)
 
@@ -1471,50 +1515,89 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
     def _build_operation_expression(self, op: "AlterOperation") -> exp.Expr:
         """Build a structured SQLGlot expression for a single alter operation."""
         op_type = op.operation_type.upper()
+        effective_dialect = self._expression_dialect or self.dialect_name
 
         if op_type == "ADD COLUMN":
             if not op.column_definition:
                 self._raise_builder_error("Column definition required for ADD COLUMN")
-            effective_dialect = self._expression_dialect or self.dialect_name
-            return build_column_expression(op.column_definition, dialect=effective_dialect)
+            col_expr = build_column_expression(op.column_definition, dialect=effective_dialect)
+            if isinstance(col_expr, exp.ColumnDef) and (op.after_column or op.first):
+                constraints = list(col_expr.args.get("constraints") or [])
+                if op.after_column:
+                    constraints.append(
+                        exp.ColumnConstraint(
+                            kind=exp.ColumnPosition(
+                                this=_parse_ddl_identifier(op.after_column, dialect=effective_dialect), position="AFTER"
+                            )
+                        )
+                    )
+                elif op.first:
+                    constraints.append(exp.ColumnConstraint(kind=exp.ColumnPosition(position="FIRST")))
+                col_expr.set("constraints", constraints)
+            return col_expr
 
         if op_type == "DROP COLUMN":
-            return exp.Drop(tables=[exp.to_identifier(op.column_name)], kind="COLUMN", exists=True)
+            return exp.Drop(
+                tables=[_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect)],
+                kind="COLUMN",
+                exists=True,
+            )
 
         if op_type == "DROP COLUMN CASCADE":
-            return exp.Drop(tables=[exp.to_identifier(op.column_name)], kind="COLUMN", cascade=True, exists=True)
+            return exp.Drop(
+                tables=[_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect)],
+                kind="COLUMN",
+                cascade=True,
+                exists=True,
+            )
 
         if op_type == "ALTER COLUMN TYPE":
             if not op.new_type:
                 self._raise_builder_error("New type required for ALTER COLUMN TYPE")
             return exp.AlterColumn(
-                this=exp.to_identifier(op.column_name),
-                dtype=_parse_column_type(op.column_name, op.new_type, self._expression_dialect or self.dialect_name),
-                using=exp.maybe_parse(op.using_expression) if op.using_expression else None,
+                this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect),
+                dtype=_parse_column_type(op.column_name, op.new_type, effective_dialect),
+                using=exp.maybe_parse(op.using_expression, dialect=effective_dialect) if op.using_expression else None,
             )
 
         if op_type == "RENAME COLUMN":
-            return exp.RenameColumn(this=exp.to_identifier(op.column_name), to=exp.to_identifier(op.new_name))
+            return exp.RenameColumn(
+                this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect),
+                to=_parse_ddl_identifier(cast("str", op.new_name), dialect=effective_dialect),
+            )
 
         if op_type == "ADD CONSTRAINT":
             if not op.constraint_definition:
                 self._raise_builder_error("Constraint definition required for ADD CONSTRAINT")
-            constraint_expr = build_constraint_expression(op.constraint_definition)
+            constraint_expr = build_constraint_expression(op.constraint_definition, dialect=effective_dialect)
             return exp.AddConstraint(expressions=[constraint_expr])
 
         if op_type == "DROP CONSTRAINT":
-            return exp.Drop(tables=[exp.to_identifier(op.constraint_name)], kind="CONSTRAINT", exists=True)
+            return exp.Drop(
+                tables=[_parse_ddl_identifier(cast("str", op.constraint_name), dialect=effective_dialect)],
+                kind="CONSTRAINT",
+                exists=True,
+            )
 
         if op_type == "DROP CONSTRAINT CASCADE":
             return exp.Drop(
-                tables=[exp.to_identifier(op.constraint_name)], kind="CONSTRAINT", cascade=True, exists=True
+                tables=[_parse_ddl_identifier(cast("str", op.constraint_name), dialect=effective_dialect)],
+                kind="CONSTRAINT",
+                cascade=True,
+                exists=True,
             )
 
         if op_type == "ALTER COLUMN SET NOT NULL":
-            return exp.AlterColumn(this=exp.to_identifier(op.column_name), allow_null=False)
+            return exp.AlterColumn(
+                this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect), allow_null=False
+            )
 
         if op_type == "ALTER COLUMN DROP NOT NULL":
-            return exp.AlterColumn(this=exp.to_identifier(op.column_name), drop=True, allow_null=True)
+            return exp.AlterColumn(
+                this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect),
+                drop=True,
+                allow_null=True,
+            )
 
         if op_type == "ALTER COLUMN SET DEFAULT":
             if not op.column_definition or op.column_definition.default is None:
@@ -1523,7 +1606,7 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
             default_expr: exp.Expr | None
             if isinstance(default_val, str):
                 if self._is_sql_function_default(default_val):
-                    default_expr = exp.maybe_parse(default_val)
+                    default_expr = exp.maybe_parse(default_val, dialect=effective_dialect)
                 else:
                     default_expr = exp.convert(default_val)
             elif isinstance(default_val, (int, float)):
@@ -1534,10 +1617,14 @@ class AlterTable(DDLBuilder, _IfExistsDDLMixin):
                 default_expr = exp.false()
             else:
                 default_expr = exp.convert(str(default_val))
-            return exp.AlterColumn(this=exp.to_identifier(op.column_name), default=default_expr)
+            return exp.AlterColumn(
+                this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect), default=default_expr
+            )
 
         if op_type == "ALTER COLUMN DROP DEFAULT":
-            return exp.AlterColumn(this=exp.to_identifier(op.column_name), drop=True)
+            return exp.AlterColumn(
+                this=_parse_ddl_identifier(cast("str", op.column_name), dialect=effective_dialect), drop=True
+            )
 
         self._raise_builder_error(f"Unknown operation type: {op.operation_type}")
         raise AssertionError
@@ -1585,14 +1672,22 @@ class CommentOn(DDLBuilder):
         return self
 
     def _create_base_expression(self) -> exp.Expr:
+        effective_dialect = self._expression_dialect or self.dialect_name
         if self._target_type == "TABLE" and self._table and self._comment is not None:
-            return exp.Comment(this=exp.to_table(self._table), kind="TABLE", expression=exp.convert(self._comment))
-        if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
             return exp.Comment(
-                this=exp.Column(table=self._table, this=self._column),
-                kind="COLUMN",
+                this=_parse_ddl_table(self._table, dialect=effective_dialect),
+                kind="TABLE",
                 expression=exp.convert(self._comment),
             )
+        if self._target_type == "COLUMN" and self._table and self._column and self._comment is not None:
+            table_expr = _parse_ddl_table(self._table, dialect=effective_dialect)
+            col_expr = exp.Column(
+                this=_parse_ddl_identifier(self._column, dialect=effective_dialect),
+                table=table_expr.args.get("this"),
+                db=table_expr.args.get("db"),
+                catalog=table_expr.args.get("catalog"),
+            )
+            return exp.Comment(this=col_expr, kind="COLUMN", expression=exp.convert(self._comment))
         self._raise_builder_error("Must specify target and comment for COMMENT ON statement.")
         raise AssertionError
 
@@ -1623,17 +1718,20 @@ class RenameTable(DDLBuilder):
 
     def _create_base_expression(self) -> exp.Expr:
         self._require(self._old_name and self._new_name, "Both old and new table names must be set for RENAME TABLE.")
+        effective_dialect = self._expression_dialect or self.dialect_name
         return exp.Alter(
-            this=exp.to_table(self._old_name),
+            this=_parse_ddl_table(self._old_name, dialect=effective_dialect),
             kind="TABLE",
-            actions=[exp.AlterRename(this=exp.to_identifier(self._new_name))],
+            actions=[exp.AlterRename(this=_parse_ddl_table(cast("str", self._new_name), dialect=effective_dialect))],
         )
 
 
-def _build_optional_column_schema(columns: list[str]) -> exp.Schema | None:
+def _build_optional_column_schema(columns: list[str], dialect: "DialectType | None" = None) -> exp.Schema | None:
     if not columns:
         return None
-    return exp.Schema(expressions=[exp.column(column) for column in columns])
+    return exp.Schema(
+        expressions=[exp.Column(this=_parse_ddl_identifier(column, dialect=dialect)) for column in columns]
+    )
 
 
 def _wrap_properties(properties: list[exp.Property]) -> exp.Properties | None:

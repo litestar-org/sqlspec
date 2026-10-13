@@ -536,3 +536,45 @@ async def test_pool_close_without_connectors() -> None:
     mock_pool.close.assert_called_once()
     assert config._cloud_sql_connector is None
     assert config._alloydb_connector is None
+
+
+def test_cloud_sql_empty_segments_rejected() -> None:
+    """Cloud SQL instance with empty segments like '::' should raise ImproperConfigurationError."""
+    with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
+        with pytest.raises(ImproperConfigurationError, match="Invalid Cloud SQL instance format"):
+            AsyncpgConfig(
+                connection_config={"dsn": "postgresql://localhost/test"},
+                driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "::"},
+            )
+
+
+def test_alloydb_incomplete_uri_rejected() -> None:
+    """AlloyDB URI missing required resource segments should raise ImproperConfigurationError."""
+    with patch("sqlspec.adapters.asyncpg.config.ALLOYDB_CONNECTOR_INSTALLED", True):
+        with pytest.raises(ImproperConfigurationError, match="Invalid AlloyDB instance URI format"):
+            AsyncpgConfig(
+                connection_config={"dsn": "postgresql://localhost/test"},
+                driver_features={"enable_alloydb": True, "alloydb_instance_uri": "projects/my-proj"},
+            )
+
+
+async def test_cloud_sql_connector_cleaned_up_when_create_pool_fails(mock_cloud_sql_module) -> None:
+    """If asyncpg_create_pool raises, the initialized Cloud SQL connector should be closed and reset."""
+    with patch("sqlspec.adapters.asyncpg.config.CLOUD_SQL_CONNECTOR_INSTALLED", True):
+        mock_connector = MagicMock()
+        mock_connector.close_async = AsyncMock()
+        mock_cloud_sql_module.return_value = mock_connector
+
+        with patch("sqlspec.adapters.asyncpg.config.asyncpg_create_pool", new_callable=AsyncMock) as mock_create_pool:
+            mock_create_pool.side_effect = RuntimeError("pool init failed")
+
+            config = AsyncpgConfig(
+                connection_config={"user": "testuser", "password": "testpass", "database": "testdb"},
+                driver_features={"enable_cloud_sql": True, "cloud_sql_instance": "project:region:instance"},
+            )
+
+            with pytest.raises(RuntimeError, match="pool init failed"):
+                await config._create_pool()
+
+            mock_connector.close_async.assert_awaited_once()
+            assert config._cloud_sql_connector is None

@@ -6,7 +6,13 @@ and transaction management.
 
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlspec.adapters.psqlpy._typing import PsqlpyCursor, PsqlpyDatabaseError, PsqlpyError, PsqlpySessionContext
+from sqlspec.adapters.psqlpy._typing import (
+    PsqlpyConnectionExecuteError,
+    PsqlpyCursor,
+    PsqlpyDatabaseError,
+    PsqlpyError,
+    PsqlpySessionContext,
+)
 from sqlspec.adapters.psqlpy.core import (
     _DML_COUNT_COLUMN,
     PsqlpyStreamSource,
@@ -28,10 +34,11 @@ from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
+from sqlspec.utils.serializers import from_json
 from sqlspec.utils.text import normalize_identifier, quote_identifier
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from sqlspec.adapters.psqlpy._typing import PsqlpyConnection
     from sqlspec.core import ArrowResult, SQLResult
@@ -39,6 +46,8 @@ if TYPE_CHECKING:
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
 
 __all__ = ("PsqlpyCursor", "PsqlpyDriver", "PsqlpyExceptionHandler", "PsqlpySessionContext")
+
+_CAST_DIALECTS = frozenset({"postgres", "postgresql", "pgvector", "paradedb", "pg_textsearch"})
 
 
 class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
@@ -58,7 +67,7 @@ class PsqlpyExceptionHandler(BaseAsyncExceptionHandler):
         if exc_type is None:
             return False
 
-        if issubclass(exc_type, (PsqlpyDatabaseError, PsqlpyError)):
+        if issubclass(exc_type, (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError)):
             self.pending_exception = create_mapped_exception(exc_val)
             return True
         return False
@@ -88,6 +97,17 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: PsqlpyDataDictionary | None = None
         self._transaction_active = False
+
+    @property
+    def data_dictionary(self) -> "PsqlpyDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = PsqlpyDataDictionary()
+        return self._data_dictionary
 
     async def dispatch_execute(self, cursor: "PsqlpyConnection", statement: SQL) -> "ExecutionResult":
         """Execute single SQL statement.
@@ -175,9 +195,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         successful_count = 0
         last_result = None
         params = prepared_parameters or []
+        is_single = len(statements) == 1
 
         for stmt in statements:
-            last_result = await cursor.execute(stmt, params)
+            stmt_params = params if (is_single or "$" in stmt) else []
+            last_result = await cursor.execute(stmt, stmt_params)
             successful_count += 1
 
         return self.create_execution_result(
@@ -186,10 +208,12 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
     async def begin(self) -> None:
         """Begin a database transaction."""
+        if self._transaction_active:
+            return
 
         try:
             await self.connection.execute("BEGIN")
-        except PsqlpyDatabaseError as e:
+        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
             msg = f"Failed to begin psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
         self._transaction_active = True
@@ -199,7 +223,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         try:
             await self.connection.execute("COMMIT")
-        except PsqlpyDatabaseError as e:
+        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
             msg = f"Failed to commit psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
         finally:
@@ -210,7 +234,7 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         try:
             await self.connection.execute("ROLLBACK")
-        except PsqlpyDatabaseError as e:
+        except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
             msg = f"Failed to rollback psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
         finally:
@@ -231,37 +255,6 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     async def reset_migration_session_schema(self) -> None:
         """Reset the PostgreSQL search path after non-transactional migration SQL."""
         await self.connection.execute("RESET search_path")
-
-    async def _resolve_json_columns(self, schema_name: "str | None", table_name: str) -> "set[str]":
-        """Return the destination columns the database reports as json or jsonb.
-
-        Args:
-            schema_name: Destination schema, or None for the current search path.
-            table_name: Destination table name.
-
-        The relation is resolved the way the server would resolve it in a query,
-        so a table shadowed on the search path contributes no columns, and only
-        the one relation it names is inspected. A column typed as a domain is
-        read through to the type the domain is built on.
-
-        Returns:
-            Names of columns typed json or jsonb.
-        """
-        qualified = quote_identifier(table_name)
-        if schema_name is not None:
-            qualified = f"{quote_identifier(schema_name)}.{qualified}"
-        rows = await self.connection.fetch(
-            "SELECT a.attname AS column_name "
-            "FROM pg_attribute a "
-            "JOIN pg_type t ON t.oid = a.atttypid "
-            "LEFT JOIN pg_type b ON b.oid = t.typbasetype "
-            "WHERE a.attrelid = to_regclass($1) "
-            "AND a.attnum > 0 AND NOT a.attisdropped "
-            "AND COALESCE(b.typname, t.typname) IN ('json', 'jsonb')",
-            [qualified],
-        )
-        data, _ = collect_rows(rows)
-        return {str(row["column_name"]) for row in data}
 
     async def has_schema(self, schema: str) -> bool:
         """Return whether a PostgreSQL schema exists."""
@@ -352,8 +345,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                 if schema_name:
                     copy_kwargs["schema_name"] = schema_name
                 json_columns = await self._resolve_json_columns(schema_name, table_name)
+                deserializer = cast("Callable[[str], Any]", self.driver_features.get("json_deserializer", from_json))
                 await cursor.copy_records_to_table(
-                    table_name, coerce_json_columns(records, columns, json_columns), **copy_kwargs
+                    table_name,
+                    coerce_json_columns(records, columns, json_columns, deserializer=deserializer),
+                    **copy_kwargs,
                 )
             if exc_handler.pending_exception is not None:
                 raise exc_handler.pending_exception from None
@@ -398,35 +394,33 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             Parameters with cast-aware type coercion applied
         """
         enable_cast_detection = self.driver_features.get("enable_cast_detection", True)
+        active_dialect = statement_config.dialect or self.dialect
 
-        if enable_cast_detection and prepared_statement and self.dialect in {"postgres", "postgresql"} and not is_many:
+        prepared: Any
+        if enable_cast_detection and prepared_statement and active_dialect in _CAST_DIALECTS:
             parameter_casts = get_parameter_casts(prepared_statement)
-            prepared = prepare_parameters_with_casts(parameters, parameter_casts, statement_config)
+            if is_many:
+                if isinstance(parameters, (list, tuple)):
+                    prepared = [
+                        prepare_parameters_with_casts(param_set, parameter_casts, statement_config)
+                        for param_set in parameters
+                    ]
+                else:
+                    prepared = super().prepare_driver_parameters(
+                        parameters, statement_config, is_many, prepared_statement
+                    )
+            else:
+                prepared = prepare_parameters_with_casts(parameters, parameter_casts, statement_config)
         else:
             prepared = super().prepare_driver_parameters(parameters, statement_config, is_many, prepared_statement)
 
-        if not is_many:
-            operation_type = getattr(prepared_statement, "operation_type", None)
-            if operation_type != "SELECT":
-                prepared = coerce_numeric_for_write(prepared)
-        elif getattr(prepared_statement, "operation_type", None) != "SELECT":
+        if getattr(prepared_statement, "operation_type", None) != "SELECT":
             prepared = coerce_numeric_for_write(prepared)
 
         if not is_many and isinstance(prepared, list):
             prepared = tuple(prepared)
 
         return prepared
-
-    @property
-    def data_dictionary(self) -> "PsqlpyDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = PsqlpyDataDictionary()
-        return self._data_dictionary
 
     def collect_rows(self, cursor: "PsqlpyConnection", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect psqlpy rows for the direct execution path.
@@ -439,6 +433,37 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: "PsqlpyConnection") -> int:
         """Resolve rowcount from psqlpy result for the direct execution path."""
         return extract_rows_affected(cursor)
+
+    async def _resolve_json_columns(self, schema_name: "str | None", table_name: str) -> "set[str]":
+        """Return the destination columns the database reports as json or jsonb.
+
+        Args:
+            schema_name: Destination schema, or None for the current search path.
+            table_name: Destination table name.
+
+        The relation is resolved the way the server would resolve it in a query,
+        so a table shadowed on the search path contributes no columns, and only
+        the one relation it names is inspected. A column typed as a domain is
+        read through to the type the domain is built on.
+
+        Returns:
+            Names of columns typed json or jsonb.
+        """
+        qualified = quote_identifier(table_name)
+        if schema_name is not None:
+            qualified = f"{quote_identifier(schema_name)}.{qualified}"
+        rows = await self.connection.fetch(
+            "SELECT a.attname AS column_name "
+            "FROM pg_attribute a "
+            "JOIN pg_type t ON t.oid = a.atttypid "
+            "LEFT JOIN pg_type b ON b.oid = t.typbasetype "
+            "WHERE a.attrelid = to_regclass($1) "
+            "AND a.attnum > 0 AND NOT a.attisdropped "
+            "AND COALESCE(b.typname, t.typname) IN ('json', 'jsonb')",
+            [qualified],
+        )
+        data, _ = collect_rows(rows)
+        return {str(row["column_name"]) for row in data}
 
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any

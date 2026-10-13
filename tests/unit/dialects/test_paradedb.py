@@ -1,6 +1,6 @@
 """Dialect unit tests for the ParadeDB (PostgreSQL + pgvector + pg_search) dialect."""
 
-from sqlglot import parse_one
+from sqlglot import exp, parse_one
 from sqlglot.dialects.postgres import Postgres
 
 import sqlspec.dialects.postgres._paradedb  # noqa: F401
@@ -125,3 +125,12 @@ def test_paradedb_tokenizer_inherits_from_postgres_tokenizer() -> None:
 
 def test_paradedb_subclasses_postgres() -> None:
     assert issubclass(ParadeDB, Postgres)
+
+
+def test_paradedb_operator_precedence_with_concatenation() -> None:
+    """Verify ParadeDB @@@ operator has lower precedence than || string concatenation."""
+    parsed = parse_one("SELECT * FROM items WHERE title || ' ' || body @@@ 'shoes'", dialect="paradedb")
+    where = parsed.args.get("where")
+    assert isinstance(where, exp.Where)
+    assert isinstance(where.this, exp.Operator)
+    assert isinstance(where.this.this, exp.DPipe)

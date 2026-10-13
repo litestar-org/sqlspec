@@ -87,6 +87,14 @@ class MigrationTemplateSettings:
     default_format: str
     profile: "MigrationTemplateProfile"
 
+    @property
+    def description_hints(self) -> "TemplateDescriptionHints":
+        """Expose description extraction hints derived from the active profile."""
+
+        return TemplateDescriptionHints(
+            sql_keys=self.profile.sql.description_keys, python_keys=self.profile.python.description_keys
+        )
+
     def resolve_format(self, requested: str | None) -> str:
         """Resolve the effective file format to render."""
 
@@ -95,14 +103,6 @@ class MigrationTemplateSettings:
             msg = f"Unsupported migration format '{format_choice}'"
             raise TemplateValidationError(msg)
         return format_choice
-
-    @property
-    def description_hints(self) -> "TemplateDescriptionHints":
-        """Expose description extraction hints derived from the active profile."""
-
-        return TemplateDescriptionHints(
-            sql_keys=self.profile.sql.description_keys, python_keys=self.profile.python.description_keys
-        )
 
 
 def build_template_settings(migration_config: dict[str, Any] | None) -> "MigrationTemplateSettings":
@@ -206,7 +206,7 @@ _DEFAULT_PY_TEMPLATE = PythonTemplateDefinition(
         "Replace 'def' with 'async def' if you need awaitables. The optional"
         " context argument receives the SQLSpec migration context when provided."
     ),
-    imports=["from typing import Iterable"],
+    imports=["from collections.abc import Iterable"],
     body=(
         "def up(context: object | None = None) -> str | Iterable[str]:\n"
         '    """Apply the migration (upgrade)."""\n'

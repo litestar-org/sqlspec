@@ -1,11 +1,19 @@
 """PyMySQL database configuration."""
 
+import contextlib
 import ssl
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.pymysql._typing import PyMysqlCloudSqlConnector as Connector
-from sqlspec.adapters.pymysql._typing import PyMysqlConnection, PyMysqlCursor, PyMysqlRawCursor, PyMysqlSessionContext
+from sqlspec.adapters.pymysql._typing import (
+    PyMysqlConnection,
+    PyMysqlCursor,
+    PyMysqlDictCursor,
+    PyMysqlRawCursor,
+    PyMysqlSessionContext,
+    PyMysqlSSCursor,
+)
 from sqlspec.adapters.pymysql.core import apply_driver_features, default_statement_config
 from sqlspec.adapters.pymysql.driver import PyMysqlDriver, PyMysqlExceptionHandler
 from sqlspec.adapters.pymysql.pool import PyMysqlConnectionPool
@@ -160,17 +168,16 @@ _CLOUD_SQL_DIRECT_CONNECTION_KEYS = frozenset((
     "password",
     "port",
     "ssl",
+    "ssl_ca",
+    "ssl_cert",
+    "ssl_disabled",
+    "ssl_key",
+    "ssl_key_password",
+    "ssl_verify_cert",
+    "ssl_verify_identity",
     "unix_socket",
     "user",
 ))
-
-
-def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize PyMySQL local-infile aliases to the native connection flag."""
-    config = dict(connection_config)
-    allow_local_infile = bool(config.pop("allow_local_infile", False))
-    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
-    return config
 
 
 def build_connection_config(
@@ -225,11 +232,11 @@ class _PyMysqlCloudSqlConnector:
             "enable_iam_auth": self._config.driver_features.get("cloud_sql_enable_iam_auth", False),
             "ip_type": self._config.driver_features.get("cloud_sql_ip_type", "PRIVATE"),
         }
-        if self._user:
+        if self._user is not None:
             conn_kwargs["user"] = self._user
-        if self._password:
+        if self._password is not None:
             conn_kwargs["password"] = self._password
-        if self._database:
+        if self._database is not None:
             conn_kwargs["database"] = self._database
 
         return cast("PyMysqlConnection", connector.connect(**conn_kwargs))
@@ -307,6 +314,40 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         self._cloud_sql_connector: Any | None = None
         self._validate_connector_config()
 
+    def create_connection(self) -> PyMysqlConnection:
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same parameters and creation hook the pool
+        applies, but it is not the pool's thread-local connection, so closing it
+        leaves the pool usable.
+
+        Returns:
+            PyMysqlConnection: A newly opened connection.
+        """
+        return self.provide_pool().new_connection()
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "PyMysqlConnectionContext": PyMysqlConnectionContext,
+            "PyMysqlConnection": PyMysqlConnection,
+            "PyMysqlConnectionParams": PyMysqlConnectionParams,
+            "PyMysqlConnectionPool": PyMysqlConnectionPool,
+            "PyMysqlCursor": PyMysqlCursor,
+            "PyMysqlDictCursor": PyMysqlDictCursor,
+            "PyMysqlDriver": PyMysqlDriver,
+            "PyMysqlDriverFeatures": PyMysqlDriverFeatures,
+            "PyMysqlExceptionHandler": PyMysqlExceptionHandler,
+            "PyMysqlPoolParams": PyMysqlPoolParams,
+            "PyMysqlRawCursor": PyMysqlRawCursor,
+            "PyMysqlSSCursor": PyMysqlSSCursor,
+            "PyMysqlSessionContext": PyMysqlSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
     def _get_cloud_sql_connector(self) -> Any | None:
         """Return the configured Cloud SQL connector instance."""
         return self._cloud_sql_connector
@@ -331,6 +372,9 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
 
     def _setup_cloud_sql_connector(self, config: "dict[str, Any]") -> "_PyMysqlCloudSqlConnector":
         """Setup Cloud SQL connector and return a pool connection factory."""
+        if self._cloud_sql_connector is not None:
+            with contextlib.suppress(Exception):
+                self._cloud_sql_connector.close()
         self._cloud_sql_connector = Connector()
 
         user = config.get("user")
@@ -349,13 +393,20 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
         connection_factory = None
         if self.driver_features.get("enable_cloud_sql", False):
             connection_factory = self._setup_cloud_sql_connector(config)
-        return PyMysqlConnectionPool(
-            config,
-            recycle_seconds=pool_recycle,
-            health_check_interval=health_check,
-            on_connection_create=self._user_connection_hook,
-            connection_factory=connection_factory,
-        )
+        try:
+            return PyMysqlConnectionPool(
+                config,
+                recycle_seconds=pool_recycle,
+                health_check_interval=health_check,
+                on_connection_create=self._user_connection_hook,
+                connection_factory=connection_factory,
+            )
+        except BaseException:
+            if self._cloud_sql_connector is not None:
+                with contextlib.suppress(Exception):
+                    self._cloud_sql_connector.close()
+                self._cloud_sql_connector = None
+            raise
 
     def _close_pool(self) -> None:
         if self.connection_instance:
@@ -366,33 +417,10 @@ class PyMysqlConfig(SyncDatabaseConfig[PyMysqlConnection, PyMysqlConnectionPool,
             self._cloud_sql_connector.close()
             self._cloud_sql_connector = None
 
-    def create_connection(self) -> PyMysqlConnection:
-        """Open a standalone connection owned by the caller.
 
-        The connection carries the same parameters and creation hook the pool
-        applies, but it is not the pool's thread-local connection, so closing it
-        leaves the pool usable.
-
-        Returns:
-            PyMysqlConnection: A newly opened connection.
-        """
-        return self.provide_pool().new_connection()
-
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "PyMysqlConnectionContext": PyMysqlConnectionContext,
-            "PyMysqlConnection": PyMysqlConnection,
-            "PyMysqlConnectionParams": PyMysqlConnectionParams,
-            "PyMysqlConnectionPool": PyMysqlConnectionPool,
-            "PyMysqlCursor": PyMysqlCursor,
-            "PyMysqlDriver": PyMysqlDriver,
-            "PyMysqlDriverFeatures": PyMysqlDriverFeatures,
-            "PyMysqlExceptionHandler": PyMysqlExceptionHandler,
-            "PyMysqlPoolParams": PyMysqlPoolParams,
-            "PyMysqlSessionContext": PyMysqlSessionContext,
-        })
-        return namespace
-
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+def _normalize_local_infile(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize PyMySQL local-infile aliases to the native connection flag."""
+    config = dict(connection_config)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
+    return config

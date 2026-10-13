@@ -10,29 +10,6 @@ import pytest
 from sqlspec.adapters.pymssql.adk import PymssqlADKStore
 
 
-def _mock_config(adk_config: "dict[str, object] | None" = None) -> MagicMock:
-    config = MagicMock()
-    config.extension_config = {"adk": adk_config or {}}
-    return config
-
-
-def _normalized(sql: str) -> str:
-    return " ".join(sql.split())
-
-
-def _session_store_with_capture(
-    monkeypatch: "pytest.MonkeyPatch",
-) -> "tuple[PymssqlADKStore, list[tuple[str, tuple[Any, ...]]]]":
-    calls: list[tuple[str, tuple[Any, ...]]] = []
-
-    def capture(_store: PymssqlADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        calls.append((sql, tuple(params)))
-        return []
-
-    monkeypatch.setattr(PymssqlADKStore, "_execute_fetchall", capture)
-    return PymssqlADKStore(_mock_config()), calls
-
-
 def test_pymssql_list_sessions_binds_order_and_page(monkeypatch: "pytest.MonkeyPatch") -> None:
     """SQL Server row limiting binds the offset before the row count."""
     store, calls = _session_store_with_capture(monkeypatch)
@@ -135,3 +112,118 @@ def test_pymssql_adk_memory_store_insert_handles_none_metadata_and_missing_autho
     params = cursor.execute.call_args.args[1]
     assert params[6] is None
     assert params[10] is None
+
+
+def test_pymssql_adk_store_requests_tuple_cursor_and_supports_dict_rows() -> None:
+    """PymssqlADKStore must request as_dict=False from PymssqlCursor and handle dict rows if returned."""
+    from datetime import datetime
+    from typing import cast
+
+    config = _mock_config({"native_json": False})
+    cursor_kwargs: list[dict[str, Any]] = []
+    now = datetime.now(tz=UTC)
+    dict_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": '{"ok": true}',
+        "create_time": now,
+        "update_time": now,
+    }
+
+    class _FakeRawCursor:
+        def execute(self, _sql: str, _params: Any = None) -> None:
+            return None
+
+        def fetchone(self) -> Any:
+            return dict_row
+
+        def close(self) -> None:
+            return None
+
+    class _FakeConn:
+        def cursor(self, **kwargs: Any) -> _FakeRawCursor:
+            cursor_kwargs.append(kwargs)
+            return _FakeRawCursor()
+
+    config.provide_connection.return_value.__enter__.return_value = _FakeConn()
+    store = PymssqlADKStore(cast("Any", config))
+
+    session = store.get_session("app", "u1", "s1")
+
+    assert cursor_kwargs == [{"as_dict": False}]
+    assert session is not None
+    assert session["id"] == "s1"
+    assert session["state"] == {"ok": True}
+
+
+def test_pymssql_adk_search_entries_escapes_tsql_like_wildcards_and_rolls_back_on_insert_failure(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """PymssqlADKMemoryStore escapes T-SQL LIKE wildcards and rolls back failed inserts."""
+    from datetime import datetime
+    from typing import cast
+
+    from sqlspec.adapters.pymssql.adk import PymssqlADKMemoryStore
+
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture(_store: PymssqlADKMemoryStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+        calls.append((sql, tuple(params)))
+        return []
+
+    monkeypatch.setattr(PymssqlADKMemoryStore, "_execute_fetchall", capture)
+    store = PymssqlADKMemoryStore(_mock_config({"native_json": False}))
+    store.search_entries(r"50%_off[1]\test", "app", "u1", limit=5)
+
+    sql, params = calls[0]
+    assert "LIKE %s ESCAPE N'\\'" in _normalized(sql)
+    assert params[-1] == r"%50\%\_off\[1]\\test%"
+
+    mem_config = _mock_config({"native_json": False})
+    conn = mem_config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.execute.side_effect = RuntimeError("db failure")
+    mem_store = PymssqlADKMemoryStore(mem_config)
+    now = datetime.now(tz=UTC)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user-1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+    with pytest.raises(RuntimeError, match="db failure"):
+        mem_store.insert_memory_entries([entry])
+    conn.rollback.assert_called_once()
+
+
+def _mock_config(adk_config: "dict[str, object] | None" = None) -> MagicMock:
+    config = MagicMock()
+    config.extension_config = {"adk": adk_config or {}}
+    return config
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _session_store_with_capture(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> "tuple[PymssqlADKStore, list[tuple[str, tuple[Any, ...]]]]":
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture(_store: PymssqlADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+        calls.append((sql, tuple(params)))
+        return []
+
+    monkeypatch.setattr(PymssqlADKStore, "_execute_fetchall", capture)
+    return PymssqlADKStore(_mock_config()), calls

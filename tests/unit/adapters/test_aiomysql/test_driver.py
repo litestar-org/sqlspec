@@ -68,3 +68,32 @@ async def test_begin_uses_the_native_call_instead_of_a_cursor_statement() -> Non
 
     assert connection.begins == 1
     assert connection.executed == []
+
+
+async def test_aiomysql_create_pool_resolves_database_and_db_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AiomysqlConfig._create_pool normalizes database to db without raising duplicate keyword conflicts."""
+    import aiomysql
+
+    from sqlspec.adapters.aiomysql.config import AiomysqlConfig
+
+    captured_kwargs: dict[str, Any] = {}
+
+    async def _fake_create_pool(**kwargs: Any) -> Any:
+        captured_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(aiomysql, "create_pool", _fake_create_pool)
+    config = AiomysqlConfig(connection_config={"host": "localhost", "database": "canonical_db", "db": "legacy_db"})
+    await config._create_pool()
+    assert captured_kwargs["db"] == "legacy_db"
+    assert "database" not in captured_kwargs
+
+
+def test_aiomysql_signature_namespace_includes_cursors() -> None:
+    """AiomysqlConfig.get_signature_namespace includes AiomysqlDictCursor and AiomysqlRawCursor."""
+    from sqlspec.adapters.aiomysql.config import AiomysqlConfig
+
+    config = AiomysqlConfig(connection_config={"host": "localhost", "db": "test"})
+    ns = config.get_signature_namespace()
+    assert "AiomysqlDictCursor" in ns
+    assert "AiomysqlRawCursor" in ns

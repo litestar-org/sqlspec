@@ -39,10 +39,7 @@ if TYPE_CHECKING:
 
 __all__ = ("MySQLAsyncDataDictionary", "MySQLSyncDataDictionary")
 
-
-def _get_driver_cache_key(driver: Any) -> int:
-    """Resolve a cache key for engine version caching."""
-    return id(driver)
+_MAX_ENGINE_VERSION_CACHE_SIZE = 256
 
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
@@ -61,21 +58,15 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         if cache_key in self._version_fetch_attempted:
             return self._version_cache.get(cache_key)
 
-        version_value = await driver.select_value_or_none(self.get_query("version", "current"))
-        if not version_value:
+        engine_version = await self._get_engine_version(driver)
+        if engine_version is None:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(cache_key, None)
             return None
 
-        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
-        if version_info is None:
-            self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(cache_key, None)
-            return None
-
-        self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(cache_key, version_info)
-        return version_info
+        self._log_version_detected(type(self).dialect, engine_version.version)
+        self.cache_version(cache_key, engine_version.version)
+        return engine_version.version
 
     async def get_feature_flag(self, driver: "AsyncDriverAdapterBase", feature: str) -> bool:
         """Check if MySQL database supports a specific feature."""
@@ -277,12 +268,14 @@ class MySQLAsyncDataDictionary(AsyncDataDictionaryBase):
         cache_key = _get_driver_cache_key(driver)
         if cache_key in self._engine_version_cache:
             return self._engine_version_cache[cache_key]
+        if len(self._engine_version_cache) >= _MAX_ENGINE_VERSION_CACHE_SIZE:
+            self._engine_version_cache.pop(next(iter(self._engine_version_cache)))
         try:
             version_value = await driver.select_value_or_none(self.get_query_text("version", "current"))
         except Exception:
             self._engine_version_cache[cache_key] = None
             return None
-        if version_value is None:
+        if not version_value:
             self._engine_version_cache[cache_key] = None
             return None
         engine_version = parse_mysql_engine_version(str(version_value))
@@ -330,21 +323,15 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         if cache_key in self._version_fetch_attempted:
             return self._version_cache.get(cache_key)
 
-        version_value = driver.select_value_or_none(self.get_query("version", "current"))
-        if not version_value:
+        engine_version = self._get_engine_version(driver)
+        if engine_version is None:
             self._log_version_unavailable(type(self).dialect, "missing")
             self.cache_version(cache_key, None)
             return None
 
-        version_info = self.parse_version_with_pattern(self.get_dialect_config().version_pattern, str(version_value))
-        if version_info is None:
-            self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(cache_key, None)
-            return None
-
-        self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(cache_key, version_info)
-        return version_info
+        self._log_version_detected(type(self).dialect, engine_version.version)
+        self.cache_version(cache_key, engine_version.version)
+        return engine_version.version
 
     def get_feature_flag(self, driver: "SyncDriverAdapterBase", feature: str) -> bool:
         """Check if MySQL database supports a specific feature."""
@@ -546,12 +533,14 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         cache_key = _get_driver_cache_key(driver)
         if cache_key in self._engine_version_cache:
             return self._engine_version_cache[cache_key]
+        if len(self._engine_version_cache) >= _MAX_ENGINE_VERSION_CACHE_SIZE:
+            self._engine_version_cache.pop(next(iter(self._engine_version_cache)))
         try:
             version_value = driver.select_value_or_none(self.get_query_text("version", "current"))
         except Exception:
             self._engine_version_cache[cache_key] = None
             return None
-        if version_value is None:
+        if not version_value:
             self._engine_version_cache[cache_key] = None
             return None
         engine_version = parse_mysql_engine_version(str(version_value))
@@ -581,3 +570,8 @@ class MySQLSyncDataDictionary(SyncDataDictionaryBase):
         else:
             rows = driver.select(query.sql, schema_name=schema_name, table_name=table_name)
         return MetadataResult(domain, capability=capability, items=tuple(rows))
+
+
+def _get_driver_cache_key(driver: Any) -> int:
+    """Resolve a cache key for engine version caching."""
+    return id(driver)

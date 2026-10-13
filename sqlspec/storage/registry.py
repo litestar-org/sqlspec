@@ -9,13 +9,16 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Final, cast
-from urllib.parse import unquote, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 from mypy_extensions import mypyc_attr
 
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.protocols import ObjectStoreProtocol
-from sqlspec.storage._paths import is_file_destination, strip_windows_drive_prefix
+from sqlspec.storage._paths import is_file_destination, parse_file_uri_path
+from sqlspec.storage.backends.fsspec import FSSpecBackend
+from sqlspec.storage.backends.local import LocalStore
+from sqlspec.storage.backends.obstore import ObStoreBackend
 from sqlspec.typing import FSSPEC_INSTALLED, OBSTORE_INSTALLED
 from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.type_guards import is_local_path
@@ -28,6 +31,7 @@ SCHEME_REGEX: Final = re.compile(r"([a-zA-Z0-9+.-]+)://")
 
 
 FSSPEC_ONLY_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https", "ftp", "sftp", "ssh"})
+_CLOUD_OBJECT_STORE_SCHEMES: Final[frozenset[str]] = frozenset({"s3", "gs", "gcs", "az", "azure"})
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -44,16 +48,6 @@ class StorageRegistry:
     def __init__(self) -> None:
         self._alias_configs: dict[str, tuple[type[ObjectStoreProtocol], str, dict[str, Any]]] = {}
         self._instances: dict[str | tuple[str, tuple[tuple[str, Any], ...]], ObjectStoreProtocol] = {}
-
-    def _make_hashable(self, obj: Any) -> Any:
-        """Convert nested dict/list structures to hashable tuples."""
-        if isinstance(obj, dict):
-            return tuple(sorted((k, self._make_hashable(v)) for k, v in obj.items()))
-        if isinstance(obj, list):
-            return tuple(self._make_hashable(item) for item in obj)
-        if isinstance(obj, set):
-            return tuple(sorted(self._make_hashable(item) for item in obj))
-        return obj
 
     def register_alias(
         self, alias: str, uri: str, *, backend: str | None = None, base_path: str = "", **kwargs: Any
@@ -112,7 +106,6 @@ class StorageRegistry:
         base_uri = path_str
         is_alias = False
 
-        # Check if it's an alias first (either exact match or prefix match like "alias/path")
         parts = path_str.split("/", 1)
         potential_alias = parts[0]
 
@@ -121,11 +114,13 @@ class StorageRegistry:
             is_alias = True
         elif scheme:
             if scheme == "file":
-                parsed = urlparse(path_str)
-                file_path = strip_windows_drive_prefix(unquote(parsed.path))
-
+                file_path = parse_file_uri_path(path_str)
                 path_obj = Path(file_path).expanduser().resolve()
                 base_uri = _local_backend_uri(path_obj)
+            elif scheme in _CLOUD_OBJECT_STORE_SCHEMES:
+                parsed = urlparse(path_str)
+                if parsed.netloc:
+                    base_uri = f"{scheme}://{parsed.netloc}"
         elif is_local_path(path_str):
             scheme = "file"
             path_obj = Path(path_str).expanduser().resolve()
@@ -142,7 +137,6 @@ class StorageRegistry:
         if not is_alias:
             instance = self._backend_from_uri(base_uri, backend_override=backend, **kwargs)
         else:
-            # It must be an alias (already validated above)
             backend_cls, stored_uri, config = self._alias_configs[base_uri]
             if backend:
                 backend_cls = self._backend_class(backend)
@@ -151,6 +145,59 @@ class StorageRegistry:
         self._instances[cache_key] = instance
         log_with_context(logger, logging.DEBUG, "storage.resolve", uri_or_alias=path_str, cached=False)
         return instance
+
+    def is_alias_registered(self, alias: str) -> bool:
+        """Check if a named alias is registered."""
+        return alias in self._alias_configs
+
+    def list_aliases(self) -> "list[str]":
+        """List all registered aliases."""
+        return list(self._alias_configs.keys())
+
+    def clear_cache(self, uri_or_alias: str | None = None) -> None:
+        """Clear resolved backend cache."""
+        if uri_or_alias:
+            keys_to_remove: list[str | tuple[str, tuple[tuple[str, Any], ...]]] = []
+            for key in list(self._instances):
+                if isinstance(key, str):
+                    if key == uri_or_alias:
+                        keys_to_remove.append(key)
+                    continue
+                if key and key[0] == uri_or_alias:
+                    keys_to_remove.append(key)
+            for key in keys_to_remove:
+                self._instances.pop(key, None)
+            return
+        self._instances.clear()
+
+    def clear(self) -> None:
+        """Clear all aliases and instances."""
+        self._alias_configs.clear()
+        self._instances.clear()
+
+    def clear_instances(self) -> None:
+        """Clear only cached instances, keeping aliases."""
+        self._instances.clear()
+
+    def clear_aliases(self) -> None:
+        """Clear only aliases, keeping cached instances."""
+        self._alias_configs.clear()
+
+    def _make_hashable(self, obj: Any) -> Any:
+        """Convert nested dict/list structures to hashable tuples."""
+        if isinstance(obj, dict):
+            return tuple(sorted(((str(k), self._make_hashable(v)) for k, v in obj.items()), key=repr))
+        if isinstance(obj, (list, tuple)):
+            return tuple(self._make_hashable(item) for item in obj)
+        if isinstance(obj, (set, frozenset)):
+            return tuple(sorted((self._make_hashable(item) for item in obj), key=repr))
+        if isinstance(obj, Path):
+            return obj.as_posix()
+        try:
+            hash(obj)
+        except TypeError:
+            return repr(obj)
+        return obj
 
     def _backend_from_uri(self, uri: str, *, backend_override: str | None = None, **kwargs: Any) -> ObjectStoreProtocol:
         """Resolve backend from URI with optional backend override.
@@ -247,16 +294,10 @@ class StorageRegistry:
     def _backend_class(self, backend_type: str) -> type[ObjectStoreProtocol]:
         """Get backend class by type name."""
         if backend_type == "local":
-            from sqlspec.storage.backends.local import LocalStore
-
             return cast("type[ObjectStoreProtocol]", LocalStore)
         if backend_type == "obstore":
-            from sqlspec.storage.backends.obstore import ObStoreBackend
-
             return cast("type[ObjectStoreProtocol]", ObStoreBackend)
         if backend_type == "fsspec":
-            from sqlspec.storage.backends.fsspec import FSSpecBackend
-
             return cast("type[ObjectStoreProtocol]", FSSpecBackend)
         msg = f"Unknown backend type: {backend_type}. Supported types: 'local', 'obstore', 'fsspec'"
         raise ValueError(msg)
@@ -271,43 +312,6 @@ class StorageRegistry:
             return None
         match = SCHEME_REGEX.match(uri)
         return match.group(1).lower() if match else None
-
-    def is_alias_registered(self, alias: str) -> bool:
-        """Check if a named alias is registered."""
-        return alias in self._alias_configs
-
-    def list_aliases(self) -> "list[str]":
-        """List all registered aliases."""
-        return list(self._alias_configs.keys())
-
-    def clear_cache(self, uri_or_alias: str | None = None) -> None:
-        """Clear resolved backend cache."""
-        if uri_or_alias:
-            keys_to_remove: list[str | tuple[str, tuple[tuple[str, Any], ...]]] = []
-            for key in list(self._instances):
-                if isinstance(key, str):
-                    if key == uri_or_alias:
-                        keys_to_remove.append(key)
-                    continue
-                if key and key[0] == uri_or_alias:
-                    keys_to_remove.append(key)
-            for key in keys_to_remove:
-                self._instances.pop(key, None)
-            return
-        self._instances.clear()
-
-    def clear(self) -> None:
-        """Clear all aliases and instances."""
-        self._alias_configs.clear()
-        self._instances.clear()
-
-    def clear_instances(self) -> None:
-        """Clear only cached instances, keeping aliases."""
-        self._instances.clear()
-
-    def clear_aliases(self) -> None:
-        """Clear only aliases, keeping cached instances."""
-        self._alias_configs.clear()
 
 
 storage_registry = StorageRegistry()

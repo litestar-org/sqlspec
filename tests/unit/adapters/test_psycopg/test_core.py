@@ -7,12 +7,15 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from psycopg import errors as pg_errors
 
 from sqlspec.adapters.psycopg.core import (
     build_async_pipeline_execution_result,
     build_copy_from_command,
     build_pipeline_execution_result,
     create_mapped_exception,
+    default_statement_config,
+    escape_literal_percent,
     resolve_many_rowcount,
 )
 from sqlspec.exceptions import ConnectionTimeoutError, SQLParsingError, UniqueViolationError
@@ -65,9 +68,6 @@ def test_build_copy_from_command_preserves_quoted_dots_in_table_identifier() -> 
 
 def test_create_mapped_exception_dispatches_native_psycopg_error() -> None:
     """Native psycopg error types should resolve through the adapter-local dispatch table."""
-    pytest.importorskip("psycopg")
-    from psycopg import errors as pg_errors
-
     error = pg_errors.SyntaxError("syntax error at or near SELECT")
     mapped = create_mapped_exception(error)
     assert isinstance(mapped, SQLParsingError)
@@ -77,8 +77,6 @@ def test_create_mapped_exception_dispatches_native_psycopg_error() -> None:
 
 def test_create_mapped_exception_dispatches_native_psycopg_subclass() -> None:
     """Native psycopg subclasses should use cached MRO dispatch without changing mappings."""
-    pytest.importorskip("psycopg")
-    from psycopg import errors as pg_errors
 
     class CustomUniqueViolation(pg_errors.UniqueViolation):
         pass
@@ -204,10 +202,41 @@ def test_build_async_pipeline_execution_result_detects_record_row_format() -> No
 
 @pytest.mark.parametrize("error_name, sqlstate", [("AdminShutdown", "57P01"), ("CannotConnectNow", "57P03")])
 def test_create_mapped_exception_dispatches_connection_errors(error_name: str, sqlstate: str) -> None:
-    from psycopg import errors
-
-    error = getattr(errors, error_name)("server unavailable")
+    error = getattr(pg_errors, error_name)("server unavailable")
     mapped = create_mapped_exception(error)
     assert isinstance(mapped, ConnectionTimeoutError)
     assert mapped.__cause__ is error
     assert sqlstate in str(mapped)
+
+
+def test_build_pipeline_execution_result_fetches_rows_and_types_when_cursor_description_present() -> None:
+    """Pipeline execution should collect rows and column_types when cursor.description is present even if returns_rows() is False."""
+
+    class _Statement:
+        def returns_rows(self) -> bool:
+            return False
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.description = [SimpleNamespace(name="id", type_code=23)]
+
+        def fetchall(self) -> list[tuple[int]]:
+            return [(42,)]
+
+    result = build_pipeline_execution_result(
+        cast("Any", _Statement()),
+        _Cursor(),
+        column_types_resolver=lambda desc: {c.name: str(c.type_code) for c in desc},
+    )
+    assert result.is_select_result is True
+    assert result.selected_data == [(42,)]
+    assert result.column_names == ["id"]
+    assert result.column_types == {"id": "23"}
+
+
+def test_escape_literal_percent_preserves_placeholders_and_doubles_literals() -> None:
+    """escape_literal_percent should escape literal % signs while keeping %s placeholders intact."""
+    validator = default_statement_config.parameter_validator
+    sql = "SELECT * FROM items WHERE label LIKE '100%' AND code = %s"
+    escaped = escape_literal_percent(sql, ("abc",), validator)
+    assert escaped == "SELECT * FROM items WHERE label LIKE '100%%' AND code = %s"

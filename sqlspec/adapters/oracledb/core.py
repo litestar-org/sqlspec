@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from sqlspec.adapters.oracledb._json_handlers import is_json_payload
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
 from sqlspec.adapters.oracledb._typing import DB_TYPE_BLOB, DB_TYPE_CLOB, oracledb_module
-from sqlspec.adapters.oracledb.data_dictionary import resolve_oracle_connection_major
+from sqlspec.adapters.oracledb.data_dictionary import (
+    resolve_oracle_connection_compatible_major,
+    resolve_oracle_connection_major,
+)
 from sqlspec.adapters.oracledb.type_converter import OracleOutputConverter
 from sqlspec.core import (
     DriverParameterProfile,
@@ -18,7 +21,7 @@ from sqlspec.core import (
     build_statement_config_from_profile,
     create_sql_result,
 )
-from sqlspec.data_dictionary.dialects.oracle import ORACLE_JSON_STORAGE_BLOB_JSON, resolve_oracle_json_storage
+from sqlspec.data_dictionary.dialects.oracle import ORACLE_JSON_STORAGE_NATIVE, resolve_oracle_json_storage
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
     CheckViolationError,
@@ -40,7 +43,7 @@ from sqlspec.exceptions import (
 from sqlspec.typing import NUMPY_INSTALLED
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
-from sqlspec.utils.type_guards import has_rowcount, is_readable
+from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -59,6 +62,7 @@ __all__ = (
     "DB_TYPE_BLOB",
     "DB_TYPE_CLOB",
     "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
+    "ORACLEDB_VERSION",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
     "OracleAsyncStreamSource",
     "OracleBlob",
@@ -95,6 +99,117 @@ __all__ = (
 
 
 IMPLICIT_UPPER_COLUMN_PATTERN: "re.Pattern[str]" = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
+_UNQUOTED_ORACLE_IDENTIFIER_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]*$")
+_ORACLE_RESERVED_COLUMN_NAMES: "frozenset[str]" = frozenset({
+    "ACCESS",
+    "ADD",
+    "ALL",
+    "ALTER",
+    "AND",
+    "ANY",
+    "AS",
+    "ASC",
+    "AUDIT",
+    "BETWEEN",
+    "BY",
+    "CHAR",
+    "CHECK",
+    "CLUSTER",
+    "COLUMN",
+    "COMMENT",
+    "COMPRESS",
+    "CONNECT",
+    "CREATE",
+    "CURRENT",
+    "DATE",
+    "DECIMAL",
+    "DEFAULT",
+    "DELETE",
+    "DESC",
+    "DISTINCT",
+    "DROP",
+    "ELSE",
+    "EXCLUSIVE",
+    "EXISTS",
+    "FILE",
+    "FLOAT",
+    "FOR",
+    "FROM",
+    "GRANT",
+    "GROUP",
+    "HAVING",
+    "IDENTIFIED",
+    "IMMEDIATE",
+    "IN",
+    "INCREMENT",
+    "INDEX",
+    "INITIAL",
+    "INSERT",
+    "INTEGER",
+    "INTERSECT",
+    "INTO",
+    "IS",
+    "LEVEL",
+    "LIKE",
+    "LOCK",
+    "LONG",
+    "MAXEXTENTS",
+    "MINUS",
+    "MLSLABEL",
+    "MODE",
+    "MODIFY",
+    "NOAUDIT",
+    "NOCOMPRESS",
+    "NOT",
+    "NOWAIT",
+    "NULL",
+    "NUMBER",
+    "OF",
+    "OFFLINE",
+    "ON",
+    "ONLINE",
+    "OPTION",
+    "OR",
+    "ORDER",
+    "PCTFREE",
+    "PRIOR",
+    "PUBLIC",
+    "RAW",
+    "RENAME",
+    "RESOURCE",
+    "REVOKE",
+    "ROW",
+    "ROWID",
+    "ROWNUM",
+    "ROWS",
+    "SELECT",
+    "SESSION",
+    "SET",
+    "SHARE",
+    "SIZE",
+    "SMALLINT",
+    "START",
+    "SUCCESSFUL",
+    "SYNONYM",
+    "SYSDATE",
+    "TABLE",
+    "THEN",
+    "TO",
+    "TRIGGER",
+    "UID",
+    "UNION",
+    "UNIQUE",
+    "UPDATE",
+    "USER",
+    "VALIDATE",
+    "VALUES",
+    "VARCHAR",
+    "VARCHAR2",
+    "VIEW",
+    "WHENEVER",
+    "WHERE",
+    "WITH",
+})
 _VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
 _LOB_TYPE_NAME_MARKERS: "tuple[str, ...]" = ("LOB", "BFILE")
@@ -111,21 +226,30 @@ ORA_TABLESPACE_FULL = 1652
 
 _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     1: (UniqueViolationError, "unique constraint violation"),
+    28: (DatabaseConnectionError, "session has been killed"),
     54: (OperationalError, "resource busy and acquire with NOWAIT specified or timeout expired"),
     60: (DeadlockError, "deadlock detected"),
-    942: (PermissionDeniedError, "table or view does not exist"),
+    942: (SQLParsingError, "table or view does not exist"),
     1013: (OperationCancelledError, "user requested cancel"),
     1017: (PermissionDeniedError, "invalid username/password"),
     1031: (PermissionDeniedError, "insufficient privileges"),
     1400: (NotNullViolationError, "not-null constraint violation"),
     1407: (NotNullViolationError, "not-null constraint violation"),
+    1438: (DataError, "numeric precision overflow"),
     1652: (OperationalError, "tablespace full"),
     1722: (DataError, "invalid number"),
+    1830: (DataError, "date format picture ends before converting entire input string"),
     1840: (DataError, "data conversion error"),
+    1843: (DataError, "not a valid month"),
     1858: (DataError, "invalid character"),
+    1861: (DataError, "literal does not match format string"),
     2291: (ForeignKeyViolationError, "foreign key constraint violation"),
     2292: (ForeignKeyViolationError, "foreign key constraint violation"),
     ORA_CHECK_CONSTRAINT: (CheckViolationError, "check constraint violation"),
+    3113: (DatabaseConnectionError, "end-of-file on communication channel"),
+    3114: (DatabaseConnectionError, "not connected to ORACLE"),
+    3135: (DatabaseConnectionError, "connection lost contact"),
+    4068: (OperationalError, "existing state of packages has been discarded"),
     8176: (TransactionError, "consistent read failure"),
     8177: (TransactionError, "cannot serialize access"),
     12154: (DatabaseConnectionError, "TNS resolution failed"),
@@ -134,18 +258,23 @@ _ERROR_CODE_MAPPING: "dict[int, tuple[type[SQLSpecError], str]]" = {
     12514: (DatabaseConnectionError, "service not known"),
     12541: (ConnectionTimeoutError, "no listener"),
     12545: (ConnectionTimeoutError, "connect failed"),
+    12899: (DataError, "value too large for column"),
+    28000: (PermissionDeniedError, "the account is locked"),
+    28001: (PermissionDeniedError, "the password has expired"),
+    30006: (OperationalError, "resource busy; acquire with WAIT timeout expired"),
+}
+
+_DPY_ERROR_CODE_MAPPING: "dict[str, tuple[type[SQLSpecError], str]]" = {
+    "DPY-1001": (DatabaseConnectionError, "not connected to database"),
+    "DPY-4011": (DatabaseConnectionError, "connection was closed"),
+    "DPY-6000": (DatabaseConnectionError, "cannot connect to database"),
+    "DPY-6001": (DatabaseConnectionError, "cannot connect to database"),
+    "DPY-6005": (ConnectionTimeoutError, "cannot connect to database"),
 }
 
 
-def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
-    parts = [int(part) for part in version.split(".") if part.isdigit()]
-    while len(parts) < _VERSION_COMPONENTS:
-        parts.append(0)
-    return parts[0], parts[1], parts[2]
-
-
-ORACLEDB_VERSION: "tuple[int, int, int]" = _parse_version_tuple(oracledb_module.__version__)
 SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
+
 ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
 
@@ -202,14 +331,7 @@ def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]"
 
 def build_arrow_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
     """Build Oracle Arrow/DataFrame fetch keyword arguments."""
-    fetch_kwargs: dict[str, object] = {}
-    fetch_lobs = driver_features.get("fetch_lobs")
-    if fetch_lobs is not None:
-        fetch_kwargs["fetch_lobs"] = fetch_lobs
-    fetch_decimals = driver_features.get("fetch_decimals")
-    if fetch_decimals is not None:
-        fetch_kwargs["fetch_decimals"] = fetch_decimals
-    return fetch_kwargs
+    return build_fetch_kwargs(driver_features)
 
 
 def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
@@ -248,9 +370,7 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
     Returns:
         Normalized parameters payload.
     """
-    if isinstance(parameters, tuple):
-        return list(parameters)
-    return parameters
+    return normalize_execute_many_parameters_sync(parameters)
 
 
 class _OracleJsonBindingState:
@@ -268,10 +388,12 @@ class _OracleJsonBindingState:
         """Return the operation-scoped JSON storage decision."""
         if not self._resolved:
             server_major = resolve_oracle_connection_major(self._connection, self._version_cache)
+            compatible_major = resolve_oracle_connection_compatible_major(self._connection, self._version_cache)
             self._use_blob = (
                 isinstance(server_major, int)
                 and not isinstance(server_major, bool)
-                and resolve_oracle_json_storage(server_major) == ORACLE_JSON_STORAGE_BLOB_JSON
+                and resolve_oracle_json_storage(server_major, compatible_major=compatible_major)
+                != ORACLE_JSON_STORAGE_NATIVE
             )
             self._resolved = True
         return self._use_blob
@@ -281,10 +403,10 @@ def coerce_large_parameters_sync(
     connection: Any,
     parameters: Any,
     *,
-    clob_type: Any,
-    blob_type: Any,
-    varchar2_byte_limit: int,
-    raw_byte_limit: int,
+    clob_type: Any = DB_TYPE_CLOB,
+    blob_type: Any = DB_TYPE_BLOB,
+    varchar2_byte_limit: int = 4000,
+    raw_byte_limit: int = 2000,
     version_cache: Any = None,
 ) -> Any:
     """Coerce large string/bytes parameters into CLOBs/BLOBs with wrapper-aware routing.
@@ -328,10 +450,10 @@ async def coerce_large_parameters_async(
     connection: Any,
     parameters: Any,
     *,
-    clob_type: Any,
-    blob_type: Any,
-    varchar2_byte_limit: int,
-    raw_byte_limit: int,
+    clob_type: Any = DB_TYPE_CLOB,
+    blob_type: Any = DB_TYPE_BLOB,
+    varchar2_byte_limit: int = 4000,
+    raw_byte_limit: int = 2000,
     version_cache: Any = None,
 ) -> Any:
     """Async mirror of :func:`coerce_large_parameters_sync`.
@@ -356,10 +478,10 @@ def coerce_many_parameters_sync(
     connection: Any,
     parameters: Any,
     *,
-    clob_type: Any,
-    blob_type: Any,
-    varchar2_byte_limit: int,
-    raw_byte_limit: int,
+    clob_type: Any = DB_TYPE_CLOB,
+    blob_type: Any = DB_TYPE_BLOB,
+    varchar2_byte_limit: int = 4000,
+    raw_byte_limit: int = 2000,
     version_cache: Any = None,
 ) -> Any:
     """Coerce every parameter row prepared for synchronous ``executemany``."""
@@ -390,10 +512,10 @@ async def coerce_many_parameters_async(
     connection: Any,
     parameters: Any,
     *,
-    clob_type: Any,
-    blob_type: Any,
-    varchar2_byte_limit: int,
-    raw_byte_limit: int,
+    clob_type: Any = DB_TYPE_CLOB,
+    blob_type: Any = DB_TYPE_BLOB,
+    varchar2_byte_limit: int = 4000,
+    raw_byte_limit: int = 2000,
     version_cache: Any = None,
 ) -> Any:
     """Coerce every parameter row prepared for asynchronous ``executemany``."""
@@ -421,7 +543,7 @@ async def coerce_many_parameters_async(
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
-    column_list = ", ".join(columns)
+    column_list = ", ".join(_format_insert_column(col) for col in columns)
     placeholders = ", ".join(f":{idx + 1}" for idx in range(len(columns)))
     return f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})"
 
@@ -708,6 +830,13 @@ class OracleSyncStreamSource:
         )
         return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
 
+    def close(self, error: bool = False) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
     def _caller_wants_locators(self) -> bool:
         """Report whether the caller asked to receive LOB locators.
 
@@ -719,13 +848,6 @@ class OracleSyncStreamSource:
         if fetch_lobs is None:
             fetch_lobs = self._driver.driver_features.get("fetch_lobs")
         return bool(fetch_lobs)
-
-    def close(self, error: bool = False) -> None:
-        cursor = self._cursor
-        self._cursor = None
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                cursor.close()
 
 
 class OracleAsyncStreamSource:
@@ -764,29 +886,6 @@ class OracleAsyncStreamSource:
         await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
 
-    async def _start(self) -> None:
-        try:
-            cursor = self._driver.connection.cursor()
-            self._cursor = cursor
-            cursor.arraysize = self._chunk_size
-            cursor.prefetchrows = self._chunk_size
-            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
-            if self._fetch_lobs is not None:
-                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
-            parameters = await coerce_large_parameters_async(
-                self._driver.connection,
-                self._parameters,
-                clob_type=DB_TYPE_CLOB,
-                blob_type=DB_TYPE_BLOB,
-                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
-                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
-                version_cache=getattr(self._driver, "_oracle_version_cache", None),
-            )
-            await cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
-        except BaseException:
-            await self.close(error=True)
-            raise
-
     async def fetch_chunk(self) -> "list[dict[str, Any]]":
         handler = self._driver.handle_database_exceptions()
         cursor = self._cursor
@@ -812,6 +911,36 @@ class OracleAsyncStreamSource:
         )
         return rows_to_dicts(cast("list[Any]", coerced_rows), column_names)
 
+    async def close(self, error: bool = False) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+    async def _start(self) -> None:
+        try:
+            cursor = self._driver.connection.cursor()
+            self._cursor = cursor
+            cursor.arraysize = self._chunk_size
+            cursor.prefetchrows = self._chunk_size
+            fetch_kwargs = build_fetch_kwargs(self._driver.driver_features)
+            if self._fetch_lobs is not None:
+                fetch_kwargs["fetch_lobs"] = self._fetch_lobs
+            parameters = await coerce_large_parameters_async(
+                self._driver.connection,
+                self._parameters,
+                clob_type=DB_TYPE_CLOB,
+                blob_type=DB_TYPE_BLOB,
+                varchar2_byte_limit=self._driver.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                raw_byte_limit=self._driver.driver_features.get("oracle_raw_byte_limit", 2000),
+                version_cache=getattr(self._driver, "_oracle_version_cache", None),
+            )
+            await cast("Any", cursor).execute(self._sql, parameters or {}, **fetch_kwargs)
+        except BaseException:
+            await self.close(error=True)
+            raise
+
     def _caller_wants_locators(self) -> bool:
         """Report whether the caller asked to receive LOB locators.
 
@@ -823,13 +952,6 @@ class OracleAsyncStreamSource:
         if fetch_lobs is None:
             fetch_lobs = self._driver.driver_features.get("fetch_lobs")
         return bool(fetch_lobs)
-
-    async def close(self, error: bool = False) -> None:
-        cursor = self._cursor
-        self._cursor = None
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                cursor.close()
 
 
 def collect_sync_rows(
@@ -953,11 +1075,29 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> SQLSpec
     if not error_obj:
         return _create_oracle_error(error, None, SQLSpecError, "database error")
 
+    full_code = getattr(error_obj, "full_code", None)
+    if isinstance(full_code, str):
+        dpy_mapping = _DPY_ERROR_CODE_MAPPING.get(full_code)
+        if dpy_mapping:
+            error_class, error_desc = dpy_mapping
+            return _create_oracle_error(error, None, error_class, f"{error_desc} [{full_code}]")
+
     try:
         error_code = error_obj.code
     except AttributeError:
         error_code = None
-    if not error_code:
+
+    if isinstance(error_code, str):
+        dpy_mapping = _DPY_ERROR_CODE_MAPPING.get(error_code)
+        if dpy_mapping:
+            error_class, error_desc = dpy_mapping
+            return _create_oracle_error(error, None, error_class, f"{error_desc} [{error_code}]")
+
+    if not isinstance(error_code, int) or isinstance(error_code, bool) or not error_code:
+        error_text = str(error_obj)
+        for dpy_code, (error_class, error_desc) in _DPY_ERROR_CODE_MAPPING.items():
+            if error_text.startswith(dpy_code):
+                return _create_oracle_error(error, None, error_class, f"{error_desc} [{dpy_code}]")
         return _create_oracle_error(error, None, SQLSpecError, "database error")
 
     mapping = _ERROR_CODE_MAPPING.get(error_code)
@@ -1030,6 +1170,44 @@ class _OracleAsyncStreamDriver(Protocol):
     ) -> Any: ...
 
     def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
+
+
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection parameters.
+    """
+    config = dict(connection_config)
+    if "dsn" not in config:
+        dsn = config.pop("url", None) or config.pop("connection_string", None)
+        if dsn is not None:
+            config["dsn"] = dsn
+    else:
+        config.pop("url", None)
+        config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if "user" not in config and user_alias is not None:
+        config["user"] = user_alias
+    return config
+
+
+def _parse_version_tuple(version: str) -> "tuple[int, int, int]":
+    parts = [int(part) for part in version.split(".") if part.isdigit()]
+    while len(parts) < _VERSION_COMPONENTS:
+        parts.append(0)
+    return parts[0], parts[1], parts[2]
+
+
+ORACLEDB_VERSION: "tuple[int, int, int]" = _parse_version_tuple(oracledb_module.__version__)
 
 
 def _parameter_values_need_coercion(
@@ -1330,13 +1508,21 @@ def _description_requires_lob_coercion(description: "list[Any]") -> bool:
     return False
 
 
+def _format_insert_column(column: str) -> str:
+    """Format a column identifier for INSERT statements, quoting special names."""
+    if _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(column) and column.upper() not in _ORACLE_RESERVED_COLUMN_NAMES:
+        return column
+    escaped = column.replace('"', '""')
+    return f'"{escaped}"'
+
+
 def _row_requires_lob_coercion(row: "tuple[Any, ...]") -> bool:
     """Return True when a row contains readable values that need LOB coercion."""
     for value in row:
         value_type = type(value)
         if value_type in _SCALAR_PASSTHROUGH_TYPES:
             continue
-        if is_readable(value):
+        if is_readable(value) or is_async_readable(value):
             return True
     return False
 
@@ -1363,13 +1549,7 @@ def _coerce_sync_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
             continue
 
         if is_readable(value):
-            try:
-                processed_value = value.read()
-            except Exception:
-                if coerced_values is not None:
-                    coerced_values.append(value)
-                continue
-
+            processed_value = value.read()
             if coerced_values is None:
                 coerced_values = list(row[:index])
             coerced_values.append(processed_value)
@@ -1404,14 +1584,8 @@ async def _coerce_async_row_values(row: "tuple[Any, ...]") -> "tuple[Any, ...]":
                 coerced_values.append(value)
             continue
 
-        if is_readable(value):
-            try:
-                processed_value = await TYPE_CONVERTER.process_lob(value)
-            except Exception:
-                if coerced_values is not None:
-                    coerced_values.append(value)
-                continue
-
+        if is_readable(value) or is_async_readable(value):
+            processed_value = await TYPE_CONVERTER.process_lob(value)
             if coerced_values is None:
                 if processed_value is value:
                     continue
@@ -1445,31 +1619,3 @@ def _create_oracle_error(
     exc = error_class(msg)
     exc.__cause__ = error
     return exc
-
-
-driver_profile = build_profile()
-
-default_statement_config = build_statement_config()
-
-
-def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build a normalized connection configuration dictionary.
-
-    Args:
-        connection_config: Raw connection configuration mapping.
-
-    Returns:
-        Normalized connection parameters.
-    """
-    config = dict(connection_config)
-    if "dsn" not in config:
-        dsn = config.pop("url", None) or config.pop("connection_string", None)
-        if dsn is not None:
-            config["dsn"] = dsn
-    else:
-        config.pop("url", None)
-        config.pop("connection_string", None)
-    user_alias = config.pop("username", None)
-    if "user" not in config and user_alias is not None:
-        config["user"] = user_alias
-    return config

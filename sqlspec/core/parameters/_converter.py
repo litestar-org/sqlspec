@@ -102,6 +102,17 @@ class ParameterConverter:
         )
         return converted_sql, converted_parameters
 
+    def convert_parameter_info_style(
+        self,
+        param_info: "list[ParameterInfo]",
+        target_style: "ParameterStyle",
+        precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
+    ) -> "list[ParameterInfo]":
+        _, converted_param_info = self._render_conversion(
+            "", param_info, target_style, precomputed_plan, collect_metadata=True
+        )
+        return converted_param_info
+
     def _build_conversion_plan(
         self, param_info: "list[ParameterInfo]", target_style: "ParameterStyle"
     ) -> "tuple[list[ParameterInfo], dict[str, int]]":
@@ -175,17 +186,6 @@ class ParameterConverter:
 
         segments.append(sql[last_end:])
         return "".join(segments), converted_param_info
-
-    def convert_parameter_info_style(
-        self,
-        param_info: "list[ParameterInfo]",
-        target_style: "ParameterStyle",
-        precomputed_plan: "tuple[list[ParameterInfo], dict[str, int]] | None" = None,
-    ) -> "list[ParameterInfo]":
-        _, converted_param_info = self._render_conversion(
-            "", param_info, target_style, precomputed_plan, collect_metadata=True
-        )
-        return converted_param_info
 
     def _convert_builtin(
         self,
@@ -433,10 +433,8 @@ class ParameterConverter:
         preserve_original_batch: bool = False,
     ) -> "ConvertedParameters":
         if not parameters or not param_info:
-            # When parameters is falsy, it's either None or empty - return None
             if parameters is None:
                 return None
-            # For empty containers, convert to concrete type
             if isinstance(parameters, Mapping):
                 return dict(parameters)
             if isinstance(parameters, (list, tuple)):
@@ -528,7 +526,6 @@ class ParameterConverter:
 
             return param_values
 
-        # Fallback for non-standard parameters - return None
         return None
 
     @staticmethod
@@ -624,6 +621,41 @@ class ParameterConverter:
 
         msg = f"Missing value for placeholder '{param.placeholder_text}' in statically compiled SQL"
         raise SQLSpecError(msg)
+
+
+def ambiguous_index_placeholder(param_info: "list[ParameterInfo]") -> "ParameterInfo | None":
+    """Return the first ``$n`` / ``:n`` placeholder whose written index is not its slot.
+
+    Only statements that mix index placeholders with another placeholder style are
+    inspected. A slot is the rank of a placeholder among the distinct placeholders of
+    the statement, which is the position a sequence value is bound to.
+    """
+    has_index = False
+    has_other = False
+    for param in param_info:
+        if _explicit_index(param) >= 0:
+            has_index = True
+        else:
+            has_other = True
+    if not (has_index and has_other):
+        return None
+    slots: dict[str, int] = {}
+    for param in _ordered_parameter_info(param_info):
+        key = _parameter_lookup_key(param)
+        if key not in slots:
+            slots[key] = len(slots)
+        written = _explicit_index(param)
+        if written >= 0 and written != slots[key]:
+            return param
+    return None
+
+
+def ambiguous_index_message(param: "ParameterInfo") -> str:
+    return (
+        f"Ambiguous positional binding: index placeholder {param.placeholder_text!r} is mixed with other "
+        "placeholder styles and its index does not match its position among the statement's placeholders. "
+        "Use a single placeholder style, number index placeholders by position, or pass a mapping."
+    )
 
 
 def _placeholder_qmark(_: Any) -> str:
@@ -743,41 +775,6 @@ def _named_placeholder_keys(param_info: "list[ParameterInfo]") -> "set[str]":
             keys.add(param.name)
             keys.add(param.placeholder_text)
     return keys
-
-
-def ambiguous_index_placeholder(param_info: "list[ParameterInfo]") -> "ParameterInfo | None":
-    """Return the first ``$n`` / ``:n`` placeholder whose written index is not its slot.
-
-    Only statements that mix index placeholders with another placeholder style are
-    inspected. A slot is the rank of a placeholder among the distinct placeholders of
-    the statement, which is the position a sequence value is bound to.
-    """
-    has_index = False
-    has_other = False
-    for param in param_info:
-        if _explicit_index(param) >= 0:
-            has_index = True
-        else:
-            has_other = True
-    if not (has_index and has_other):
-        return None
-    slots: dict[str, int] = {}
-    for param in _ordered_parameter_info(param_info):
-        key = _parameter_lookup_key(param)
-        if key not in slots:
-            slots[key] = len(slots)
-        written = _explicit_index(param)
-        if written >= 0 and written != slots[key]:
-            return param
-    return None
-
-
-def ambiguous_index_message(param: "ParameterInfo") -> str:
-    return (
-        f"Ambiguous positional binding: index placeholder {param.placeholder_text!r} is mixed with other "
-        "placeholder styles and its index does not match its position among the statement's placeholders. "
-        "Use a single placeholder style, number index placeholders by position, or pass a mapping."
-    )
 
 
 def _sequence_to_positional(

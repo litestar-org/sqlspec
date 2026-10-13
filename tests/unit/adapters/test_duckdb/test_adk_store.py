@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false
 """Unit tests for DuckDB ADK store extension configuration."""
 
+from datetime import UTC, datetime
 from textwrap import dedent
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
@@ -9,6 +10,7 @@ import pytest
 
 import sqlspec.adapters.duckdb.adk as duckdb_adk
 from sqlspec.adapters.duckdb.adk import DuckdbADKMemoryStore, DuckdbADKStore
+from sqlspec.adapters.duckdb.litestar.store import DuckdbStore
 from sqlspec.config import ADKConfig
 
 
@@ -244,3 +246,62 @@ def test_duckdb_list_sessions_rejects_invalid_options_before_connecting(options:
         store.list_sessions("app", **options)
 
     assert conn.calls == []
+
+
+def test_duckdb_adk_delete_helpers_use_returning_row_count() -> None:
+    """_delete_expired_events, _delete_idle_sessions, and _delete_idle_user_states use DELETE ... RETURNING 1."""
+
+    class _DeleteConn:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def execute(self, sql: str, params: Any = None) -> "_DeleteConn":
+            self.queries.append(" ".join(sql.split()))
+            return self
+
+        def fetchall(self) -> list[tuple[int]]:
+            return [(1,), (1,)]
+
+        def commit(self) -> None:
+            pass
+
+        def __enter__(self) -> "Self":
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+    conn = _DeleteConn()
+    config = _mock_config()
+    config.provide_connection = lambda *_a, **_k: conn
+    store = DuckdbADKStore(config)
+    cutoff = datetime.now(UTC)
+
+    assert store._delete_expired_events(cutoff) == 2
+    assert store._delete_idle_sessions(cutoff) == 2
+    assert store._delete_idle_user_states(cutoff) == 2
+    assert all("RETURNING 1" in q for q in conn.queries if q.startswith("DELETE FROM adk_session"))
+
+
+def test_duckdb_adk_ensure_fts_extension_loads_before_installing() -> None:
+    """_ensure_fts_extension should try LOAD fts first and skip INSTALL fts when already installed."""
+    store = DuckdbADKMemoryStore(_mock_config({"memory_use_fts": True}))
+    executed: list[str] = []
+
+    class _Conn:
+        def execute(self, sql: str) -> None:
+            executed.append(sql)
+
+    assert store._ensure_fts_extension(_Conn()) is True
+    assert executed == ["LOAD fts"]
+
+
+def test_duckdb_litestar_store_uses_timestamptz_and_normalizes_utc() -> None:
+    """DuckdbStore DDL and queries use TIMESTAMPTZ/CURRENT_TIMESTAMP and normalize naive timestamps to UTC."""
+    store = DuckdbStore(_mock_config())
+    ddl = store._table_ddl()
+    assert "TIMESTAMPTZ" in ddl
+    naive = datetime(2026, 1, 1, 12, 0, 0)
+    converted = store._timestamp_to_datetime(naive)
+    assert converted is not None
+    assert converted.tzinfo == UTC

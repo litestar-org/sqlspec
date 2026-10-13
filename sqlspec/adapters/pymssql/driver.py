@@ -12,12 +12,16 @@ from sqlspec.adapters.pymssql._typing import (
     PymssqlSessionContext,
 )
 from sqlspec.adapters.pymssql.core import (
+    build_insert_statement,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    escape_literal_percent,
+    format_identifier,
     normalize_execute_many_parameters,
     normalize_execute_parameters,
+    quote_bracket_identifier,
     resolve_column_names,
     resolve_many_rowcount,
     resolve_rowcount,
@@ -39,6 +43,11 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sqlspec.adapters.pymssql._typing import PymssqlQueryParams as QueryParams
+    from sqlspec.builder import QueryBuilder
+    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementFilter
+    from sqlspec.driver import CachedQuery
+    from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
+    from sqlspec.typing import StatementParameters
 
 __all__ = ("PymssqlCursor", "PymssqlDriver", "PymssqlExceptionHandler", "PymssqlSessionContext")
 
@@ -78,7 +87,11 @@ class PymssqlStreamSource:
             cursor = cursor_manager.__enter__()
             handler = self._driver.handle_database_exceptions()
             with handler:
-                cursor.execute(self._sql, normalize_execute_parameters(self._parameters))
+                normalized_params = normalize_execute_parameters(self._parameters)
+                sql = escape_literal_percent(
+                    self._sql, normalized_params, self._driver.statement_config.parameter_validator
+                )
+                cursor.execute(sql, normalized_params)
             self._driver._check_pending_exception(handler)
         except BaseException:
             with contextlib.suppress(Exception):
@@ -142,9 +155,17 @@ class PymssqlDriver(SyncDriverAdapterBase):
         self._transaction_active = False
         self._explicit_transaction = False
 
+    @property
+    def data_dictionary(self) -> "PymssqlSyncDataDictionary":
+        if self._data_dictionary is None:
+            self._data_dictionary = PymssqlSyncDataDictionary()
+        return self._data_dictionary
+
     def dispatch_execute(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
-        cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
+        normalized_params = normalize_execute_parameters(prepared_parameters)
+        sql = escape_literal_percent(sql, normalized_params, self.statement_config.parameter_validator)
+        cursor.execute(sql, normalized_params)
 
         if statement.returns_rows():
             fetched_data = cursor.fetchall()
@@ -165,6 +186,7 @@ class PymssqlDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
 
         prepared_parameters = normalize_execute_many_parameters(prepared_parameters)
+        sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
         cursor.executemany(sql, cast("Sequence[QueryParams]", prepared_parameters))
 
@@ -174,10 +196,12 @@ class PymssqlDriver(SyncDriverAdapterBase):
     def dispatch_execute_script(self, cursor: "PymssqlRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
+        normalized_params = normalize_execute_parameters(prepared_parameters)
 
         successful_count = 0
         for stmt in statements:
-            cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            stmt_sql = escape_literal_percent(stmt, normalized_params, self.statement_config.parameter_validator)
+            cursor.execute(stmt_sql, normalized_params)
             successful_count += 1
         return self.create_execution_result(
             cursor, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
@@ -253,59 +277,158 @@ class PymssqlDriver(SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Point the database user's default schema at the migration schema, remembering the prior one."""
-        with self.with_cursor(self.connection) as cursor:
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler, self.with_cursor(self.connection) as cursor:
             if self._migration_schema_restore is None:
                 cursor.execute("SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;")
                 row: Any = cursor.fetchone()
+                if row is None:
+                    return
                 user_name, current_schema = (
                     (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
                 )
+                resolved_schema = str(current_schema or "dbo")
                 cursor.execute(_alter_default_schema_sql(str(user_name), schema))
-                self._migration_schema_restore = (str(user_name), str(current_schema))
-                return
-            cursor.execute(_alter_default_schema_sql(self._migration_schema_restore[0], schema))
+                self._migration_schema_restore = (str(user_name), resolved_schema)
+            else:
+                cursor.execute(_alter_default_schema_sql(self._migration_schema_restore[0], schema))
+        self._check_pending_exception(exc_handler)
 
     def reset_migration_session_schema(self) -> None:
         """Restore the user's default schema captured by set_migration_session_schema and commit it."""
         if self._migration_schema_restore is None:
             return
         user_name, previous_schema = self._migration_schema_restore
-        with self.with_cursor(self.connection) as cursor:
-            cursor.execute(_alter_default_schema_sql(user_name, previous_schema))
-        self.connection.commit()
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
+            with self.with_cursor(self.connection) as cursor:
+                cursor.execute(_alter_default_schema_sql(user_name, previous_schema))
+            self.connection.commit()
+        self._check_pending_exception(exc_handler)
         self._migration_schema_restore = None
 
     def has_schema(self, schema: str) -> bool:
         """Return whether the specified schema exists."""
-        with self.with_cursor(self.connection) as cursor:
+        result = False
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler, self.with_cursor(self.connection) as cursor:
             cursor.execute("SELECT 1 FROM sys.schemas WHERE name = %s", (schema,))
-            return cursor.fetchone() is not None
+            result = cursor.fetchone() is not None
+        self._check_pending_exception(exc_handler)
+        return result
 
-    @property
-    def data_dictionary(self) -> "PymssqlSyncDataDictionary":
-        if self._data_dictionary is None:
-            self._data_dictionary = PymssqlSyncDataDictionary()
-        return self._data_dictionary
+    def select_to_storage(
+        self,
+        statement: "Statement | QueryBuilder | SQL | str",
+        destination: "StorageDestination",
+        /,
+        *parameters: "StatementParameters | StatementFilter",
+        statement_config: "StatementConfig | None" = None,
+        partitioner: "dict[str, object] | None" = None,
+        format_hint: "StorageFormat | None" = None,
+        telemetry: "StorageTelemetry | None" = None,
+        **kwargs: Any,
+    ) -> "StorageBridgeJob":
+        """Execute a query and write the Arrow result to storage."""
+        self._require_capability("arrow_export_enabled")
+        arrow_result = self.select_to_arrow(statement, *parameters, statement_config=statement_config, **kwargs)
+        pipeline = self._storage_pipeline()
+        telemetry_payload = self._write_storage_result(
+            arrow_result, destination, format_hint=format_hint, pipeline=pipeline
+        )
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_arrow(
+        self,
+        table: str,
+        source: "ArrowResult | Any",
+        *,
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+        telemetry: "StorageTelemetry | None" = None,
+    ) -> "StorageBridgeJob":
+        """Load Arrow data into the target table via executemany."""
+        self._require_capability("arrow_import_enabled")
+        arrow_table = self._coerce_arrow_table(source)
+        if overwrite:
+            statement = f"DELETE FROM {format_identifier(table)}"
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                cursor.execute(statement)
+            self._check_pending_exception(exc_handler)
+
+        columns, records = self._arrow_table_to_rows(arrow_table)
+        if records:
+            insert_sql = escape_literal_percent(
+                build_insert_statement(table, columns), records, self.statement_config.parameter_validator
+            )
+            needs_preparation = self._arrow_rows_need_preparation(arrow_table)
+            prepared_records = (
+                self.prepare_driver_parameters(records, self.statement_config, is_many=True)
+                if needs_preparation
+                else records
+            )
+            normalized_records = normalize_execute_many_parameters(prepared_records)
+            exc_handler = self.handle_database_exceptions()
+            with exc_handler, self.with_cursor(self.connection) as cursor:
+                cursor.executemany(insert_sql, cast("Sequence[QueryParams]", normalized_records))
+            self._check_pending_exception(exc_handler)
+
+        telemetry_payload = self._ingest_telemetry(arrow_table)
+        telemetry_payload["destination"] = table
+        self._attach_partition_telemetry(telemetry_payload, partitioner)
+        return self._storage_job(telemetry_payload, telemetry)
+
+    def load_from_storage(
+        self,
+        table: str,
+        source: "StorageDestination",
+        *,
+        file_format: "StorageFormat",
+        partitioner: "dict[str, object] | None" = None,
+        overwrite: bool = False,
+    ) -> "StorageBridgeJob":
+        """Load staged artifacts from storage into the target SQL Server table."""
+        arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
+        return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
     def collect_rows(self, cursor: "PymssqlRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        column_names = resolve_column_names(cursor.description or None, self._column_name_cache)
-        return fetched, column_names, len(fetched)
+        rows, column_names, _row_format = collect_rows(fetched, cursor.description or None, self._column_name_cache)
+        return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: "PymssqlRawCursor") -> int:
         return resolve_rowcount(cursor)
+
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        normalized_params = normalize_execute_parameters(params) if isinstance(params, list) else params
+        if not normalized_params or (
+            "%" in cached.compiled_sql
+            and escape_literal_percent(
+                cached.compiled_sql, normalized_params, self.statement_config.parameter_validator
+            )
+            != cached.compiled_sql
+        ):
+            statement = self._cached_statement(
+                sql,
+                normalized_params,
+                cached,
+                normalized_params or None,
+                params_are_simple=True,
+                compiled_sql=cached.compiled_sql,
+            )
+            return self._execute_cached_statement(statement)
+        return super()._execute_cache_hit(sql, normalized_params, cached)
 
     def _connection_in_transaction(self) -> bool:
         """Return whether a transaction opened by this driver remains active."""
         return self._transaction_active
 
 
-def _quote_tsql_identifier(identifier: str) -> str:
-    """Bracket-quote an identifier so the statement is valid regardless of the session's QUOTED_IDENTIFIER setting."""
-    return f"[{identifier.replace(']', ']]')}]"
-
-
 def _alter_default_schema_sql(user_name: str, schema: str) -> str:
-    return f"ALTER USER {_quote_tsql_identifier(user_name)} WITH DEFAULT_SCHEMA = {_quote_tsql_identifier(schema)};"
+    return f"ALTER USER {quote_bracket_identifier(user_name)} WITH DEFAULT_SCHEMA = {quote_bracket_identifier(schema)};"
 
 
 register_driver_profile("pymssql", driver_profile)

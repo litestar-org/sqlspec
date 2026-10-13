@@ -14,17 +14,17 @@ __all__ = ("Db2AsyncStore", "Db2SyncStore")
 
 
 def session_catalog_names(table: str) -> "tuple[str | None, str]":
-    """Return the catalog schema and table name for an unquoted session table name.
+    """Return the catalog schema and table name for a session table name.
 
-    Session DDL writes the table name unquoted, so Db2 folds it to uppercase.
+    Unquoted table names are upper-folded while quoted identifiers keep their case.
 
     Args:
         table: Session table name.
 
     Returns:
-        The schema, or ``None`` for ``CURRENT SCHEMA``, and the upper-folded table name.
+        The schema, or ``None`` for ``CURRENT SCHEMA``, and the catalog-folded table name.
     """
-    return split_db2_table_name(table.upper())
+    return split_db2_table_name(table)
 
 
 def session_index_name(table: str) -> str:
@@ -210,28 +210,6 @@ def drop_session_table_sql(table: str) -> str:
         The DROP TABLE statement.
     """
     return f"DROP TABLE {table}"
-
-
-def _coerce_bytes(value: Any) -> "bytes | None":
-    """Coerce row data into bytes if not None."""
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, memoryview):
-        return value.tobytes()
-    return bytes(value)
-
-
-def _normalize_utc(dt: Any) -> "datetime | None":
-    """Return a stored naive-UTC timestamp as an aware UTC datetime."""
-    if dt is None:
-        return None
-    if isinstance(dt, datetime):
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=UTC)
-        return dt.astimezone(UTC)
-    return None
 
 
 class Db2SyncStore(BaseSQLSpecStore["Db2SyncConfig"]):
@@ -463,3 +441,25 @@ class Db2AsyncStore(BaseSQLSpecStore["Db2AsyncConfig"]):
                 await driver.execute(session_index_ddl(self._table_name))
             await driver.commit()
         self._log_table_created()
+
+
+def _coerce_bytes(value: Any) -> "bytes | None":
+    """Coerce row data into bytes if not None."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    return bytes(value)
+
+
+def _normalize_utc(dt: Any) -> "datetime | None":
+    """Return a stored naive-UTC timestamp as an aware UTC datetime."""
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    return None

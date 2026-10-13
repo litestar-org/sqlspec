@@ -127,13 +127,6 @@ class DuckDBConnectionPool:
             return ":memory:"
         return str(db)
 
-    def _create_connection(self) -> DuckDBConnection:
-        """Create a pool-owned connection and record it for shutdown."""
-        connection = self.new_connection(record_thread_state=True)
-        with self._lock:
-            self._connection_registry.add(connection)
-        return connection
-
     def new_connection(self, record_thread_state: bool = False) -> DuckDBConnection:
         """Open a standalone connection with extensions and secrets applied.
 
@@ -233,12 +226,96 @@ class DuckDBConnectionPool:
         ]
 
         if self._on_connection_create:
-            self._on_connection_create(connection)
+            modified = self._on_connection_create(connection)
+            if modified is not None:
+                connection = modified
         storage_protocols.update(connection.list_filesystems())
         if record_thread_state:
             self._thread_local.storage_extensions = frozenset(loaded_extensions)
             self._thread_local.storage_secrets = tuple(created_secrets)
             self._thread_local.storage_protocols = frozenset(storage_protocols)
+        return connection
+
+    @contextmanager
+    def get_connection(self) -> "Generator[DuckDBConnection, None, None]":
+        """Get a thread-local connection.
+
+        Each thread gets its own dedicated DuckDB connection to prevent
+        thread-safety issues with concurrent cursor operations.
+
+        Re-entrant checkouts on the same thread reuse the active connection
+        without committing, rolling back, or closing on inner exits.
+
+        Yields:
+            DuckDBConnection: A thread-local connection.
+        """
+        connection = self._get_thread_connection()
+        depth = int(getattr(self._thread_local, "depth", 0))
+        self._thread_local.depth = depth + 1
+        try:
+            yield connection
+        except Exception:
+            if depth == 0:
+                with suppress(Exception):
+                    connection.rollback()
+                if not self._is_memory_db:
+                    self._close_thread_connection()
+            raise
+        else:
+            if depth == 0:
+                try:
+                    connection.commit()
+                except Exception:
+                    with suppress(Exception):
+                        connection.rollback()
+                    if not self._is_memory_db:
+                        self._close_thread_connection()
+                    raise
+        finally:
+            self._thread_local.depth = depth
+
+    def close(self) -> None:
+        """Close every connection this pool opened, on any thread."""
+        self._close_thread_connection()
+        with self._lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+            self._generation += 1
+        for connection in orphaned:
+            with suppress(Exception):
+                connection.close()
+
+    def size(self) -> int:
+        """Get current pool size (always 1 for thread-local)."""
+        return 1 if "connection" in self._thread_local.__dict__ else 0
+
+    def checked_out(self) -> int:
+        """Get number of checked out connections (always 0 for thread-local)."""
+        return 0
+
+    def acquire(self) -> DuckDBConnection:
+        """Acquire a thread-local connection.
+
+        Each thread gets its own dedicated DuckDB connection to prevent
+        thread-safety issues with concurrent cursor operations.
+
+        Returns:
+            DuckDBConnection: A thread-local connection
+        """
+        return self._get_thread_connection()
+
+    def release(self, connection: DuckDBConnection) -> None:
+        """Release a connection (no-op for thread-local connections).
+
+        Args:
+            connection: The connection to release (ignored)
+        """
+
+    def _create_connection(self) -> DuckDBConnection:
+        """Create a pool-owned connection and record it for shutdown."""
+        connection = self.new_connection(record_thread_state=True)
+        with self._lock:
+            self._connection_registry.add(connection)
         return connection
 
     def _storage_settings(self, connection: DuckDBConnection) -> "dict[str, Any]":
@@ -371,76 +448,6 @@ class DuckDBConnectionPool:
         except Exception:
             return False
         return True
-
-    @contextmanager
-    def get_connection(self) -> "Generator[DuckDBConnection, None, None]":
-        """Get a thread-local connection.
-
-        Each thread gets its own dedicated DuckDB connection to prevent
-        thread-safety issues with concurrent cursor operations.
-
-        For file-based databases, the connection is closed when the context
-        manager exits to release DuckDB's file lock, allowing subsequent
-        connections with different configurations.
-
-        For in-memory databases, connections are kept alive to preserve data,
-        as in-memory data is lost when the last connection closes.
-
-        Yields:
-            DuckDBConnection: A thread-local connection.
-        """
-        connection = self._get_thread_connection()
-        try:
-            yield connection
-        except Exception:
-            with suppress(Exception):
-                connection.rollback()
-            if not self._is_memory_db:
-                self._close_thread_connection()
-            raise
-        else:
-            try:
-                connection.commit()
-            finally:
-                if not self._is_memory_db:
-                    self._close_thread_connection()
-
-    def close(self) -> None:
-        """Close every connection this pool opened, on any thread."""
-        self._close_thread_connection()
-        with self._lock:
-            orphaned = list(self._connection_registry)
-            self._connection_registry.clear()
-            self._generation += 1
-        for connection in orphaned:
-            with suppress(Exception):
-                connection.close()
-
-    def size(self) -> int:
-        """Get current pool size (always 1 for thread-local)."""
-        return 1 if "connection" in self._thread_local.__dict__ else 0
-
-    def checked_out(self) -> int:
-        """Get number of checked out connections (always 0 for thread-local)."""
-        return 0
-
-    def acquire(self) -> DuckDBConnection:
-        """Acquire a thread-local connection.
-
-        Each thread gets its own dedicated DuckDB connection to prevent
-        thread-safety issues with concurrent cursor operations.
-
-        Returns:
-            DuckDBConnection: A thread-local connection
-        """
-        return self._get_thread_connection()
-
-    def release(self, connection: DuckDBConnection) -> None:
-        """Release a connection (no-op for thread-local connections).
-
-        Args:
-            connection: The connection to release (ignored)
-        """
 
 
 def _validate_sql_identifier(value: str, field_name: str) -> None:

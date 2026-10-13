@@ -2,11 +2,13 @@
 
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner.adk.store import (
     _DDL_TIMEOUT_SECONDS,
     SPANNER_PARAM_TYPES,
     _adk_config,
+    _extract_spanner_json_codecs,
     _is_spanner_table_missing,
     _json_param_type,
     _run_read_async,
@@ -14,19 +16,23 @@ from sqlspec.adapters.spanner.adk.store import (
     _SpannerAsyncUpdateJob,
     _SpannerReadProtocol,
     _SpannerSyncUpdateJob,
+    _SpannerWriteTransactionProtocol,
 )
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.spanner.core import (
+    _convert_json_row_value,
+    create_mapped_exception,
     execute_ddl_async,
     execute_ddl_sync,
     list_existing_table_names_async,
     list_existing_table_names_sync,
 )
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.extensions.adk.artifact.store import BaseAsyncADKArtifactStore, BaseSyncADKArtifactStore
-from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import datetime
 
     from sqlspec.adapters.spanner._typing import (
@@ -49,6 +55,8 @@ class _SpannerADKArtifactStoreMixin:
     if TYPE_CHECKING:
         _artifact_table: str
         _artifact_row_deletion_policy: str
+        _json_serializer: Callable[[Any], str]
+        _json_deserializer: Callable[[str], Any]
 
     def _artifact_table_ddl(self) -> "list[str]":
         ddl = f"""CREATE TABLE IF NOT EXISTS {self._artifact_table} (
@@ -99,7 +107,7 @@ class _SpannerADKArtifactStoreMixin:
             "version": int(record["version"]),
             "mime_type": record["mime_type"],
             "canonical_uri": record["canonical_uri"],
-            "custom_metadata": to_json(metadata) if metadata is not None else None,
+            "custom_metadata": self._json_serializer(metadata) if metadata is not None else None,
             "created_at": record["created_at"],
         }
         types: dict[str, Any] = {
@@ -293,14 +301,16 @@ ORDER BY app_name ASC, user_id ASC, session_id ASC, filename ASC, version ASC"""
     def _decode_metadata(self, value: Any) -> "dict[str, Any] | None":
         if value is None:
             return None
-        if isinstance(value, dict):
-            return cast("dict[str, Any]", value)
-        raw = getattr(value, "serialize", None)
-        if callable(raw):
-            value = raw()
-        if isinstance(value, str):
-            return cast("dict[str, Any]", from_json(value)) if value else None
-        return cast("dict[str, Any]", from_json(str(value)))
+        if isinstance(value, str) and not value:
+            return None
+        decoded = _convert_json_row_value(value, json_deserializer=self._json_deserializer)
+        if decoded is None:
+            return None
+        if isinstance(decoded, dict):
+            return cast("dict[str, Any]", decoded)
+        if isinstance(decoded, str):
+            return cast("dict[str, Any]", self._json_deserializer(decoded)) if decoded else None
+        return cast("dict[str, Any]", self._json_deserializer(str(decoded)))
 
     def _rows_to_artifacts(self, rows: "list[Any]") -> "list[StoredArtifact]":
         return [
@@ -322,7 +332,7 @@ ORDER BY app_name ASC, user_id ASC, session_id ASC, filename ASC, version ASC"""
 class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _SpannerADKArtifactStoreMixin):
     """Spanner ADK artifact store backed by synchronous Spanner client."""
 
-    __slots__ = ("_artifact_row_deletion_policy",)
+    __slots__ = ("_artifact_row_deletion_policy", "_json_deserializer", "_json_serializer")
 
     connector_name: ClassVar[str] = "spanner"
 
@@ -331,23 +341,33 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         self._artifact_row_deletion_policy = _spanner_row_deletion_policy(
             _adk_config(config), "artifact_ttl_seconds", "created_at"
         )
+        self._json_serializer, self._json_deserializer = _extract_spanner_json_codecs(config)
 
     def create_table(self) -> None:
         """Create the artifact versions table if it does not exist."""
         if self._artifact_table in self._existing_tables():
             return
-        execute_ddl_sync(self._database(), self._artifact_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
+        try:
+            execute_ddl_sync(self._database(), self._artifact_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def drop_table(self) -> None:
         """Drop the artifact versions table if it exists."""
         if self._artifact_table not in self._existing_tables():
             return
-        execute_ddl_sync(self._database(), self._build_drop_artifact_table_sql(), timeout=_DDL_TIMEOUT_SECONDS)
+        try:
+            execute_ddl_sync(self._database(), self._build_drop_artifact_table_sql(), timeout=_DDL_TIMEOUT_SECONDS)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def insert_artifact(self, record: StoredArtifact) -> None:
         """Insert an artifact version metadata row."""
         sql, params, types = self._build_insert_artifact_statement(record)
-        cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types))
+        try:
+            cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None, version: "int | None" = None
@@ -356,9 +376,11 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         sql, params, types = self._build_get_artifact_query(app_name, user_id, filename, session_id, version)
         try:
             rows = self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return None
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         if not rows:
             return None
@@ -371,9 +393,11 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         sql, params, types = self._build_list_artifact_versions_query(app_name, user_id, filename, session_id)
         try:
             rows = self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         return self._rows_to_artifacts(rows)
 
@@ -382,9 +406,11 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         sql, params, types = self._build_list_artifact_keys_query(app_name, user_id, session_id)
         try:
             rows = self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         return [str(row[0]) for row in rows]
 
@@ -396,7 +422,10 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
             app_name, user_id, filename, session_id
         )
         job = _SpannerSyncArtifactDeleteJob(select_sql, delete_sql, params, types)
-        rows = cast("list[Any]", cast("Any", self._database()).run_in_transaction(job))
+        try:
+            rows = cast("list[Any]", cast("Any", self._database()).run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
         return self._rows_to_artifacts(rows)
 
     def get_next_version(self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None) -> int:
@@ -404,9 +433,11 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         sql, params, types = self._build_get_next_version_query(app_name, user_id, filename, session_id)
         try:
             rows = self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return 0
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         if not rows or rows[0][0] is None:
             return 0
@@ -416,27 +447,36 @@ class SpannerSyncADKArtifactStore(BaseSyncADKArtifactStore[SpannerSyncConfig], _
         """Delete artifact version rows created before a cutoff and return them."""
         select_sql, delete_sql, params, types = self._build_delete_artifacts_older_than_statements(before, app_name)
         job = _SpannerSyncArtifactDeleteJob(select_sql, delete_sql, params, types)
-        rows = cast("list[Any]", cast("Any", self._database()).run_in_transaction(job))
+        try:
+            rows = cast("list[Any]", cast("Any", self._database()).run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
         return self._rows_to_artifacts(rows)
 
     def _database(self) -> "SpannerDatabase":
         return self._config.get_database()
 
     def _existing_tables(self) -> "set[str]":
-        return list_existing_table_names_sync(self._database())
+        try:
+            return list_existing_table_names_sync(self._database())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
-        with self._config.provide_connection() as snapshot:
-            reader = cast("_SpannerReadProtocol", snapshot)
-            return list(reader.execute_sql(sql, params=params, param_types=types))
+        try:
+            with self._config.provide_connection(transaction=False) as snapshot:
+                reader = cast("_SpannerReadProtocol", snapshot)
+                return list(reader.execute_sql(sql, params=params, param_types=types))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
 
 class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig], _SpannerADKArtifactStoreMixin):
     """Spanner ADK artifact store backed by asynchronous Spanner client."""
 
-    __slots__ = ("_artifact_row_deletion_policy",)
+    __slots__ = ("_artifact_row_deletion_policy", "_json_deserializer", "_json_serializer")
 
     connector_name: ClassVar[str] = "spanner"
 
@@ -445,26 +485,36 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         self._artifact_row_deletion_policy = _spanner_row_deletion_policy(
             _adk_config(config), "artifact_ttl_seconds", "created_at"
         )
+        self._json_serializer, self._json_deserializer = _extract_spanner_json_codecs(config)
 
     async def create_table(self) -> None:
         """Create the artifact versions table if it does not exist."""
         if self._artifact_table in await self._existing_tables():
             return
-        await execute_ddl_async(await self._database(), self._artifact_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
+        try:
+            await execute_ddl_async(await self._database(), self._artifact_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def drop_table(self) -> None:
         """Drop the artifact versions table if it exists."""
         if self._artifact_table not in await self._existing_tables():
             return
-        await execute_ddl_async(
-            await self._database(), self._build_drop_artifact_table_sql(), timeout=_DDL_TIMEOUT_SECONDS
-        )
+        try:
+            await execute_ddl_async(
+                await self._database(), self._build_drop_artifact_table_sql(), timeout=_DDL_TIMEOUT_SECONDS
+            )
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def insert_artifact(self, record: StoredArtifact) -> None:
         """Insert an artifact version metadata row."""
         sql, params, types = self._build_insert_artifact_statement(record)
         database = await self._database()
-        await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types))
+        try:
+            await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def get_artifact(
         self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None, version: "int | None" = None
@@ -473,9 +523,11 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         sql, params, types = self._build_get_artifact_query(app_name, user_id, filename, session_id, version)
         try:
             rows = await self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return None
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         if not rows:
             return None
@@ -488,9 +540,11 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         sql, params, types = self._build_list_artifact_versions_query(app_name, user_id, filename, session_id)
         try:
             rows = await self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         return self._rows_to_artifacts(rows)
 
@@ -499,9 +553,11 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         sql, params, types = self._build_list_artifact_keys_query(app_name, user_id, session_id)
         try:
             rows = await self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         return [str(row[0]) for row in rows]
 
@@ -514,7 +570,10 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         )
         database = await self._database()
         job = _SpannerAsyncArtifactDeleteJob(select_sql, delete_sql, params, types)
-        rows = cast("list[Any]", await database.run_in_transaction(job))
+        try:
+            rows = cast("list[Any]", await database.run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
         return self._rows_to_artifacts(rows)
 
     async def get_next_version(
@@ -524,9 +583,11 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         sql, params, types = self._build_get_next_version_query(app_name, user_id, filename, session_id)
         try:
             rows = await self._run_read(sql, params, types)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._artifact_table):
                 return 0
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
         if not rows or rows[0][0] is None:
             return 0
@@ -539,14 +600,20 @@ class SpannerAsyncADKArtifactStore(BaseAsyncADKArtifactStore[SpannerAsyncConfig]
         select_sql, delete_sql, params, types = self._build_delete_artifacts_older_than_statements(before, app_name)
         database = await self._database()
         job = _SpannerAsyncArtifactDeleteJob(select_sql, delete_sql, params, types)
-        rows = cast("list[Any]", await database.run_in_transaction(job))
+        try:
+            rows = cast("list[Any]", await database.run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
         return self._rows_to_artifacts(rows)
 
     async def _database(self) -> "SpannerAsyncDatabase":
         return await self._config.get_database()
 
     async def _existing_tables(self) -> "set[str]":
-        return await list_existing_table_names_async(await self._database())
+        try:
+            return await list_existing_table_names_async(await self._database())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -573,7 +640,9 @@ class _SpannerSyncArtifactDeleteJob:
         )
         if not rows:
             return []
-        cast("Any", transaction).execute_update(self._delete_sql, params=self._params, param_types=self._types)
+        cast("_SpannerWriteTransactionProtocol", transaction).execute_update(
+            self._delete_sql, params=self._params, param_types=self._types
+        )
         return rows
 
 

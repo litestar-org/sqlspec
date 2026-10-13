@@ -186,8 +186,15 @@ class PsycopgAsyncListenerHub:
                 await connection_cm.__aexit__(None, None, None)
             msg = "Psycopg async adapter did not yield a connection"
             raise ImproperConfigurationError(msg)
-        with contextlib.suppress(Exception):
+        try:
+            if not getattr(connection, "autocommit", True):
+                with contextlib.suppress(Exception):
+                    await connection.rollback()
             await connection.set_autocommit(True)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await connection_cm.__aexit__(None, None, None)
+            raise
         self._connection_cm = connection_cm
         self._connection = connection
         try:
@@ -247,7 +254,7 @@ class PsycopgAsyncListenerHub:
         self._record_queue_depth()
 
     def _record_queue_depth(self) -> None:
-        depth = sum(queue.qsize() for queues in self._queues.values() for queue in queues.values())
+        depth = sum(queue.qsize() for queues in list(self._queues.values()) for queue in list(queues.values()))
         self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
 
 
@@ -285,7 +292,9 @@ class PsycopgSyncListenerHub:
         self._connection: Any | None = None
         self._stopping = threading.Event()
         self._shutting_down = False
-        self._command_queue: stdlib_queue.Queue[tuple[str, str, threading.Event]] = stdlib_queue.Queue()
+        self._command_queue: stdlib_queue.Queue[tuple[str, str, threading.Event, list[BaseException]]] = (
+            stdlib_queue.Queue()
+        )
         self._worker_thread: threading.Thread | None = None
         self._pool_destroying_registered = False
 
@@ -336,7 +345,7 @@ class PsycopgSyncListenerHub:
             channels = list(self._queues.keys())
             worker_thread = self._worker_thread
             self._queues.clear()
-            self._record_queue_depth()
+            self._record_queue_depth_locked()
             self._connection_cm = None
             self._worker_thread = None
         if worker_thread is not None:
@@ -403,7 +412,15 @@ class PsycopgSyncListenerHub:
                 connection_cm.__exit__(None, None, None)
             msg = "Psycopg sync adapter did not yield a connection"
             raise ImproperConfigurationError(msg)
-        connection.autocommit = True
+        try:
+            if not getattr(connection, "autocommit", True):
+                with contextlib.suppress(Exception):
+                    connection.rollback()
+            connection.autocommit = True
+        except BaseException:
+            with contextlib.suppress(Exception):
+                connection_cm.__exit__(None, None, None)
+            raise
         self._connection_cm = connection_cm
         self._connection = connection
         self._worker_thread = threading.Thread(
@@ -433,14 +450,26 @@ class PsycopgSyncListenerHub:
 
     def _submit(self, op: str, channel: str, *, timeout: "float | None" = None) -> None:
         done = threading.Event()
-        self._command_queue.put((op, channel, done))
-        done.wait(timeout=timeout)
+        error_box: list[BaseException] = []
+        self._command_queue.put((op, channel, done, error_box))
+        if timeout is not None:
+            done.wait(timeout=timeout)
+        else:
+            while not done.wait(timeout=0.05):
+                worker = self._worker_thread
+                if worker is None or not worker.is_alive():
+                    break
+        if error_box:
+            raise error_box[0]
 
     def _worker(
-        self, stopping: threading.Event, command_queue: "stdlib_queue.Queue[tuple[str, str, threading.Event]]"
+        self,
+        stopping: threading.Event,
+        command_queue: "stdlib_queue.Queue[tuple[str, str, threading.Event, list[BaseException]]]",
     ) -> None:
         connection = self._connection
         if connection is None or not has_notifies(connection):
+            self._drain_commands(connection, command_queue, stopping)
             return
         while not stopping.is_set():
             self._drain_commands(connection, command_queue, stopping)
@@ -460,22 +489,29 @@ class PsycopgSyncListenerHub:
     def _drain_commands(
         self,
         connection: Any,
-        command_queue: "stdlib_queue.Queue[tuple[str, str, threading.Event]]",
+        command_queue: "stdlib_queue.Queue[tuple[str, str, threading.Event, list[BaseException]]]",
         stopping: threading.Event,
     ) -> None:
         while True:
             try:
-                op, channel, done = command_queue.get_nowait()
+                op, channel, done, error_box = command_queue.get_nowait()
             except stdlib_queue.Empty:
                 return
+            if op == "listen" and connection is None:
+                error_box.append(RuntimeError("Psycopg sync listener connection is not available"))
+                done.set()
+                continue
             try:
-                if op == "listen":
+                if op == "listen" and connection is not None:
                     connection.execute(_listen_statement(channel))
                 elif op == "unlisten":
                     with contextlib.suppress(Exception):
-                        connection.execute(_unlisten_statement(channel))
+                        if connection is not None:
+                            connection.execute(_unlisten_statement(channel))
                 elif op == "stop":
                     stopping.set()
+            except Exception as exc:
+                error_box.append(exc)
             finally:
                 done.set()
 
@@ -490,9 +526,13 @@ class PsycopgSyncListenerHub:
                 self._config.get_observability_runtime().increment_metric("events.listener.queue.dropped")
         self._record_queue_depth()
 
-    def _record_queue_depth(self) -> None:
-        depth = sum(queue.qsize() for queues in self._queues.values() for queue in queues.values())
+    def _record_queue_depth_locked(self) -> None:
+        depth = sum(queue.qsize() for queues in list(self._queues.values()) for queue in list(queues.values()))
         self._config.get_observability_runtime().record_metric("events.listener.queue.depth", depth)
+
+    def _record_queue_depth(self) -> None:
+        with self._lock:
+            self._record_queue_depth_locked()
 
 
 def _record_listener_lifecycle(

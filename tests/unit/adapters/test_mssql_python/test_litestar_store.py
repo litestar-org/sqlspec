@@ -133,7 +133,7 @@ async def test_mssql_python_store_create_table_bridges_sync_session(monkeypatch:
     await store.create_table()
 
     assert len(session.scripts) == 1
-    assert "CREATE TABLE mssql_sessions" in session.scripts[0]
+    assert "CREATE TABLE [dbo].[mssql_sessions]" in session.scripts[0]
     assert session.commits == 1
 
 
@@ -145,7 +145,7 @@ async def test_mssql_python_store_set_uses_merge_with_positional_parameters() ->
     await store.set("session-1", "payload", expires_in=60)
 
     sql, parameters = connection.executed[0]
-    assert "MERGE INTO mssql_sessions" in sql
+    assert "MERGE INTO [dbo].[mssql_sessions]" in sql
     assert parameters[0] == "session-1"
     assert parameters[1] == b"payload"
     assert isinstance(parameters[2], datetime)
@@ -161,7 +161,7 @@ async def test_mssql_python_store_get_renews_unexpired_session() -> None:
     data = await store.get("session-1", renew_for=60)
 
     assert data == b"payload"
-    assert any("UPDATE mssql_sessions" in sql for sql, _ in connection.executed)
+    assert any("UPDATE [dbo].[mssql_sessions]" in sql for sql, _ in connection.executed)
     assert connection.commits == 1
 
 
@@ -185,3 +185,23 @@ async def test_mssql_python_store_delete_expired_returns_rows_affected() -> None
 
     assert count == 3
     assert connection.commits == 1
+
+
+def test_mssql_python_store_supports_schema_qualified_and_quoted_table_names() -> None:
+    """Litestar store DDL should split schema.table and escape single quotes in metadata probes."""
+    store = MssqlPythonStore(cast("Any", FakeConfig()))
+    store._table_name = "auth.user's_sessions"
+
+    ddl = store._table_ddl()
+    drop_sql = store._drop_table_sql()
+
+    assert "SCHEMA_ID(N'auth')" in ddl
+    assert "WHERE name = N'user''s_sessions'" in ddl
+    assert "CREATE TABLE [auth].[user's_sessions]" in ddl
+
+    assert "CREATE INDEX [IX_user's_sessions_expires_at] ON [auth].[user's_sessions](expires_at)" in " ".join(
+        ddl.split()
+    )
+    assert drop_sql == [
+        "IF OBJECT_ID(N'[auth].[user''s_sessions]', N'U') IS NOT NULL DROP TABLE [auth].[user's_sessions];"
+    ]

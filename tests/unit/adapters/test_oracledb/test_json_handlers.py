@@ -4,6 +4,7 @@ import inspect
 from functools import partial
 from unittest.mock import Mock
 
+import oracledb
 import pytest
 
 from sqlspec.adapters.oracledb._json_handlers import (
@@ -153,10 +154,8 @@ def test_input_handler_routes_dict_to_db_type_blob_on_12c() -> None:
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=2, inconverter=json_converter_in_blob)
 
 
-def test_input_handler_routes_dict_to_db_type_clob_pre_12c() -> None:
-    """Dict bound on Oracle 11g (no IS JSON constraint) should use DB_TYPE_CLOB."""
-    import oracledb
-
+def test_input_handler_routes_dict_to_db_type_blob_pre_12c() -> None:
+    """Dict bound on Oracle 11g (BLOB_PLAIN storage) should use DB_TYPE_BLOB."""
     cursor = _mock_cursor_with_major(11)
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
@@ -164,13 +163,24 @@ def test_input_handler_routes_dict_to_db_type_clob_pre_12c() -> None:
     result = json_input_type_handler(cursor, {"foo": "bar"}, 2)
 
     assert result is cursor_var
-    cursor.var.assert_called_once_with(oracledb.DB_TYPE_CLOB, arraysize=2, inconverter=json_converter_in_clob)
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=2, inconverter=json_converter_in_blob)
+
+
+def test_input_handler_respects_compatible_major_on_21c() -> None:
+    """Oracle 21c with COMPATIBLE=19.0.0 must route JSON to DB_TYPE_BLOB instead of DB_TYPE_JSON."""
+    cursor = _mock_cursor_with_major(21)
+    cursor.connection._sqlspec_oracle_compatible_major = 19
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+
+    result = json_input_type_handler(cursor, {"foo": "bar"}, 1)
+
+    assert result is cursor_var
+    cursor.var.assert_called_once_with(oracledb.DB_TYPE_BLOB, arraysize=1, inconverter=json_converter_in_blob)
 
 
 def test_input_handler_defaults_to_db_type_json_when_major_unknown() -> None:
     """When server version is unknown (None), default to DB_TYPE_JSON (21c+ assumption)."""
-    import oracledb
-
     cursor = _mock_cursor_with_major(None)
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
@@ -183,8 +193,6 @@ def test_input_handler_defaults_to_db_type_json_when_major_unknown() -> None:
 
 def test_input_handler_routes_list() -> None:
     """list[dict] should be claimed by the JSON handler."""
-    import oracledb
-
     cursor = _mock_cursor_with_major(21)
     cursor_var = Mock()
     cursor.var = Mock(return_value=cursor_var)
@@ -193,6 +201,18 @@ def test_input_handler_routes_list() -> None:
 
     assert result is cursor_var
     cursor.var.assert_called_once_with(oracledb.DB_TYPE_JSON, arraysize=1)
+
+
+def test_input_handler_claims_empty_list_and_mixed_list() -> None:
+    """Empty list [] and mixed numeric/non-numeric list [1, 'two'] must be claimed by JSON handler."""
+    cursor = _mock_cursor_with_major(21)
+    cursor_var = Mock()
+    cursor.var = Mock(return_value=cursor_var)
+
+    assert json_input_type_handler(cursor, [], 1) is cursor_var
+    assert json_input_type_handler(cursor, [1, "two", {"k": "v"}], 1) is cursor_var
+    assert cursor.var.call_count == 2
+    cursor.var.assert_called_with(oracledb.DB_TYPE_JSON, arraysize=1)
 
 
 def test_input_handler_does_not_claim_list_of_floats() -> None:

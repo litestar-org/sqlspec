@@ -178,3 +178,32 @@ def test_repeated_parameter_with_equal_value_is_not_a_collision(tmp_path: Path, 
     assert equal_values.named_parameters == {"kind": "a"}
     with pytest.raises(SQLSlotError, match="'kind'"):
         loader.get_sql("repeated", first=shared, second=SQL("alt_kind = :kind", kind="b"))
+
+
+def test_sql_value_slot_returns_compiled_expression(loader: SQLFileLoader) -> None:
+    """Parameterized SQL slot values must still return a compiled SQL object with expression populated."""
+    stmt = loader.get_sql("list_efforts", predicates=SQL("e.journey = :journey", journey="modernize"))
+
+    assert stmt.expression is not None
+    assert stmt.named_parameters == {"journey": "modernize"}
+
+
+def test_reload_changed_files_preserves_multiple_namespaces(tmp_path: Path) -> None:
+    """Reloading a changed SQL file loaded under multiple namespaces must preserve all namespaces."""
+    sql_file = tmp_path / "shared_ns.sql"
+    sql_file.write_text("-- name: fetch_val\nSELECT 1 AS val;\n")
+    sql_loader = SQLFileLoader()
+    sql_loader._load_single_file(sql_file, None)
+    sql_loader._load_single_file(sql_file, "reporting")
+
+    assert sql_loader.has_query("fetch_val")
+    assert sql_loader.has_query("reporting.fetch_val")
+
+    sql_file.write_text("-- name: fetch_val\nSELECT 2 AS val;\n")
+    reloaded = sql_loader._reload_changed_files()
+
+    assert str(sql_file) in reloaded
+    assert sql_loader.has_query("fetch_val")
+    assert sql_loader.has_query("reporting.fetch_val")
+    assert "SELECT 2" in sql_loader.get_query_text("fetch_val")
+    assert "SELECT 2" in sql_loader.get_query_text("reporting.fetch_val")

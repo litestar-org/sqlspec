@@ -6,9 +6,11 @@ import builtins
 import contextlib
 from abc import abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Literal, Self, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, cast, overload
 
 from mypy_extensions import mypyc_attr
+
+from sqlspec.utils.sync_tools import get_default_async_executor
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,6 +58,9 @@ class AsyncArrowBatchIterator:
     ) -> None:
         await self.aclose()
 
+    def __anext__(self) -> Any:
+        return asyncio.get_running_loop().run_in_executor(get_default_async_executor(), self._sync_next)
+
     async def aclose(self) -> None:
         """Close the underlying generator and its active storage reader."""
         if self._closed:
@@ -63,7 +68,7 @@ class AsyncArrowBatchIterator:
         self._closed = True
         close = getattr(self._sync_iter, "close", None)
         if close is not None:
-            await asyncio.get_running_loop().run_in_executor(None, close)
+            await asyncio.get_running_loop().run_in_executor(get_default_async_executor(), close)
 
     def _sync_next(self) -> "ArrowRecordBatch":
         if self._closed:
@@ -73,10 +78,6 @@ class AsyncArrowBatchIterator:
             self._closed = True
             raise _StopAsync()
         return cast("ArrowRecordBatch", result)
-
-    def __anext__(self) -> Any:
-        # Returning a Future avoids mypyc coroutine state machine bugs entirely.
-        return asyncio.get_running_loop().run_in_executor(None, self._sync_next)
 
 
 class AsyncObStoreStreamIterator:
@@ -91,8 +92,35 @@ class AsyncObStoreStreamIterator:
     def __aiter__(self) -> "AsyncObStoreStreamIterator":
         return self
 
-    def __anext__(self) -> Any:
-        return self._stream.__anext__()
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        await self.aclose()
+
+    async def __anext__(self) -> bytes:
+        if self._stream is None:
+            raise StopAsyncIteration
+        chunk = await self._stream.__anext__()
+        return chunk if type(chunk) is bytes else bytes(chunk)
+
+    async def aclose(self) -> None:
+        """Close the underlying stream if it exposes a close hook."""
+        stream = self._stream
+        if stream is None:
+            return
+        self._stream = None
+        aclose: Any = getattr(stream, "aclose", None)
+        if aclose is not None:
+            with contextlib.suppress(Exception):
+                await aclose()
+            return
+        close: Any = getattr(stream, "close", None)
+        if close is not None:
+            with contextlib.suppress(Exception):
+                close()
 
 
 class AsyncThreadedBytesIterator:
@@ -116,12 +144,15 @@ class AsyncThreadedBytesIterator:
     ) -> None:
         await self.aclose()
 
+    def __anext__(self) -> Any:
+        return asyncio.get_running_loop().run_in_executor(get_default_async_executor(), self._sync_read)
+
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
         with contextlib.suppress(Exception):
-            self._file_obj.close()
+            await asyncio.get_running_loop().run_in_executor(get_default_async_executor(), self._file_obj.close)
 
     def _sync_read(self) -> bytes:
         if self._closed:
@@ -134,9 +165,6 @@ class AsyncThreadedBytesIterator:
             raise _StopAsync()
         return cast("bytes", result)
 
-    def __anext__(self) -> Any:
-        return asyncio.get_running_loop().run_in_executor(None, self._sync_read)
-
 
 @mypyc_attr(allow_interpreted_subclasses=True)
 class ObjectStoreBase:
@@ -148,33 +176,39 @@ class ObjectStoreBase:
 
     __slots__ = ()
 
+    @property
+    @abstractmethod
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing."""
+        raise NotImplementedError
+
     @abstractmethod
     def resolve_uri(self, path: "str | Path") -> str:
         """Resolve a backend-relative path to its unsigned address."""
         raise NotImplementedError
 
     @abstractmethod
-    def read_bytes_sync(self, path: str, **kwargs: Any) -> bytes:
+    def read_bytes_sync(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def write_bytes_sync(self, path: str, data: bytes, **kwargs: Any) -> None:
+    def write_bytes_sync(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def stream_read_sync(self, path: str, chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
+    def stream_read_sync(self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any) -> Iterator[bytes]:
         """Stream bytes from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def read_text_sync(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    def read_text_sync(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def write_text_sync(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    def write_text_sync(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to storage synchronously."""
         raise NotImplementedError
 
@@ -184,22 +218,22 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def exists_sync(self, path: str, **kwargs: Any) -> bool:
+    def exists_sync(self, path: "str | Path", **kwargs: Any) -> bool:
         """Check if object exists in storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def delete_sync(self, path: str, **kwargs: Any) -> None:
+    def delete_sync(self, path: "str | Path", **kwargs: Any) -> None:
         """Delete object from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def copy_sync(self, source: str, destination: str, **kwargs: Any) -> None:
+    def copy_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy object within storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def move_sync(self, source: str, destination: str, **kwargs: Any) -> None:
+    def move_sync(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move object within storage synchronously."""
         raise NotImplementedError
 
@@ -209,27 +243,27 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    def get_metadata_sync(self, path: str, **kwargs: Any) -> "dict[str, object]":
+    def get_metadata_sync(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
         """Get object metadata from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def is_object_sync(self, path: str) -> bool:
+    def is_object_sync(self, path: "str | Path") -> bool:
         """Check if path points to an object synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def is_path_sync(self, path: str) -> bool:
+    def is_path_sync(self, path: "str | Path") -> bool:
         """Check if path points to a directory synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def read_arrow_sync(self, path: str, **kwargs: Any) -> "ArrowTable":
+    def read_arrow_sync(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage synchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    def write_arrow_sync(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+    def write_arrow_sync(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage synchronously."""
         raise NotImplementedError
 
@@ -240,29 +274,40 @@ class ObjectStoreBase:
         """Stream Arrow record batches from storage synchronously."""
         raise NotImplementedError
 
+    @overload
+    def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+    @overload
+    def sign_sync(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
     @abstractmethod
-    async def read_bytes_async(self, path: str, **kwargs: Any) -> bytes:
+    def sign_sync(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) synchronously."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def read_bytes_async(self, path: "str | Path", **kwargs: Any) -> bytes:
         """Read bytes from storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def write_bytes_async(self, path: str, data: bytes, **kwargs: Any) -> None:
+    async def write_bytes_async(self, path: "str | Path", data: bytes, **kwargs: Any) -> None:
         """Write bytes to storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def read_text_async(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> str:
+    async def read_text_async(self, path: "str | Path", encoding: str = "utf-8", **kwargs: Any) -> str:
         """Read text from storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def write_text_async(self, path: str, data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
+    async def write_text_async(self, path: "str | Path", data: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Write text to storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
     async def stream_read_async(
-        self, path: str, chunk_size: "int | None" = None, **kwargs: Any
+        self, path: "str | Path", chunk_size: "int | None" = None, **kwargs: Any
     ) -> AsyncIterator[bytes]:
         """Stream bytes from storage asynchronously."""
         raise NotImplementedError
@@ -273,46 +318,59 @@ class ObjectStoreBase:
         raise NotImplementedError
 
     @abstractmethod
-    async def exists_async(self, path: str, **kwargs: Any) -> bool:
+    async def exists_async(self, path: "str | Path", **kwargs: Any) -> bool:
         """Check if object exists in storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def delete_async(self, path: str, **kwargs: Any) -> None:
+    async def delete_async(self, path: "str | Path", **kwargs: Any) -> None:
         """Delete object from storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def copy_async(self, source: str, destination: str, **kwargs: Any) -> None:
+    async def copy_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Copy object within storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def move_async(self, source: str, destination: str, **kwargs: Any) -> None:
+    async def move_async(self, source: "str | Path", destination: "str | Path", **kwargs: Any) -> None:
         """Move object within storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def get_metadata_async(self, path: str, **kwargs: Any) -> "dict[str, object]":
+    async def get_metadata_async(self, path: "str | Path", **kwargs: Any) -> "dict[str, object]":
         """Get object metadata from storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def read_arrow_async(self, path: str, **kwargs: Any) -> "ArrowTable":
+    async def read_arrow_async(self, path: "str | Path", **kwargs: Any) -> "ArrowTable":
         """Read Arrow table from storage asynchronously."""
         raise NotImplementedError
 
     @abstractmethod
-    async def write_arrow_async(self, path: str, table: "ArrowTable", **kwargs: Any) -> None:
+    async def write_arrow_async(self, path: "str | Path", table: "ArrowTable", **kwargs: Any) -> None:
         """Write Arrow table to storage asynchronously."""
         raise NotImplementedError
 
-    # NOTE: Returns AsyncIterator directly; keep in sync with ObjectStoreProtocol.
     @abstractmethod
     def stream_arrow_async(
         self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
     ) -> "AsyncIterator[ArrowRecordBatch]":
-        """Stream Arrow record batches from storage asynchronously."""
+        """Stream Arrow record batches from storage asynchronously.
+
+        Returns AsyncIterator directly (not a coroutine).
+        """
+        raise NotImplementedError
+
+    @overload
+    async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
+    @overload
+    async def sign_async(self, paths: "list[str]", expires_in: int = 3600, for_upload: bool = False) -> "list[str]": ...
+    @abstractmethod
+    async def sign_async(
+        self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
+    ) -> "str | list[str]":
+        """Generate signed URL(s) asynchronously."""
         raise NotImplementedError
 
 

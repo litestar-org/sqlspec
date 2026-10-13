@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
     from sqlspec.extensions.litestar.plugin import SQLSpecPlugin
 
+__all__ = ("add_sessions_delete_expired_command", "database_group", "get_database_migration_plugin")
+
 
 def _safe_group(*, aliases: "list[str] | None" = None, **kwargs: Any) -> Callable[[Callable[..., Any]], Any]:
     if aliases is None:

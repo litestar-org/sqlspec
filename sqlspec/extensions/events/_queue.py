@@ -1,6 +1,7 @@
 """Table-backed queue implementation for EventChannel."""
 
 import asyncio
+import threading
 import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -46,8 +47,10 @@ class _BaseTableEventQueue:
         "_claim_statement",
         "_cleanup_on_ack",
         "_config",
+        "_delete_by_id_statement",
         "_dialect",
         "_empty_poll_delays",
+        "_empty_poll_lock",
         "_insert_statement",
         "_lease_seconds",
         "_max_claim_attempts",
@@ -79,9 +82,10 @@ class _BaseTableEventQueue:
         self._runtime = config.get_observability_runtime()
         self._dialect = str(self._statement_config.dialect or "").lower() if self._statement_config else ""
         self._empty_poll_delays: dict[str, float] = {}
+        self._empty_poll_lock = threading.Lock()
         self._table_name = normalize_queue_table_name(queue_table or _DEFAULT_TABLE)
-        self._lease_seconds = lease_seconds or 30
-        self._retention_seconds = retention_seconds or 86_400
+        self._lease_seconds = 30 if lease_seconds is None else lease_seconds
+        self._retention_seconds = 86_400 if retention_seconds is None else retention_seconds
         self._max_claim_attempts = 5
         self._select_for_update = bool(select_for_update)
         self._cleanup_on_ack = bool(cleanup_on_ack)
@@ -93,6 +97,7 @@ class _BaseTableEventQueue:
         self._ack_statement = self._ack_sql()
         self._nack_statement = self._nack_sql()
         self._acked_cleanup_statement = self._cleanup_sql()
+        self._delete_by_id_statement = self._delete_by_id_sql()
 
     @property
     def statement_config(self) -> "StatementConfig":
@@ -126,17 +131,20 @@ class _BaseTableEventQueue:
         return bool(locking_enabled) and "oracle" in self._dialect
 
     def _next_empty_poll_delay(self, channel: str, poll_interval: "float | None") -> float:
+        """Record and return the bounded empty-poll delay for a channel."""
         if poll_interval is None or poll_interval <= 0:
             return 0.0
-        if channel not in self._empty_poll_delays and len(self._empty_poll_delays) >= _MAX_EMPTY_POLL_CHANNELS:
-            self._empty_poll_delays.pop(next(iter(self._empty_poll_delays)))
-        delay = poll_interval
-        self._empty_poll_delays[channel] = delay
+        with self._empty_poll_lock:
+            if channel not in self._empty_poll_delays and len(self._empty_poll_delays) >= _MAX_EMPTY_POLL_CHANNELS:
+                self._empty_poll_delays.pop(next(iter(self._empty_poll_delays)))
+            delay = poll_interval
+            self._empty_poll_delays[channel] = delay
         self._runtime.record_metric("events.poll.backoff", delay)
         return delay
 
     def _reset_empty_poll_delay(self, channel: str) -> None:
-        self._empty_poll_delays.pop(channel, None)
+        with self._empty_poll_lock:
+            self._empty_poll_delays.pop(channel, None)
 
     def _claim_sql(self) -> str:
         return f"UPDATE {self._table_name} SET status = :claimed_status, lease_expires_at = :lease_expires_at, attempts = attempts + 1 WHERE event_id = :event_id AND (status = :pending_status OR (status = :leased_status AND (lease_expires_at IS NULL OR lease_expires_at <= :lease_reentry_cutoff)))"
@@ -145,10 +153,13 @@ class _BaseTableEventQueue:
         return f"UPDATE {self._table_name} SET status = :acked, acknowledged_at = :acked_at WHERE event_id = :event_id"
 
     def _nack_sql(self) -> str:
-        return f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL, attempts = attempts + 1 WHERE event_id = :event_id"
+        return f"UPDATE {self._table_name} SET status = :pending, lease_expires_at = NULL WHERE event_id = :event_id"
 
     def _cleanup_sql(self) -> str:
         return f"DELETE FROM {self._table_name} WHERE status = :acked AND acknowledged_at IS NOT NULL AND acknowledged_at <= :cutoff"
+
+    def _delete_by_id_sql(self) -> str:
+        return f"DELETE FROM {self._table_name} WHERE event_id = :event_id"
 
     @staticmethod
     def _candidate_parameters(channel: str, current_time: "datetime") -> "dict[str, Any]":
@@ -210,7 +221,9 @@ class _BaseTableEventQueue:
         return claim_verified(row, leased_until)
 
     @staticmethod
-    def _hydrate_event(row: "dict[str, Any]", lease_expires_at: "datetime | None") -> EventMessage:
+    def _hydrate_event(
+        row: "dict[str, Any]", lease_expires_at: "datetime | None", *, increment_attempts: bool = False
+    ) -> EventMessage:
         payload_raw = row.get("payload_json")
         metadata_raw = row.get("metadata_json")
         payload_obj: object
@@ -233,12 +246,13 @@ class _BaseTableEventQueue:
         created_at = parse_event_timestamp(row.get("created_at"))
         lease_value = lease_expires_at or row.get("lease_expires_at")
         lease_at = parse_event_timestamp(lease_value) if lease_value is not None else None
+        attempts = int(row.get("attempts", 0)) + (1 if increment_attempts else 0)
         return EventMessage(
             event_id=row["event_id"],
             channel=row["channel"],
             payload=payload_value,
             metadata=metadata_value,
-            attempts=int(row.get("attempts", 0)),
+            attempts=attempts,
             available_at=available_at,
             lease_expires_at=lease_at,
             created_at=created_at,
@@ -337,7 +351,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                 claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._hydrate_event(row, leased_until)
+                return self._hydrate_event(row, leased_until, increment_attempts=True)
         return None
 
     def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
@@ -350,12 +364,16 @@ class SyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._hydrate_event(row, leased_until)
+            event = self._hydrate_event(row, leased_until, increment_attempts=True)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
 
     def ack(self, event_id: str) -> None:
+        if self._cleanup_on_ack and self._retention_seconds <= 0:
+            self._execute(self._delete_by_id_statement, {"event_id": event_id})
+            self._runtime.increment_metric("events.ack")
+            return
         now = self._utcnow()
         self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
         if self._cleanup_on_ack:
@@ -440,7 +458,7 @@ class SyncTableEventQueue(_BaseTableEventQueue):
                     driver.rollback()
                     return None
                 driver.commit()
-                return self._hydrate_event(row, leased_until)
+                return self._hydrate_event(row, leased_until, increment_attempts=True)
             except Exception:
                 with suppress(Exception):
                     driver.rollback()
@@ -574,7 +592,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                 claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
             if claimed:
                 self._reset_empty_poll_delay(channel)
-                return self._hydrate_event(row, leased_until)
+                return self._hydrate_event(row, leased_until, increment_attempts=True)
         return None
 
     async def dequeue_by_event_id(self, event_id: str) -> "EventMessage | None":
@@ -587,12 +605,16 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
         if not claimed:
             claimed = self._claim_verified(await self._fetch_by_event_id(row["event_id"]), leased_until)
         if claimed:
-            event = self._hydrate_event(row, leased_until)
+            event = self._hydrate_event(row, leased_until, increment_attempts=True)
             self._reset_empty_poll_delay(event.channel)
             return event
         return None
 
     async def ack(self, event_id: str) -> None:
+        if self._cleanup_on_ack and self._retention_seconds <= 0:
+            await self._execute(self._delete_by_id_statement, {"event_id": event_id})
+            self._runtime.increment_metric("events.ack")
+            return
         now = self._utcnow()
         await self._execute(self._ack_statement, {"acked": _ACKED_STATUS, "acked_at": now, "event_id": event_id})
         if self._cleanup_on_ack:
@@ -682,7 +704,7 @@ class AsyncTableEventQueue(_BaseTableEventQueue):
                     await driver.rollback()
                     return None
                 await driver.commit()
-                return self._hydrate_event(row, leased_until)
+                return self._hydrate_event(row, leased_until, increment_attempts=True)
             except Exception:
                 with suppress(Exception):
                     await driver.rollback()

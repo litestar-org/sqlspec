@@ -13,12 +13,6 @@ from sqlspec.extensions.adk import BaseSyncADKStore
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 
 
-def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
-    config = MagicMock()
-    config.extension_config = {"adk": adk_config or {}}
-    return config
-
-
 def test_mssql_python_adk_exports_sync_store_type() -> None:
     """The adapter exposes a sync store that implements the current ADK base."""
 
@@ -103,23 +97,6 @@ def test_sync_store_uses_tsql_upsert_and_top_limit() -> None:
     assert "SELECT TOP (?)" in events_sql
     assert params[0] == 5
     assert "LIMIT" not in events_sql
-
-
-def _normalized(sql: str) -> str:
-    return " ".join(sql.split())
-
-
-def _session_store_with_capture(
-    monkeypatch: "pytest.MonkeyPatch",
-) -> "tuple[MssqlPythonADKStore, list[tuple[str, tuple[Any, ...]]]]":
-    calls: list[tuple[str, tuple[Any, ...]]] = []
-
-    def capture(_store: MssqlPythonADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        calls.append((sql, tuple(params)))
-        return []
-
-    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", capture)
-    return MssqlPythonADKStore(_mock_config()), calls
 
 
 def test_mssql_python_list_sessions_binds_order_and_page(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -312,3 +289,118 @@ def test_disabled_memory_store_rejects_operations_without_connecting() -> None:
         store.search_entries("query", "app", "user")
     config.provide_connection.assert_not_called()
     config.provide_session.assert_not_called()
+
+
+def test_mssql_python_adk_search_entries_escapes_tsql_like_wildcards(monkeypatch: "pytest.MonkeyPatch") -> None:
+    """search_entries must escape \\, %, _, and [ in LIKE patterns and include ESCAPE N'\\\\'."""
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture(_store: MssqlPythonADKMemoryStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+        calls.append((sql, tuple(params)))
+        return []
+
+    monkeypatch.setattr(MssqlPythonADKMemoryStore, "_execute_fetchall", capture)
+    store = MssqlPythonADKMemoryStore(_mock_config())
+    store.search_entries(r"50%_off[1]\test", "app", "u1", limit=5)
+
+    sql, params = calls[0]
+    assert "LIKE ? ESCAPE N'\\'" in _normalized(sql)
+    assert params[-1] == r"%50\%\_off\[1]\\test%"
+
+
+def test_mssql_python_adk_store_handles_dict_rows_and_schema_qualified_tables(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """ADK store should support dict rows and split schema.table for DDL and constraints."""
+    from datetime import datetime
+
+    store = MssqlPythonADKStore(_mock_config({"native_json": False}))
+    store._session_table = "custom.adk_sessions"
+    store._events_table = "custom.adk_events"
+    sessions_ddl = store._sessions_table_ddl()
+    events_ddl = store._events_table_ddl()
+    assert "SCHEMA_ID(N'custom')" in sessions_ddl
+    assert "CREATE TABLE [custom].[adk_sessions]" in sessions_ddl
+    assert "CONSTRAINT [pk_adk_sessions_row_id] PRIMARY KEY (row_id)" in sessions_ddl
+    assert "REFERENCES [custom].[adk_sessions](id)" in events_ddl
+
+    now = datetime.now(tz=UTC)
+    dict_row = {
+        "id": "s1",
+        "app_name": "app",
+        "user_id": "u1",
+        "state": '{"k": "v"}',
+        "create_time": now,
+        "update_time": now,
+    }
+    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchone", lambda *_a, **_kw: dict_row)
+    session = store.get_session("app", "u1", "s1")
+    assert session is not None
+    assert session["id"] == "s1"
+    assert session["state"] == {"k": "v"}
+
+
+def test_mssql_python_adk_create_tables_reconciles_schema_and_memory_insert_rolls_back_on_error(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """create_tables calls reconcile_schema(assume_existing=True) and insert_memory_entries rolls back on error."""
+    from datetime import datetime
+
+    config = _mock_config({"native_json": False})
+    store = MssqlPythonADKStore(config)
+    reconciled: list[bool] = []
+    monkeypatch.setattr(
+        MssqlPythonADKStore,
+        "reconcile_schema",
+        lambda _self, *, assume_existing=False: reconciled.append(assume_existing),
+    )
+    store.create_tables()
+    assert reconciled == [True]
+
+    mem_config = _mock_config({"native_json": False})
+    conn = mem_config.provide_connection.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
+    cursor.execute.side_effect = RuntimeError("db failure")
+    mem_store = MssqlPythonADKMemoryStore(mem_config)
+    now = datetime.now(tz=UTC)
+    entry = cast(
+        "Any",
+        {
+            "id": "mem-1",
+            "session_id": "sess-1",
+            "app_name": "app",
+            "user_id": "user-1",
+            "event_id": "evt-1",
+            "timestamp": now,
+            "content_json": {"text": "hello"},
+            "content_text": "hello",
+            "metadata_json": None,
+            "inserted_at": now,
+        },
+    )
+    with pytest.raises(RuntimeError, match="db failure"):
+        mem_store.insert_memory_entries([entry])
+    conn.rollback.assert_called_once()
+
+
+def _mock_config(adk_config: dict[str, object] | None = None) -> MagicMock:
+    config = MagicMock()
+    config.extension_config = {"adk": adk_config or {}}
+    return config
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def _session_store_with_capture(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> "tuple[MssqlPythonADKStore, list[tuple[str, tuple[Any, ...]]]]":
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def capture(_store: MssqlPythonADKStore, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
+        calls.append((sql, tuple(params)))
+        return []
+
+    monkeypatch.setattr(MssqlPythonADKStore, "_execute_fetchall", capture)
+    return MssqlPythonADKStore(_mock_config()), calls

@@ -5,8 +5,11 @@ from typing import Any, cast
 
 import pytest
 
-from sqlspec.adapters.sqlite import SqliteDriver
+from sqlspec.adapters.sqlite import SqliteConfig, SqliteDriver
 from sqlspec.adapters.sqlite.core import SQLITE_CONNECT_SUPPORTS_AUTOCOMMIT, default_statement_config
+from sqlspec.adapters.sqlite.pool import SqliteConnectionPool
+from sqlspec.adapters.sqlite.type_converter import json_converter, register_type_handlers, unregister_type_handlers
+from sqlspec.exceptions import ImproperConfigurationError
 
 
 def test_rowid_eligibility_falls_back_when_table_list_is_unavailable() -> None:
@@ -327,3 +330,42 @@ def test_window_registration_checks_native_capability(async_adapter: bool) -> No
             _register_runtime_objects(cast("Any", SimpleNamespace(_conn=object())), (), (), functions)
         else:
             _apply_runtime_setup(cast("Any", object()), {"custom_window_functions": functions})
+
+
+def test_sqlite_pool_size_and_release_rollback() -> None:
+    pool = SqliteConnectionPool(connection_parameters={"database": ":memory:"})
+    try:
+        conn = pool.acquire()
+        assert pool.size() == 1
+        conn.execute("CREATE TABLE t (id INTEGER)")
+        conn.execute("INSERT INTO t VALUES (1)")
+        pool.release(conn)
+        assert conn.in_transaction is False
+    finally:
+        pool.close()
+        assert pool.size() == 0
+
+
+def test_sqlite_config_validates_driver_features() -> None:
+    with pytest.raises(ImproperConfigurationError, match="custom_functions"):
+        SqliteConfig(
+            connection_config={"database": ":memory:"},
+            driver_features=cast("Any", {"custom_functions": ["not_a_mapping"]}),
+        )
+    with pytest.raises(ImproperConfigurationError, match="custom_aggregates"):
+        SqliteConfig(
+            connection_config={"database": ":memory:"},
+            driver_features=cast("Any", {"custom_aggregates": [{"name": "a", "narg": 1}]}),
+        )
+    with pytest.raises(ImproperConfigurationError, match="default_transaction_mode"):
+        SqliteConfig(
+            connection_config={"database": ":memory:"},
+            driver_features=cast("Any", {"default_transaction_mode": "INVALID"}),
+        )
+
+
+def test_sqlite_json_converter_and_unregister() -> None:
+    assert json_converter(b'{"a": 1}') == {"a": 1}
+    register_type_handlers()
+    unregister_type_handlers()
+    assert (dict, sqlite3.PrepareProtocol) not in sqlite3.adapters

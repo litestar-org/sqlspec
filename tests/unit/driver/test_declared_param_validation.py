@@ -223,3 +223,25 @@ def test_execute_many_first_row_valid_passes(driver: _MockDriver) -> None:
     )
     prepared = driver.prepare_statement(good, ())
     assert prepared.is_many
+
+
+def test_execute_many_validates_subsequent_rows_and_preserves_caller_dicts(driver: _MockDriver) -> None:
+    row_one: dict[str, Any] = {"a": 1}
+    row_two: dict[str, Any] = {}
+    bad = SQL(
+        "select :a",
+        [row_one, row_two],
+        is_many=True,
+        declared_parameters=_declared(ParameterDeclaration("a", "int")),
+        statement_config=StatementConfig(),
+    )
+    with pytest.raises(SQLSpecError, match="a"):
+        driver.prepare_statement(bad, ())
+    assert row_two == {}
+
+
+def test_prepare_from_sql_does_not_mutate_caller_statement(driver: _MockDriver) -> None:
+    original = SQL("SELECT * FROM users", statement_config=StatementConfig())
+    prepared = driver.prepare_statement(original, (LimitOffsetFilter(limit=10, offset=5),))
+    assert prepared is not original
+    assert "LIMIT" not in original.raw_sql.upper()

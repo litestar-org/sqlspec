@@ -3,13 +3,22 @@
 Every test runs in both driver modes through the ``db2_mode`` fixture.
 """
 
+from typing import Any
+
 import pytest
 
-from sqlspec.adapters.db2.core import default_statement_config
+from sqlspec.adapters.db2.core import create_mapped_exception, default_statement_config, resolve_column_names
 from sqlspec.adapters.db2.data_dictionary import Db2AsyncDataDictionary, Db2SyncDataDictionary
 from sqlspec.core import SQL
 from sqlspec.driver import AsyncRowStream, SyncRowStream
-from sqlspec.exceptions import SQLParsingError, TransactionError, UniqueViolationError
+from sqlspec.exceptions import (
+    DataError,
+    ForeignKeyViolationError,
+    QueryTimeoutError,
+    SQLParsingError,
+    TransactionError,
+    UniqueViolationError,
+)
 from tests.unit.adapters.test_db2._fakes import (
     DriverMode,
     FakeDb2Connection,
@@ -133,6 +142,26 @@ async def test_dispatch_execute_script(db2_mode: DriverMode) -> None:
     assert [call[0] for call in cursor.executed] == ["CREATE TABLE t1 (id INT)", "CREATE TABLE t2 (id INT)"]
 
 
+async def test_dispatch_execute_script_slices_parameters_per_statement(db2_mode: DriverMode) -> None:
+    """Multi-statement scripts slice positional parameters across statements by placeholder count."""
+    cursor = FakeDb2Cursor()
+    driver = db2_mode.driver(FakeDb2Connection(lambda: cursor), statement_config=default_statement_config)
+    statement = SQL(
+        "INSERT INTO t1 VALUES (?); DELETE FROM t2; INSERT INTO t1 VALUES (?, ?);",
+        (10, 20, 30),
+        statement_config=default_statement_config,
+        is_script=True,
+    )
+
+    await db2_mode.call(driver.dispatch_execute_script, db2_mode.cursor(cursor), statement)
+
+    assert cursor.executed == [
+        ("INSERT INTO t1 VALUES (?)", (10,)),
+        ("DELETE FROM t2", None),
+        ("INSERT INTO t1 VALUES (?, ?)", (20, 30)),
+    ]
+
+
 async def test_dispatch_select_stream(db2_mode: DriverMode) -> None:
     """dispatch_select_stream reads rows in fetchmany chunks and closes the cursor."""
     rows = [(1, "Ada"), (2, "Grace"), (3, "Margaret")]
@@ -179,6 +208,26 @@ async def test_exception_handler_maps_db2_error(db2_mode: DriverMode) -> None:
     assert isinstance(handler.pending_exception, UniqueViolationError)
 
 
+@pytest.mark.parametrize(
+    ("sqlcode", "sqlstate", "expected_cls"),
+    [
+        (-532, "23504", ForeignKeyViolationError),
+        (-302, "22001", DataError),
+        (-433, "22001", DataError),
+        (-952, "57014", QueryTimeoutError),
+    ],
+)
+def test_create_mapped_exception_maps_additional_sqlcodes(
+    sqlcode: int, sqlstate: str, expected_cls: type[Exception]
+) -> None:
+    """Additional Db2 SQLCODEs (-532, -302, -433, -952) map to their specific exception classes."""
+    err = db2_error(sqlcode, sqlstate, f"SQL0{abs(sqlcode)}N error")
+
+    mapped = create_mapped_exception(err)
+
+    assert isinstance(mapped, expected_cls)
+
+
 async def test_driver_execute_raises_mapped_exception(db2_mode: DriverMode) -> None:
     """driver.execute translates database errors into mapped SQLSpecError."""
     cursor = FakeDb2Cursor(error=db2_error(-803, "23505", DUPLICATE_KEY_TEXT, cls=FakeDb2IntegrityError))
@@ -219,20 +268,39 @@ async def test_select_stream_lowercases_implicit_uppercase_columns(db2_mode: Dri
     assert rows == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]
 
 
-async def test_repeated_select_keeps_lowercase_columns(db2_mode: DriverMode) -> None:
-    """Re-executing a cached query returns the same lowercase keys and rowcounts as the first execution."""
-    driver = db2_mode.driver(
-        FakeDb2Connection(lambda: FakeDb2Cursor(rows=[(1,)], description=db2_description("schema_name"), rowcount=4))
-    )
+async def test_repeated_select_keeps_lowercase_columns_and_normalizes_list_params(db2_mode: DriverMode) -> None:
+    """Re-executing a cached query normalizes list parameters to tuples and keeps lowercase keys."""
+    executed_params: list[Any] = []
 
-    first = await db2_mode.call(driver.execute, "SELECT schema_name FROM t WHERE id = ?", (1,))
-    second = await db2_mode.call(driver.execute, "SELECT schema_name FROM t WHERE id = ?", (1,))
-    first_update = await db2_mode.call(driver.execute, "UPDATE t SET a = ? WHERE id = ?", (1, 2))
-    second_update = await db2_mode.call(driver.execute, "UPDATE t SET a = ? WHERE id = ?", (1, 2))
+    def make_cursor() -> FakeDb2Cursor:
+        return FakeDb2Cursor(rows=[(1,)], description=db2_description("schema_name"), rowcount=4)
+
+    conn = FakeDb2Connection(make_cursor)
+    driver = db2_mode.driver(conn)
+
+    first = await db2_mode.call(driver.execute, "SELECT schema_name FROM t WHERE id = ?", [1])
+    second = await db2_mode.call(driver.execute, "SELECT schema_name FROM t WHERE id = ?", [1])
+    first_update = await db2_mode.call(driver.execute, "UPDATE t SET a = ? WHERE id = ?", [1, 2])
+    second_update = await db2_mode.call(driver.execute, "UPDATE t SET a = ? WHERE id = ?", [1, 2])
+
+    for cursor in conn.cursors:
+        for _, params in cursor.executed:
+            executed_params.append(params)
 
     assert first.get_data() == [{"schema_name": 1}]
     assert second.get_data() == [{"schema_name": 1}]
     assert (first_update.rows_affected, second_update.rows_affected) == (4, 4)
+    assert all(isinstance(params, tuple) for params in executed_params)
+
+
+def test_resolve_column_names_caps_cache_at_256_entries() -> None:
+    """resolve_column_names evicts oldest entries when cache reaches 256 descriptions."""
+    cache: dict[int, tuple[Any, list[str]]] = {}
+    descriptions = [[(f"COL_{i}",)] for i in range(300)]
+    for desc in descriptions:
+        resolve_column_names(desc, cache, lowercase=True)
+
+    assert len(cache) <= 256
 
 
 async def test_driver_exposes_matching_data_dictionary(db2_mode: DriverMode) -> None:

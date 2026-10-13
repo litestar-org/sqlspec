@@ -327,7 +327,7 @@ def test_sync_execute_cached_statement_re_raises_mapped_exception(sqlite_sync_dr
     statement = SQL("SELECT ?", (1,), statement_config=sqlite_sync_driver.statement_config)
     statement.compile()
 
-    with pytest.raises(SQLSpecError, match="SQLite database error: boom"):
+    with pytest.raises(SQLSpecError, match="SQLite operational error: boom"):
         sqlite_sync_driver._execute_cached_statement(statement)
 
 
@@ -351,7 +351,7 @@ def test_sync_execute_cache_hit_re_raises_mapped_exception(sqlite_sync_driver: A
         ),
     )
 
-    with pytest.raises(SQLSpecError, match="SQLite database error: boom"):
+    with pytest.raises(SQLSpecError, match="SQLite operational error: boom"):
         sqlite_sync_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
 
@@ -837,7 +837,7 @@ async def test_async_execute_cached_statement_re_raises_mapped_exception(
     statement = SQL("SELECT ?", (1,), statement_config=aiosqlite_async_driver.statement_config)
     statement.compile()
 
-    with pytest.raises(SQLSpecError, match="AIOSQLite database error: boom"):
+    with pytest.raises(SQLSpecError, match="AIOSQLite operational error: boom"):
         await aiosqlite_async_driver._execute_cached_statement(statement)
 
 
@@ -864,7 +864,7 @@ async def test_async_execute_cache_hit_re_raises_mapped_exception(
         ),
     )
 
-    with pytest.raises(SQLSpecError, match="AIOSQLite database error: boom"):
+    with pytest.raises(SQLSpecError, match="AIOSQLite operational error: boom"):
         await aiosqlite_async_driver._execute_cache_hit("INSERT INTO t (id) VALUES (?)", (1,), cached)
 
 
@@ -934,3 +934,29 @@ def test_compiled_statement_cache_direct_uses_direct_attribute(sqlite_sync_drive
 
     assert compiled.compiled_sql == "SELECT ?"
     assert prepared == (1,)
+
+
+def test_pooled_statement_cleared_when_attached_to_sql_result(sqlite_sync_driver: Any) -> None:
+    """build_statement_result clears _pooled so result.statement is not returned to the pool."""
+    processed = ProcessedState(compiled_sql="SELECT 1", execution_parameters=[], operation_type="SELECT")
+    pooled = SQL._create_cached_direct("SELECT 1", sqlite_sync_driver.statement_config, processed)
+    assert pooled._pooled is True
+
+    result = sqlite_sync_driver.build_statement_result(pooled, sqlite_sync_driver.create_execution_result(None))
+    assert result.statement is pooled
+    assert pooled._pooled is False
+
+    sqlite_sync_driver._release_pooled_statement(pooled)
+    assert result.statement.raw_sql == "SELECT 1"
+
+
+def test_refresh_statement_cache_state_allows_none_observability(sqlite_sync_driver: Any) -> None:
+    """_refresh_statement_cache_state enables cache when _observability is None."""
+    original_obs = sqlite_sync_driver._observability
+    try:
+        sqlite_sync_driver._observability = None
+        sqlite_sync_driver._refresh_statement_cache_state()
+        assert sqlite_sync_driver._stmt_cache_enabled is True
+    finally:
+        sqlite_sync_driver._observability = original_obs
+        sqlite_sync_driver._refresh_statement_cache_state()

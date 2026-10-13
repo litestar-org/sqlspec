@@ -217,3 +217,27 @@ async def test_async_select_stream_eager_fallback_applies_schema_type(monkeypatc
         assert [(row.id, row.name) for row in streamed[:3]] == [(0, "n0"), (1, "n1"), (2, "n2")]
     finally:
         await config.close_pool()
+
+
+def test_sync_select_stream_eager_fallback_defers_execution_until_enter(monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = SQLSpec()
+    config = spec.add_config(SqliteConfig(connection_config={"database": ":memory:"}))
+    with spec.provide_session(config) as session:
+        _seed_sync(session)
+        _disable_native(session, monkeypatch)
+        executed = False
+        original_execute = type(session).execute
+
+        def tracked_execute(self: Any, *args: Any, **kwargs: Any) -> Any:
+            nonlocal executed
+            executed = True
+            return original_execute(self, *args, **kwargs)
+
+        monkeypatch.setattr(type(session), "execute", tracked_execute)
+        stream = session.select_stream(_SELECT, chunk_size=10)
+        assert executed is False
+        with stream as active_stream:
+            assert executed is False
+            rows = list(active_stream)
+            assert executed is True
+        assert len(rows) == 25

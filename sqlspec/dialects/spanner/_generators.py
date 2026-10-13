@@ -202,7 +202,9 @@ def _spanner_properties_sql(self: Any, expression: exp.Properties) -> str:
     )
     if not spanner_block:
         return rendered
-    return f"{rendered}, {spanner_block}" if rendered else f", {spanner_block}"
+    if rendered:
+        return f"{rendered}, {spanner_block}"
+    return f" {spanner_block}" if isinstance(expression.parent, exp.Create) else spanner_block
 
 
 def _spangres_property_sql(self: Any, expression: exp.Property) -> str:
@@ -250,13 +252,19 @@ _original_bq_hint_transform = BigQueryGenerator.TRANSFORMS.get(exp.Hint)
 _original_bq_returning_transform = BigQueryGenerator.TRANSFORMS.get(exp.Returning)
 _original_bq_select_transform = BigQueryGenerator.TRANSFORMS.get(exp.Select)
 _original_bq_table_transform = BigQueryGenerator.TRANSFORMS.get(exp.Table)
+_original_bq_join_transform = BigQueryGenerator.TRANSFORMS.get(exp.Join)
 _original_bq_anonymous_transform = BigQueryGenerator.TRANSFORMS.get(exp.Anonymous)
 
 _original_pg_property_transform = PostgresGenerator.TRANSFORMS.get(exp.Property)
 _original_pg_properties_transform = PostgresGenerator.TRANSFORMS.get(exp.Properties)
+_original_pg_create_transform = PostgresGenerator.TRANSFORMS.get(exp.Create)
+_original_pg_index_transform = PostgresGenerator.TRANSFORMS.get(exp.Index)
+_original_pg_alter_transform = PostgresGenerator.TRANSFORMS.get(exp.Alter)
+_original_pg_drop_transform = PostgresGenerator.TRANSFORMS.get(exp.Drop)
 _original_pg_hint_transform = PostgresGenerator.TRANSFORMS.get(exp.Hint)
 _original_pg_select_transform = PostgresGenerator.TRANSFORMS.get(exp.Select)
 _original_pg_table_transform = PostgresGenerator.TRANSFORMS.get(exp.Table)
+_original_pg_join_transform = PostgresGenerator.TRANSFORMS.get(exp.Join)
 _original_pg_anonymous_transform = PostgresGenerator.TRANSFORMS.get(exp.Anonymous)
 
 
@@ -363,8 +371,9 @@ def _spanner_index_sql(generator: Any, expression: exp.Index) -> str:
             opts_str = ", ".join(opts_list)
             parts.append(f"OPTIONS ({opts_str})")
         return " ".join(parts)
-    if _original_bq_index_transform is not None:
-        return str(_original_bq_index_transform(generator, expression))
+    orig = _original_pg_index_transform if _get_dialect_name(generator) == "Spangres" else _original_bq_index_transform
+    if orig is not None:
+        return str(orig(generator, expression))
     return str(generator.index_sql(expression))
 
 
@@ -397,8 +406,8 @@ def _spanner_graph_table_sql(generator: Any, expression: exp.Expr) -> str:
     return f"GRAPH_TABLE({inner})"
 
 
-def _spanner_create_transform(generator: Any, expression: exp.Create) -> str:
-    """Transform CREATE statements for Spanner including TABLE, SEQUENCE, CHANGE STREAM, and PROPERTY GRAPH."""
+def _spanner_ddl_create_sql(generator: Any, expression: exp.Create) -> "str | None":
+    """Render Spanner/Spangres CREATE DDL for PROPERTY GRAPH, SEQUENCE, and CHANGE STREAM."""
     if expression.kind == "PROPERTY GRAPH":
         replace = " OR REPLACE" if expression.args.get("replace") else ""
         exists = " IF NOT EXISTS" if expression.args.get("exists") else ""
@@ -420,7 +429,15 @@ def _spanner_create_transform(generator: Any, expression: exp.Create) -> str:
             if len(exprs) == 1 and isinstance(exprs[0], exp.Var) and exprs[0].name.upper() == "ALL":
                 parts.append("FOR ALL")
             else:
-                target_str = ", ".join(generator.sql(x) for x in exprs)
+                target_items: list[str] = []
+                for item in exprs:
+                    if isinstance(item, exp.Anonymous):
+                        tbl_sql = generator.sql(item, "this")
+                        cols_sql = ", ".join(generator.sql(col) for col in item.expressions)
+                        target_items.append(f"{tbl_sql}({cols_sql})")
+                    else:
+                        target_items.append(generator.sql(item))
+                target_str = ", ".join(target_items)
                 parts.append(f"FOR {target_str}")
         props = expression.args.get("properties")
         if props:
@@ -428,15 +445,27 @@ def _spanner_create_transform(generator: Any, expression: exp.Create) -> str:
             opts_str = ", ".join(opts_list)
             parts.append(f"OPTIONS ({opts_str})")
         return " ".join(parts)
+    return None
+
+
+def _spanner_create_transform(generator: Any, expression: exp.Create) -> str:
+    """Transform CREATE statements for Spanner including TABLE, SEQUENCE, CHANGE STREAM, and PROPERTY GRAPH."""
+    ddl_sql = _spanner_ddl_create_sql(generator, expression)
+    if ddl_sql is not None:
+        return ddl_sql
+    target = expression
     if expression.this and expression.kind == "TABLE":
         properties = expression.args.get("properties")
         if properties:
             spanner_props = [p for p in properties.expressions if _is_post_schema_spanner_property(p)]
             other_props = [p for p in properties.expressions if not _is_post_schema_spanner_property(p)]
-            properties.set("expressions", other_props + spanner_props)
+            reordered = other_props + spanner_props
+            if reordered != list(properties.expressions):
+                target = expression.copy()
+                target.args["properties"].set("expressions", reordered)
     if _original_bq_create_transform is not None:
-        return str(_original_bq_create_transform(generator, expression))
-    return str(generator.create_sql(expression))
+        return str(_original_bq_create_transform(generator, target))
+    return str(generator.create_sql(target))
 
 
 def _bq_create_transform(self: Any, expression: exp.Create) -> str:
@@ -446,6 +475,17 @@ def _bq_create_transform(self: Any, expression: exp.Create) -> str:
         return _spanner_create_transform(self, expression)
     if _original_bq_create_transform is not None:
         return str(_original_bq_create_transform(self, expression))
+    return str(self.create_sql(expression))
+
+
+def _pg_create_transform(self: Any, expression: exp.Create) -> str:
+    """Transform CREATE statements for Spangres or delegate to original Postgres transform."""
+    if _get_dialect_name(self) == "Spangres":
+        ddl_sql = _spanner_ddl_create_sql(self, expression)
+        if ddl_sql is not None:
+            return ddl_sql
+    if _original_pg_create_transform is not None:
+        return str(_original_pg_create_transform(self, expression))
     return str(self.create_sql(expression))
 
 
@@ -468,8 +508,9 @@ def _spanner_alter_sql(generator: Any, expression: exp.Alter) -> str:
             opts_str = ", ".join(opts_list)
             return f"ALTER CHANGE STREAM {name} SET OPTIONS ({opts_str})"
         return f"ALTER CHANGE STREAM {name}"
-    if _original_bq_alter_transform is not None:
-        return str(_original_bq_alter_transform(generator, expression))
+    orig = _original_pg_alter_transform if _get_dialect_name(generator) == "Spangres" else _original_bq_alter_transform
+    if orig is not None:
+        return str(orig(generator, expression))
     return str(generator.alter_sql(expression))
 
 
@@ -480,8 +521,9 @@ def _spanner_drop_sql(generator: Any, expression: exp.Drop) -> str:
         exists_sql = " IF EXISTS" if expression.args.get("exists") else ""
         name = generator.sql(expression, "this")
         return f"DROP {kind}{exists_sql} {name}"
-    if _original_bq_drop_transform is not None:
-        return str(_original_bq_drop_transform(generator, expression))
+    orig = _original_pg_drop_transform if _get_dialect_name(generator) == "Spangres" else _original_bq_drop_transform
+    if orig is not None:
+        return str(orig(generator, expression))
     return str(generator.drop_sql(expression))
 
 
@@ -545,42 +587,41 @@ def _spangres_select_sql(generator: Any, expression: exp.Select) -> str:
     return PostgresGenerator.select_sql(generator, expression)
 
 
-def _spanner_table_sql(generator: Any, expression: exp.Table) -> str:
-    """Render table reference followed by @{...} table hint if present."""
+def _render_table_with_hints(generator: Any, expression: exp.Table, original_transform: Any, default_fn: Any) -> str:
     hints = expression.args.get("hints")
     if hints:
         expr_copy = expression.copy()
         expr_copy.set("hints", None)
-        base_sql = (
-            _original_bq_table_transform(generator, expr_copy)
-            if _original_bq_table_transform is not None
-            else BigQueryGenerator.table_sql(generator, expr_copy)
+        bare_copy = expr_copy.copy()
+        bare_copy.set("alias", None)
+        bare_copy.set("pivots", None)
+        bare_copy.set("joins", None)
+        table_path_sql = str(
+            original_transform(generator, bare_copy)
+            if original_transform is not None
+            else default_fn(generator, bare_copy)
         )
-        hint_strs = [generator.sql(h) for h in hints]
-        joined_hints = " ".join(hint_strs)
-        return f"{base_sql} {joined_hints}"
-    if _original_bq_table_transform is not None:
-        return str(_original_bq_table_transform(generator, expression))
-    return BigQueryGenerator.table_sql(generator, expression)
+        full_sql = str(
+            original_transform(generator, expr_copy)
+            if original_transform is not None
+            else default_fn(generator, expr_copy)
+        )
+        suffix = full_sql[len(table_path_sql) :] if full_sql.startswith(table_path_sql) else ""
+        joined_hints = " ".join(generator.sql(h) for h in hints)
+        return f"{table_path_sql} {joined_hints}{suffix}"
+    if original_transform is not None:
+        return str(original_transform(generator, expression))
+    return str(default_fn(generator, expression))
+
+
+def _spanner_table_sql(generator: Any, expression: exp.Table) -> str:
+    """Render table reference followed by @{...} table hint before any table alias."""
+    return _render_table_with_hints(generator, expression, _original_bq_table_transform, BigQueryGenerator.table_sql)
 
 
 def _spangres_table_sql(generator: Any, expression: exp.Table) -> str:
-    """Render table reference followed by /*@ ... */ table hint if present."""
-    hints = expression.args.get("hints")
-    if hints:
-        expr_copy = expression.copy()
-        expr_copy.set("hints", None)
-        base_sql = (
-            _original_pg_table_transform(generator, expr_copy)
-            if _original_pg_table_transform is not None
-            else PostgresGenerator.table_sql(generator, expr_copy)
-        )
-        hint_strs = [generator.sql(h) for h in hints]
-        joined_hints = " ".join(hint_strs)
-        return f"{base_sql} {joined_hints}"
-    if _original_pg_table_transform is not None:
-        return str(_original_pg_table_transform(generator, expression))
-    return PostgresGenerator.table_sql(generator, expression)
+    """Render table reference followed by /*@ ... */ table hint before any table alias."""
+    return _render_table_with_hints(generator, expression, _original_pg_table_transform, PostgresGenerator.table_sql)
 
 
 def _bq_index_transform(generator: Any, expression: exp.Index) -> str:
@@ -607,6 +648,33 @@ def _bq_drop_transform(generator: Any, expression: exp.Drop) -> str:
         return _spanner_drop_sql(generator, expression)
     if _original_bq_drop_transform is not None:
         return str(_original_bq_drop_transform(generator, expression))
+    return str(generator.drop_sql(expression))
+
+
+def _pg_index_transform(generator: Any, expression: exp.Index) -> str:
+    """Transform INDEX statements for Spangres or delegate to original Postgres transform."""
+    if _get_dialect_name(generator) == "Spangres":
+        return _spanner_index_sql(generator, expression)
+    if _original_pg_index_transform is not None:
+        return str(_original_pg_index_transform(generator, expression))
+    return str(generator.index_sql(expression))
+
+
+def _pg_alter_transform(generator: Any, expression: exp.Alter) -> str:
+    """Transform ALTER statements for Spangres or delegate to original Postgres transform."""
+    if _get_dialect_name(generator) == "Spangres":
+        return _spanner_alter_sql(generator, expression)
+    if _original_pg_alter_transform is not None:
+        return str(_original_pg_alter_transform(generator, expression))
+    return str(generator.alter_sql(expression))
+
+
+def _pg_drop_transform(generator: Any, expression: exp.Drop) -> str:
+    """Transform DROP statements for Spangres or delegate to original Postgres transform."""
+    if _get_dialect_name(generator) == "Spangres":
+        return _spanner_drop_sql(generator, expression)
+    if _original_pg_drop_transform is not None:
+        return str(_original_pg_drop_transform(generator, expression))
     return str(generator.drop_sql(expression))
 
 
@@ -747,25 +815,31 @@ def _pg_table_transform(generator: Any, expression: exp.Table) -> str:
     return str(PostgresGenerator.table_sql(generator, expression))
 
 
+def _render_spanner_custom_anonymous(generator: Any, expression: exp.Anonymous) -> "str | None":
+    name = str(expression.this).upper()
+    if name == "SPANNER_PROPERTY_GRAPH":
+        return _spanner_property_graph_sql(generator, expression)
+    if name == "GRAPH_TABLE" and "match" in expression.args:
+        return _spanner_graph_table_sql(generator, expression)
+    if name == "GET_NEXT_SEQUENCE_VALUE" and expression.expressions:
+        seq = generator.sql(expression.expressions[0])
+        return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
+    if name == "APPROX_COSINE_DISTANCE":
+        return _render_approx_cosine_distance(generator, expression)
+    if name == "TOKENIZE_FULLTEXT":
+        return _render_tokenize_fulltext(generator, expression)
+    if name in {"SEARCH_SUBSTRING", "SCORE", "SCORE_NGRAMS", "SNIPPET", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
+        args = ", ".join(generator.sql(e) for e in expression.expressions)
+        return f"{name}({args})"
+    return None
+
+
 def _spanner_anonymous_transform(generator: Any, expression: exp.Anonymous) -> str:
     """Transform Anonymous function calls for Spanner."""
-    dialect_name = _get_dialect_name(generator)
-    if dialect_name == "Spanner":
-        name = str(expression.this).upper()
-        if name == "SPANNER_PROPERTY_GRAPH":
-            return _spanner_property_graph_sql(generator, expression)
-        if name == "GRAPH_TABLE" and "match" in expression.args:
-            return _spanner_graph_table_sql(generator, expression)
-        if name == "GET_NEXT_SEQUENCE_VALUE" and expression.expressions:
-            seq = generator.sql(expression.expressions[0])
-            return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
-        if name == "APPROX_COSINE_DISTANCE":
-            return _render_approx_cosine_distance(generator, expression)
-        if name == "TOKENIZE_FULLTEXT":
-            return _render_tokenize_fulltext(generator, expression)
-        if name in {"SEARCH_SUBSTRING", "SCORE", "SCORE_NGRAMS", "SNIPPET", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
-            args = ", ".join(generator.sql(e) for e in expression.expressions)
-            return f"{name}({args})"
+    if _get_dialect_name(generator) == "Spanner":
+        rendered = _render_spanner_custom_anonymous(generator, expression)
+        if rendered is not None:
+            return rendered
     if _original_bq_anonymous_transform is not None:
         return str(_original_bq_anonymous_transform(generator, expression))
     return str(generator.anonymous_sql(expression))
@@ -773,17 +847,10 @@ def _spanner_anonymous_transform(generator: Any, expression: exp.Anonymous) -> s
 
 def _spangres_anonymous_transform(generator: Any, expression: exp.Anonymous) -> str:
     """Transform Anonymous function calls for Spangres."""
-    dialect_name = _get_dialect_name(generator)
-    if dialect_name == "Spangres":
-        name = str(expression.this).upper()
-        if name == "GET_NEXT_SEQUENCE_VALUE" and expression.expressions:
-            seq = generator.sql(expression.expressions[0])
-            return f"GET_NEXT_SEQUENCE_VALUE(SEQUENCE {seq})"
-        if name == "APPROX_COSINE_DISTANCE":
-            return _render_approx_cosine_distance(generator, expression)
-        if name in {"SEARCH_SUBSTRING", "SCORE", "SCORE_NGRAMS", "SNIPPET", "TOKENIZE_SUBSTRING", "TOKENIZE_NGRAMS"}:
-            args = ", ".join(generator.sql(e) for e in expression.expressions)
-            return f"{name}({args})"
+    if _get_dialect_name(generator) == "Spangres":
+        rendered = _render_spanner_custom_anonymous(generator, expression)
+        if rendered is not None:
+            return rendered
     if _original_pg_anonymous_transform is not None:
         return str(_original_pg_anonymous_transform(generator, expression))
     return str(generator.anonymous_sql(expression))
@@ -791,11 +858,13 @@ def _spangres_anonymous_transform(generator: Any, expression: exp.Anonymous) -> 
 
 def _spanner_join_sql(generator: Any, expression: exp.Join) -> str:
     """Preserve native join hints in their position after JOIN."""
-    sql = str(generator.join_sql(expression))
+    dialect_name = _get_dialect_name(generator)
+    orig = _original_pg_join_transform if isinstance(generator, PostgresGenerator) else _original_bq_join_transform
+    sql = str(orig(generator, expression)) if orig is not None else str(generator.join_sql(expression))
     hint = expression.args.get("spanner_hint")
-    if hint is not None and _get_dialect_name(generator) in {"Spanner", "Spangres"}:
-        prefix, separator, suffix = sql.partition("JOIN ")
-        return f"{prefix}{separator}{generator.sql(hint)} {suffix}"
+    if hint is not None and dialect_name in {"Spanner", "Spangres"}:
+        hint_sql = generator.sql(hint)
+        return re.sub(r"\b(JOIN)\s+", rf"\1 {hint_sql} ", sql, count=1, flags=re.IGNORECASE)
     return sql
 
 
@@ -818,6 +887,7 @@ _original_bq_search_transform = BigQueryGenerator.TRANSFORMS.get(Search)
 _original_pg_cosine_distance_transform = PostgresGenerator.TRANSFORMS.get(CosineDistance)
 _original_pg_euclidean_distance_transform = PostgresGenerator.TRANSFORMS.get(EuclideanDistance)
 _original_pg_dot_product_transform = PostgresGenerator.TRANSFORMS.get(DotProduct)
+_original_pg_search_transform = PostgresGenerator.TRANSFORMS.get(Search)
 
 
 def _register_spanner_generator_transforms() -> None:
@@ -857,6 +927,10 @@ def _register_spanner_generator_transforms() -> None:
     if not getattr(PostgresGenerator, _GENERATOR_TRANSFORMS_REGISTERED_ATTR, False):
         PostgresGenerator.TRANSFORMS[exp.Property] = _pg_property_transform
         PostgresGenerator.TRANSFORMS[exp.Properties] = _pg_properties_transform
+        PostgresGenerator.TRANSFORMS[exp.Create] = _pg_create_transform
+        PostgresGenerator.TRANSFORMS[exp.Index] = _pg_index_transform
+        PostgresGenerator.TRANSFORMS[exp.Alter] = _pg_alter_transform
+        PostgresGenerator.TRANSFORMS[exp.Drop] = _pg_drop_transform
         PostgresGenerator.TRANSFORMS[exp.Hint] = _pg_hint_transform
         PostgresGenerator.TRANSFORMS[exp.Select] = _pg_select_transform
         PostgresGenerator.TRANSFORMS[exp.Table] = _pg_table_transform
@@ -870,6 +944,9 @@ def _register_spanner_generator_transforms() -> None:
         )
         PostgresGenerator.TRANSFORMS[DotProduct] = _build_function_fallback_transform(
             "Spangres", _original_pg_dot_product_transform
+        )
+        PostgresGenerator.TRANSFORMS[Search] = _build_function_fallback_transform(
+            "Spangres", _original_pg_search_transform
         )
         setattr(PostgresGenerator, _GENERATOR_TRANSFORMS_REGISTERED_ATTR, True)
         updated = True

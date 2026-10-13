@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -21,6 +22,7 @@ from sqlspec.adapters.oracledb.adk import (
 from sqlspec.adapters.oracledb.adk.store import _event_data_column_ddl
 from sqlspec.adapters.oracledb.data_dictionary import OracleVersionCache, OracleVersionInfo
 from sqlspec.config import ADKConfig
+from sqlspec.exceptions import SQLSpecError
 
 
 def _mock_config(adk_config: dict[str, object]) -> MagicMock:
@@ -330,7 +332,7 @@ def test_oracle_adk_create_tables_checks_existence() -> None:
 
 
 def test_oracle_adk_create_tables_creates_absent_tables() -> None:
-    """create_tables still issues CREATE TABLE for tables the dictionary omits."""
+    """create_tables issues CREATE TABLE with ORA-00955 race guards for tables the dictionary omits."""
 
     store, driver, _ = _sync_store_with_driver()
     driver.data_dictionary.get_tables.return_value = []
@@ -340,7 +342,7 @@ def test_oracle_adk_create_tables_creates_absent_tables() -> None:
     driver.data_dictionary.get_tables.assert_called_once()
     executed = " ".join(str(call.args[0]) for call in driver.execute_script.call_args_list)
     assert "CREATE TABLE" in executed.upper()
-    assert "SQLCODE != -955" not in executed
+    assert "SQLCODE != -955" in executed
 
 
 class _RecordingCursor:
@@ -380,6 +382,12 @@ class _RecordingConnection:
 
     def cursor(self) -> _RecordingCursor:
         return self._cursor
+
+    def commit(self) -> None:
+        return None
+
+    async def commit_async(self) -> None:
+        return None
 
     def __enter__(self) -> "Self":
         return self
@@ -527,3 +535,92 @@ def test_oracle_sync_list_sessions_rejects_invalid_options(options: "dict[str, A
         store.list_sessions("app", **options)
 
     assert cursor.calls == []
+
+
+def test_oracle_sync_upsert_state_avoids_dual_state_bind_and_coerces_large_payload() -> None:
+    """MERGE statements must not bind :state inside SELECT FROM DUAL and must coerce >2KB BLOBs."""
+    cursor = _RecordingCursor()
+    conn = _RecordingConnection(cursor)
+    lob_mock = MagicMock()
+    conn.createlob = MagicMock(return_value=lob_mock)  # type: ignore[attr-defined]
+    config = _config_for_storage(JSONStorageType.BLOB_JSON)
+    config.extension_config = {"adk": {}}
+    config.provide_connection = lambda *_a, **_k: conn
+    store = OracleSyncADKStore(config)
+
+    large_state = {"blob": "x" * 5000}
+    store.upsert_app_state("app", large_state)
+    store.upsert_user_state("app", "u1", large_state)
+
+    app_sql, app_params = cursor.calls[0]
+    user_sql, user_params = cursor.calls[1]
+    assert ":state AS state FROM DUAL" not in app_sql
+    assert ":state AS state FROM DUAL" not in user_sql
+    assert app_params["state"] is lob_mock
+    assert user_params["state"] is lob_mock
+
+
+def test_oracle_adk_memory_store_validates_table_identifier_and_drops_actual_indexes() -> None:
+    """Memory stores validate _memory_table and drop the actual created index names."""
+    bad_config = _mock_config({"memory_table": "bad; DROP TABLE x"})
+    with pytest.raises((SQLSpecError, ValueError)):
+        OracleSyncADKMemoryStore(bad_config)
+    with pytest.raises((SQLSpecError, ValueError)):
+        OracleAsyncADKMemoryStore(bad_config)
+
+    fts_config = _mock_config({"memory_use_fts": True})
+    sync_store = OracleSyncADKMemoryStore(fts_config)
+    drop_sql = " ".join(sync_store._drop_memory_table_sql())
+    assert "idx_adk_memory_app_scope_user_time" in drop_sql
+    assert "idx_adk_memory_scope" in drop_sql
+    assert "idx_adk_memory_fts" in drop_sql
+    assert "idx_adk_memory_app_user_time" not in drop_sql
+
+
+def test_oracle_adk_memory_store_preserves_raw_owner_id() -> None:
+    """insert_memory_entries binds owner_id directly without str() coercion."""
+    cursor = _RecordingCursor()
+    conn = _RecordingConnection(cursor)
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {"owner_id_column": "owner_id RAW(16)"}}
+    config.provide_connection = lambda *_a, **_k: conn
+    store = OracleSyncADKMemoryStore(config)
+
+    owner_uuid = uuid4()
+    now = datetime.now(UTC)
+    store.insert_memory_entries(
+        [
+            {
+                "id": "m1",
+                "session_id": "s1",
+                "app_name": "app",
+                "user_id": "u1",
+                "scope": "user",
+                "event_id": "e1",
+                "author": "user",
+                "timestamp": now,
+                "content_json": {"a": 1},
+                "content_text": "hello",
+                "metadata_json": None,
+                "inserted_at": now,
+                "embedding": None,
+            }
+        ],
+        owner_id=owner_uuid,
+    )
+
+    _, params = cursor.calls[0]
+    assert params["owner_id"] is owner_uuid
+
+
+def test_oracle_adk_owner_id_column_ddl_escapes_single_quotes() -> None:
+    """owner_id_column DDL with single-quoted defaults is escaped inside EXECUTE IMMEDIATE."""
+    config = _mock_config({"owner_id_column": "owner_id VARCHAR2(32) DEFAULT 'anon' NOT NULL"})
+    session_store = OracleSyncADKStore(config)
+    memory_store = OracleSyncADKMemoryStore(config)
+
+    session_ddl = session_store._sessions_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+    memory_ddl = memory_store._memory_table_ddl_for_type(JSONStorageType.JSON_NATIVE)
+
+    assert "DEFAULT ''anon'' NOT NULL" in session_ddl
+    assert "DEFAULT ''anon'' NOT NULL" in memory_ddl

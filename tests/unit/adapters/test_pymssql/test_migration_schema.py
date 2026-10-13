@@ -116,3 +116,21 @@ def test_pymssql_reset_without_set_is_noop() -> None:
 
     driver.reset_migration_session_schema()
     assert cursor.executed == []
+
+
+def test_pymssql_migration_schema_handles_none_row_and_none_current_schema() -> None:
+    """set_migration_session_schema should no-op if fetchone returns None and default current_schema=None to 'dbo'."""
+    cursor = FakeCursor(current_schema=cast("Any", None))
+    driver = PymssqlDriver(cast("Any", FakeConnection(cursor)))
+    driver.set_migration_session_schema("tenant")
+    driver.reset_migration_session_schema()
+    assert cursor.executed[-1] == ("ALTER USER [sqlspec_migrator] WITH DEFAULT_SCHEMA = [dbo];", None)
+
+    class _EmptyCursor(FakeCursor):
+        def fetchone(self) -> Any:
+            return None
+
+    empty_cursor = _EmptyCursor()
+    empty_driver = PymssqlDriver(cast("Any", FakeConnection(empty_cursor)))
+    empty_driver.set_migration_session_schema("tenant")
+    assert len(empty_cursor.executed) == 1

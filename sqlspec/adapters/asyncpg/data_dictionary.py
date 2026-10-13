@@ -85,15 +85,6 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase):
         requested_domains = tuple(_POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
         return tuple(_postgres_system_metadata_capability(domain) for domain in requested_domains)
 
-    async def _select_domain(
-        self, driver: "AsyncpgDriver", domain: str, query_name: str, **parameters: Any
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
-        rows = await driver.select(query.sql, **parameters)
-        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
-
     async def get_schemas(self, driver: "AsyncpgDriver") -> MetadataResult:
         """Get schema metadata."""
         return await self._select_domain(driver, "schemas", "list")
@@ -203,32 +194,34 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase):
     async def get_version(self, driver: "AsyncpgDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
+        Performs an inline cache check to avoid a cross-module method call
+        that can trigger a mypyc segmentation fault.
+
         Args:
             driver: Async database driver instance.
 
         Returns:
             PostgreSQL version information or None if detection fails.
         """
-        driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
-        if driver_id in self._version_fetch_attempted:
-            return self._version_cache.get(driver_id)
+        cache_key = id(getattr(driver, "connection", None) or driver)
+        if cache_key in self._version_fetch_attempted:
+            return self._version_cache.get(cache_key)
 
         version_value = await driver.select_value_or_none(self.get_query("version", "current"))
         if not version_value:
             self._log_version_unavailable(type(self).dialect, "missing")
-            self.cache_version(driver_id, None)
+            self.cache_version(cache_key, None)
             return None
 
         config = self.get_dialect_config()
         version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
         if version_info is None:
             self._log_version_unavailable(type(self).dialect, "parse_failed")
-            self.cache_version(driver_id, None)
+            self.cache_version(cache_key, None)
             return None
 
         self._log_version_detected(type(self).dialect, version_info)
-        self.cache_version(id(driver), version_info)
+        self.cache_version(cache_key, version_info)
         return version_info
 
     async def get_feature_flag(self, driver: "AsyncpgDriver", feature: str) -> bool:
@@ -338,6 +331,15 @@ class AsyncpgDataDictionary(AsyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+
+    async def _select_domain(
+        self, driver: "AsyncpgDriver", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = await driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
 
 
 def _postgres_metadata_capability(domain: str) -> MetadataCapability:

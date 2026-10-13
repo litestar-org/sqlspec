@@ -10,6 +10,9 @@ from sqlspec.utils.module_loader import ensure_prometheus
 __all__ = ("PrometheusStatementObserver", "enable_metrics")
 
 
+_FORBIDDEN_HIGH_CARDINALITY_LABELS = frozenset({"sql", "parameters", "correlation_id", "duration_s"})
+
+
 class PrometheusStatementObserver:
     """Statement observer that records Prometheus metrics."""
 
@@ -24,7 +27,13 @@ class PrometheusStatementObserver:
         label_names: Iterable[str] = ("db_system", "operation"),
         duration_buckets: tuple[float, ...] | None = None,
     ) -> None:
-        self._label_names = tuple(label_names)
+        resolved_labels = tuple(label_names)
+        forbidden = _FORBIDDEN_HIGH_CARDINALITY_LABELS.intersection(resolved_labels)
+        if forbidden:
+            forbidden_names = ", ".join(sorted(forbidden))
+            msg = f"High-cardinality Prometheus label names are not allowed: {forbidden_names}"
+            raise ValueError(msg)
+        self._label_names = resolved_labels
         self._counters = Counter(
             "query_total",
             "Total SQL statements executed",
@@ -64,7 +73,7 @@ class PrometheusStatementObserver:
 
     def _label_values(self, event: StatementEvent) -> tuple[str, ...]:
         values: list[str] = []
-        payload = event.as_dict()
+        payload: dict[str, Any] | None = None
         for name in self._label_names:
             match name:
                 case "db_system":
@@ -81,6 +90,8 @@ class PrometheusStatementObserver:
                 case "bind_key":
                     values.append(event.bind_key or "default")
                 case _:
+                    if payload is None:
+                        payload = event.as_dict()
                     value = payload.get(name)
                     values.append("" if value is None else str(value))
         return tuple(values)

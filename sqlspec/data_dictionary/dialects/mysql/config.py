@@ -1,3 +1,5 @@
+"""MySQL and MariaDB dialect static configuration and reflection helpers."""
+
 import re
 
 from sqlspec.data_dictionary import (
@@ -20,7 +22,14 @@ from sqlspec.utils.text import quote_backtick_identifier, split_qualified_identi
 
 __all__ = (
     "MARIADB_CONFIG",
+    "MARIADB_FEATURE_FLAGS",
+    "MARIADB_FEATURE_VERSIONS",
     "MYSQL_CONFIG",
+    "MYSQL_FEATURE_FLAGS",
+    "MYSQL_FEATURE_VERSIONS",
+    "MYSQL_METADATA_DOMAINS",
+    "MYSQL_TYPE_MAPPINGS",
+    "MYSQL_VERSION_PATTERN",
     "MySQLEngineVersion",
     "build_mysql_metadata_capability_profile",
     "build_mysql_show_create_statement",

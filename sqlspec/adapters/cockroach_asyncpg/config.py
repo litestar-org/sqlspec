@@ -3,12 +3,7 @@
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 
-from sqlspec.adapters.asyncpg.core import (
-    apply_driver_features,
-    default_statement_config,
-    register_json_codecs,
-    register_pgvector_support,
-)
+from sqlspec.adapters.asyncpg.core import default_statement_config, register_json_codecs, register_pgvector_support
 from sqlspec.adapters.cockroach_asyncpg._typing import (
     CockroachAsyncpgConnection,
     CockroachAsyncpgPool,
@@ -17,7 +12,12 @@ from sqlspec.adapters.cockroach_asyncpg._typing import (
 from sqlspec.adapters.cockroach_asyncpg._typing import CockroachAsyncpgRecord as Record
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_connect as asyncpg_connect
 from sqlspec.adapters.cockroach_asyncpg._typing import cockroach_asyncpg_create_pool as asyncpg_create_pool
-from sqlspec.adapters.cockroach_asyncpg.core import build_connection_config, validate_follower_read_staleness
+from sqlspec.adapters.cockroach_asyncpg.core import (
+    CockroachAsyncpgRetryConfig,
+    apply_driver_features,
+    build_connection_config,
+    validate_follower_read_staleness,
+)
 from sqlspec.adapters.cockroach_asyncpg.driver import CockroachAsyncpgDriver, CockroachAsyncpgExceptionHandler
 from sqlspec.config import AsyncDatabaseConfig, ExtensionConfigs
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -25,7 +25,6 @@ from sqlspec.core.config_runtime import resolve_runtime_statement_config
 from sqlspec.driver import AsyncPoolConnectionContext, AsyncPoolSessionFactory
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventRuntimeHints
-from sqlspec.utils.config_tools import normalize_connection_config
 from sqlspec.utils.serializers import from_json, to_json
 
 if TYPE_CHECKING:
@@ -38,6 +37,7 @@ if TYPE_CHECKING:
 __all__ = (
     "CockroachAsyncpgConfig",
     "CockroachAsyncpgConnectionConfig",
+    "CockroachAsyncpgConnectionContext",
     "CockroachAsyncpgDriverFeatures",
     "CockroachAsyncpgGSSLib",
     "CockroachAsyncpgPoolConfig",
@@ -78,6 +78,8 @@ class CockroachAsyncpgConnectionConfig(TypedDict):
     connect_timeout: NotRequired[float]
     command_timeout: NotRequired[float]
     application_name: NotRequired[str]
+    cluster: NotRequired[str]
+    pgbouncer: NotRequired[bool]
     default_transaction_use_follower_reads: NotRequired[bool]
     results_buffer_size: NotRequired[int]
     statement_cache_size: NotRequired[int]
@@ -114,33 +116,6 @@ class _NativeStorageCSVOptions(TypedDict):
     skip: NotRequired[int]
 
 
-def _validate_follower_read_features(driver_features: "dict[str, Any]") -> None:
-    staleness = driver_features.get("default_staleness")
-    if staleness is None:
-        return
-    if not isinstance(staleness, str):
-        msg = "default_staleness must be a string."
-        raise ImproperConfigurationError(msg)
-    driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
-
-
-def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
-    if "native_storage_csv_options" not in driver_features:
-        return
-    options = driver_features["native_storage_csv_options"]
-    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
-        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
-        raise ImproperConfigurationError(msg)
-    for key in ("nullas", "nullif"):
-        if key in options and not isinstance(options[key], str):
-            msg = "native_storage_csv_options nullas and nullif must be strings."
-            raise ImproperConfigurationError(msg)
-    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
-        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
-        raise ImproperConfigurationError(msg)
-    driver_features["native_storage_csv_options"] = dict(options)
-
-
 class CockroachAsyncpgDriverFeatures(TypedDict):
     """Driver feature flags for CockroachDB AsyncPG adapter.
 
@@ -175,7 +150,6 @@ class CockroachAsyncpgDriverFeatures(TypedDict):
 class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
     """Uses pool.acquire() context manager pattern instead of direct acquire/release."""
 
-    # _connection inherited from AsyncPoolSessionFactory.__slots__ is never written; this class uses _ctx exclusively via the pool.acquire() context manager pattern.
     __slots__ = ("_ctx",)
 
     def __init__(self, config: "CockroachAsyncpgConfig") -> None:
@@ -183,10 +157,7 @@ class _CockroachAsyncpgSessionFactory(AsyncPoolSessionFactory):
         self._ctx: Any | None = None
 
     async def acquire_connection(self) -> "CockroachAsyncpgConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        pool = await self._config.provide_pool()
         ctx = pool.acquire()
         self._ctx = ctx
         return cast("CockroachAsyncpgConnection", await ctx.__aenter__())
@@ -238,11 +209,9 @@ class CockroachAsyncpgConfig(
         observability_config: "ObservabilityConfig | None" = None,
         **kwargs: Any,
     ) -> None:
-        raw_enable_pgvector = bool(driver_features and driver_features.get("enable_pgvector") is True)
-        connection_config = build_connection_config(normalize_connection_config(connection_config))
+        connection_config = build_connection_config(connection_config)
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
-        driver_features["enable_pgvector"] = raw_enable_pgvector
 
         driver_features.setdefault("enable_native_storage", False)
         _validate_native_storage_options(driver_features)
@@ -264,32 +233,8 @@ class CockroachAsyncpgConfig(
             observability_config=observability_config,
             **kwargs,
         )
-
-    async def _create_pool(self) -> "CockroachAsyncpgPool":
-        config = build_connection_config(self.connection_config)
-        config.setdefault("init", self._init_connection)
-        return await asyncpg_create_pool(**config)
-
-    async def _init_connection(self, connection: "CockroachAsyncpgConnection") -> None:
-        """Initialize connection with JSON codecs and user callback."""
-        if self.driver_features.get("enable_json_codecs", True):
-            await register_json_codecs(
-                connection,
-                encoder=self.driver_features.get("json_serializer", to_json),
-                decoder=self.driver_features.get("json_deserializer", from_json),
-            )
-
-        if self.driver_features.get("enable_pgvector") is True:
-            await register_pgvector_support(connection)
-
         if self._user_connection_hook is not None:
-            await self._user_connection_hook(connection)
-
-    async def _close_pool(self) -> None:
-        if not self.connection_instance:
-            return
-        await self.connection_instance.close()
-        self.connection_instance = None
+            self.driver_features["on_connection_create"] = self._user_connection_hook
 
     async def create_connection(self) -> "CockroachAsyncpgConnection":
         """Open a standalone connection owned by the caller.
@@ -346,13 +291,72 @@ class CockroachAsyncpgConfig(
     def get_signature_namespace(self) -> "dict[str, Any]":
         namespace = super().get_signature_namespace()
         namespace.update({
+            "CockroachAsyncpgConfig": CockroachAsyncpgConfig,
+            "CockroachAsyncpgConnection": CockroachAsyncpgConnection,
             "CockroachAsyncpgConnectionConfig": CockroachAsyncpgConnectionConfig,
-            "CockroachAsyncpgPoolConfig": CockroachAsyncpgPoolConfig,
+            "CockroachAsyncpgConnectionContext": CockroachAsyncpgConnectionContext,
             "CockroachAsyncpgDriver": CockroachAsyncpgDriver,
+            "CockroachAsyncpgDriverFeatures": CockroachAsyncpgDriverFeatures,
             "CockroachAsyncpgExceptionHandler": CockroachAsyncpgExceptionHandler,
+            "CockroachAsyncpgPool": CockroachAsyncpgPool,
+            "CockroachAsyncpgPoolConfig": CockroachAsyncpgPoolConfig,
+            "CockroachAsyncpgRetryConfig": CockroachAsyncpgRetryConfig,
             "CockroachAsyncpgSessionContext": CockroachAsyncpgSessionContext,
         })
         return namespace
 
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    async def _create_pool(self) -> "CockroachAsyncpgPool":
+        config = build_connection_config(self.connection_config)
+        config.setdefault("init", self._init_connection)
+        return await asyncpg_create_pool(**config)
+
+    async def _init_connection(self, connection: "CockroachAsyncpgConnection") -> None:
+        """Initialize connection with JSON codecs and user callback."""
+        if self.driver_features.get("enable_json_codecs", True):
+            await register_json_codecs(
+                connection,
+                encoder=self.driver_features.get("json_serializer", to_json),
+                decoder=self.driver_features.get("json_deserializer", from_json),
+            )
+
+        if self.driver_features.get("enable_pgvector") is True:
+            await register_pgvector_support(connection)
+
+        if self._user_connection_hook is not None:
+            await self._user_connection_hook(connection)
+
+    async def _close_pool(self) -> None:
+        if not self.connection_instance:
+            return
+        await self.connection_instance.close()
+        self.connection_instance = None
+
+
+def _validate_follower_read_features(driver_features: "dict[str, Any]") -> None:
+    staleness = driver_features.get("default_staleness")
+    if staleness is None:
+        return
+    if not isinstance(staleness, str):
+        msg = "default_staleness must be a string."
+        raise ImproperConfigurationError(msg)
+    driver_features["default_staleness"] = validate_follower_read_staleness(staleness)
+
+
+def _validate_native_storage_options(driver_features: "dict[str, Any]") -> None:
+    if "native_storage_csv_options" not in driver_features:
+        return
+    options = driver_features["native_storage_csv_options"]
+    if not isinstance(options, dict) or options.keys() - {"nullas", "nullif", "skip"}:
+        msg = "native_storage_csv_options must contain only nullas, nullif, and skip."
+        raise ImproperConfigurationError(msg)
+    for key in ("nullas", "nullif"):
+        if key in options and not isinstance(options[key], str):
+            msg = "native_storage_csv_options nullas and nullif must be strings."
+            raise ImproperConfigurationError(msg)
+    if "skip" in options and (type(options["skip"]) is not int or options["skip"] < 0):
+        msg = "native_storage_csv_options skip must be a nonnegative integer, excluding bool."
+        raise ImproperConfigurationError(msg)
+    driver_features["native_storage_csv_options"] = dict(options)

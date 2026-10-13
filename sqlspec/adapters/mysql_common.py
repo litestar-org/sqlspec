@@ -1,6 +1,7 @@
 """Shared MySQL-family adapter helpers, constants, and error mappings."""
 
 from collections.abc import Callable, Sequence, Sized
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.driver import rows_to_dicts
@@ -36,6 +37,7 @@ __all__ = (
     "MYSQL_CR_SERVER_LOST",
     "MYSQL_CR_SSL_CONNECTION_ERROR",
     "MYSQL_CR_UNKNOWN_HOST",
+    "MYSQL_DATA_ERROR_DISPATCH",
     "MYSQL_ER_ACCESS_DENIED",
     "MYSQL_ER_CHECK_CONSTRAINT_VIOLATED",
     "MYSQL_ER_DBACCESS_DENIED",
@@ -53,6 +55,7 @@ __all__ = (
     "bool_to_int",
     "build_insert_statement",
     "build_load_data_statement",
+    "can_use_local_infile_records",
     "collect_rows",
     "collect_stream_rows",
     "create_mapped_exception",
@@ -105,6 +108,8 @@ MYSQL_SQLSTATE_PREFIX_DISPATCH: Final[dict[str, tuple[type[SQLSpecError], str]]]
 }
 MYSQL_CONSTRAINT_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_DUP_ENTRY: (UniqueViolationError, "unique constraint violation"),
+    1169: (UniqueViolationError, "unique constraint violation"),
+    1586: (UniqueViolationError, "unique constraint violation"),
     1216: (ForeignKeyViolationError, "foreign key constraint violation"),
     1217: (ForeignKeyViolationError, "foreign key constraint violation"),
     1451: (ForeignKeyViolationError, "foreign key constraint violation"),
@@ -112,6 +117,7 @@ MYSQL_CONSTRAINT_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]
     1048: (NotNullViolationError, "not-null constraint violation"),
     MYSQL_ER_NO_DEFAULT_FOR_FIELD: (NotNullViolationError, "not-null constraint violation"),
     MYSQL_ER_CHECK_CONSTRAINT_VIOLATED: (CheckViolationError, "check constraint violation"),
+    4025: (CheckViolationError, "check constraint violation"),
 }
 MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_DBACCESS_DENIED: (PermissionDeniedError, "access denied"),
@@ -121,14 +127,32 @@ MYSQL_ACCESS_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = 
 MYSQL_TRANSACTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_ER_LOCK_DEADLOCK: (DeadlockError, "deadlock detected"),
     MYSQL_ER_LOCK_WAIT_TIMEOUT: (QueryTimeoutError, "lock wait timeout"),
+    1317: (QueryTimeoutError, "query execution interrupted"),
+    1969: (QueryTimeoutError, "query execution timeout"),
+    3024: (QueryTimeoutError, "query execution timeout"),
 }
 MYSQL_CONNECTION_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     MYSQL_CR_SERVER_LOST: (ConnectionTimeoutError, "connection lost"),
     MYSQL_CR_CONNECTION_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_CONN_HOST_ERROR: (DatabaseConnectionError, "connection error"),
+    2004: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_UNKNOWN_HOST: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_SERVER_GONE_ERROR: (DatabaseConnectionError, "connection error"),
     MYSQL_CR_SSL_CONNECTION_ERROR: (DatabaseConnectionError, "ssl connection error"),
+    2055: (DatabaseConnectionError, "connection error"),
+    4031: (DatabaseConnectionError, "connection error"),
+}
+MYSQL_DATA_ERROR_DISPATCH: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
+    1264: (DataError, "data error"),
+    1265: (DataError, "data error"),
+    1292: (DataError, "data error"),
+    1366: (DataError, "data error"),
+    1406: (DataError, "data error"),
+    1411: (DataError, "data error"),
+    3140: (DataError, "data error"),
+    3141: (DataError, "data error"),
+    3142: (DataError, "data error"),
+    3143: (DataError, "data error"),
 }
 
 
@@ -148,6 +172,38 @@ def build_insert_statement(table: str, columns: "list[str]") -> str:
     column_clause = ", ".join(quote_backtick_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def can_use_local_infile_records(arrow_table: Any, records: "Sequence[Sequence[Any]]") -> bool:
+    """Return whether Arrow records can be safely serialized via MySQL LOCAL INFILE TSV."""
+    schema = getattr(arrow_table, "schema", None)
+    if schema is not None:
+        all_safe_types = True
+        for field in schema:
+            field_type = getattr(field, "type", None)
+            type_str = str(field_type).lower() if field_type is not None else ""
+            if "binary" in type_str or "duration" in type_str:
+                return False
+            if not type_str or not type_str.startswith((
+                "int",
+                "uint",
+                "float",
+                "double",
+                "halffloat",
+                "bool",
+                "string",
+                "large_string",
+                "utf8",
+                "large_utf8",
+                "date",
+                "timestamp",
+                "time",
+                "decimal",
+            )):
+                all_safe_types = False
+        if all_safe_types:
+            return True
+    return not any(isinstance(value, (bytes, bytearray, memoryview, timedelta)) for row in records for value in row)
 
 
 def encode_records_for_local_infile(records: "list[tuple[Any, ...]]") -> bytes:
@@ -264,78 +320,6 @@ def detect_json_columns(
     return detect_json_columns_from_description(description, json_type_codes)
 
 
-def _deserialize_json_value(value: Any, deserializer: "Callable[[Any], Any]", *, logger: Any | None = None) -> Any:
-    """Safely decode JSON column values using the specified deserializer."""
-    if value is None:
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        try:
-            raw_bytes = bytes(value) if isinstance(value, (bytearray, memoryview)) else value
-            return deserializer(raw_bytes)
-        except Exception:
-            if logger is not None:
-                logger.debug("Failed to deserialize JSON column", exc_info=True)
-            return value
-    if isinstance(value, str):
-        try:
-            return deserializer(value)
-        except Exception:
-            if logger is not None:
-                logger.debug("Failed to deserialize JSON column", exc_info=True)
-            return value
-    return value
-
-
-def _deserialize_json_dict_rows(
-    column_names: "Sequence[str]",
-    rows: "Sequence[dict[str, Any]]",
-    json_indexes: "list[int]",
-    deserializer: "Callable[[Any], Any]",
-    *,
-    logger: Any | None = None,
-) -> "list[dict[str, Any]]":
-    """Deserialize JSON fields in dictionary rows in-place."""
-    if not json_indexes:
-        return rows if isinstance(rows, list) else list(rows)
-    json_columns = [column_names[idx] for idx in json_indexes if idx < len(column_names)]
-    for row in rows:
-        for column in json_columns:
-            if column in row and row[column] is not None:
-                row[column] = _deserialize_json_value(row[column], deserializer, logger=logger)
-    return rows if isinstance(rows, list) else list(rows)
-
-
-def _deserialize_json_tuple_rows(
-    rows: "Sequence[tuple[Any, ...]]",
-    json_indexes: "list[int]",
-    deserializer: "Callable[[Any], Any]",
-    *,
-    logger: Any | None = None,
-) -> "list[tuple[Any, ...]]":
-    """Deserialize JSON fields in tuple rows using sparse index iteration and lazy row mutation."""
-    if not json_indexes:
-        return rows if isinstance(rows, list) else list(rows)
-    result: list[tuple[Any, ...]] = []
-    for row in rows:
-        row_len = len(row)
-        row_list: list[Any] | None = None
-        for idx in json_indexes:
-            if idx >= row_len:
-                continue
-            raw_val = row[idx]
-            if raw_val is None:
-                continue
-            decoded = _deserialize_json_value(raw_val, deserializer, logger=logger)
-            if decoded is not raw_val:
-                if row_list is None:
-                    row_list = list(row)
-                row_list[idx] = decoded
-        result.append(tuple(row_list) if row_list is not None else row)
-    return result
-
-
 def collect_stream_rows(
     rows: "Sequence[Any]",
     row_plan: "tuple[list[str], list[int] | None]",
@@ -422,17 +406,6 @@ def bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _create_mysql_error(
-    error: Any, sqlstate: str | None, code: int | None, error_class: type[SQLSpecError], description: str
-) -> SQLSpecError:
-    """Create a MySQL error instance without raising it."""
-    code_str = f"[{sqlstate or code}]" if sqlstate or code else ""
-    msg = f"MySQL {description} {code_str}: {error}" if code_str else f"MySQL {description}: {error}"
-    exc = error_class(msg)
-    exc.__cause__ = error
-    return exc
-
-
 def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpecError | bool":
     """Map MySQL driver exceptions to SQLSpec errors."""
     error_code = getattr(error, "errno", None)
@@ -480,14 +453,17 @@ def create_mapped_exception(error: Any, *, logger: Any | None = None) -> "SQLSpe
     if isinstance(error_code, int) and MYSQL_SYNTAX_ERROR_MIN <= error_code < MYSQL_SYNTAX_ERROR_MAX_EXCLUSIVE:
         return _create_mysql_error(error, sqlstate, error_code, SQLParsingError, "SQL syntax error")
 
-    if sqlstate_prefix == "08":
-        dispatch = MYSQL_SQLSTATE_PREFIX_DISPATCH["08"]
-        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
     dispatch = MYSQL_CONNECTION_ERROR_DISPATCH.get(error_code) if error_code is not None else None
     if dispatch is not None:
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if sqlstate_prefix == "08":
+        dispatch = MYSQL_SQLSTATE_PREFIX_DISPATCH["08"]
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
-    if sqlstate_prefix == "22":
+    dispatch = MYSQL_DATA_ERROR_DISPATCH.get(error_code) if error_code is not None else None
+    if dispatch is not None:
+        return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
+    if sqlstate_prefix == "22" or type(error).__name__ == "DataError":
         dispatch = MYSQL_SQLSTATE_PREFIX_DISPATCH["22"]
         return _create_mysql_error(error, sqlstate, error_code, dispatch[0], dispatch[1])
 
@@ -500,3 +476,86 @@ def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValid
         return sql
     keep = {info.position for info in validator.extract_parameters(sql)}
     return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
+
+
+def _deserialize_json_value(value: Any, deserializer: "Callable[[Any], Any]", *, logger: Any | None = None) -> Any:
+    """Safely decode JSON column values using the specified deserializer."""
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            raw_bytes = bytes(value) if isinstance(value, (bytearray, memoryview)) else value
+            return deserializer(raw_bytes)
+        except Exception:
+            if logger is not None:
+                logger.debug("Failed to deserialize JSON column", exc_info=True)
+            return value
+    if isinstance(value, str):
+        try:
+            return deserializer(value)
+        except Exception:
+            if logger is not None:
+                logger.debug("Failed to deserialize JSON column", exc_info=True)
+            return value
+    return value
+
+
+def _deserialize_json_dict_rows(
+    column_names: "Sequence[str]",
+    rows: "Sequence[dict[str, Any]]",
+    json_indexes: "list[int]",
+    deserializer: "Callable[[Any], Any]",
+    *,
+    logger: Any | None = None,
+) -> "list[dict[str, Any]]":
+    """Deserialize JSON fields in dictionary rows in-place."""
+    if not json_indexes:
+        return rows if isinstance(rows, list) else list(rows)
+    json_columns = [column_names[idx] for idx in json_indexes if idx < len(column_names)]
+    for row in rows:
+        for column in json_columns:
+            if column in row and row[column] is not None:
+                row[column] = _deserialize_json_value(row[column], deserializer, logger=logger)
+    return rows if isinstance(rows, list) else list(rows)
+
+
+def _deserialize_json_tuple_rows(
+    rows: "Sequence[tuple[Any, ...]]",
+    json_indexes: "list[int]",
+    deserializer: "Callable[[Any], Any]",
+    *,
+    logger: Any | None = None,
+) -> "list[tuple[Any, ...]]":
+    """Deserialize JSON fields in tuple rows using sparse index iteration and lazy row mutation."""
+    if not json_indexes:
+        return rows if isinstance(rows, list) else list(rows)
+    result: list[tuple[Any, ...]] = []
+    for row in rows:
+        row_len = len(row)
+        row_list: list[Any] | None = None
+        for idx in json_indexes:
+            if idx >= row_len:
+                continue
+            raw_val = row[idx]
+            if raw_val is None:
+                continue
+            decoded = _deserialize_json_value(raw_val, deserializer, logger=logger)
+            if decoded is not raw_val:
+                if row_list is None:
+                    row_list = list(row)
+                row_list[idx] = decoded
+        result.append(tuple(row_list) if row_list is not None else row)
+    return result
+
+
+def _create_mysql_error(
+    error: Any, sqlstate: str | None, code: int | None, error_class: type[SQLSpecError], description: str
+) -> SQLSpecError:
+    """Create a MySQL error instance without raising it."""
+    code_str = f"[{sqlstate or code}]" if sqlstate or code else ""
+    msg = f"MySQL {description} {code_str}: {error}" if code_str else f"MySQL {description}: {error}"
+    exc = error_class(msg)
+    exc.__cause__ = error
+    return exc

@@ -65,6 +65,8 @@ __all__ = (
     "driver_profile",
     "execute_ddl_async",
     "execute_ddl_sync",
+    "execute_partitioned_dml_async",
+    "execute_partitioned_dml_sync",
     "infer_param_types",
     "is_ddl_statement",
     "is_query_statement",
@@ -703,6 +705,89 @@ async def execute_ddl_async(database: Any, statements: "list[str]", *, timeout: 
         return
     operation = await database.update_ddl(statements)
     await operation.result(timeout=timeout)
+
+
+def execute_partitioned_dml_sync(
+    database: Any,
+    sql: str,
+    params: "dict[str, Any] | None" = None,
+    param_types: "dict[str, Any] | None" = None,
+    *,
+    json_serializer: "Callable[[Any], str] | None" = None,
+    enable_uuid_conversion: bool = True,
+    **kwargs: Any,
+) -> int:
+    """Execute a Partitioned DML statement on a sync Spanner database.
+
+    Args:
+        database: Sync Spanner database.
+        sql: Partitioned DML statement.
+        params: Optional parameter dictionary.
+        param_types: Optional Spanner parameter types dictionary.
+        json_serializer: Optional JSON serializer for parameter coercion.
+        enable_uuid_conversion: Whether to convert UUID parameters to strings.
+        **kwargs: Additional keyword arguments passed to ``database.execute_partitioned_dml``.
+
+    Returns:
+        Lower bound of the number of rows modified.
+
+    Raises:
+        SQLSpecError: Mapped exception when the Spanner API call fails.
+    """
+    resolved_types = param_types if param_types is not None else (infer_param_types(params) if params else None)
+    coerced_params = (
+        coerce_params(params, json_serializer=json_serializer, enable_uuid_conversion=enable_uuid_conversion)
+        if params
+        else None
+    )
+    try:
+        return int(
+            database.execute_partitioned_dml(sql, params=coerced_params, param_types=resolved_types, **kwargs) or 0
+        )
+    except api_exceptions.GoogleAPICallError as exc:
+        raise create_mapped_exception(exc) from exc
+
+
+async def execute_partitioned_dml_async(
+    database: Any,
+    sql: str,
+    params: "dict[str, Any] | None" = None,
+    param_types: "dict[str, Any] | None" = None,
+    *,
+    json_serializer: "Callable[[Any], str] | None" = None,
+    enable_uuid_conversion: bool = True,
+    **kwargs: Any,
+) -> int:
+    """Execute a Partitioned DML statement on an async Spanner database.
+
+    Args:
+        database: Async Spanner database.
+        sql: Partitioned DML statement.
+        params: Optional parameter dictionary.
+        param_types: Optional Spanner parameter types dictionary.
+        json_serializer: Optional JSON serializer for parameter coercion.
+        enable_uuid_conversion: Whether to convert UUID parameters to strings.
+        **kwargs: Additional keyword arguments passed to ``database.execute_partitioned_dml``.
+
+    Returns:
+        Lower bound of the number of rows modified.
+
+    Raises:
+        SQLSpecError: Mapped exception when the Spanner API call fails.
+    """
+    resolved_types = param_types if param_types is not None else (infer_param_types(params) if params else None)
+    coerced_params = (
+        coerce_params(params, json_serializer=json_serializer, enable_uuid_conversion=enable_uuid_conversion)
+        if params
+        else None
+    )
+    try:
+        result = await database.execute_partitioned_dml(
+            sql, params=coerced_params, param_types=resolved_types, **kwargs
+        )
+        return int(result or 0)
+    except api_exceptions.GoogleAPICallError as exc:
+        raise create_mapped_exception(exc) from exc
 
 
 class _SpannerStreamSourceBase:

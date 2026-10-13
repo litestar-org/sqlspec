@@ -11,7 +11,8 @@ import pytest
 
 from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
 from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.core import SQL
+from sqlspec.exceptions import SerializationConflictError, SQLSpecError
 
 if TYPE_CHECKING:
     from sqlspec.adapters.psycopg._typing import PsycopgAsyncConnection, PsycopgSyncConnection
@@ -405,3 +406,57 @@ async def test_async_logical_transaction_is_reported_while_libpq_is_idle() -> No
     await driver.begin()
 
     assert driver._connection_in_transaction() is True  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sync_inerror_status_is_not_active_transaction_and_rolls_back_on_begin() -> None:
+    """TRANSACTION_STATUS_INERROR (3) should not report an active transaction and should roll back on begin()."""
+    connection = _SyncTransactionConnection(transaction_status=3)
+    driver = _sync_driver(connection)
+
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+    driver.begin()
+
+    assert connection.rollback_calls == 1
+    assert connection.autocommit_calls == [False]
+    assert driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_async_inerror_status_is_not_active_transaction_and_rolls_back_on_begin() -> None:
+    """TRANSACTION_STATUS_INERROR (3) should not report an active transaction and should roll back on async begin()."""
+    connection = _AsyncTransactionConnection(transaction_status=3)
+    driver = _async_driver(connection)
+
+    assert driver._connection_in_transaction() is False  # pyright: ignore[reportPrivateUsage]
+    await driver.begin()
+
+    assert connection.rollback_calls == 1
+    assert connection.autocommit_calls == [False]
+    assert driver._transaction_active is True  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sync_commit_maps_typed_psycopg_exception() -> None:
+    """commit() should preserve typed SQLSpec exceptions mapped from psycopg errors."""
+    connection = _SyncTransactionConnection(commit_error=psycopg.errors.SerializationFailure("could not serialize"))
+    driver = _sync_driver(connection)
+    driver.begin()
+
+    with pytest.raises(SerializationConflictError, match="serialization failure"):
+        driver.commit()
+
+
+def test_sync_copy_to_stdout_decodes_memoryview_chunks_and_reports_rowcount() -> None:
+    """COPY ... TO STDOUT should decode memoryview chunks without str(memoryview) corruption."""
+    driver = _sync_driver(_SyncTransactionConnection())
+    cursor = MagicMock()
+    cursor.rowcount = 2
+    copy_ctx = MagicMock()
+    copy_ctx.__enter__.return_value = [memoryview(b"1\talice\n"), memoryview(b"2\tbob\n")]
+    copy_ctx.__exit__.return_value = False
+    cursor.copy.return_value = copy_ctx
+
+    statement = SQL("COPY users TO STDOUT")
+    statement.compile()
+    result = driver.dispatch_special_handling(cursor, statement)
+    assert result is not None
+    assert result.get_data() == [{"copy_output": "1\talice\n2\tbob\n"}]
+    assert result.rows_affected == 2

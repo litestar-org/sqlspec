@@ -124,9 +124,9 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         CREATE TABLE IF NOT EXISTS {self._table_name} (
             session_id VARCHAR PRIMARY KEY,
             data BLOB NOT NULL,
-            expires_at TIMESTAMP,
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
+            expires_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
         ON {self._table_name}(expires_at);
@@ -141,7 +141,7 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         return [f"DROP INDEX IF EXISTS idx_{self._table_name}_expires_at", f"DROP TABLE IF EXISTS {self._table_name}"]
 
     def _datetime_to_timestamp(self, dt: "datetime | None") -> "str | None":
-        """Convert datetime to ISO 8601 string for DuckDB TIMESTAMP storage.
+        """Convert datetime to ISO 8601 string for DuckDB TIMESTAMPTZ storage.
 
         Args:
             dt: Datetime to convert (must be UTC-aware).
@@ -167,11 +167,11 @@ class DuckdbStore(BaseSQLSpecStore["DuckDBConfig"]):
         if isinstance(ts, datetime):
             if ts.tzinfo is None:
                 return ts.replace(tzinfo=UTC)
-            return ts
+            return ts.astimezone(UTC)
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
-        return dt
+        return dt.astimezone(UTC)
 
     def _create_table(self) -> None:
         """Synchronous implementation of create_table."""

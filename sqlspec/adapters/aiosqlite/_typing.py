@@ -1,4 +1,3 @@
-# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """AIOSQLite adapter type definitions.
 
 This module contains type aliases and classes that are excluded from mypyc
@@ -6,15 +5,12 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-import sqlite3
 import sqlite3 as aiosqlite_sqlite_module
 from typing import TYPE_CHECKING, Any
 
-import aiosqlite
 import aiosqlite as aiosqlite_module
-from typing_extensions import TypeAliasType
 
-_AiosqliteConnection = aiosqlite.Connection
+_AiosqliteConnection = aiosqlite_module.Connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,12 +21,12 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     AiosqliteConnection: TypeAlias = _AiosqliteConnection
-    AiosqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
-    AiosqliteRawCursor: TypeAlias = aiosqlite.Cursor
+    AiosqliteConnectionFactory: TypeAlias = type[aiosqlite_sqlite_module.Connection]
+    AiosqliteRawCursor: TypeAlias = aiosqlite_module.Cursor
 else:
     AiosqliteConnection = _AiosqliteConnection
-    AiosqliteConnectionFactory = TypeAliasType("AiosqliteConnectionFactory", type[sqlite3.Connection])
-    AiosqliteRawCursor = aiosqlite.Cursor
+    AiosqliteConnectionFactory = type[aiosqlite_sqlite_module.Connection]
+    AiosqliteRawCursor = aiosqlite_module.Cursor
 
 __all__ = (
     "AiosqliteConnection",

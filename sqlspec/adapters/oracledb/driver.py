@@ -1,3 +1,5 @@
+"""Oracle Database driver implementation."""
+
 import logging
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, overload
 
@@ -69,7 +71,7 @@ from sqlspec.driver import (
 )
 from sqlspec.exceptions import ImproperConfigurationError, SQLSpecError, StackExecutionError
 from sqlspec.utils.logging import get_logger, log_with_context
-from sqlspec.utils.module_loader import ensure_pyarrow
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_guards import has_pipeline_capability, is_async_readable
 from sqlspec.utils.uuids import uuid4
@@ -95,6 +97,7 @@ __all__ = (
 
 
 logger = get_logger(__name__)
+pa: Any = import_optional("pyarrow")
 
 PLAN_STATEMENT_ID_MAX_LENGTH: Final[int] = 30
 """Width of the PLAN_TABLE STATEMENT_ID column."""
@@ -198,7 +201,8 @@ class OraclePipelineMixin:
             sql=compiled_sql,
             parameters=prepared_parameters,
             method=operation.method,
-            returns_rows=sql_statement.returns_rows(),
+            returns_rows=sql_statement.returns_rows()
+            and sql_statement.operation_type not in {"INSERT", "UPDATE", "DELETE"},
             summary=summary,
         )
 
@@ -349,6 +353,17 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
+    @property
+    def data_dictionary(self) -> "OracledbSyncDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = OracledbSyncDataDictionary()
+        return self._data_dictionary
+
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
@@ -385,7 +400,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
-        if is_select_like:
+        if is_select_like and cursor.description is not None:
             fetched_data = cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = collect_sync_rows(
@@ -469,6 +484,15 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             Execution result containing statement count and success information
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        prepared_parameters = coerce_large_parameters_sync(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
@@ -476,7 +500,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         last_cursor = cursor
 
         for stmt in statements:
-            cursor.execute(stmt, prepared_parameters or {})
+            cursor.execute(stmt, _filter_script_parameters(stmt, prepared_parameters))
             successful_count += 1
 
         return self.create_execution_result(
@@ -501,8 +525,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         try:
             self.connection.commit()
         except OracleError as e:
-            msg = f"Failed to commit Oracle transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         self._transaction_active = False
 
     def rollback(self) -> None:
@@ -515,8 +538,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         try:
             self.connection.rollback()
         except OracleError as e:
-            msg = f"Failed to rollback Oracle transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
 
@@ -565,7 +587,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "SyncRowStream[SchemaT]": ...
-
     @overload
     def select_stream(
         self,
@@ -578,7 +599,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "SyncRowStream[dict[str, Any]]": ...
-
     def select_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
@@ -658,8 +678,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        import pyarrow as pa
-
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
@@ -677,8 +695,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         try:
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
-                import pyarrow as pa
-
                 record_batches, batch_schema = self._fetch_arrow_record_batches(
                     sql, prepared_parameters, batch_size, arrow_schema
                 )
@@ -731,9 +747,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         if not self._pipeline_native_supported():
             self._log_pipeline_skip(self._pipeline_support_reason or "database_version", stack)
-            return super().execute_stack(stack, continue_on_error=continue_on_error)
-
-        return self._execute_stack_native(stack, continue_on_error=continue_on_error)
+        return super().execute_stack(stack, continue_on_error=continue_on_error)
 
     def select_to_storage(
         self,
@@ -805,7 +819,16 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 with self.with_cursor(self.connection) as cursor, exc_handler:
                     for batch in arrow_table.to_batches(max_chunksize=5000):
                         batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
-                        cursor.executemany(statement, batch_rows)
+                        coerced_rows = coerce_many_parameters_sync(
+                            self.connection,
+                            batch_rows,
+                            clob_type=DB_TYPE_CLOB,
+                            blob_type=DB_TYPE_BLOB,
+                            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                            version_cache=self._oracle_version_cache,
+                        )
+                        cursor.executemany(statement, coerced_rows)
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -825,17 +848,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         """Load staged artifacts into Oracle."""
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    @property
-    def data_dictionary(self) -> "OracledbSyncDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = OracledbSyncDataDictionary()
-        return self._data_dictionary
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle sync rows for the direct execution path."""
@@ -949,8 +961,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
-        import pyarrow as pa
-
         params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
@@ -977,40 +987,6 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 batch_schema = batch_table.schema
             record_batches.extend(batch_table.to_batches())
         return record_batches, batch_schema
-
-    def _execute_stack_native(self, stack: "StatementStack", *, continue_on_error: bool) -> "tuple[StackResult, ...]":
-
-        compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
-        pipeline = create_oracle_pipeline()
-        for compiled in compiled_operations:
-            self._add_pipeline_operation(pipeline, compiled)
-
-        results: list[StackResult] = []
-        owns_transaction = not self._connection_in_transaction()
-
-        with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=True) as observer:
-            try:
-                if owns_transaction and not continue_on_error:
-                    self.begin()
-
-                pipeline_results = self.connection.run_pipeline(pipeline, continue_on_error=True)
-                results = self._build_stack_results_from_pipeline(
-                    compiled_operations, pipeline_results, continue_on_error, observer
-                )
-
-                if owns_transaction:
-                    self.commit()
-            except Exception as exc:
-                if owns_transaction:
-                    try:
-                        self.rollback()
-                    except Exception as rollback_error:  # pragma: no cover
-                        logger.debug("Rollback after pipeline failure failed: %s", rollback_error)
-                if isinstance(exc, StackExecutionError):
-                    raise
-                raise self._wrap_pipeline_error(exc, stack, continue_on_error) from exc
-
-        return tuple(results)
 
     def _pipeline_native_supported(self) -> bool:
         if self._pipeline_support is not None:
@@ -1062,6 +1038,17 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self._row_metadata_cache: dict[int, tuple[Any, list[str], bool]] = {}
         self._transaction_active = False
 
+    @property
+    def data_dictionary(self) -> "OracledbAsyncDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = OracledbAsyncDataDictionary()
+        return self._data_dictionary
+
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement with Oracle data handling.
 
@@ -1098,7 +1085,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
-        if is_select_like:
+        if is_select_like and cursor.description is not None:
             fetched_data = await cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = await collect_async_rows(
@@ -1184,14 +1171,23 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             Execution result containing statement count and success information
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        prepared_parameters = await coerce_large_parameters_async(
+            self.connection,
+            prepared_parameters,
+            clob_type=DB_TYPE_CLOB,
+            blob_type=DB_TYPE_BLOB,
+            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+            version_cache=self._oracle_version_cache,
+        )
+        prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
-        script_params = cast("dict[str, Any]", prepared_parameters or {})
 
         successful_count = 0
         last_cursor = cursor
 
         for stmt in statements:
-            await cursor.execute(stmt, script_params)
+            await cursor.execute(stmt, _filter_script_parameters(stmt, prepared_parameters))
             successful_count += 1
 
         return self.create_execution_result(
@@ -1216,8 +1212,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         try:
             await self.connection.commit()
         except OracleError as e:
-            msg = f"Failed to commit Oracle transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         self._transaction_active = False
 
     async def rollback(self) -> None:
@@ -1230,8 +1225,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         try:
             await self.connection.rollback()
         except OracleError as e:
-            msg = f"Failed to rollback Oracle transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         finally:
             self._transaction_active = False
 
@@ -1283,7 +1277,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "AsyncRowStream[SchemaT]": ...
-
     @overload
     def select_stream(
         self,
@@ -1296,7 +1289,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "AsyncRowStream[dict[str, Any]]": ...
-
     def select_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
@@ -1376,8 +1368,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         """
         ensure_pyarrow()
 
-        import pyarrow as pa
-
         config = statement_config or self.statement_config
         prepared_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
         sql, prepared_parameters = self._compiled_sql(prepared_statement, config)
@@ -1395,8 +1385,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         try:
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
-                import pyarrow as pa
-
                 record_batches, batch_schema = await self._fetch_arrow_record_batches(
                     sql, prepared_parameters, batch_size, arrow_schema
                 )
@@ -1521,7 +1509,16 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 async with self.with_cursor(self.connection) as cursor, exc_handler:
                     for batch in arrow_table.to_batches(max_chunksize=5000):
                         batch_rows = [tuple(row[col] for col in columns) for row in batch.to_pylist()]
-                        await cursor.executemany(statement, batch_rows)
+                        coerced_rows = await coerce_many_parameters_async(
+                            self.connection,
+                            batch_rows,
+                            clob_type=DB_TYPE_CLOB,
+                            blob_type=DB_TYPE_BLOB,
+                            varchar2_byte_limit=self.driver_features.get("oracle_varchar2_byte_limit", 4000),
+                            raw_byte_limit=self.driver_features.get("oracle_raw_byte_limit", 2000),
+                            version_cache=self._oracle_version_cache,
+                        )
+                        await cursor.executemany(statement, coerced_rows)
                 if exc_handler.pending_exception is not None:
                     raise exc_handler.pending_exception from None
         telemetry_payload = self._ingest_telemetry(arrow_table)
@@ -1543,17 +1540,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
-
-    @property
-    def data_dictionary(self) -> "OracledbAsyncDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = OracledbAsyncDataDictionary()
-        return self._data_dictionary
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect Oracle async rows for the direct execution path.
@@ -1676,8 +1662,6 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         batch_size: int | None,
         arrow_schema: "ArrowSchema | None",
     ) -> "tuple[list[ArrowRecordBatch], ArrowSchema | None]":
-        import pyarrow as pa
-
         params = parameters if parameters is not None else []
         record_batches: list[ArrowRecordBatch] = []
         batch_schema: ArrowSchema | None = None
@@ -1709,10 +1693,35 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         self, stack: "StatementStack", *, continue_on_error: bool
     ) -> "tuple[StackResult, ...]":
 
-        compiled_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
+        raw_operations = [self._prepare_pipeline_operation(op) for op in stack.operations]
+        compiled_operations: list[_CompiledStackOperation] = []
         pipeline = create_oracle_pipeline()
-        for compiled in compiled_operations:
-            self._add_pipeline_operation(pipeline, compiled)
+        varchar2_limit = self.driver_features.get("oracle_varchar2_byte_limit", 4000)
+        raw_limit = self.driver_features.get("oracle_raw_byte_limit", 2000)
+        for compiled in raw_operations:
+            if compiled.method == "execute_many":
+                coerced_params: Any = await coerce_many_parameters_async(
+                    self.connection,
+                    compiled.parameters,
+                    clob_type=DB_TYPE_CLOB,
+                    blob_type=DB_TYPE_BLOB,
+                    varchar2_byte_limit=varchar2_limit,
+                    raw_byte_limit=raw_limit,
+                    version_cache=self._oracle_version_cache,
+                )
+            else:
+                coerced_params = await coerce_large_parameters_async(
+                    self.connection,
+                    compiled.parameters,
+                    clob_type=DB_TYPE_CLOB,
+                    blob_type=DB_TYPE_BLOB,
+                    varchar2_byte_limit=varchar2_limit,
+                    raw_byte_limit=raw_limit,
+                    version_cache=self._oracle_version_cache,
+                )
+            coerced_op = compiled._replace(parameters=coerced_params)
+            compiled_operations.append(coerced_op)
+            self._add_pipeline_operation(pipeline, coerced_op)
 
         results: list[StackResult] = []
         owns_transaction = not self._connection_in_transaction()
@@ -1802,7 +1811,6 @@ def _arrow_schema_supports_direct_path(arrow_table: Any) -> bool:
         True when every column type is known to be convertible.
     """
     ensure_pyarrow()
-    import pyarrow as pa
 
     for field in arrow_table.schema:
         data_type = field.type
@@ -1899,3 +1907,30 @@ def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, obj
     retry_kwargs = dict(fetch_kwargs)
     retry_kwargs.pop("fetch_lobs", None)
     return retry_kwargs
+
+
+def _statement_contains_bind(statement: str, name: str) -> bool:
+    """Return whether a SQL statement references a named Oracle bind placeholder."""
+    lowered_sql = statement.lower()
+    target = f":{name.lower()}"
+    start = 0
+    while True:
+        idx = lowered_sql.find(target, start)
+        if idx == -1:
+            return False
+        prev_ok = idx == 0 or lowered_sql[idx - 1] != ":"
+        end_idx = idx + len(target)
+        next_ch = lowered_sql[end_idx] if end_idx < len(lowered_sql) else ""
+        next_ok = not (next_ch.isalnum() or next_ch in {"_", "$", "#"})
+        if prev_ok and next_ok:
+            return True
+        start = idx + 1
+
+
+def _filter_script_parameters(statement: str, parameters: Any) -> Any:
+    """Filter dictionary script parameters to the bind placeholders present in statement."""
+    if not parameters:
+        return {}
+    if isinstance(parameters, dict):
+        return {key: val for key, val in parameters.items() if _statement_contains_bind(statement, str(key))}
+    return parameters

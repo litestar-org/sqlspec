@@ -1,3 +1,5 @@
+"""ADBC adapter for SQLSpec."""
+
 from sqlspec.adapters.adbc._typing import AdbcConnection
 from sqlspec.adapters.adbc.config import AdbcConfig, AdbcConnectionParams, AdbcDriverFeatures
 from sqlspec.adapters.adbc.driver import AdbcCursor, AdbcDriver, AdbcExceptionHandler

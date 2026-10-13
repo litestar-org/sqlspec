@@ -1,3 +1,5 @@
+"""AsyncMy database adapter for SQLSpec."""
+
 from sqlspec.adapters.asyncmy._typing import AsyncmyConnection, AsyncmyCursor
 from sqlspec.adapters.asyncmy.config import (
     AsyncmyConfig,

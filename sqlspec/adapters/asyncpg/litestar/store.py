@@ -3,6 +3,8 @@
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NotRequired, cast
 
+from sqlspec.adapters.asyncpg._typing import asyncpg_module as asyncpg
+from sqlspec.adapters.asyncpg.core import parse_status
 from sqlspec.config import LitestarConfig
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 
@@ -79,36 +81,39 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         Returns:
             Session data as bytes if found and not expired, None otherwise.
         """
-        if renew_for is not None:
-            new_expires_at = self._calculate_expires_at(renew_for)
-            if new_expires_at is not None:
-                update_sql = f"""
-                UPDATE {self._table_name}
-                SET expires_at = CASE WHEN expires_at IS NOT NULL THEN $1 ELSE expires_at END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE session_id = $2
-                AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-                RETURNING data
-                """
-                async with self._config.provide_connection() as conn:
-                    row = await conn.fetchrow(update_sql, new_expires_at, key)
-                    if row is None:
-                        return None
-                    return bytes(row["data"])
+        try:
+            if renew_for is not None:
+                new_expires_at = self._calculate_expires_at(renew_for)
+                if new_expires_at is not None:
+                    update_sql = f"""
+                    UPDATE {self._table_name}
+                    SET expires_at = CASE WHEN expires_at IS NOT NULL THEN $1 ELSE expires_at END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE session_id = $2
+                    AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                    RETURNING data
+                    """
+                    async with self._config.provide_connection() as conn:
+                        row = await conn.fetchrow(update_sql, new_expires_at, key)
+                        if row is None:
+                            return None
+                        return bytes(row["data"])
 
-        sql = f"""
-        SELECT data, expires_at FROM {self._table_name}
-        WHERE session_id = $1
-        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        """
+            sql = f"""
+            SELECT data, expires_at FROM {self._table_name}
+            WHERE session_id = $1
+            AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            """
 
-        async with self._config.provide_connection() as conn:
-            row = await conn.fetchrow(sql, key)
+            async with self._config.provide_connection() as conn:
+                row = await conn.fetchrow(sql, key)
 
-            if row is None:
-                return None
+                if row is None:
+                    return None
 
-            return bytes(row["data"])
+                return bytes(row["data"])
+        except asyncpg.exceptions.UndefinedTableError:
+            return None
 
     async def set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         """Store a session value.
@@ -142,15 +147,21 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE session_id = $1"
 
-        async with self._config.provide_connection() as conn:
-            await conn.execute(sql, key)
+        try:
+            async with self._config.provide_connection() as conn:
+                await conn.execute(sql, key)
+        except asyncpg.exceptions.UndefinedTableError:
+            return
 
     async def delete_all(self) -> None:
         """Delete all sessions from the store."""
         sql = f"DELETE FROM {self._table_name}"
 
-        async with self._config.provide_connection() as conn:
-            await conn.execute(sql)
+        try:
+            async with self._config.provide_connection() as conn:
+                await conn.execute(sql)
+        except asyncpg.exceptions.UndefinedTableError:
+            return
         self._log_delete_all()
 
     async def exists(self, key: str) -> bool:
@@ -168,9 +179,12 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """
 
-        async with self._config.provide_connection() as conn:
-            result = await conn.fetchval(sql, key)
-            return result is not None
+        try:
+            async with self._config.provide_connection() as conn:
+                result = await conn.fetchval(sql, key)
+                return result is not None
+        except asyncpg.exceptions.UndefinedTableError:
+            return False
 
     async def expires_in(self, key: str) -> "int | None":
         """Get the time in seconds until the session expires.
@@ -186,18 +200,21 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         WHERE session_id = $1
         """
 
-        async with self._config.provide_connection() as conn:
-            expires_at = await conn.fetchval(sql, key)
+        try:
+            async with self._config.provide_connection() as conn:
+                expires_at = await conn.fetchval(sql, key)
 
-            if expires_at is None:
-                return None
+                if expires_at is None:
+                    return None
 
-            now = datetime.now(UTC)
-            if expires_at <= now:
-                return 0
+                now = datetime.now(UTC)
+                if expires_at <= now:
+                    return 0
 
-            delta = expires_at - now
-            return int(delta.total_seconds())
+                delta = expires_at - now
+                return int(delta.total_seconds())
+        except asyncpg.exceptions.UndefinedTableError:
+            return None
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -207,12 +224,15 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= CURRENT_TIMESTAMP"
 
-        async with self._config.provide_connection() as conn:
-            result = await conn.execute(sql)
-            count = int(result.split()[-1])
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+        try:
+            async with self._config.provide_connection() as conn:
+                result = await conn.execute(sql)
+                count = parse_status(result)
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
+        except asyncpg.exceptions.UndefinedTableError:
+            return 0
 
     def _table_ddl(self) -> str:
         """Get PostgreSQL CREATE TABLE SQL with optimized schema.
@@ -228,15 +248,14 @@ class AsyncpgStore(BaseSQLSpecStore["AsyncpgConfig"]):
             expires_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        ) WITH (fillfactor = {fillfactor});
-
-        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
-        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
-
-        ALTER TABLE {self._table_name} SET (
+        ) WITH (
+            fillfactor = {fillfactor},
             autovacuum_vacuum_scale_factor = {vacuum_scale:g},
             autovacuum_analyze_scale_factor = {analyze_scale:g}
         );
+
+        CREATE INDEX IF NOT EXISTS idx_{self._table_name}_expires_at
+        ON {self._table_name}(expires_at) WHERE expires_at IS NOT NULL;
         """
 
     def _drop_table_sql(self) -> "list[str]":

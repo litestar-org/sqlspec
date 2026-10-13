@@ -9,13 +9,24 @@ pytest.importorskip("arrow_odbc")
 from arrow_odbc import TextEncoding
 
 import sqlspec.adapters.arrow_odbc.config as arrow_odbc_config
-from sqlspec.adapters.arrow_odbc import ArrowOdbcConfig, ArrowOdbcDriver, build_connection_config
+from sqlspec.adapters.arrow_odbc import (
+    ArrowOdbcConfig,
+    ArrowOdbcDriver,
+    apply_driver_features,
+    build_connection_config,
+    build_statement_config,
+    resolve_dialect_from_dbms_name,
+)
 from sqlspec.adapters.arrow_odbc.core import _extract_sqlstate, create_mapped_exception
 from sqlspec.exceptions import (
+    CheckViolationError,
     DatabaseConnectionError,
     DataError,
+    ForeignKeyViolationError,
     ImproperConfigurationError,
     IntegrityError,
+    PermissionDeniedError,
+    QueryTimeoutError,
     SQLParsingError,
 )
 
@@ -57,19 +68,19 @@ def test_explicit_field_outranks_the_same_option_inside_the_connection_string() 
 
 
 def test_build_connection_config_merges_port_with_connection_string_server() -> None:
-    """Discrete port must be attached to the server defined in connection_string."""
-    connection_string, _ = build_connection_config({"connection_string": "Server=host;UID=u;PWD=p;", "port": 1433})
+    """Discrete port must be attached to the server defined in connection_string for SQL Server."""
+    connection_string, _ = build_connection_config(
+        {"connection_string": "Server=host;UID=u;PWD=p;", "port": 1433}, dialect="mssql"
+    )
 
     assert "Server=host,1433" in connection_string
 
 
 def test_build_connection_config_discrete_server_overrides_connection_string() -> None:
-    """Discrete server must override server in connection_string."""
-    connection_string, _ = build_connection_config({
-        "connection_string": "Server=oldhost;UID=u;PWD=p;",
-        "server": "newhost",
-        "port": 14333,
-    })
+    """Discrete server must override server in connection_string for SQL Server."""
+    connection_string, _ = build_connection_config(
+        {"connection_string": "Server=oldhost;UID=u;PWD=p;", "server": "newhost", "port": 14333}, dialect="mssql"
+    )
 
     assert "Server=newhost,14333" in connection_string
     assert "oldhost" not in connection_string
@@ -192,3 +203,119 @@ def test_sqlstate_classes_map_to_sqlspec_exceptions(sqlstate: str, expected: typ
 def test_a_five_character_token_in_prose_is_not_read_as_a_sqlstate(message: str) -> None:
     """Only the driver's own State field carries a SQLSTATE, so prose must not be mined for one."""
     assert _extract_sqlstate(message) is None
+
+
+def test_non_mssql_connection_config_keeps_separate_port_keyword() -> None:
+    """Non-SQL-Server dialects emit separate Server and Port keywords instead of Server=host,port."""
+    connection_string, _ = build_connection_config({
+        "driver": "PostgreSQL Unicode",
+        "server": "pg.internal",
+        "port": 5432,
+        "database": "app",
+    })
+
+    assert "Server=pg.internal;" in connection_string
+    assert "Port=5432;" in connection_string
+    assert "Server=pg.internal,5432" not in connection_string
+
+
+def test_mssql_inferred_connection_config_uses_comma_port_syntax() -> None:
+    """SQL Server drivers combine server and port with a comma when dialect is inferred."""
+    connection_string, _ = build_connection_config({"driver": "FreeTDS", "server": "sql.internal", "port": 1433})
+
+    assert "Server=sql.internal,1433" in connection_string
+    assert "Port=" not in connection_string
+
+
+@pytest.mark.parametrize(
+    ("dbms_name", "expected_dialect"), [("FreeTDS", "mssql"), ("libtdsodbc.so", "mssql"), ("psqlodbcw.so", "postgres")]
+)
+def test_resolve_dialect_from_dbms_name_recognizes_common_odbc_drivers(dbms_name: str, expected_dialect: str) -> None:
+    assert resolve_dialect_from_dbms_name(dbms_name) == expected_dialect
+
+
+def test_config_reads_extra_options_and_preserves_driver_over_dsn() -> None:
+    """ArrowOdbcConfig inspects extra for connection_string/autocommit and prioritizes driver over dsn."""
+    config = ArrowOdbcConfig(
+        connection_config={
+            "extra": {"connection_string": "Driver={PostgreSQL Unicode};Server=localhost;", "autocommit": False}
+        }
+    )
+    assert config.statement_config.dialect == "postgres"
+    assert config.driver_features["connection_autocommit"] is False
+
+    driver_and_dsn = ArrowOdbcConfig(connection_config={"driver": "ODBC Driver 18 for SQL Server", "dsn": "analytics"})
+    assert driver_and_dsn.driver_features["dbms_name"] == "ODBC Driver 18 for SQL Server"
+    assert driver_and_dsn.statement_config.dialect == "tsql"
+
+
+@pytest.mark.parametrize(
+    ("error_text", "expected_type"),
+    [
+        ("State: 23514, Native error: 0, Message: violates check constraint", CheckViolationError),
+        ("State: 42501, Native error: 0, Message: permission denied for table items", PermissionDeniedError),
+        ("State: HYT00, Native error: 0, Message: timeout expired", QueryTimeoutError),
+        ("State: HYT01, Native error: 0, Message: connection timeout expired", DatabaseConnectionError),
+        ("State: 42000, Native error: 229, Message: [SQL Server]SELECT permission was denied", PermissionDeniedError),
+        (
+            "State: 42000, Native error: 230, Message: [SQL Server]SELECT permission was denied on column",
+            PermissionDeniedError,
+        ),
+        (
+            "State: 23000, Native error: 547, Message: [SQL Server]The INSERT statement conflicted with the CHECK constraint",
+            CheckViolationError,
+        ),
+        (
+            "State: 23000, Native error: 547, Message: [SQL Server]The INSERT statement conflicted with the FOREIGN KEY constraint",
+            ForeignKeyViolationError,
+        ),
+    ],
+)
+def test_create_mapped_exception_specific_sqlstates_and_native_codes(
+    error_text: str, expected_type: type[Exception]
+) -> None:
+    mapped = create_mapped_exception(Exception(error_text))
+    assert isinstance(mapped, expected_type)
+
+
+def test_apply_driver_features_applies_json_serializers_to_explicit_statement_config() -> None:
+    """Custom JSON serializers in driver_features apply even when statement_config is explicitly provided."""
+
+    def custom_serializer(value: Any) -> str:
+        return f"custom:{value}"
+
+    def custom_deserializer(raw: str) -> dict[str, str]:
+        return {"decoded": raw}
+
+    explicit_statement_config = build_statement_config(dialect="postgres")
+
+    updated_config, _ = apply_driver_features(
+        explicit_statement_config, {"json_serializer": custom_serializer, "json_deserializer": custom_deserializer}
+    )
+    assert updated_config.parameter_config.json_serializer is custom_serializer
+    assert updated_config.parameter_config.json_deserializer is custom_deserializer
+
+    config = ArrowOdbcConfig(
+        connection_config={"dsn": "pg"},
+        statement_config=explicit_statement_config,
+        driver_features={"json_serializer": custom_serializer, "json_deserializer": custom_deserializer},
+    )
+    assert config.statement_config.parameter_config.json_serializer is custom_serializer
+    assert config.statement_config.parameter_config.json_deserializer is custom_deserializer
+
+
+def test_create_connection_wraps_driver_pooling_failure_in_improper_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failures inside _apply_driver_pooling during create_connection raise ImproperConfigurationError."""
+    monkeypatch.setattr(arrow_odbc_config, "_DRIVER_POOLING_ENABLED", False)
+
+    def broken_pooling() -> None:
+        msg = "ODBC environment already initialized"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(arrow_odbc_config, "enable_odbc_connection_pooling", broken_pooling)
+    config = ArrowOdbcConfig(connection_config={"dsn": "analytics"}, driver_features={"enable_driver_pooling": True})
+
+    with pytest.raises(ImproperConfigurationError, match="Could not configure arrow-odbc connection"):
+        config.create_connection()

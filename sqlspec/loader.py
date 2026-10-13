@@ -218,6 +218,7 @@ class SQLFileLoader:
 
     __slots__ = (
         "_compiled_statements",
+        "_file_namespaces",
         "_files",
         "_fragment_to_file",
         "_fragments",
@@ -254,6 +255,7 @@ class SQLFileLoader:
         self._compiled_statements: dict[str, SQL] = {}
         self._queries: dict[str, NamedStatement] = {}
         self._files: dict[str, SQLFile] = {}
+        self._file_namespaces: dict[str, set[str | None]] = {}
         self._query_to_file: dict[str, str] = {}
         self._fragments: dict[str, SQLFragment] = {}
         self._fragment_to_file: dict[str, str] = {}
@@ -520,25 +522,23 @@ class SQLFileLoader:
 
     def clear_cache(self) -> None:
         """Clear all cached files and queries."""
+        self.clear_file_cache()
         self._compiled_statements.clear()
-        self._files.clear()
         self._queries.clear()
         self._query_to_file.clear()
         self._fragments.clear()
         self._fragment_to_file.clear()
         self._resolved_text.clear()
 
-        cache_config = get_cache_config()
-        if cache_config.compiled_cache_enabled:
-            cache = get_cache()
-            cache.clear()
-
     def clear_file_cache(self) -> None:
         """Clear the file cache only, keeping loaded queries."""
         cache_config = get_cache_config()
         if cache_config.compiled_cache_enabled:
             cache = get_cache()
-            cache.clear()
+            for path_str in self._files:
+                cache.delete_file(self._file_cache_key(path_str))
+        self._files.clear()
+        self._file_namespaces.clear()
 
     def get_query_text(self, name: str) -> str:
         """Get raw SQL text for a query.
@@ -620,12 +620,7 @@ class SQLFileLoader:
         except Exception as exc:
             raise SQLFileParseError(name=name, path="<statement>", original_error=exc) from exc
         if slot_parameters:
-            return SQL(
-                statement_text,
-                slot_parameters,
-                dialect=sqlglot_dialect,
-                declared_parameters=parsed_statement.parameters,
-            )
+            return SQL(sql, slot_parameters, dialect=sqlglot_dialect, declared_parameters=parsed_statement.parameters)
         if not slots:
             self._compiled_statements[safe_name] = sql
         return sql
@@ -714,7 +709,7 @@ class SQLFileLoader:
         Returns:
             Paths of files that were reloaded.
         """
-        pending_reloads: list[tuple[str, str | None]] = []
+        pending_reloads: list[tuple[str, list[str | None]]] = []
         for path, sql_file in list(self._files.items()):
             if self._is_file_unchanged(path, sql_file):
                 if self._runtime is not None:
@@ -723,17 +718,24 @@ class SQLFileLoader:
 
             query_names = [name for name, source in self._query_to_file.items() if source == path]
             fragment_names = [name for name, source in self._fragment_to_file.items() if source == path]
-            namespaces = {
-                name[: -(len(statement.name) + 1)]
-                for name in query_names
-                if (statement := self._queries.get(name)) is not None and name.endswith(f".{statement.name}")
-            }
-            namespaces.update(
-                name[: -(len(fragment.name) + 1)]
-                for name in fragment_names
-                if (fragment := self._fragments.get(name)) is not None and name.endswith(f".{fragment.name}")
-            )
-            namespace = next(iter(namespaces)) if len(namespaces) == 1 else None
+            recorded_namespaces = self._file_namespaces.pop(path, None)
+            reload_namespaces: list[str | None]
+            if recorded_namespaces:
+                reload_namespaces = sorted(recorded_namespaces, key=lambda ns: (ns is not None, ns or ""))
+            else:
+                namespaces: set[str | None] = {
+                    name[: -(len(statement.name) + 1)]
+                    for name in query_names
+                    if (statement := self._queries.get(name)) is not None and name.endswith(f".{statement.name}")
+                }
+                namespaces.update(
+                    name[: -(len(fragment.name) + 1)]
+                    for name in fragment_names
+                    if (fragment := self._fragments.get(name)) is not None and name.endswith(f".{fragment.name}")
+                )
+                reload_namespaces = (
+                    sorted(namespaces, key=lambda ns: (ns is not None, ns or "")) if namespaces else [None]
+                )
             for name in query_names:
                 self._queries.pop(name, None)
                 self._query_to_file.pop(name, None)
@@ -742,13 +744,14 @@ class SQLFileLoader:
                 self._fragments.pop(name, None)
                 self._fragment_to_file.pop(name, None)
             self._files.pop(path, None)
-            pending_reloads.append((path, namespace))
+            pending_reloads.append((path, reload_namespaces))
 
         if pending_reloads:
             self._invalidate_resolved()
         changed_paths: list[str] = []
-        for path, namespace in pending_reloads:
-            self._load_single_file(path, namespace)
+        for path, reload_namespaces in pending_reloads:
+            for namespace in reload_namespaces:
+                self._load_single_file(path, namespace)
             changed_paths.append(path)
             if self._runtime is not None:
                 self._runtime.increment_metric("loader.reload.changed")
@@ -1106,7 +1109,7 @@ class SQLFileLoader:
         if runtime is not None:
             runtime.increment_metric("loader.files.considered")
 
-        if path_str in self._files:
+        if path_str in self._files and namespace in self._file_namespaces.get(path_str, set()):
             if runtime is not None:
                 runtime.increment_metric("loader.cache.hit")
             return False
@@ -1130,6 +1133,7 @@ class SQLFileLoader:
 
             if file_content is not None and self._content_matches_cache(file_content, cached_file):
                 self._files[path_str] = cached_file.sql_file
+                self._file_namespaces.setdefault(path_str, set()).add(namespace)
                 for name, statement in cached_file.parsed_statements.items():
                     namespaced_name = f"{namespace}.{name}" if namespace else name
                     if namespaced_name in self._queries:
@@ -1193,6 +1197,7 @@ class SQLFileLoader:
 
         sql_file = SQLFile(content=content, path=path_str)
         self._files[path_str] = sql_file
+        self._file_namespaces.setdefault(path_str, set()).add(namespace)
 
         for name, statement in statements.items():
             namespaced_name = f"{namespace}.{name}" if namespace else name

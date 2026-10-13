@@ -2,10 +2,13 @@
 
 from typing import Any, cast
 
+import pytest
 from pymysql.constants import SERVER_STATUS
 
 from sqlspec import StatementStack
 from sqlspec.adapters.pymysql import PyMysqlDriver
+from sqlspec.adapters.pymysql._typing import PyMysqlMySQLError
+from sqlspec.exceptions import DeadlockError
 
 
 class _FakeCursor:
@@ -90,3 +93,15 @@ def test_connection_in_transaction_returns_false_when_server_status_unreadable()
     connection = _FakeConnection(server_status=None, autocommit=False)
 
     assert _driver(connection)._connection_in_transaction() is False
+
+
+def test_commit_maps_pymysql_deadlock_error() -> None:
+    connection = _FakeConnection()
+
+    def _fail_commit() -> None:
+        raise PyMysqlMySQLError(1213, "Deadlock found when trying to get lock")
+
+    setattr(connection, "commit", _fail_commit)
+    driver = _driver(connection)
+    with pytest.raises(DeadlockError):
+        driver.commit()

@@ -48,6 +48,7 @@ _PROPERTY_PARSERS_REGISTERED_ATTR: Final[str] = "_sqlspec_spanner_property_parse
 _WITH_ACTION_SENTINEL: Final[str] = "__sqlspec_then_return_with_action__"
 _DML_STATEMENT_TOKENS: Final[frozenset[TokenType]] = frozenset({TokenType.INSERT, TokenType.UPDATE, TokenType.DELETE})
 _SPANNER_DIALECT_NAMES: Final[frozenset[str]] = frozenset({"Spangres", "Spanner"})
+_BINARY_VECTOR_ARITY: Final[int] = 2
 
 
 def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, in_parent: bool = True) -> exp.Property:
@@ -58,6 +59,178 @@ def build_interleave_property(parent: exp.Expr, on_delete: "str | None" = None, 
     if on_delete is not None:
         values.append(exp.Literal.string(_normalize_on_delete_value(on_delete)))
     return exp.Property(this=exp.Literal.string(_INTERLEAVE_NAME), value=exp.Tuple(expressions=values))
+
+
+_original_bq_function_graph_table: Any = BigQueryParser.FUNCTION_PARSERS.get("GRAPH_TABLE")
+
+
+def normalize_spanner_tokens(tokens: "list[Token]", sql: str = "") -> "list[Token]":
+    """Convert Spanner GoogleSQL ``@{...}`` hint token sequences into token comments.
+
+    Token-level normalization ensures ``@{...}`` inside string literals or SQL
+    comments is left untouched while statement, table, and join hints attach to
+    the appropriate token's ``comments`` list for ``attach_hints`` to consume.
+
+    Args:
+        tokens: Tokens produced by the base BigQuery tokenizer.
+        sql: Original SQL text used to extract raw hint body substrings.
+
+    Returns:
+        Normalized token list with ``@{...}`` sequences folded into comments.
+    """
+    result: list[Token] = []
+    pending_comments: list[str] = []
+    index = 0
+    total = len(tokens)
+    while index < total:
+        token = tokens[index]
+        if (
+            token.token_type == TokenType.PARAMETER
+            and token.text == "@"
+            and index + 1 < total
+            and tokens[index + 1].token_type == TokenType.L_BRACE
+            and (not sql or token.end + 1 == tokens[index + 1].start)
+        ):
+            l_brace = tokens[index + 1]
+            end_idx = _closing_brace_index(tokens, index + 2)
+            if end_idx >= 0:
+                r_brace = tokens[end_idx]
+                if sql and r_brace.start > l_brace.end:
+                    hint_body = sql[l_brace.end + 1 : r_brace.start].strip()
+                else:
+                    hint_body = "".join(
+                        ", " if part.token_type == TokenType.COMMA else part.text
+                        for part in tokens[index + 2 : end_idx]
+                    ).strip()
+                collected_comments = [comment for part in tokens[index : end_idx + 1] for comment in part.comments]
+                if hint_body:
+                    collected_comments.append(f"@ {hint_body}")
+                if result and result[-1].token_type not in {TokenType.SEMICOLON, TokenType.L_PAREN}:
+                    result[-1].comments.extend(collected_comments)
+                else:
+                    pending_comments.extend(collected_comments)
+                index = end_idx + 1
+                continue
+        if pending_comments:
+            token.comments = [*pending_comments, *token.comments]
+            pending_comments = []
+        result.append(token)
+        index += 1
+    return _collapse_then_return(result)
+
+
+def parse_hint_expression(raw_hint: str) -> exp.Hint:
+    """Parse hint string into canonical exp.Hint."""
+    raw = raw_hint.strip()
+    if raw.startswith("@"):
+        raw = raw[1:].strip()
+    pairs = [p.strip() for p in raw.split(",") if p.strip()]
+    exprs: list[exp.Expr] = []
+    for pair in pairs:
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            v_str = v.strip()
+            val_expr: exp.Expr = exp.Literal.number(int(v_str)) if v_str.isdigit() else exp.var(v_str)
+            exprs.append(exp.EQ(this=exp.to_identifier(k.strip()), expression=val_expr))
+        else:
+            exprs.append(exp.to_identifier(pair.strip()))
+    return exp.Hint(expressions=exprs)
+
+
+def attach_hints(expression: exp.Expr) -> None:
+    """Attach parsed hints from node comments to AST nodes and resolve ``THEN RETURN WITH ACTION``."""
+    for node in expression.walk():
+        if isinstance(node, exp.Returning):
+            _attach_then_return_action(node)
+        elif isinstance(node, exp.ColumnDef):
+            _attach_hidden_column_constraint(node)
+        elif (
+            isinstance(node, exp.DataType) and node.this == exp.DataType.Type.USERDEFINED and not node.args.get("kind")
+        ):
+            node.set("kind", "TOKENLIST")
+        comments = getattr(node, "comments", None)
+        if not comments:
+            continue
+        hint_comments = [c for c in comments if c.strip().startswith("@") and "=" in c.strip()[1:]]
+        for hc in hint_comments:
+            hint = parse_hint_expression(hc)
+            target_table: exp.Table | None = None
+            if isinstance(node, exp.Table):
+                target_table = node
+            elif isinstance(node.parent, exp.Table) and (
+                isinstance(node, exp.TableAlias) or (isinstance(node, exp.Identifier) and node is node.parent.this)
+            ):
+                target_table = node.parent
+            if target_table is not None:
+                comments.remove(hc)
+                existing_hints = list(target_table.args.get("hints") or [])
+                existing_hints.append(hint)
+                target_table.set("hints", existing_hints)
+            elif isinstance(node, (exp.Select, exp.Query)):
+                comments.remove(hc)
+                node.set("hint", hint)
+            elif isinstance(node, exp.Join):
+                comments.remove(hc)
+                node.set("spanner_hint", hint)
+
+
+_original_bq_function_cosine_distance: Any = BigQueryParser.FUNCTIONS.get("COSINE_DISTANCE")
+_original_bq_function_euclidean_distance: Any = BigQueryParser.FUNCTIONS.get("EUCLIDEAN_DISTANCE")
+_original_bq_function_dot_product: Any = BigQueryParser.FUNCTIONS.get("DOT_PRODUCT")
+_original_bq_function_search: Any = BigQueryParser.FUNCTIONS.get("SEARCH")
+
+_original_pg_function_cosine_distance: Any = PostgresParser.FUNCTIONS.get("COSINE_DISTANCE")
+_original_pg_function_euclidean_distance: Any = PostgresParser.FUNCTIONS.get("EUCLIDEAN_DISTANCE")
+_original_pg_function_dot_product: Any = PostgresParser.FUNCTIONS.get("DOT_PRODUCT")
+_original_pg_function_search: Any = PostgresParser.FUNCTIONS.get("SEARCH")
+_original_pg_function_graph_table: Any = PostgresParser.FUNCTION_PARSERS.get("GRAPH_TABLE")
+
+_original_bq_statement_create: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.CREATE)
+_original_bq_statement_alter: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.ALTER)
+_original_bq_statement_drop: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.DROP)
+_original_bq_constraint_hidden: Any = BigQueryParser.CONSTRAINT_PARSERS.get("HIDDEN")
+
+_original_pg_statement_create: Any = PostgresParser.STATEMENT_PARSERS.get(TokenType.CREATE)
+_original_pg_statement_alter: Any = PostgresParser.STATEMENT_PARSERS.get(TokenType.ALTER)
+_original_pg_statement_drop: Any = PostgresParser.STATEMENT_PARSERS.get(TokenType.DROP)
+
+
+def register_spanner_property_parsers() -> None:
+    """Install Spanner parser extensions on the BigQuery and Postgres parser classes."""
+    for parser_class in (BigQueryParser, PostgresParser):
+        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
+            continue
+        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
+        for key, handler in (
+            ("INTERLEAVE", _parse_interleave),
+            ("PRIMARY KEY", _parse_primary_key_property),
+            ("ROW", _parse_row_deletion_policy),
+            ("TTL", _parse_ttl),
+        ):
+            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
+        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
+        if parser_class is BigQueryParser:
+            BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
+            BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
+            BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
+            BigQueryParser.FUNCTIONS["SEARCH"] = _build_search
+            BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
+            BigQueryParser.FUNCTION_PARSERS["GRAPH_TABLE"] = _parse_graph_table
+            BigQueryParser.CONSTRAINT_PARSERS["HIDDEN"] = _parse_hidden_column_constraint
+            BigQueryParser.STATEMENT_PARSERS[TokenType.CREATE] = _bq_parse_create
+            BigQueryParser.STATEMENT_PARSERS[TokenType.ALTER] = _bq_parse_alter
+            BigQueryParser.STATEMENT_PARSERS[TokenType.DROP] = _bq_parse_drop
+        elif parser_class is PostgresParser:
+            PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
+            PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
+            PostgresParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
+            PostgresParser.FUNCTIONS["SEARCH"] = _build_search
+            PostgresParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
+            PostgresParser.FUNCTION_PARSERS["GRAPH_TABLE"] = _parse_graph_table
+            PostgresParser.STATEMENT_PARSERS[TokenType.CREATE] = _pg_parse_create
+            PostgresParser.STATEMENT_PARSERS[TokenType.ALTER] = _pg_parse_alter
+            PostgresParser.STATEMENT_PARSERS[TokenType.DROP] = _pg_parse_drop
+        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
 
 
 def _normalize_on_delete_value(on_delete: str) -> str:
@@ -165,39 +338,60 @@ def _parse_get_next_sequence_value(parser: Any) -> exp.Anonymous:
     return exp.Anonymous(this="GET_NEXT_SEQUENCE_VALUE", expressions=parser._parse_csv(parser._parse_lambda))
 
 
+def _has_kwarg_arg(args: list[Any]) -> bool:
+    return any(isinstance(arg, exp.Kwarg) for arg in args)
+
+
 def _build_search(args: list[Any], dialect: Any) -> exp.Expr:
-    """Build a Spanner Search node or fall back to Anonymous for BigQuery."""
-    if dialect is not None and type(dialect).__name__ == "Spanner":
-        return Search.from_arg_list(args)
+    """Build a Spanner/Spangres Search node or delegate to the base dialect."""
+    dialect_name = type(dialect).__name__ if dialect is not None else ""
+    if not _has_kwarg_arg(args):
+        if dialect_name in _SPANNER_DIALECT_NAMES:
+            return Search.from_arg_list(args)
+        if dialect_name == "BigQuery" and _original_bq_function_search is not None:
+            return cast("exp.Expr", _original_bq_function_search(args))
+        if dialect_name and _original_pg_function_search is not None:
+            return cast("exp.Expr", _original_pg_function_search(args))
     return exp.Anonymous(this="SEARCH", expressions=args)
 
 
 def _build_cosine_distance(args: list[Any], dialect: Any) -> exp.Expr:
-    """Build a Spanner/Spangres CosineDistance node or fall back to Anonymous."""
-    if dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES:
-        return CosineDistance.from_arg_list(args)
+    """Build a CosineDistance node or delegate to the base dialect."""
+    dialect_name = type(dialect).__name__ if dialect is not None else ""
+    if len(args) <= _BINARY_VECTOR_ARITY and not _has_kwarg_arg(args):
+        if dialect_name in _SPANNER_DIALECT_NAMES:
+            return CosineDistance.from_arg_list(args)
+        if dialect_name == "BigQuery" and _original_bq_function_cosine_distance is not None:
+            return cast("exp.Expr", _original_bq_function_cosine_distance(args))
+        if dialect_name and _original_pg_function_cosine_distance is not None:
+            return cast("exp.Expr", _original_pg_function_cosine_distance(args))
     return exp.Anonymous(this="COSINE_DISTANCE", expressions=args)
 
 
 def _build_euclidean_distance(args: list[Any], dialect: Any) -> exp.Expr:
-    """Build a Spanner/Spangres EuclideanDistance node or fall back to Anonymous."""
-    if dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES:
-        return EuclideanDistance.from_arg_list(args)
+    """Build a EuclideanDistance node or delegate to the base dialect."""
+    dialect_name = type(dialect).__name__ if dialect is not None else ""
+    if len(args) <= _BINARY_VECTOR_ARITY and not _has_kwarg_arg(args):
+        if dialect_name in _SPANNER_DIALECT_NAMES:
+            return EuclideanDistance.from_arg_list(args)
+        if dialect_name == "BigQuery" and _original_bq_function_euclidean_distance is not None:
+            return cast("exp.Expr", _original_bq_function_euclidean_distance(args))
+        if dialect_name and _original_pg_function_euclidean_distance is not None:
+            return cast("exp.Expr", _original_pg_function_euclidean_distance(args))
     return exp.Anonymous(this="EUCLIDEAN_DISTANCE", expressions=args)
 
 
 def _build_dot_product(args: list[Any], dialect: Any) -> exp.Expr:
-    """Build a Spanner/Spangres DotProduct node or fall back to Anonymous."""
-    if dialect is not None and type(dialect).__name__ in _SPANNER_DIALECT_NAMES:
-        return DotProduct.from_arg_list(args)
+    """Build a DotProduct node or delegate to the base dialect."""
+    dialect_name = type(dialect).__name__ if dialect is not None else ""
+    if len(args) <= _BINARY_VECTOR_ARITY and not _has_kwarg_arg(args):
+        if dialect_name in _SPANNER_DIALECT_NAMES:
+            return DotProduct.from_arg_list(args)
+        if dialect_name == "BigQuery" and _original_bq_function_dot_product is not None:
+            return cast("exp.Expr", _original_bq_function_dot_product(args))
+        if dialect_name and _original_pg_function_dot_product is not None:
+            return cast("exp.Expr", _original_pg_function_dot_product(args))
     return exp.Anonymous(this="DOT_PRODUCT", expressions=args)
-
-
-def _convert_userdefined_type(data_type: exp.DataType) -> exp.DataType:
-    """Assign explicit TOKENLIST kind to unparameterized USERDEFINED data types in Spanner."""
-    if not data_type.args.get("kind"):
-        data_type.set("kind", "TOKENLIST")
-    return data_type
 
 
 def _parse_options_properties(parser: Any) -> exp.Properties | None:
@@ -213,9 +407,9 @@ def _parse_options_properties(parser: Any) -> exp.Properties | None:
 def _parse_create_vector_index(parser: Any) -> exp.Index:
     """Parse CREATE VECTOR INDEX [IF NOT EXISTS] name ON table (cols) [STORING (cols)] [WHERE ...] [OPTIONS (...)]."""
     exists = parser._parse_exists(not_=True)
-    name = parser._parse_id_var()
+    name = parser._parse_table_parts(schema=True)
     parser._match_text_seq("ON")
-    table = exp.Table(this=parser._parse_id_var())
+    table = parser._parse_table_parts(schema=True)
     parser._match(TokenType.L_PAREN)
     cols = parser._parse_csv(parser._parse_column)
     parser._match(TokenType.R_PAREN)
@@ -240,9 +434,9 @@ def _parse_create_vector_index(parser: Any) -> exp.Index:
 def _parse_create_search_index(parser: Any) -> exp.Index:
     """Parse CREATE SEARCH INDEX [IF NOT EXISTS] name ON table (cols) [STORING (cols)] [PARTITION BY cols] [ORDER BY order] [OPTIONS (...)]."""
     exists = parser._parse_exists(not_=True)
-    name = parser._parse_id_var()
+    name = parser._parse_table_parts(schema=True)
     parser._match_text_seq("ON")
-    table = exp.Table(this=parser._parse_id_var())
+    table = parser._parse_table_parts(schema=True)
     parser._match(TokenType.L_PAREN)
     cols = parser._parse_csv(parser._parse_column)
     parser._match(TokenType.R_PAREN)
@@ -291,7 +485,7 @@ def _parse_alter_sequence(parser: Any) -> exp.Alter:
 
 def _parse_create_change_stream(parser: Any) -> exp.Create:
     """Parse CREATE CHANGE STREAM name [FOR ...] [OPTIONS (...)]."""
-    name = parser._parse_id_var()
+    name = parser._parse_table_parts(schema=True)
     for_expressions: list[exp.Expr] = []
     if parser._match_text_seq("FOR"):
         if parser._match_text_seq("ALL"):
@@ -299,11 +493,11 @@ def _parse_create_change_stream(parser: Any) -> exp.Create:
         else:
 
             def _parse_stream_target() -> exp.Expr:
-                target_table = cast("exp.Expr", parser._parse_id_var())
+                target_table = cast("exp.Expr", parser._parse_table_parts(schema=True))
                 if parser._match(TokenType.L_PAREN):
                     cols = parser._parse_csv(parser._parse_column)
                     parser._match(TokenType.R_PAREN)
-                    return exp.Anonymous(this=target_table.name, expressions=cols)
+                    return exp.Anonymous(this=target_table, expressions=cols)
                 return target_table
 
             targets = parser._parse_csv(_parse_stream_target)
@@ -314,7 +508,7 @@ def _parse_create_change_stream(parser: Any) -> exp.Create:
 
 def _parse_alter_change_stream(parser: Any) -> exp.Alter:
     """Parse ALTER CHANGE STREAM name [SET ...] [OPTIONS (...)]."""
-    name = parser._parse_id_var()
+    name = parser._parse_table_parts(schema=True)
     options: exp.Properties | None = None
     if parser._match_text_seq("SET", "OPTIONS") or parser._match_text_seq("OPTIONS"):
         parser._retreat(parser._index - 1)
@@ -327,6 +521,43 @@ def _parse_drop_spanner_object(parser: Any, kind: str) -> exp.Drop:
     exists = parser._parse_exists()
     name = parser._parse_table_parts(schema=True)
     return exp.Drop(this=name, kind=kind, exists=exists)
+
+
+def _collapse_unquoted_whitespace(sql_fragment: str) -> str:
+    """Collapse runs of whitespace outside quoted literals into single spaces."""
+    chars: list[str] = []
+    quote_char: str | None = None
+    in_space = False
+    index = 0
+    total = len(sql_fragment)
+    while index < total:
+        ch = sql_fragment[index]
+        if quote_char is not None:
+            chars.append(ch)
+            if ch == "\\" and index + 1 < total:
+                index += 1
+                chars.append(sql_fragment[index])
+            elif ch == quote_char:
+                if index + 1 < total and sql_fragment[index + 1] == quote_char:
+                    index += 1
+                    chars.append(sql_fragment[index])
+                else:
+                    quote_char = None
+        elif ch in {"'", '"', "`"}:
+            if in_space and chars:
+                chars.append(" ")
+            in_space = False
+            quote_char = ch
+            chars.append(ch)
+        elif ch.isspace():
+            in_space = True
+        else:
+            if in_space and chars:
+                chars.append(" ")
+            in_space = False
+            chars.append(ch)
+        index += 1
+    return "".join(chars)
 
 
 def _parse_graph_element_list(parser: Any) -> list[exp.Expr]:
@@ -350,7 +581,7 @@ def _parse_graph_element_list(parser: Any) -> list[exp.Expr]:
             parser._advance()
         raw_elem = parser._find_sql(start_token, end_token).strip()
         if raw_elem:
-            elements.append(exp.var(" ".join(raw_elem.split())))
+            elements.append(exp.var(_collapse_unquoted_whitespace(raw_elem)))
         if not parser._match(TokenType.COMMA):
             break
     parser._match(TokenType.R_PAREN)
@@ -360,7 +591,7 @@ def _parse_graph_element_list(parser: Any) -> list[exp.Expr]:
 def _parse_create_property_graph(parser: Any, *, replace: bool = False) -> exp.Create:
     """Parse CREATE [OR REPLACE] PROPERTY GRAPH [IF NOT EXISTS] name NODE TABLES (...) [EDGE TABLES (...)]."""
     exists = parser._parse_exists(not_=True)
-    name = parser._parse_id_var()
+    name = parser._parse_table_parts(schema=True)
     node_tables: list[exp.Expr] = []
     if parser._match_text_seq("NODE", "TABLES"):
         node_tables = _parse_graph_element_list(parser)
@@ -371,16 +602,16 @@ def _parse_create_property_graph(parser: Any, *, replace: bool = False) -> exp.C
     return exp.Create(this=graph, kind="PROPERTY GRAPH", exists=exists, replace=replace)
 
 
-_original_bq_function_graph_table: Any = BigQueryParser.FUNCTION_PARSERS.get("GRAPH_TABLE")
-
-
 def _parse_graph_table(parser: Any) -> SpannerGraphTable | exp.Expr:
     """Parse GRAPH_TABLE(graph MATCH pattern [WHERE expr] COLUMNS (col_expr [AS alias], ...))."""
     if not _is_spanner_parser(parser):
-        if _original_bq_function_graph_table is not None:
+        dialect_name = type(getattr(parser, "dialect", None)).__name__
+        if dialect_name == "BigQuery" and _original_bq_function_graph_table is not None:
             return cast("exp.Expr", _original_bq_function_graph_table(parser))
+        if _original_pg_function_graph_table is not None:
+            return cast("exp.Expr", _original_pg_function_graph_table(parser))
         return exp.Anonymous(this="GRAPH_TABLE", expressions=parser._parse_csv(parser._parse_lambda))
-    graph = cast("exp.Expr", parser._parse_id_var())
+    graph = cast("exp.Expr", parser._parse_table_parts(schema=True))
     parser._match_text_seq("MATCH")
     start_token = parser._curr
     end_token = start_token
@@ -397,7 +628,7 @@ def _parse_graph_table(parser: Any) -> SpannerGraphTable | exp.Expr:
         end_token = curr
         parser._advance()
     match_sql = parser._find_sql(start_token, end_token).strip() if start_token and end_token else ""
-    match_expr = exp.var(" ".join(match_sql.split()))
+    match_expr = exp.var(_collapse_unquoted_whitespace(match_sql))
     where_expr: exp.Expr | None = None
     if parser._match(TokenType.WHERE) or parser._match_text_seq("WHERE"):
         where_expr = cast("exp.Expr", parser._parse_conjunction())
@@ -419,61 +650,6 @@ def _closing_brace_index(tokens: "list[Token]", start: int) -> int:
             if depth == 0:
                 return position
     return -1
-
-
-def normalize_spanner_tokens(tokens: "list[Token]", sql: str = "") -> "list[Token]":
-    """Convert Spanner GoogleSQL ``@{...}`` hint token sequences into token comments.
-
-    Token-level normalization ensures ``@{...}`` inside string literals or SQL
-    comments is left untouched while statement, table, and join hints attach to
-    the appropriate token's ``comments`` list for ``attach_hints`` to consume.
-
-    Args:
-        tokens: Tokens produced by the base BigQuery tokenizer.
-        sql: Original SQL text used to extract raw hint body substrings.
-
-    Returns:
-        Normalized token list with ``@{...}`` sequences folded into comments.
-    """
-    result: list[Token] = []
-    pending_comments: list[str] = []
-    index = 0
-    total = len(tokens)
-    while index < total:
-        token = tokens[index]
-        if (
-            token.token_type == TokenType.PARAMETER
-            and token.text == "@"
-            and index + 1 < total
-            and tokens[index + 1].token_type == TokenType.L_BRACE
-            and (not sql or token.end + 1 == tokens[index + 1].start)
-        ):
-            l_brace = tokens[index + 1]
-            end_idx = _closing_brace_index(tokens, index + 2)
-            if end_idx >= 0:
-                r_brace = tokens[end_idx]
-                if sql and r_brace.start > l_brace.end:
-                    hint_body = sql[l_brace.end + 1 : r_brace.start].strip()
-                else:
-                    hint_body = "".join(
-                        ", " if part.token_type == TokenType.COMMA else part.text
-                        for part in tokens[index + 2 : end_idx]
-                    ).strip()
-                collected_comments = [comment for part in tokens[index : end_idx + 1] for comment in part.comments]
-                if hint_body:
-                    collected_comments.append(f"@ {hint_body}")
-                if result and result[-1].token_type not in {TokenType.SEMICOLON, TokenType.L_PAREN}:
-                    result[-1].comments.extend(collected_comments)
-                else:
-                    pending_comments.extend(collected_comments)
-                index = end_idx + 1
-                continue
-        if pending_comments:
-            token.comments = [*pending_comments, *token.comments]
-            pending_comments = []
-        result.append(token)
-        index += 1
-    return _collapse_then_return(result)
 
 
 def _is_word(token: "Token", word: str) -> bool:
@@ -582,61 +758,6 @@ def _attach_hidden_column_constraint(column_def: exp.ColumnDef) -> None:
         column_def.set("constraints", remaining)
 
 
-def parse_hint_expression(raw_hint: str) -> exp.Hint:
-    """Parse hint string into canonical exp.Hint."""
-    raw = raw_hint.strip()
-    if raw.startswith("@"):
-        raw = raw[1:].strip()
-    pairs = [p.strip() for p in raw.split(",") if p.strip()]
-    exprs: list[exp.Expr] = []
-    for pair in pairs:
-        if "=" in pair:
-            k, v = pair.split("=", 1)
-            v_str = v.strip()
-            val_expr: exp.Expr = exp.Literal.number(int(v_str)) if v_str.isdigit() else exp.var(v_str)
-            exprs.append(exp.EQ(this=exp.to_identifier(k.strip()), expression=val_expr))
-        else:
-            exprs.append(exp.to_identifier(pair.strip()))
-    return exp.Hint(expressions=exprs)
-
-
-def attach_hints(expression: exp.Expr) -> None:
-    """Attach parsed hints from node comments to AST nodes and resolve ``THEN RETURN WITH ACTION``."""
-    for node in expression.walk():
-        if isinstance(node, exp.Returning):
-            _attach_then_return_action(node)
-        elif isinstance(node, exp.ColumnDef):
-            _attach_hidden_column_constraint(node)
-        comments = getattr(node, "comments", None)
-        if not comments:
-            continue
-        hint_comments = [c for c in comments if c.strip().startswith("@") and "=" in c.strip()[1:]]
-        for hc in hint_comments:
-            hint = parse_hint_expression(hc)
-            target_table: exp.Table | None = None
-            if isinstance(node, exp.Table):
-                target_table = node
-            elif isinstance(node, exp.TableAlias) and isinstance(node.parent, exp.Table):
-                target_table = node.parent
-            if target_table is not None:
-                comments.remove(hc)
-                existing_hints = list(target_table.args.get("hints") or [])
-                existing_hints.append(hint)
-                target_table.set("hints", existing_hints)
-            elif isinstance(node, (exp.Select, exp.Query)):
-                comments.remove(hc)
-                node.set("hint", hint)
-            elif isinstance(node, exp.Join):
-                comments.remove(hc)
-                node.set("spanner_hint", hint)
-
-
-_original_bq_statement_create: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.CREATE)
-_original_bq_statement_alter: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.ALTER)
-_original_bq_statement_drop: Any = BigQueryParser.STATEMENT_PARSERS.get(TokenType.DROP)
-_original_bq_constraint_hidden: Any = BigQueryParser.CONSTRAINT_PARSERS.get("HIDDEN")
-
-
 def _parse_hidden_column_constraint(parser: Any) -> exp.Expr | None:
     """Parse trailing HIDDEN modifier on Spanner generated/tokenlist columns."""
     if _is_spanner_parser(parser):
@@ -697,44 +818,54 @@ def _bq_parse_drop(self: Any) -> exp.Drop | exp.Command:
     return cast("exp.Drop | exp.Command", self._parse_drop())
 
 
-def register_spanner_property_parsers() -> None:
-    """Install Spanner parser extensions on the BigQuery and Postgres parser classes."""
-    for parser_class in (BigQueryParser, PostgresParser):
-        if getattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, False):
-            continue
-        property_parsers: dict[str, Any] = dict(parser_class.PROPERTY_PARSERS)
-        for key, handler in (
-            ("INTERLEAVE", _parse_interleave),
-            ("PRIMARY KEY", _parse_primary_key_property),
-            ("ROW", _parse_row_deletion_policy),
-            ("TTL", _parse_ttl),
-        ):
-            property_parsers[key] = _build_property_entry(handler, property_parsers.get(key))
-        setattr(parser_class, "PROPERTY_PARSERS", property_parsers)
-        if parser_class is BigQueryParser:
-            BigQueryParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
-            BigQueryParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
-            BigQueryParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
-            BigQueryParser.FUNCTIONS["SEARCH"] = _build_search
-            BigQueryParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
-            BigQueryParser.FUNCTION_PARSERS["GRAPH_TABLE"] = _parse_graph_table
-            BigQueryParser.CONSTRAINT_PARSERS["HIDDEN"] = _parse_hidden_column_constraint
-            BigQueryParser.TYPE_CONVERTERS = {
-                **BigQueryParser.TYPE_CONVERTERS,
-                exp.DataType.Type.USERDEFINED: _convert_userdefined_type,
-            }
-            BigQueryParser.STATEMENT_PARSERS[TokenType.CREATE] = _bq_parse_create
-            BigQueryParser.STATEMENT_PARSERS[TokenType.ALTER] = _bq_parse_alter
-            BigQueryParser.STATEMENT_PARSERS[TokenType.DROP] = _bq_parse_drop
-        elif parser_class is PostgresParser:
-            PostgresParser.FUNCTIONS["COSINE_DISTANCE"] = _build_cosine_distance
-            PostgresParser.FUNCTIONS["EUCLIDEAN_DISTANCE"] = _build_euclidean_distance
-            PostgresParser.FUNCTIONS["DOT_PRODUCT"] = _build_dot_product
-            PostgresParser.FUNCTION_PARSERS["GET_NEXT_SEQUENCE_VALUE"] = _parse_get_next_sequence_value
-        setattr(parser_class, _PROPERTY_PARSERS_REGISTERED_ATTR, True)
+def _pg_parse_create(self: Any) -> exp.Create | exp.Index | exp.Command:
+    """Parse Spangres CREATE statements including VECTOR INDEX, SEARCH INDEX, CHANGE STREAM, and PROPERTY GRAPH."""
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spangres":
+        if self._match_text_seq("VECTOR", "INDEX"):
+            return _parse_create_vector_index(self)
+        if self._match_text_seq("SEARCH", "INDEX"):
+            return _parse_create_search_index(self)
+        if self._match_text_seq("CHANGE", "STREAM"):
+            return _parse_create_change_stream(self)
+        if self._match_text_seq("PROPERTY", "GRAPH"):
+            return _parse_create_property_graph(self, replace=False)
+        if self._match_text_seq("OR", "REPLACE", "PROPERTY", "GRAPH"):
+            return _parse_create_property_graph(self, replace=True)
+    if _original_pg_statement_create is not None:
+        return cast("exp.Create | exp.Index | exp.Command", _original_pg_statement_create(self))
+    return cast("exp.Create | exp.Index | exp.Command", self._parse_create())
+
+
+def _pg_parse_alter(self: Any) -> exp.Alter | exp.Command:
+    """Parse Spangres ALTER statements including CHANGE STREAM."""
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spangres" and self._match_text_seq("CHANGE", "STREAM"):
+        return _parse_alter_change_stream(self)
+    if _original_pg_statement_alter is not None:
+        return cast("exp.Alter | exp.Command", _original_pg_statement_alter(self))
+    return cast("exp.Alter | exp.Command", self._parse_alter())
+
+
+def _pg_parse_drop(self: Any) -> exp.Drop | exp.Command:
+    """Parse Spangres DROP statements including CHANGE STREAM, PROPERTY GRAPH, VECTOR INDEX, and SEARCH INDEX."""
+    dialect = getattr(self, "dialect", None)
+    if dialect is not None and type(dialect).__name__ == "Spangres":
+        if self._match_text_seq("CHANGE", "STREAM"):
+            return _parse_drop_spanner_object(self, "CHANGE STREAM")
+        if self._match_text_seq("PROPERTY", "GRAPH"):
+            return _parse_drop_spanner_object(self, "PROPERTY GRAPH")
+        if self._match_text_seq("VECTOR", "INDEX"):
+            return _parse_drop_spanner_object(self, "VECTOR INDEX")
+        if self._match_text_seq("SEARCH", "INDEX"):
+            return _parse_drop_spanner_object(self, "SEARCH INDEX")
+    if _original_pg_statement_drop is not None:
+        return cast("exp.Drop | exp.Command", _original_pg_statement_drop(self))
+    return cast("exp.Drop | exp.Command", self._parse_drop())
 
 
 register_spanner_property_parsers()
 
 SpannerParser = BigQueryParser
+
 SpangresParser = PostgresParser

@@ -425,16 +425,53 @@ def test_portal_manager_atexit_cleanup_noop_when_stopped() -> None:
 
 
 def test_portal_call_timeout() -> None:
-    """PortalProvider.call raises error on timeout."""
+    """PortalProvider.call raises error on timeout and cancels the in-flight task."""
+    cancelled = False
 
     async def slow_function() -> int:
-        await asyncio.sleep(10)
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         return 42
 
     provider = PortalProvider()
     provider.start()
 
     with pytest.raises(ImproperConfigurationError, match="timed out after"):
-        provider.call(slow_function, timeout=0.1)
+        provider.call(slow_function, timeout=0.05)
 
     provider.stop()
+    assert cancelled is True
+
+
+def test_portal_call_rejects_same_thread_reentrancy() -> None:
+    """PortalProvider.call raises ImproperConfigurationError when called from its own event-loop thread."""
+    provider = PortalProvider()
+    provider.start()
+
+    async def reentrant() -> int:
+        return provider.call(reentrant)
+
+    try:
+        with pytest.raises(ImproperConfigurationError, match="event loop thread"):
+            provider.call(reentrant)
+    finally:
+        provider.stop()
+
+
+def test_portal_call_propagates_cancelled_error() -> None:
+    """PortalProvider.call propagates asyncio.CancelledError instead of hanging."""
+    provider = PortalProvider()
+    provider.start()
+
+    async def cancel_me() -> int:
+        raise asyncio.CancelledError("task cancelled")
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            provider.call(cancel_me)
+    finally:
+        provider.stop()

@@ -429,51 +429,12 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
     def _create_tables(self) -> None:
         """Synchronous implementation of create_tables."""
         with self._config.provide_connection() as conn:
-            conn.execute(self._sync_sessions_table_ddl())
-            conn.execute(self._sync_events_table_ddl())
+            conn.execute(self._sessions_table_ddl())
+            conn.execute(self._events_table_ddl())
             conn.execute(self._app_states_table_ddl())
             conn.execute(self._user_states_table_ddl())
             conn.execute(self._metadata_table_ddl())
             conn.commit()
-
-    def _sync_sessions_table_ddl(self) -> str:
-        """Synchronous version of DDL generation for use in _create_tables."""
-        owner_id_line = ""
-        if self._owner_id_column_ddl:
-            owner_id_line = f",\n            {self._owner_id_column_ddl}"
-
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._session_table} (
-            id VARCHAR PRIMARY KEY,
-            app_name VARCHAR NOT NULL,
-            user_id VARCHAR NOT NULL{owner_id_line},
-            state JSON NOT NULL,
-            create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id);
-        CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC);
-        """
-
-    def _sync_events_table_ddl(self) -> str:
-        """Synchronous version of DDL generation for use in _create_tables."""
-        generated_columns = self._event_generated_columns_sql()
-        generated_indexes = self._event_generated_column_indexes_sql()
-        return f"""
-        CREATE TABLE IF NOT EXISTS {self._events_table} (
-            id VARCHAR PRIMARY KEY,
-            app_name VARCHAR NOT NULL,
-            user_id VARCHAR NOT NULL,
-            session_id VARCHAR NOT NULL,
-            invocation_id VARCHAR,
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            event_data JSON NOT NULL{generated_columns},
-            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC);
-        CREATE INDEX IF NOT EXISTS idx_{self._events_table}_app_timestamp ON {self._events_table}(app_name, timestamp ASC);
-        {generated_indexes}
-        """
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -781,14 +742,12 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         if app_name is not None:
             where += " AND app_name = ?"
             params = (before, app_name)
-        count_sql = f"SELECT COUNT(*) FROM {self._events_table} {where}"
-        delete_sql = f"DELETE FROM {self._events_table} {where}"
+        delete_sql = f"DELETE FROM {self._events_table} {where} RETURNING 1"
 
         try:
             with self._config.provide_connection() as conn:
-                count_row = conn.execute(count_sql, params).fetchone()
-                count = int(count_row[0]) if count_row is not None else 0
-                conn.execute(delete_sql, params)
+                cursor = conn.execute(delete_sql, params)
+                count = len(cursor.fetchall())
                 conn.commit()
                 return count
         except Exception as e:
@@ -802,19 +761,17 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         if app_name is not None:
             where += " AND app_name = ?"
             params = (updated_before, app_name)
-        count_sql = f"SELECT COUNT(*) FROM {self._session_table} {where}"
         delete_events_sql = f"""
         DELETE FROM {self._events_table}
         WHERE session_id IN (SELECT id FROM {self._session_table} {where})
         """
-        delete_sessions_sql = f"DELETE FROM {self._session_table} {where}"
+        delete_sessions_sql = f"DELETE FROM {self._session_table} {where} RETURNING 1"
 
         try:
             with self._config.provide_connection() as conn:
-                count_row = conn.execute(count_sql, params).fetchone()
-                count = int(count_row[0]) if count_row is not None else 0
                 conn.execute(delete_events_sql, params)
-                conn.execute(delete_sessions_sql, params)
+                cursor = conn.execute(delete_sessions_sql, params)
+                count = len(cursor.fetchall())
                 conn.commit()
                 return count
         except Exception as e:
@@ -828,14 +785,12 @@ class DuckdbADKStore(BaseSyncADKStore["DuckDBConfig"]):
         if app_name is not None:
             where += " AND app_name = ?"
             params = (updated_before, app_name)
-        count_sql = f"SELECT COUNT(*) FROM {self._user_state_table} {where}"
-        delete_sql = f"DELETE FROM {self._user_state_table} {where}"
+        delete_sql = f"DELETE FROM {self._user_state_table} {where} RETURNING 1"
 
         try:
             with self._config.provide_connection() as conn:
-                count_row = conn.execute(count_sql, params).fetchone()
-                count = int(count_row[0]) if count_row is not None else 0
-                conn.execute(delete_sql, params)
+                cursor = conn.execute(delete_sql, params)
+                count = len(cursor.fetchall())
                 conn.commit()
                 return count
         except Exception as e:
@@ -989,6 +944,10 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
     def _ensure_fts_extension(self, conn: Any) -> bool:
         """Ensure the DuckDB FTS extension is available for this connection."""
         with contextlib.suppress(Exception):
+            conn.execute("LOAD fts")
+            return True
+
+        with contextlib.suppress(Exception):
             conn.execute("INSTALL fts")
 
         try:
@@ -1092,15 +1051,11 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
         if not self._enabled:
             return
 
-        ddl = self._sync_memory_table_ddl()
+        ddl = self._memory_table_ddl()
         with self._config.provide_connection() as conn:
             conn.execute(ddl)
             if self._use_fts:
                 self._create_fts_index(conn)
-
-    def _sync_memory_table_ddl(self) -> str:
-        """Synchronous version of DDL generation for use in _create_tables."""
-        return self._memory_table_ddl()
 
     def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Synchronous implementation of insert_memory_entries."""
@@ -1131,44 +1086,50 @@ class DuckdbADKMemoryStore(BaseSyncADKMemoryStore["DuckDBConfig"]):
             """
 
         with self._config.provide_connection() as conn:
-            for entry in entries:
-                params: tuple[Any, ...]
-                scope_value = entry.get("scope", "user")
-                metadata_json = entry.get("metadata_json")
-                if self._owner_id_column_name:
-                    params = (
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        scope_value,
-                        entry["event_id"],
-                        entry.get("author"),
-                        owner_id,
-                        entry["timestamp"],
-                        to_json(entry["content_json"]),
-                        entry["content_text"],
-                        to_json(metadata_json) if metadata_json is not None else None,
-                        entry["inserted_at"],
-                    )
-                else:
-                    params = (
-                        entry["id"],
-                        entry["session_id"],
-                        entry["app_name"],
-                        entry["user_id"],
-                        scope_value,
-                        entry["event_id"],
-                        entry.get("author"),
-                        entry["timestamp"],
-                        to_json(entry["content_json"]),
-                        entry["content_text"],
-                        to_json(metadata_json) if metadata_json is not None else None,
-                        entry["inserted_at"],
-                    )
-                result = conn.execute(sql, params)
-                inserted_count += len(result.fetchall())
-            conn.commit()
+            conn.begin()
+            try:
+                for entry in entries:
+                    params: tuple[Any, ...]
+                    scope_value = entry.get("scope", "user")
+                    metadata_json = entry.get("metadata_json")
+                    if self._owner_id_column_name:
+                        params = (
+                            entry["id"],
+                            entry["session_id"],
+                            entry["app_name"],
+                            entry["user_id"],
+                            scope_value,
+                            entry["event_id"],
+                            entry.get("author"),
+                            owner_id,
+                            entry["timestamp"],
+                            to_json(entry["content_json"]),
+                            entry["content_text"],
+                            to_json(metadata_json) if metadata_json is not None else None,
+                            entry["inserted_at"],
+                        )
+                    else:
+                        params = (
+                            entry["id"],
+                            entry["session_id"],
+                            entry["app_name"],
+                            entry["user_id"],
+                            scope_value,
+                            entry["event_id"],
+                            entry.get("author"),
+                            entry["timestamp"],
+                            to_json(entry["content_json"]),
+                            entry["content_text"],
+                            to_json(metadata_json) if metadata_json is not None else None,
+                            entry["inserted_at"],
+                        )
+                    result = conn.execute(sql, params)
+                    inserted_count += len(result.fetchall())
+                conn.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    conn.rollback()
+                raise
 
             if self._use_fts and inserted_count > 0:
                 self._refresh_fts_index(conn)

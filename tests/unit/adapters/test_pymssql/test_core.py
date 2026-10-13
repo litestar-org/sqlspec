@@ -5,11 +5,13 @@ from typing import Any
 import pytest
 
 from sqlspec.adapters.pymssql.core import (
+    build_connection_config,
     build_insert_statement,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    escape_literal_percent,
     extract_error_number,
     format_identifier,
     normalize_execute_many_parameters,
@@ -19,8 +21,13 @@ from sqlspec.core import SQL, ParameterStyle
 from sqlspec.exceptions import (
     CheckViolationError,
     DatabaseConnectionError,
+    DataError,
     ForeignKeyViolationError,
     NotNullViolationError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SerializationConflictError,
+    SQLParsingError,
     UniqueViolationError,
 )
 
@@ -185,3 +192,63 @@ def test_normalize_execute_parameters_preserves_tuples() -> None:
     """normalize_execute_parameters passes tuples through directly."""
     params = (1, "Alice")
     assert normalize_execute_parameters(params) is params
+
+
+def test_extract_error_number_from_nested_tuple() -> None:
+    """extract_error_number extracts integer from nested tuple args."""
+    assert extract_error_number(Exception((2627, b"Violation of UNIQUE KEY constraint"))) == 2627
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_type"),
+    [
+        (102, SQLParsingError),
+        (105, SQLParsingError),
+        (156, SQLParsingError),
+        (207, SQLParsingError),
+        (208, SQLParsingError),
+        (241, DataError),
+        (242, DataError),
+        (245, DataError),
+        (2628, DataError),
+        (8115, DataError),
+        (8152, DataError),
+        (1222, QueryTimeoutError),
+        (3960, SerializationConflictError),
+        (229, PermissionDeniedError),
+        (230, PermissionDeniedError),
+        (262, PermissionDeniedError),
+    ],
+)
+def test_create_mapped_exception_maps_expanded_sql_server_error_codes(
+    code: int, expected_type: type[Exception]
+) -> None:
+    """Expanded SQL Server error codes map to their specific SQLSpec exception types."""
+    mapped = create_mapped_exception(Exception(code, f"SQL Server failure ({code})"))
+    assert isinstance(mapped, expected_type)
+
+
+def test_escape_literal_percent_preserves_placeholders_and_escapes_literals() -> None:
+    """escape_literal_percent doubles literal % while keeping %s placeholders intact when parameters exist."""
+    validator = default_statement_config.parameter_validator
+    sql_with_params = "SELECT * FROM dbo.items WHERE discount LIKE '50%' AND category = %s"
+    assert (
+        escape_literal_percent(sql_with_params, ("books",), validator)
+        == "SELECT * FROM dbo.items WHERE discount LIKE '50%%' AND category = %s"
+    )
+    sql_without_params = "SELECT * FROM dbo.items WHERE discount LIKE '50%'"
+    assert escape_literal_percent(sql_without_params, (), validator) == sql_without_params
+
+
+def test_build_connection_config_merges_extra_mapping() -> None:
+    """build_connection_config pops and merges the extra mapping without overriding explicit keys."""
+    cfg = build_connection_config({
+        "server": "sql.local",
+        "timeout": 10,
+        "extra": {"timeout": 99, "appname": "analytics", "ignored": None},
+    })
+    assert cfg["server"] == "sql.local"
+    assert cfg["timeout"] == 10
+    assert cfg["appname"] == "analytics"
+    assert "extra" not in cfg
+    assert "ignored" not in cfg

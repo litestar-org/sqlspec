@@ -6,7 +6,6 @@ type coercion, error handling, and transaction management.
 
 import tempfile
 from collections.abc import Sized
-from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from sqlspec.adapters.asyncmy._typing import (
@@ -22,6 +21,7 @@ from sqlspec.adapters.asyncmy.core import (
     AsyncmyStreamSource,
     build_insert_statement,
     build_load_data_statement,
+    can_use_local_infile_records,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 __all__ = ("AsyncmyCursor", "AsyncmyDriver", "AsyncmyExceptionHandler", "AsyncmySessionContext")
 
-logger = get_logger(__name__)
+logger = get_logger("sqlspec.adapters.asyncmy")
 
 json_type_value = (
     AsyncmyFieldType.JSON if AsyncmyFieldType is not None and supports_json_type(AsyncmyFieldType) else None
@@ -134,21 +134,16 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             "Callable[[Any], Any]", features.get("json_deserializer", from_json)
         )
 
-    async def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
-    ) -> "SQLResult":
-        if (
-            "%" in cached.compiled_sql
-            and escape_literal_percent(
-                cached.compiled_sql, params or (None,), self.statement_config.parameter_validator
-            )
-            != cached.compiled_sql
-        ):
-            statement = self._cached_statement(
-                sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-            )
-            return await self._execute_cached_statement(statement)
-        return await super()._execute_cache_hit(sql, params, cached)
+    @property
+    def data_dictionary(self) -> "AsyncmyDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = AsyncmyDataDictionary()
+        return self._data_dictionary
 
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -167,9 +162,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         sql = escape_literal_percent(sql, prepared_parameters, self.statement_config.parameter_validator)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
-        if statement.returns_rows():
+        description = getattr(cursor, "description", None) or None
+        if statement.returns_rows() or description is not None:
             fetched_data = await cursor.fetchall()
-            description = cursor.description or None
             row_plan = resolve_row_plan(description, ASYNCMY_JSON_TYPE_CODES)
             rows, column_names, row_format = collect_rows(
                 fetched_data, row_plan, self._json_deserializer, logger=logger
@@ -239,9 +234,15 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
 
         successful_count = 0
         last_cursor = cursor
+        normalized_params = normalize_execute_parameters(prepared_parameters)
 
         for stmt in statements:
-            await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            stmt_sql = (
+                escape_literal_percent(stmt, prepared_parameters, self.statement_config.parameter_validator)
+                if normalized_params is not None
+                else stmt
+            )
+            await cursor.execute(stmt_sql, normalized_params)
             successful_count += 1
 
         return self.create_execution_result(
@@ -259,6 +260,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.begin()
         except AsyncmyMySQLError as e:
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, Exception):
+                raise mapped from e
             msg = f"Failed to begin MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -271,6 +275,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.commit()
         except AsyncmyMySQLError as e:
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, Exception):
+                raise mapped from e
             msg = f"Failed to commit MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -283,6 +290,9 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         try:
             await self.connection.rollback()
         except AsyncmyMySQLError as e:
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, Exception):
+                raise mapped from e
             msg = f"Failed to rollback MySQL transaction: {e}"
             raise SQLSpecError(msg) from e
 
@@ -352,20 +362,16 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
         if overwrite:
             statement = f"TRUNCATE TABLE {format_identifier(table)}"
             exc_handler = self.handle_database_exceptions()
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                await cursor.execute(statement)
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from None
+            await self._run_with_exception_handler(exc_handler, self._execute_cursor_statement, statement)
+            self._check_pending_exception(exc_handler)
 
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             needs_preparation = self._arrow_rows_need_preparation(arrow_table)
             use_infile = (
-                self.driver_features.get("enable_local_infile_bulk_load")
+                bool(self.driver_features.get("enable_local_infile_bulk_load"))
                 and not needs_preparation
-                and not any(
-                    isinstance(value, (bytes, bytearray, memoryview, timedelta)) for row in records for value in row
-                )
+                and can_use_local_infile_records(arrow_table, records)
             )
             if use_infile:
                 await self._load_from_arrow_via_local_infile(table, columns, records)
@@ -377,30 +383,15 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
                     else records
                 )
                 exc_handler = self.handle_database_exceptions()
-                async with exc_handler, self.with_cursor(self.connection) as cursor:
-                    await cursor.executemany(insert_sql, prepared_records)
-                if exc_handler.pending_exception is not None:
-                    raise exc_handler.pending_exception from None
+                await self._run_with_exception_handler(
+                    exc_handler, self._executemany_cursor_statement, insert_sql, prepared_records
+                )
+                self._check_pending_exception(exc_handler)
 
         telemetry_payload = self._ingest_telemetry(arrow_table)
         telemetry_payload["destination"] = table
         self._attach_partition_telemetry(telemetry_payload, partitioner)
         return self._storage_job(telemetry_payload, telemetry)
-
-    async def _load_from_arrow_via_local_infile(
-        self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"
-    ) -> None:
-        with tempfile.TemporaryDirectory(prefix="sqlspec-asyncmy-") as directory:
-            with tempfile.NamedTemporaryFile(dir=directory, suffix=".tsv", delete=False) as payload:
-                payload.write(encode_records_for_local_infile(records))
-                filename = payload.name
-            statement = build_load_data_statement(table, columns)
-            exc_handler = self.handle_database_exceptions()
-            async with exc_handler, self.with_cursor(self.connection) as cursor:
-                with asyncmy_local_infile(self.connection, filename):
-                    await cursor.execute(statement, {"sqlspec_infile_path": filename})
-            if exc_handler.pending_exception is not None:
-                raise exc_handler.pending_exception from exc_handler.pending_exception.__cause__
 
     async def load_from_storage(
         self,
@@ -418,17 +409,6 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    @property
-    def data_dictionary(self) -> "AsyncmyDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = AsyncmyDataDictionary()
-        return self._data_dictionary
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect asyncmy rows for the direct execution path."""
         description = cursor.description or None
@@ -439,6 +419,42 @@ class AsyncmyDriver(AsyncDriverAdapterBase):
     def resolve_rowcount(self, cursor: Any) -> int:
         """Resolve rowcount from asyncmy cursor for the direct execution path."""
         return resolve_rowcount(cursor)
+
+    async def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        statement = self._cached_statement(
+            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+        )
+        return await self._execute_cached_statement(statement)
+
+    async def _execute_cursor_statement(self, statement: str, parameters: Any = None) -> None:
+        async with self.with_cursor(self.connection) as cursor:
+            if parameters is None:
+                await cursor.execute(statement)
+            else:
+                await cursor.execute(statement, parameters)
+
+    async def _executemany_cursor_statement(self, statement: str, parameters: Any) -> None:
+        async with self.with_cursor(self.connection) as cursor:
+            await cursor.executemany(statement, parameters)
+
+    async def _execute_local_infile_cursor(self, statement: str, filename: str) -> None:
+        async with self.with_cursor(self.connection) as cursor:
+            with asyncmy_local_infile(self.connection, filename):
+                await cursor.execute(statement, {"sqlspec_infile_path": filename})
+
+    async def _load_from_arrow_via_local_infile(
+        self, table: str, columns: "list[str]", records: "list[tuple[Any, ...]]"
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="sqlspec-asyncmy-") as directory:
+            with tempfile.NamedTemporaryFile(dir=directory, suffix=".tsv", delete=False) as payload:
+                payload.write(encode_records_for_local_infile(records))
+                filename = payload.name
+            statement = build_load_data_statement(table, columns)
+            exc_handler = self.handle_database_exceptions()
+            await self._run_with_exception_handler(exc_handler, self._execute_local_infile_cursor, statement, filename)
+            self._check_pending_exception(exc_handler)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction.

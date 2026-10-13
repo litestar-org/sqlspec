@@ -94,44 +94,15 @@ class AiomysqlPoolParams(AiomysqlConnectionParams):
     pool_recycle: NotRequired[int]
 
 
-def _normalize_local_infile(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Normalize aiomysql local-infile aliases to the native connection flag."""
-    config = dict(connection_config)
-
-    config.pop("enable_local_infile", None)
-    allow_local_infile = bool(config.pop("allow_local_infile", False))
-    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
-    return config
-
-
-def _normalize_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build aiomysql.connect-compatible kwargs from SQLSpec connection config."""
-    config = _normalize_local_infile(connection_config)
-
-    for key in _POOL_ONLY_CONFIG_KEYS:
-        config.pop(key, None)
-
-    if "cursor_class" in config and "cursorclass" not in config:
-        config["cursorclass"] = config["cursor_class"]
-    config.pop("cursor_class", None)
-
-    if "database" in config and "db" not in config:
-        config["db"] = config["database"]
-    config.pop("database", None)
-
-    if "passwd" in config and "password" not in config:
-        config["password"] = config["passwd"]
-    config.pop("passwd", None)
-
-    return config
-
-
 class AiomysqlDriverFeatures(TypedDict):
     """aiomysql driver feature flags.
 
     MySQL/MariaDB handle JSON natively, but custom serializers can be provided
     for specialized use cases.
 
+    enable_local_infile_bulk_load: Use native LOCAL INFILE for eligible Arrow rows.
+     Defaults to the connection's local_infile or allow_local_infile opt-in.
+     Set False to force executemany on an opted-in connection.
     json_serializer: Custom JSON serializer function.
      Defaults to sqlspec.utils.serializers.to_json.
      Use for performance (orjson) or custom encoding.
@@ -191,10 +162,7 @@ class _AiomysqlSessionFactory(AsyncPoolSessionFactory):
         self._contexts: dict[int, Any] = {}
 
     async def acquire_connection(self) -> "AiomysqlConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        pool = await self._config.provide_pool()
         ctx = pool.acquire()
         connection = cast("AiomysqlConnection", await ctx.__aenter__())
         self._contexts[id(connection)] = ctx
@@ -228,10 +196,7 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
         self._connection: AiomysqlConnection | None = None
 
     async def __aenter__(self) -> AiomysqlConnection:
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        pool = await self._config.provide_pool()
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AiomysqlConnection", await ctx.__aenter__())
@@ -265,6 +230,8 @@ class AiomysqlConnectionContext(AsyncPoolConnectionContext):
 @mypyc_attr(native_class=False)
 class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", AiomysqlDriver]):
     """Configuration for aiomysql database connections."""
+
+    __slots__ = ("_initialized_connections", "_user_connection_hook")
 
     driver_type: ClassVar[type[AiomysqlDriver]] = AiomysqlDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AiomysqlConnection)
@@ -335,6 +302,58 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             **kwargs,
         )
 
+    async def create_connection(self) -> AiomysqlConnection:
+        """Open a standalone connection owned by the caller.
+
+        The connection carries the same connection settings and creation hook
+        the pool applies, consumes no pool slot, and must be closed by the caller.
+
+        Returns:
+            An aiomysql connection instance.
+        """
+        connection = await aiomysql.connect(**self._connection_kwargs())
+        await self._ensure_connection(connection)
+        return connection
+
+    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AiomysqlPool":
+        """Provide async pool instance.
+
+        Returns:
+            The async connection pool.
+        """
+        if not self.connection_instance:
+            self.connection_instance = await self.create_pool()
+        return self.connection_instance
+
+    def get_signature_namespace(self) -> "dict[str, Any]":
+        """Get the signature namespace for aiomysql types.
+
+        Returns:
+            Dictionary mapping type names to types.
+        """
+
+        namespace = super().get_signature_namespace()
+        namespace.update({
+            "AiomysqlConnectionContext": AiomysqlConnectionContext,
+            "AiomysqlConnection": AiomysqlConnection,
+            "AiomysqlConnectionParams": AiomysqlConnectionParams,
+            "AiomysqlCursor": AiomysqlCursor,
+            "AiomysqlDictCursor": AiomysqlDictCursor,
+            "AiomysqlDriver": AiomysqlDriver,
+            "AiomysqlDriverFeatures": AiomysqlDriverFeatures,
+            "AiomysqlExceptionHandler": AiomysqlExceptionHandler,
+            "AiomysqlPool": AiomysqlPool,
+            "AiomysqlPoolParams": AiomysqlPoolParams,
+            "AiomysqlRawCursor": AiomysqlRawCursor,
+            "AiomysqlSessionContext": AiomysqlSessionContext,
+        })
+        return namespace
+
+    def get_event_runtime_hints(self) -> "EventRuntimeHints":
+        """Return queue polling defaults for aiomysql adapters."""
+
+        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
     async def _create_pool(self) -> "AiomysqlPool":
         """Create the actual async connection pool.
 
@@ -374,52 +393,34 @@ class AiomysqlConfig(AsyncDatabaseConfig[AiomysqlConnection, "AiomysqlPool", Aio
             await self.connection_instance.wait_closed()
             self.connection_instance = None
 
-    async def create_connection(self) -> AiomysqlConnection:
-        """Open a standalone connection owned by the caller.
 
-        The connection carries the same connection settings and creation hook
-        the pool applies, consumes no pool slot, and must be closed by the caller.
+def _normalize_local_infile(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Normalize aiomysql local-infile aliases to the native connection flag."""
+    config = dict(connection_config)
 
-        Returns:
-            An aiomysql connection instance.
-        """
-        connection = await aiomysql.connect(**self._connection_kwargs())
-        await self._ensure_connection(connection)
-        return connection
+    config.pop("enable_local_infile", None)
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
+    return config
 
-    async def provide_pool(self, *args: Any, **kwargs: Any) -> "AiomysqlPool":
-        """Provide async pool instance.
 
-        Returns:
-            The async connection pool.
-        """
-        if not self.connection_instance:
-            self.connection_instance = await self.create_pool()
-        return self.connection_instance
+def _normalize_connection_kwargs(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build aiomysql.connect-compatible kwargs from SQLSpec connection config."""
+    config = _normalize_local_infile(connection_config)
 
-    def get_signature_namespace(self) -> "dict[str, Any]":
-        """Get the signature namespace for aiomysql types.
+    for key in _POOL_ONLY_CONFIG_KEYS:
+        config.pop(key, None)
 
-        Returns:
-            Dictionary mapping type names to types.
-        """
+    if "cursor_class" in config and "cursorclass" not in config:
+        config["cursorclass"] = config["cursor_class"]
+    config.pop("cursor_class", None)
 
-        namespace = super().get_signature_namespace()
-        namespace.update({
-            "AiomysqlConnectionContext": AiomysqlConnectionContext,
-            "AiomysqlConnection": AiomysqlConnection,
-            "AiomysqlConnectionParams": AiomysqlConnectionParams,
-            "AiomysqlCursor": AiomysqlCursor,
-            "AiomysqlDriver": AiomysqlDriver,
-            "AiomysqlDriverFeatures": AiomysqlDriverFeatures,
-            "AiomysqlExceptionHandler": AiomysqlExceptionHandler,
-            "AiomysqlPool": AiomysqlPool,
-            "AiomysqlPoolParams": AiomysqlPoolParams,
-            "AiomysqlSessionContext": AiomysqlSessionContext,
-        })
-        return namespace
+    if "database" in config and "db" not in config:
+        config["db"] = config["database"]
+    config.pop("database", None)
 
-    def get_event_runtime_hints(self) -> "EventRuntimeHints":
-        """Return queue polling defaults for aiomysql adapters."""
+    if "passwd" in config and "password" not in config:
+        config["password"] = config["passwd"]
+    config.pop("passwd", None)
 
-        return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+    return config

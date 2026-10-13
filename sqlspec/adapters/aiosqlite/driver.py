@@ -3,8 +3,10 @@
 import asyncio
 import contextlib
 import inspect
-import random
+import secrets
 from typing import TYPE_CHECKING, Any, Literal, cast
+
+from mypy_extensions import mypyc_attr
 
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor, AiosqliteRawCursor, AiosqliteSessionContext
 from sqlspec.adapters.aiosqlite._typing import aiosqlite_module as aiosqlite
@@ -35,7 +37,7 @@ from sqlspec.driver import (
     parameter_value_needs_processing,
     type_coercion_fallbacks,
 )
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import DeadlockError
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
@@ -59,8 +61,10 @@ __all__ = (
 
 _execute_and_resolve_metadata = execute_and_resolve_metadata
 _execute_fetchall_with_metadata = execute_fetchall_with_metadata
+random = secrets.SystemRandom()
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
     """Async context manager for handling aiosqlite database exceptions.
 
@@ -82,6 +86,7 @@ class AiosqliteExceptionHandler(BaseAsyncExceptionHandler):
         return False
 
 
+@mypyc_attr(allow_interpreted_subclasses=True)
 class AiosqliteDriver(AsyncDriverAdapterBase):
     """AIOSQLite driver for async SQLite database operations."""
 
@@ -103,6 +108,17 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self._data_dictionary: AiosqliteDataDictionary | None = None
         self._rowid_target_cache: dict[tuple[str | None, str], bool] = {}
 
+    @property
+    def data_dictionary(self) -> "AiosqliteDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = AiosqliteDataDictionary()
+        return self._data_dictionary
+
     async def dispatch_execute(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement."""
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -120,7 +136,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                 statement.expression,
                 self._rowid_target_cache,
             )
-            self._invalidate_rowid_target_cache(statement.operation_type)
             data, column_names, row_count = collect_rows(fetched_data, description)
             row_format = resolve_row_format(data)
 
@@ -144,21 +159,15 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             statement.expression,
             self._rowid_target_cache,
         )
-        self._invalidate_rowid_target_cache(statement.operation_type)
         return self.create_execution_result(cursor, rowcount_override=affected_rows, last_inserted_id=last_inserted_id)
 
     async def dispatch_execute_many(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
         """Execute SQL with multiple parameter sets."""
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         self._invalidate_rowid_target_cache(statement.operation_type)
-
-        try:
-            affected_rows = await run_on_worker_thread(
-                self.connection, execute_many_on_worker_thread, self.connection, sql, prepared_parameters
-            )
-        finally:
-            self._invalidate_rowid_target_cache(statement.operation_type)
-
+        affected_rows = await run_on_worker_thread(
+            self.connection, execute_many_on_worker_thread, self.connection, sql, prepared_parameters
+        )
         return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     async def dispatch_execute_script(self, cursor: "AiosqliteRawCursor", statement: "SQL") -> "ExecutionResult":
@@ -234,26 +243,31 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             msg = "Transaction mode must be DEFERRED, IMMEDIATE, or EXCLUSIVE"
             raise ValueError(msg)
         try:
-            if not self.connection.in_transaction:
-                await self.connection.execute(stmt)
-        except aiosqlite.Error as e:
+            if not await _check_in_transaction(self.connection):
+                cursor = await self.connection.execute(stmt)
+                if cursor is not None:
+                    with contextlib.suppress(Exception):
+                        close_result = cursor.close()
+                        if inspect.isawaitable(close_result):
+                            await close_result
+        except (aiosqlite.Error, sqlite3.Error) as e:
             await _retry_begin_with_backoff(self.connection, e, statement=stmt)
 
     async def commit(self) -> None:
         """Commit the current transaction."""
         try:
             await end_transaction(self.connection, commit=True)
-        except aiosqlite.Error as e:
-            msg = f"Failed to commit transaction: {e}"
-            raise SQLSpecError(msg) from e
+        except (aiosqlite.Error, sqlite3.Error) as e:
+            raise create_mapped_exception(e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
         try:
             await end_transaction(self.connection, commit=False)
-        except aiosqlite.Error as e:
-            msg = f"Failed to rollback transaction: {e}"
-            raise SQLSpecError(msg) from e
+            self._rowid_target_cache.clear()
+        except (aiosqlite.Error, sqlite3.Error) as e:
+            self._rowid_target_cache.clear()
+            raise create_mapped_exception(e) from e
 
     def with_cursor(self, connection: "AiosqliteConnection") -> "AiosqliteCursor":
         """Create async context manager for AIOSQLite cursor."""
@@ -313,7 +327,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         insert_sql = build_insert_statement(table, columns)
         needs_prep = self._arrow_rows_need_preparation(arrow_table)
 
-        owns_transaction = not self.connection.in_transaction
+        owns_transaction = not await _check_in_transaction(self.connection)
         try:
             if owns_transaction:
                 await self.begin()
@@ -362,17 +376,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    @property
-    def data_dictionary(self) -> "AiosqliteDataDictionary":
-        """Get the data dictionary for this driver.
-
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = AiosqliteDataDictionary()
-        return self._data_dictionary
-
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect aiosqlite rows for the direct execution path."""
         return collect_rows(fetched, cursor.description)
@@ -385,8 +388,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: Any
     ) -> "SQLResult":
         """Execute cached queries through the async cursor fast path."""
-        prepared_params = self.prepare_driver_parameters(params, self.statement_config, prepared_statement=cached)
-        normalized_parameters = normalize_execute_parameters(prepared_params)
+        normalized_parameters = normalize_execute_parameters(params)
         direct_statement: SQL | None = None
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
@@ -415,12 +417,7 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
                         last_inserted_id=last_inserted_id,
                     )
                     direct_statement = self._cached_statement(
-                        sql,
-                        params,
-                        cached,
-                        cast("tuple[Any, ...] | list[Any] | dict[str, Any]", prepared_params),
-                        params_are_simple=True,
-                        compiled_sql=cached.compiled_sql,
+                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     result = self.build_statement_result(direct_statement, execution_result)
                 else:
@@ -440,7 +437,6 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
             assert result is not None
             return result
         finally:
-            self._invalidate_rowid_target_cache(cached.operation_type)
             if direct_statement is not None:
                 self._release_pooled_statement(direct_statement)
 
@@ -566,18 +562,33 @@ class AiosqliteDriver(AsyncDriverAdapterBase):
         return bool(self.connection.in_transaction)
 
 
+def _read_in_transaction_on_worker(raw_conn: Any) -> bool:
+    return bool(getattr(raw_conn, "in_transaction", False))
+
+
+async def _check_in_transaction(connection: "AiosqliteConnection") -> bool:
+    raw_conn = getattr(connection, "_conn", None)
+    if isinstance(raw_conn, sqlite3.Connection) and callable(getattr(connection, "_execute", None)):
+        return await run_on_worker_thread(connection, _read_in_transaction_on_worker, raw_conn)
+    return bool(getattr(connection, "in_transaction", False))
+
+
+def _is_busy_or_locked_error(error: BaseException) -> bool:
+    code = getattr(error, "sqlite_errorcode", None)
+    if isinstance(code, int) and code in {5, 6}:
+        return True
+    message = str(error).lower()
+    return "locked" in message or "busy" in message
+
+
 async def _retry_begin_with_backoff(
     connection: "AiosqliteConnection",
-    initial_error: aiosqlite.Error,
+    initial_error: "aiosqlite.Error | sqlite3.Error",
     max_retries: int = 3,
     *,
     statement: str = "BEGIN IMMEDIATE",
 ) -> None:
-    """Retry transaction start after SQLite reports a busy connection.
-
-    Aiosqlite surfaces SQLite lock contention through ``aiosqlite.Error``. Preserve
-    the existing bounded exponential-backoff behavior for every native error and
-    report the original failure if all retries are exhausted.
+    """Retry transaction start after SQLite reports a busy or locked connection.
 
     Args:
         connection: Aiosqlite connection used to retry the transaction start.
@@ -586,20 +597,30 @@ async def _retry_begin_with_backoff(
         statement: SQL statement used to start the transaction.
 
     Raises:
-        SQLSpecError: If every retry attempt fails.
+        SQLSpecError: If a non-transient error occurs or every retry attempt fails.
     """
+    if not _is_busy_or_locked_error(initial_error):
+        raise create_mapped_exception(initial_error) from initial_error
+
     for attempt in range(max_retries):
-        delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)  # noqa: S311
+        delay = 0.01 * (2**attempt) + random.uniform(0, 0.01)
         await asyncio.sleep(delay)
         try:
-            await connection.execute(statement)
-        except aiosqlite.Error:
+            cursor = await connection.execute(statement)
+            if cursor is not None:
+                with contextlib.suppress(Exception):
+                    close_result = cursor.close()
+                    if inspect.isawaitable(close_result):
+                        await close_result
+        except (aiosqlite.Error, sqlite3.Error) as exc:
+            if not _is_busy_or_locked_error(exc):
+                raise create_mapped_exception(exc) from exc
             if attempt == max_retries - 1:
                 break
         else:
             return
     msg = f"Failed to begin transaction after retries: {initial_error}"
-    raise SQLSpecError(msg) from initial_error
+    raise DeadlockError(msg) from initial_error
 
 
 register_driver_profile("aiosqlite", driver_profile)

@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Coroutine
 from typing import Any, Self, assert_type, cast
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -807,10 +808,9 @@ def test_await_portal_fallback_propagates_exceptions() -> None:
 
 
 @pytest.mark.skipif(_SYNC_TOOLS_COMPILED, reason="patch.object cannot intercept mypyc-compiled methods")
-def test_await_run_coroutine_threadsafe_when_no_current_task() -> None:
-    """When the loop is running but current_task is None (worker thread context),
-    await_ should use asyncio.run_coroutine_threadsafe."""
-    from unittest.mock import MagicMock, patch
+def test_await_delegates_to_portal_when_no_current_task() -> None:
+    """When the loop is running on the current thread and current_task is None (e.g. loop callback),
+    await_ must delegate to the background portal instead of deadlocking via run_coroutine_threadsafe."""
 
     async def async_add(a: int, b: int) -> int:
         return a + b
@@ -818,21 +818,19 @@ def test_await_run_coroutine_threadsafe_when_no_current_task() -> None:
     mock_loop = MagicMock()
     mock_loop.is_running.return_value = True
 
-    mock_future = MagicMock()
-    mock_future.result.return_value = 7
-
-    def _capture_and_close_coro(coro: "Any", loop: "Any") -> MagicMock:
-        """Close the coroutine to avoid 'was never awaited' warning."""
-        coro.close()
-        return mock_future
+    mock_portal = MagicMock()
+    mock_portal.call.return_value = 7
 
     with (
         patch("asyncio.get_running_loop", return_value=mock_loop),
         patch("asyncio.current_task", return_value=None),
-        patch("asyncio.run_coroutine_threadsafe", side_effect=_capture_and_close_coro) as mock_rcts,
+        patch("sqlspec.utils.sync_tools.get_global_portal", return_value=mock_portal),
     ):
         sync_add = await_(async_add, raise_sync_error=False)
         result = sync_add(3, 4)
 
     assert result == 7
-    mock_rcts.assert_called_once()
+    mock_portal.call.assert_called_once()
+    called_arg = mock_portal.call.call_args.args[0]
+    assert called_arg.func is async_add
+    assert called_arg.args == (3, 4)

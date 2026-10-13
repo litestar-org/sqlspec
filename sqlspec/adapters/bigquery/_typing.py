@@ -4,6 +4,8 @@ This module contains type aliases and classes that are excluded from mypyc
 compilation to avoid ABI boundary issues.
 """
 
+import contextlib
+from importlib import import_module
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 import google.cloud.bigquery as bigquery_module
@@ -12,7 +14,8 @@ from google.api_core.client_info import ClientInfo as BigQueryClientInfo
 from google.api_core.client_options import ClientOptions as BigQueryClientOptions
 from google.api_core.retry import Retry as BigQueryRetry
 from google.auth.credentials import Credentials as BigQueryCredentials
-from google.cloud.bigquery import ArrayQueryParameter, Client, QueryJob, ScalarQueryParameter, StructQueryParameter
+from google.cloud.bigquery import ArrayQueryParameter, Client, ScalarQueryParameter, StructQueryParameter
+from google.cloud.bigquery import ConnectionProperty as BigQueryConnectionProperty
 from google.cloud.bigquery import LoadJobConfig as BigQueryLoadJobConfig
 from google.cloud.bigquery import QueryJob as BigQueryQueryJob
 from google.cloud.bigquery import QueryJobConfig as BigQueryQueryJobConfig
@@ -44,6 +47,7 @@ __all__ = (
     "BigQueryClientInfo",
     "BigQueryClientOptions",
     "BigQueryConnection",
+    "BigQueryConnectionProperty",
     "BigQueryCredentials",
     "BigQueryCursor",
     "BigQueryLoadJobConfig",
@@ -60,6 +64,8 @@ __all__ = (
     "bigquery_storage_read_module",
 )
 
+_DRIVER_TYPE: "type[BigQueryDriver] | None" = None
+
 
 class BigQueryCursor:
     """BigQuery cursor with resource management."""
@@ -68,16 +74,18 @@ class BigQueryCursor:
 
     def __init__(self, connection: "BigQueryConnection") -> None:
         self.connection = connection
-        self.job: QueryJob | None = None
+        self.job: BigQueryQueryJob | None = None
 
     def __enter__(self) -> "BigQueryConnection":
         return self.connection
 
     def __exit__(self, *_: Any) -> None:
         """Clean up cursor resources including active QueryJobs."""
-        from sqlspec.adapters.bigquery.driver import _close_bigquery_cursor
-
-        _close_bigquery_cursor(self)
+        if self.job is not None:
+            with contextlib.suppress(Exception):
+                if getattr(self.job, "state", None) in {"PENDING", "RUNNING"}:
+                    self.job.cancel()
+            self.job = None
 
 
 class BigQuerySessionContext:
@@ -118,10 +126,9 @@ class BigQuerySessionContext:
         self._driver: BigQueryDriver | None = None
 
     def __enter__(self) -> "BigQueryDriver":
-        from sqlspec.adapters.bigquery.driver import BigQueryDriver
-
+        driver_cls = _get_driver_type()
         self._connection = self._acquire_connection()
-        self._driver = BigQueryDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -129,7 +136,21 @@ class BigQuerySessionContext:
     def __exit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> "bool | None":
+        if exc_type is not None and self._driver is not None and self._driver._connection_in_transaction():
+            with contextlib.suppress(Exception):
+                self._driver.rollback()
         if self._connection is not None:
             self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
+        self._driver = None
         return None
+
+
+def _get_driver_type() -> "type[BigQueryDriver]":
+    global _DRIVER_TYPE
+    driver_type = _DRIVER_TYPE
+    if driver_type is None:
+        module = import_module("sqlspec.adapters.bigquery.driver")
+        driver_type = module.BigQueryDriver
+        _DRIVER_TYPE = driver_type
+    return driver_type

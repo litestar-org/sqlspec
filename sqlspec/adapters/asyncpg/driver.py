@@ -1,25 +1,22 @@
 """AsyncPG PostgreSQL driver implementation for async PostgreSQL operations."""
 
 import re
-from collections import OrderedDict
 from collections.abc import Mapping
 from contextlib import suppress
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlglot import exp, parse_one
 from sqlglot.errors import ParseError
 
 from sqlspec.adapters.asyncpg._typing import AsyncpgCursor, AsyncpgPostgresError, AsyncpgSessionContext
 from sqlspec.adapters.asyncpg.core import (
-    PREPARED_STATEMENT_CACHE_SIZE,
     AsyncpgStreamSource,
     NormalizedStackOperation,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
-    invoke_prepared_statement,
     parse_status,
     resolve_many_rowcount,
 )
@@ -28,7 +25,6 @@ from sqlspec.core import (
     SQL,
     StackResult,
     StatementStack,
-    create_sql_result,
     get_cache_config,
     is_copy_from_operation,
     is_copy_operation,
@@ -49,7 +45,7 @@ from sqlspec.utils.type_guards import has_sqlstate
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlspec.adapters.asyncpg._typing import AsyncpgConnection, AsyncpgPreparedStatement
+    from sqlspec.adapters.asyncpg._typing import AsyncpgConnection
     from sqlspec.core import ArrowResult, SQLResult, StatementConfig
     from sqlspec.driver import ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
@@ -58,9 +54,9 @@ if TYPE_CHECKING:
 __all__ = ("AsyncpgCursor", "AsyncpgDriver", "AsyncpgExceptionHandler", "AsyncpgSessionContext")
 
 _COPY_FROM_STDIN_RE: re.Pattern[str] = re.compile(
-    r'COPY\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)(?:\s*\([^)]*\))?\s+FROM\s+STDIN', re.IGNORECASE
+    r'COPY\s+(?:ONLY\s+)?((?:"(?:[^"]|"")+"|\w+)(?:\s*\.\s*(?:"(?:[^"]|"")+"|\w+))?)(?:\s*\([^)]*\))?\s+FROM\s+STDIN',
+    re.IGNORECASE,
 )
-_QUALIFIED_TABLE_NAME_PARTS: Final = 2
 
 logger = get_logger("sqlspec.adapters.asyncpg")
 
@@ -95,7 +91,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
     and caching, and parameter processing with type coercion.
     """
 
-    __slots__ = ("_data_dictionary", "_prepared_statements", "_transaction")
+    __slots__ = ("_data_dictionary", "_transaction")
     dialect = "postgres"
 
     def __init__(
@@ -111,16 +107,18 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         super().__init__(connection=connection, statement_config=statement_config, driver_features=driver_features)
         self._data_dictionary: AsyncpgDataDictionary | None = None
-        self._prepared_statements: OrderedDict[str, AsyncpgPreparedStatement] = OrderedDict()
         self._transaction: Any = None
 
-    def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":
-        for options in (config.execution_args, self.statement_config.execution_args):
-            if options:
-                for key in ("timeout", "command_timeout"):
-                    if key in options:
-                        return {"timeout": options[key]}
-        return {}
+    @property
+    def data_dictionary(self) -> "AsyncpgDataDictionary":
+        """Get the data dictionary for this driver.
+
+        Returns:
+            Data dictionary instance for metadata queries
+        """
+        if self._data_dictionary is None:
+            self._data_dictionary = AsyncpgDataDictionary()
+        return self._data_dictionary
 
     async def dispatch_execute(self, cursor: "AsyncpgConnection", statement: "SQL") -> "ExecutionResult":
         """Execute single SQL statement.
@@ -232,21 +230,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         The claim is therefore released here.
         """
         if self._transaction is not None:
-            return
+            if self._connection_in_transaction():
+                return
+            self._transaction = None
         transaction = self.connection.transaction()
         try:
             await transaction.start()
         except AsyncpgPostgresError as e:
             self._release_failed_transaction_claim(transaction)
-            msg = f"Failed to begin async transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
         self._transaction = transaction
-
-    def _release_failed_transaction_claim(self, transaction: Any) -> None:
-        """Clear the connection's transaction claim left by a failed start."""
-        with suppress(Exception):
-            if getattr(self.connection, "_top_xact", None) is transaction:
-                self.connection._top_xact = None
 
     async def commit(self) -> None:
         """Commit the current transaction."""
@@ -255,11 +248,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         try:
             if transaction is not None:
                 await transaction.commit()
-            else:
+            elif self._connection_in_transaction():
                 await self.connection.execute("COMMIT")
         except AsyncpgPostgresError as e:
-            msg = f"Failed to commit async transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -268,11 +260,10 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         try:
             if transaction is not None:
                 await transaction.rollback()
-            else:
+            elif self._connection_in_transaction():
                 await self.connection.execute("ROLLBACK")
         except AsyncpgPostgresError as e:
-            msg = f"Failed to rollback async transaction: {e}"
-            raise SQLSpecError(msg) from e
+            raise create_mapped_exception(e) from e
 
     async def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL."""
@@ -462,16 +453,19 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
 
-    @property
-    def data_dictionary(self) -> "AsyncpgDataDictionary":
-        """Get the data dictionary for this driver.
+    def _timeout_arguments(self, config: "StatementConfig") -> "dict[str, Any]":
+        for options in (config.execution_args, self.statement_config.execution_args):
+            if options:
+                for key in ("timeout", "command_timeout"):
+                    if key in options:
+                        return {"timeout": options[key]}
+        return {}
 
-        Returns:
-            Data dictionary instance for metadata queries
-        """
-        if self._data_dictionary is None:
-            self._data_dictionary = AsyncpgDataDictionary()
-        return self._data_dictionary
+    def _release_failed_transaction_claim(self, transaction: Any) -> None:
+        """Clear the connection's transaction claim left by a failed start."""
+        with suppress(Exception):
+            if getattr(self.connection, "_top_xact", None) is transaction:
+                self.connection._top_xact = None
 
     @staticmethod
     def _copy_target(table: str) -> "tuple[str, str | None, str]":
@@ -582,41 +576,14 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 await self._commit_stack_success()
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
-        if self.driver_features.get("pgbouncer"):
-            result = await self._execute_cached_statement(normalized.statement)
-            return StackResult.from_sql_result(result)
-        timeout_args = self._timeout_arguments(normalized.statement.statement_config)
-        prepared = await self._get_prepared_statement(normalized.sql, timeout_args)
-        metadata = {"prepared_statement": True}
-
-        if normalized.statement.returns_rows():
-            rows = await invoke_prepared_statement(prepared, normalized.parameters, fetch=True, **timeout_args)
-            data, _ = collect_rows(rows)
-            sql_result = create_sql_result(
-                normalized.statement, data=data, rows_affected=len(data), metadata=metadata, row_format="record"
-            )
-            return StackResult.from_sql_result(sql_result)
-
-        status = await invoke_prepared_statement(prepared, normalized.parameters, fetch=False, **timeout_args)
-        rowcount = parse_status(status)
-        sql_result = create_sql_result(normalized.statement, rows_affected=rowcount, metadata=metadata)
-        return StackResult.from_sql_result(sql_result)
+        result = await self._execute_cached_statement(normalized.statement)
+        if not self.driver_features.get("pgbouncer"):
+            result.metadata["prepared_statement"] = True
+        return StackResult.from_sql_result(result)
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""
         return bool(self.connection.is_in_transaction())
-
-    async def _get_prepared_statement(self, sql: str, timeout_args: "dict[str, Any]") -> "AsyncpgPreparedStatement":
-        cached = self._prepared_statements.get(sql)
-        if cached is not None:
-            self._prepared_statements.move_to_end(sql)
-            return cached
-
-        prepared = cast("AsyncpgPreparedStatement", await self.connection.prepare(sql, **timeout_args))
-        self._prepared_statements[sql] = prepared
-        if len(self._prepared_statements) > PREPARED_STATEMENT_CACHE_SIZE:
-            self._prepared_statements.popitem(last=False)
-        return prepared
 
     async def _handle_copy_operation(self, cursor: "AsyncpgConnection", statement: "SQL") -> None:
         """Handle PostgreSQL COPY operations.
@@ -631,6 +598,7 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
         execution_args = statement.statement_config.execution_args
         metadata: dict[str, Any] = dict(execution_args) if execution_args else {}
+        timeout_args = self._timeout_arguments(statement.statement_config)
         if statement.is_processed:
             sql_text = statement.get_processed_state().compiled_sql
         else:
@@ -650,20 +618,16 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
                 data_str = str(copy_data)
 
             data_io = BytesIO(data_str.encode("utf-8"))
-            table_name = cast("str | None", metadata.get("postgres_copy_table"))
-            schema_name: str | None = None
+            raw_table = cast("str | None", metadata.get("postgres_copy_table"))
+            if raw_table is None:
+                raw_table = _extract_copy_from_stdin_table(sql_text)
 
-            if table_name is None:
-                match = _COPY_FROM_STDIN_RE.search(sql_text)
-                if match:
-                    table_name = match.group(1)
-
-            if table_name is None:
+            if raw_table is None:
                 msg = "COPY FROM STDIN requires a table name or postgres_copy_table execution argument"
                 raise SQLSpecError(msg)
 
-            schema_name, table_name = _split_copy_table_name(table_name)
-            copy_kwargs: dict[str, Any] = {"source": data_io}
+            table_name, schema_name, _ = self._copy_target(raw_table)
+            copy_kwargs: dict[str, Any] = {"source": data_io, **timeout_args}
             if schema_name is not None:
                 copy_kwargs["schema_name"] = schema_name
             if "postgres_copy_columns" in metadata:
@@ -676,14 +640,22 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
             await cursor.copy_to_table(table_name, **copy_kwargs)
             return
 
-        await cursor.execute(sql_text)
+        await cursor.execute(sql_text, **timeout_args)
+
+
+def _extract_copy_from_stdin_table(sql_text: str) -> "str | None":
+    with suppress(Exception):
+        parsed = parse_one(sql_text, read="postgres")
+        if isinstance(parsed, exp.Copy):
+            target = parsed.this
+            if isinstance(target, exp.Schema):
+                target = target.this
+            if isinstance(target, exp.Table):
+                return target.sql(dialect="postgres")
+    match = _COPY_FROM_STDIN_RE.search(sql_text)
+    if match:
+        return match.group(1)
+    return None
 
 
 register_driver_profile("asyncpg", driver_profile)
-
-
-def _split_copy_table_name(raw_name: str) -> "tuple[str | None, str]":
-    parts = raw_name.split(".", 1)
-    if len(parts) == _QUALIFIED_TABLE_NAME_PARTS:
-        return parts[0].strip('"'), parts[1].strip('"')
-    return None, raw_name.strip('"')

@@ -12,8 +12,6 @@ import mysql.connector as _mysql_connector
 from mysql.connector import MySQLConnection as _MysqlConnectorSyncConnection
 from mysql.connector import aio as _mysql_connector_aio
 from mysql.connector import pooling as _mysql_connector_pooling
-from mysql.connector.aio import MySQLConnection as _MysqlConnectorAsyncConnection  # pyright: ignore[reportMissingImports]
-from mysql.connector.aio.cursor import MySQLCursor as _MysqlConnectorAsyncRawCursor  # pyright: ignore[reportMissingImports]
 from mysql.connector.constants import FieldType as _MysqlConnectorFieldType
 from mysql.connector.cursor import MySQLCursor as _MysqlConnectorSyncRawCursor
 
@@ -29,7 +27,28 @@ if TYPE_CHECKING:
     from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver, MysqlConnectorSyncDriver
     from sqlspec.core import StatementConfig
 
+    class MysqlConnectorAsyncRawCursorProtocol(Protocol):
+        description: Any
+        rowcount: int
+        lastrowid: Any
+        with_rows: bool
+
+        async def execute(self, operation: Any, params: Any = None, multi: bool = False) -> Any: ...
+
+        async def executemany(self, operation: Any, seq_params: Any) -> Any: ...
+
+        async def fetchone(self) -> Any: ...
+
+        async def fetchmany(self, size: int | None = None) -> list[Any]: ...
+
+        async def fetchall(self) -> list[Any]: ...
+
+        async def close(self) -> Any: ...
+
     class MysqlConnectorAsyncConnectionProtocol(Protocol):
+        in_transaction: bool
+        unread_result: bool
+
         def cursor(self, **kwargs: Any) -> "Awaitable[MysqlConnectorAsyncRawCursor]": ...
 
         async def commit(self) -> object: ...
@@ -39,6 +58,8 @@ if TYPE_CHECKING:
         async def close(self) -> object: ...
 
         async def set_autocommit(self, value: bool) -> object: ...
+
+        async def consume_results(self) -> object: ...
 
     class MysqlConnectorAioModuleProtocol(Protocol):
         def connect(self, *args: Any, **kwargs: Any) -> "Awaitable[MysqlConnectorAsyncConnection]": ...
@@ -60,19 +81,19 @@ if TYPE_CHECKING:
     MysqlConnectorError: TypeAlias = _mysql_connector.Error
     MysqlConnectorFieldType: TypeAlias = MysqlConnectorFieldTypeProtocol
     MysqlConnectorMysqlModule: TypeAlias = MysqlConnectorMysqlModuleProtocol
-    MysqlConnectorAsyncRawCursor: TypeAlias = _MysqlConnectorAsyncRawCursor
+    MysqlConnectorAsyncRawCursor: TypeAlias = MysqlConnectorAsyncRawCursorProtocol
 
 if not TYPE_CHECKING:
     MysqlConnectorAsyncPool = import_optional_attr("mysql.connector.aio.pooling", "MySQLConnectionPool")
     MysqlConnectorAio = _mysql_connector_aio
     MysqlConnectorSyncConnection = _MysqlConnectorSyncConnection
-    MysqlConnectorAsyncConnection = _MysqlConnectorAsyncConnection
+    MysqlConnectorAsyncConnection = import_optional_attr("mysql.connector.aio", "MySQLConnection")
     MysqlConnectorConnectionPool = _mysql_connector_pooling.MySQLConnectionPool
     MysqlConnectorError = _mysql_connector.Error
     MysqlConnectorFieldType = _MysqlConnectorFieldType
     MysqlConnectorMysqlModule = _mysql
     MysqlConnectorSyncRawCursor = _MysqlConnectorSyncRawCursor
-    MysqlConnectorAsyncRawCursor = _MysqlConnectorAsyncRawCursor
+    MysqlConnectorAsyncRawCursor = import_optional_attr("mysql.connector.aio.cursor", "MySQLCursor")
 
 __all__ = (
     "MysqlConnectorAio",
@@ -90,6 +111,9 @@ __all__ = (
     "MysqlConnectorSyncRawCursor",
     "MysqlConnectorSyncSessionContext",
 )
+
+_resolved_sync_driver_type: "type[MysqlConnectorSyncDriver] | None" = None
+_resolved_async_driver_type: "type[MysqlConnectorAsyncDriver] | None" = None
 
 
 class MysqlConnectorSyncCursor:
@@ -110,6 +134,10 @@ class MysqlConnectorSyncCursor:
 
     def __exit__(self, *_: object) -> None:
         if self.cursor is not None:
+            raw_connection = getattr(self.connection, "_cnx", None) or self.connection
+            with contextlib.suppress(Exception):
+                if getattr(raw_connection, "unread_result", False):
+                    raw_connection.consume_results()
             with contextlib.suppress(Exception):
                 self.cursor.close()
 
@@ -132,6 +160,10 @@ class MysqlConnectorAsyncCursor:
 
     async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
+            raw_connection = getattr(self.connection, "_cnx", None) or self.connection
+            with contextlib.suppress(Exception):
+                if getattr(raw_connection, "unread_result", False):
+                    await raw_connection.consume_results()
             with contextlib.suppress(Exception):
                 await self.cursor.close()
 
@@ -166,10 +198,9 @@ class MysqlConnectorSyncSessionContext:
         self._driver: MysqlConnectorSyncDriver | None = None
 
     def __enter__(self) -> "MysqlConnectorSyncDriver":
-        from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorSyncDriver
-
+        driver_cls = _get_mysqlconnector_sync_driver_type()
         self._connection = self._acquire_connection()
-        self._driver = MysqlConnectorSyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -213,10 +244,9 @@ class MysqlConnectorAsyncSessionContext:
         self._driver: MysqlConnectorAsyncDriver | None = None
 
     async def __aenter__(self) -> "MysqlConnectorAsyncDriver":
-        from sqlspec.adapters.mysqlconnector.driver import MysqlConnectorAsyncDriver
-
+        driver_cls = _get_mysqlconnector_async_driver_type()
         self._connection = await self._acquire_connection()
-        self._driver = MysqlConnectorAsyncDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -228,3 +258,23 @@ class MysqlConnectorAsyncSessionContext:
             await self._release_connection(self._connection, exc_type=exc_type, exc_val=exc_val, exc_tb=exc_tb)
             self._connection = None
         return None
+
+
+def _get_mysqlconnector_sync_driver_type() -> "type[MysqlConnectorSyncDriver]":
+    """Resolve and cache MysqlConnectorSyncDriver lazily to avoid circular imports."""
+    global _resolved_sync_driver_type
+    driver_cls = _resolved_sync_driver_type
+    if driver_cls is None:
+        driver_cls = import_optional_attr("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorSyncDriver")
+        _resolved_sync_driver_type = driver_cls
+    return driver_cls
+
+
+def _get_mysqlconnector_async_driver_type() -> "type[MysqlConnectorAsyncDriver]":
+    """Resolve and cache MysqlConnectorAsyncDriver lazily to avoid circular imports."""
+    global _resolved_async_driver_type
+    driver_cls = _resolved_async_driver_type
+    if driver_cls is None:
+        driver_cls = import_optional_attr("sqlspec.adapters.mysqlconnector.driver", "MysqlConnectorAsyncDriver")
+        _resolved_async_driver_type = driver_cls
+    return driver_cls

@@ -1,6 +1,7 @@
 """arrow-odbc Litestar Store implementation."""
 
 import base64
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -12,13 +13,17 @@ from sqlspec.adapters.arrow_odbc.core import (
 )
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
 from sqlspec.utils.sync_tools import async_
+from sqlspec.utils.text import split_qualified_identifier
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from sqlspec.adapters.arrow_odbc.config import ArrowOdbcConfig
 
 __all__ = ("ArrowOdbcStore",)
 
 _MAX_INLINE_DATA_LENGTH = 3500
+_QUALIFIED_PARTS_MIN = 2
 
 
 class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
@@ -36,6 +41,10 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
         self._sql: _TsqlSessionSql | _Db2SessionSql = (
             _Db2SessionSql(self._table_name) if dialect == "db2" else _TsqlSessionSql(self._table_name)
         )
+
+    @property
+    def _chunk_table_name(self) -> str:
+        return f"{self._table_name}_chunks"
 
     async def create_table(self) -> None:
         """Create the session table if it doesn't exist."""
@@ -89,7 +98,8 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 
             expires_at = _normalize_utc(_row_value(row, "expires_at", 1))
             if expires_at is not None and expires_at < datetime.now(UTC):
-                self._delete(key)
+                driver.execute(f"DELETE FROM {self._table_name} WHERE session_id = ?", (key,))
+                driver.commit()
                 return None
 
             if renew_for is not None and expires_at is not None:
@@ -106,7 +116,7 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
     def _set(self, key: str, value: "str | bytes", expires_in: "int | timedelta | None" = None) -> None:
         data = _encode_bytes(self._value_to_bytes(value))
         expires_at = self._calculate_expires_at(expires_in)
-        with self._config.provide_session() as driver:
+        with self._config.provide_session() as driver, _atomic_write(driver):
             inline_data = data if len(data) <= _MAX_INLINE_DATA_LENGTH else None
             existing = driver.select_one_or_none(
                 f"SELECT session_id FROM {self._table_name} WHERE session_id = ?", (key,)
@@ -125,7 +135,6 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
                         """,
                         (key, index, chunk),
                     )
-            driver.commit()
 
     def _delete(self, key: str) -> None:
         with self._config.provide_session() as driver:
@@ -155,19 +164,14 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
             return max(0, int(remaining.total_seconds()))
 
     def _delete_expired(self) -> int:
-        with self._config.provide_session() as driver:
+        with self._config.provide_session() as driver, _atomic_write(driver):
             count_sql, count_parameters = self._sql.count_expired()
             count = int(driver.select_value(count_sql, *count_parameters) or 0)
             delete_sql, delete_parameters = self._sql.delete_expired()
             driver.execute(delete_sql, *delete_parameters)
-            driver.commit()
         if count > 0:
             self._log_delete_expired(count)
         return count
-
-    @property
-    def _chunk_table_name(self) -> str:
-        return f"{self._table_name}_chunks"
 
     def _get_chunked_data(self, driver: Any, key: str) -> str:
         rows = driver.select(
@@ -193,11 +197,13 @@ class ArrowOdbcStore(BaseSQLSpecStore["ArrowOdbcConfig"]):
 class _TsqlSessionSql:
     """SQL Server statements for the session store."""
 
-    __slots__ = ("_chunk_table_name", "_table_name")
+    __slots__ = ("_bare_chunk_table", "_bare_table", "_chunk_table_name", "_schema", "_table_name")
 
     def __init__(self, table_name: str) -> None:
         self._table_name = table_name
         self._chunk_table_name = f"{table_name}_chunks"
+        self._schema, self._bare_table = _split_tsql_table_name(table_name)
+        self._bare_chunk_table = f"{self._bare_table}_chunks"
 
     def create_table(self, driver: Any) -> None:
         """Create the session tables with the guarded T-SQL batch."""
@@ -276,8 +282,8 @@ class _TsqlSessionSql:
         IF NOT EXISTS (
             SELECT 1
             FROM sys.tables
-            WHERE name = N'{self._table_name}'
-              AND schema_id = SCHEMA_ID(N'dbo')
+            WHERE name = N'{self._bare_table}'
+              AND schema_id = SCHEMA_ID(N'{self._schema}')
         )
         BEGIN
             CREATE TABLE {self._table_name} (
@@ -288,7 +294,7 @@ class _TsqlSessionSql:
                 updated_at DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME()
             );
 
-            CREATE INDEX IX_{self._table_name}_expires_at
+            CREATE INDEX IX_{self._bare_table}_expires_at
                 ON {self._table_name}(expires_at)
                 WHERE expires_at IS NOT NULL;
         END;
@@ -296,16 +302,16 @@ class _TsqlSessionSql:
         IF NOT EXISTS (
             SELECT 1
             FROM sys.tables
-            WHERE name = N'{self._chunk_table_name}'
-              AND schema_id = SCHEMA_ID(N'dbo')
+            WHERE name = N'{self._bare_chunk_table}'
+              AND schema_id = SCHEMA_ID(N'{self._schema}')
         )
         BEGIN
             CREATE TABLE {self._chunk_table_name} (
                 session_id NVARCHAR(255) NOT NULL,
                 chunk_index INT NOT NULL,
                 data NVARCHAR(3500) NOT NULL,
-                CONSTRAINT PK_{self._chunk_table_name} PRIMARY KEY (session_id, chunk_index),
-                CONSTRAINT FK_{self._chunk_table_name}_session FOREIGN KEY (session_id)
+                CONSTRAINT PK_{self._bare_chunk_table} PRIMARY KEY (session_id, chunk_index),
+                CONSTRAINT FK_{self._bare_chunk_table}_session FOREIGN KEY (session_id)
                     REFERENCES {self._table_name}(session_id) ON DELETE CASCADE
             );
         END;
@@ -313,9 +319,11 @@ class _TsqlSessionSql:
 
     def drop_statements(self) -> "list[str]":
         """Get SQL Server DROP TABLE statements."""
+        chunk_target = f"{self._schema}.{self._bare_chunk_table}"
+        table_target = f"{self._schema}.{self._bare_table}"
         return [
-            f"IF OBJECT_ID(N'dbo.{self._chunk_table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._chunk_table_name};",
-            f"IF OBJECT_ID(N'dbo.{self._table_name}', N'U') IS NOT NULL DROP TABLE dbo.{self._table_name};",
+            f"IF OBJECT_ID(N'{chunk_target}', N'U') IS NOT NULL DROP TABLE {chunk_target};",
+            f"IF OBJECT_ID(N'{table_target}', N'U') IS NOT NULL DROP TABLE {table_target};",
         ]
 
 
@@ -328,33 +336,6 @@ class _Db2SessionSql:
         self._table_name = table_name
         self._chunk_table_name = f"{table_name}_chunks"
         self._schema, self._catalog_table = split_db2_name(table_name)
-
-    def _index_name(self) -> str:
-        return f"IX_{self._catalog_table}_EXP"
-
-    def _session_table_ddl(self) -> str:
-        return (
-            f"CREATE TABLE {self._table_name} ("
-            "session_id VARCHAR(255) NOT NULL PRIMARY KEY, "
-            f"data VARCHAR({_MAX_INLINE_DATA_LENGTH}), "
-            "expires_at TIMESTAMP, "
-            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, "
-            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP)"
-        )
-
-    def _index_ddl(self) -> str:
-        return f"CREATE INDEX {self._index_name()} ON {self._table_name}(expires_at)"
-
-    def _chunk_table_ddl(self) -> str:
-        return (
-            f"CREATE TABLE {self._chunk_table_name} ("
-            "session_id VARCHAR(255) NOT NULL, "
-            "chunk_index INTEGER NOT NULL, "
-            f"data VARCHAR({_MAX_INLINE_DATA_LENGTH}) NOT NULL, "
-            f"CONSTRAINT PK_{self._catalog_table}_CHUNKS PRIMARY KEY (session_id, chunk_index), "
-            f"CONSTRAINT FK_{self._catalog_table}_CHUNKS FOREIGN KEY (session_id) "
-            f"REFERENCES {self._table_name}(session_id) ON DELETE CASCADE)"
-        )
 
     def table_ddl(self) -> str:
         """Get the session table, expiry index and chunk table DDL as one script."""
@@ -421,6 +402,66 @@ class _Db2SessionSql:
         """Get the statement deleting expired sessions."""
         return (f"DELETE FROM {self._table_name} WHERE expires_at IS NOT NULL AND expires_at < ?", (_db2_now(),))
 
+    def _index_name(self) -> str:
+        return f"IX_{self._catalog_table}_EXP"
+
+    def _session_table_ddl(self) -> str:
+        return (
+            f"CREATE TABLE {self._table_name} ("
+            "session_id VARCHAR(255) NOT NULL PRIMARY KEY, "
+            f"data VARCHAR({_MAX_INLINE_DATA_LENGTH}), "
+            "expires_at TIMESTAMP, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP, "
+            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT TIMESTAMP)"
+        )
+
+    def _index_ddl(self) -> str:
+        return f"CREATE INDEX {self._index_name()} ON {self._table_name}(expires_at)"
+
+    def _chunk_table_ddl(self) -> str:
+        return (
+            f"CREATE TABLE {self._chunk_table_name} ("
+            "session_id VARCHAR(255) NOT NULL, "
+            "chunk_index INTEGER NOT NULL, "
+            f"data VARCHAR({_MAX_INLINE_DATA_LENGTH}) NOT NULL, "
+            f"CONSTRAINT PK_{self._catalog_table}_CHUNKS PRIMARY KEY (session_id, chunk_index), "
+            f"CONSTRAINT FK_{self._catalog_table}_CHUNKS FOREIGN KEY (session_id) "
+            f"REFERENCES {self._table_name}(session_id) ON DELETE CASCADE)"
+        )
+
+
+@contextlib.contextmanager
+def _atomic_write(driver: Any) -> "Iterator[None]":
+    if driver._connection_in_transaction():  # pyright: ignore[reportPrivateUsage]
+        yield
+        return
+    if not getattr(driver, "_connection_autocommit", True):
+        driver.begin()
+    try:
+        yield
+    except Exception:
+        with contextlib.suppress(Exception):
+            driver.rollback()
+        raise
+    else:
+        driver.commit()
+
+
+def _strip_tsql_quotes(part: str) -> str:
+    stripped = part.strip()
+    if len(stripped) >= _QUALIFIED_PARTS_MIN and stripped.startswith("[") and stripped.endswith("]"):
+        return stripped[1:-1].replace("]]", "]")
+    if len(stripped) >= _QUALIFIED_PARTS_MIN and stripped.startswith('"') and stripped.endswith('"'):
+        return stripped[1:-1].replace('""', '"')
+    return stripped
+
+
+def _split_tsql_table_name(table_name: str) -> "tuple[str, str]":
+    parts = [_strip_tsql_quotes(part) for part in split_qualified_identifier(table_name, quote_chars='"')]
+    if len(parts) < _QUALIFIED_PARTS_MIN:
+        return "dbo", parts[0] if parts else table_name
+    return parts[-2] or "dbo", parts[-1]
+
 
 def _db2_now() -> "str | None":
     return db2_timestamp_text(datetime.now(UTC))
@@ -443,6 +484,14 @@ def _row_value(row: object, key: str, index: int) -> Any:
 def _normalize_utc(value: Any) -> "datetime | None":
     if value is None:
         return None
+    if isinstance(value, (bytes, bytearray)):
+        value = bytes(value).decode("utf-8")
+    if isinstance(value, str):
+        normalized = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+        try:
+            value = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None:

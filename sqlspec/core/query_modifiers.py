@@ -49,7 +49,6 @@ __all__ = (
     "wrap_as_subquery",
 )
 
-# Type alias for condition factory functions
 ConditionFactory = Callable[[exp.Expr, exp.Placeholder], exp.Expr]
 
 _TABLE_QUALIFIED_PARTS: Final[int] = 2
@@ -478,7 +477,6 @@ def apply_column_pruning(
     if not isinstance(expression, exp.Select):
         return expression
 
-    # Check cache first if key provided
     if cache_key is not None:
         cache = get_cache()
         cached = cache.get_optimized(cache_key, dialect)
@@ -486,20 +484,16 @@ def apply_column_pruning(
             cached_expr: exp.Expr = cached
             return cached_expr.copy()
 
-    # Apply qualification to resolve column references
     try:
         qualified = qualify_module.qualify(expression.copy(), dialect=dialect, validate_qualify_columns=False)
     except Exception:
-        # If qualification fails, return unchanged expression
         return expression
 
     try:
         pruned: exp.Expr = pushdown_projections_module.pushdown_projections(qualified)
     except Exception:
-        # If pushdown fails, return the qualified expression
         pruned = qualified
 
-    # Cache the result
     if cache_key is not None:
         cache = get_cache()
         cache.put_optimized(cache_key, pruned.copy(), dialect)

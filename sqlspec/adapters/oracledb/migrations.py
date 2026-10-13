@@ -162,7 +162,159 @@ class OracleMigrationTrackerMixin:
 class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["SyncDriverAdapterBase"]):
     """Oracle-specific sync migration tracker."""
 
-    __slots__ = ()
+    def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
+        """Create the migration tracking table if it doesn't exist.
+
+        Uses a PL/SQL block to make the operation atomic and prevent race conditions.
+        Also checks for and adds missing columns to support schema migrations.
+
+        Args:
+            driver: The database driver to use.
+        """
+        create_script = f"""
+        BEGIN
+            EXECUTE IMMEDIATE '
+            CREATE TABLE {self.version_table} (
+                version_num VARCHAR2(32) PRIMARY KEY,
+                version_type VARCHAR2(16),
+                execution_sequence INTEGER,
+                description VARCHAR2(2000),
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                execution_time_ms INTEGER,
+                checksum VARCHAR2(64),
+                applied_by VARCHAR2(255)
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE = -955 THEN
+                    NULL; -- Table already exists
+                ELSE
+                    RAISE;
+                END IF;
+        END;
+        """
+        driver.execute_script(create_script)
+        driver.commit()
+
+        self._migrate_schema_if_needed(driver)
+
+    def get_current_version(self, driver: "SyncDriverAdapterBase") -> "str | None":
+        """Get the latest applied migration version.
+
+        Args:
+            driver: The database driver to use.
+
+        Returns:
+            The current migration version or None if no migrations applied.
+        """
+        result = driver.execute(self._current_version_query())
+        data = result.get_data()
+        return data[0]["version_num"] if data else None
+
+    def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[AppliedMigrationRecord]":
+        """Get all applied migrations in order.
+
+        Args:
+            driver: The database driver to use.
+
+        Returns:
+            List of migration records as dictionaries with lowercase keys.
+        """
+        result = driver.execute(self._applied_migrations_query())
+        return cast("list[AppliedMigrationRecord]", result.get_data())
+
+    def record_migration(
+        self,
+        driver: "SyncDriverAdapterBase",
+        version: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        *,
+        commit: bool = True,
+    ) -> None:
+        """Record a successfully applied migration.
+
+        Args:
+            driver: The database driver to use.
+            version: Version number of the migration.
+            description: Description of the migration.
+            execution_time_ms: Execution time in milliseconds.
+            checksum: MD5 checksum of the migration content.
+            commit: Whether to commit the transaction after recording.
+        """
+        applied_by = getpass.getuser()
+        parsed_version = parse_version(version)
+        version_type = parsed_version.type.value
+
+        next_seq_result = driver.execute(self._next_execution_sequence_query())
+        seq_data = next_seq_result.get_data()
+        execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
+
+        record_sql = self._record_migration_statement(
+            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
+        )
+        driver.execute(record_sql)
+        if commit:
+            driver.commit()
+
+    def remove_migration(self, driver: "SyncDriverAdapterBase", version: str, *, commit: bool = True) -> None:
+        """Remove a migration record.
+
+        Args:
+            driver: The database driver to use.
+            version: Version number to remove.
+            commit: Whether to commit the transaction after removal.
+        """
+        remove_sql = self._remove_migration_statement(version)
+        driver.execute(remove_sql)
+        if commit:
+            driver.commit()
+
+    def update_version_record(
+        self,
+        driver: "SyncDriverAdapterBase",
+        old_version: str,
+        new_version: str,
+        applied_versions: "set[str] | None" = None,
+    ) -> None:
+        """Update migration version record from timestamp to sequential.
+
+        Updates version_num and version_type while preserving execution_sequence,
+        applied_at, and other tracking metadata. Used during fix command.
+
+        Idempotent: If the version is already updated, logs and continues without error.
+        This allows fix command to be safely re-run after pulling changes.
+
+        Args:
+            driver: The database driver to use.
+            old_version: Current timestamp version string.
+            new_version: New sequential version string.
+            applied_versions: Previously loaded version set for batch reuse.
+
+        Raises:
+            ValueError: If neither old_version nor new_version found in database.
+        """
+        parsed_new_version = parse_version(new_version)
+        new_version_type = parsed_new_version.type.value
+
+        result = driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
+
+        if result.rows_affected == 0:
+            if applied_versions is None:
+                check_result = driver.execute(self._applied_migrations_query())
+                applied_versions = (
+                    {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
+                )
+
+            if new_version in applied_versions:
+                logger.debug("Version already updated: %s -> %s", old_version, new_version)
+                return
+
+            msg = f"Migration {old_version} not found in database for update to {new_version}"
+            raise ValueError(msg)
+
+        driver.commit()
 
     def _migrate_schema_if_needed(self, driver: "SyncDriverAdapterBase") -> None:
         """Check for and add any missing columns to the tracking table.
@@ -226,216 +378,9 @@ class OracleSyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrack
         driver.execute(alter_sql)
         logger.debug("Added column %s to tracking table", column_name)
 
-    def ensure_tracking_table(self, driver: "SyncDriverAdapterBase") -> None:
-        """Create the migration tracking table if it doesn't exist.
-
-        Uses a PL/SQL block to make the operation atomic and prevent race conditions.
-        Also checks for and adds missing columns to support schema migrations.
-
-        Args:
-            driver: The database driver to use.
-        """
-        create_script = f"""
-        BEGIN
-            EXECUTE IMMEDIATE '
-            CREATE TABLE {self.version_table} (
-                version_num VARCHAR2(32) PRIMARY KEY,
-                version_type VARCHAR2(16),
-                execution_sequence INTEGER,
-                description VARCHAR2(2000),
-                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                execution_time_ms INTEGER,
-                checksum VARCHAR2(64),
-                applied_by VARCHAR2(255)
-            )';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE = -955 THEN
-                    NULL; -- Table already exists
-                ELSE
-                    RAISE;
-                END IF;
-        END;
-        """
-        driver.execute_script(create_script)
-        driver.commit()
-
-        self._migrate_schema_if_needed(driver)
-
-    def get_current_version(self, driver: "SyncDriverAdapterBase") -> "str | None":
-        """Get the latest applied migration version.
-
-        Args:
-            driver: The database driver to use.
-
-        Returns:
-            The current migration version or None if no migrations applied.
-        """
-        result = driver.execute(self._current_version_query())
-        data = result.get_data()
-        return data[0]["version_num"] if data else None
-
-    def get_applied_migrations(self, driver: "SyncDriverAdapterBase") -> "list[AppliedMigrationRecord]":
-        """Get all applied migrations in order.
-
-        Args:
-            driver: The database driver to use.
-
-        Returns:
-            List of migration records as dictionaries with lowercase keys.
-        """
-        result = driver.execute(self._applied_migrations_query())
-        return cast("list[AppliedMigrationRecord]", result.get_data())
-
-    def record_migration(
-        self, driver: "SyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
-    ) -> None:
-        """Record a successfully applied migration.
-
-        Args:
-            driver: The database driver to use.
-            version: Version number of the migration.
-            description: Description of the migration.
-            execution_time_ms: Execution time in milliseconds.
-            checksum: MD5 checksum of the migration content.
-        """
-        applied_by = getpass.getuser()
-        parsed_version = parse_version(version)
-        version_type = parsed_version.type.value
-
-        next_seq_result = driver.execute(self._next_execution_sequence_query())
-        seq_data = next_seq_result.get_data()
-        execution_sequence = seq_data[0]["next_seq"] if seq_data else 1
-
-        record_sql = self._record_migration_statement(
-            version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
-        )
-        driver.execute(record_sql)
-        driver.commit()
-
-    def remove_migration(self, driver: "SyncDriverAdapterBase", version: str) -> None:
-        """Remove a migration record.
-
-        Args:
-            driver: The database driver to use.
-            version: Version number to remove.
-        """
-        remove_sql = self._remove_migration_statement(version)
-        driver.execute(remove_sql)
-        driver.commit()
-
-    def update_version_record(
-        self,
-        driver: "SyncDriverAdapterBase",
-        old_version: str,
-        new_version: str,
-        applied_versions: "set[str] | None" = None,
-    ) -> None:
-        """Update migration version record from timestamp to sequential.
-
-        Updates version_num and version_type while preserving execution_sequence,
-        applied_at, and other tracking metadata. Used during fix command.
-
-        Idempotent: If the version is already updated, logs and continues without error.
-        This allows fix command to be safely re-run after pulling changes.
-
-        Args:
-            driver: The database driver to use.
-            old_version: Current timestamp version string.
-            new_version: New sequential version string.
-            applied_versions: Previously loaded version set for batch reuse.
-
-        Raises:
-            ValueError: If neither old_version nor new_version found in database.
-        """
-        parsed_new_version = parse_version(new_version)
-        new_version_type = parsed_new_version.type.value
-
-        result = driver.execute(self._update_version_statement(old_version, new_version, new_version_type))
-
-        if result.rows_affected == 0:
-            if applied_versions is None:
-                check_result = driver.execute(self._applied_migrations_query())
-                applied_versions = (
-                    {row["version_num"] for row in check_result.get_data()} if check_result.data else set()
-                )
-
-            if new_version in applied_versions:
-                logger.debug("Version already updated: %s -> %s", old_version, new_version)
-                return
-
-            msg = f"Migration {old_version} not found in database for update to {new_version}"
-            raise ValueError(msg)
-
-        driver.commit()
-
 
 class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTracker["AsyncDriverAdapterBase"]):
     """Oracle-specific async migration tracker."""
-
-    __slots__ = ()
-
-    async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
-        """Check for and add any missing columns to the tracking table.
-
-        Uses the driver's data dictionary to query existing columns from Oracle's
-        USER_TAB_COLUMNS metadata table.
-
-        Args:
-            driver: The database driver to use.
-        """
-        try:
-            if self.version_table_schema:
-                columns_data = await driver.data_dictionary.get_columns(
-                    driver, self.version_table_name, schema=self.version_table_schema
-                )
-            else:
-                columns_data = await driver.data_dictionary.get_columns(driver, self.version_table_name)
-            existing_columns = {str(row["column_name"]).upper() for row in columns_data}
-            missing_columns = self._detect_missing_columns(existing_columns)
-
-            if not missing_columns:
-                logger.debug("Migration tracking table schema is up-to-date")
-                return
-
-            if self._should_echo():
-                console.print(
-                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
-                )
-
-            for col_name in sorted(missing_columns):
-                await self._add_column(driver, col_name)
-
-            await driver.commit()
-            if self._should_echo():
-                console.print("[green]Migration tracking table schema updated successfully[/]")
-
-        except Exception as e:
-            logger.warning("Could not check or migrate tracking table schema: %s", e)
-
-    async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
-        """Add a single column to the tracking table.
-
-        Args:
-            driver: The database driver to use.
-            column_name: Name of the column to add (lowercase).
-        """
-        target_create = self._tracking_table_ddl()
-        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
-
-        if not column_def:
-            return
-
-        default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
-        not_null_clause = " NOT NULL" if column_def.not_null else ""
-
-        alter_sql = f"""
-            ALTER TABLE {self.version_table}
-            ADD {column_def.name} {column_def.dtype}{default_clause}{not_null_clause}
-        """
-
-        await driver.execute(alter_sql)
-        logger.debug("Added column %s to tracking table", column_name)
 
     async def ensure_tracking_table(self, driver: "AsyncDriverAdapterBase") -> None:
         """Create the migration tracking table if it doesn't exist.
@@ -499,7 +444,14 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
         return cast("list[AppliedMigrationRecord]", result.get_data())
 
     async def record_migration(
-        self, driver: "AsyncDriverAdapterBase", version: str, description: str, execution_time_ms: int, checksum: str
+        self,
+        driver: "AsyncDriverAdapterBase",
+        version: str,
+        description: str,
+        execution_time_ms: int,
+        checksum: str,
+        *,
+        commit: bool = True,
     ) -> None:
         """Record a successfully applied migration.
 
@@ -509,6 +461,7 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             description: Description of the migration.
             execution_time_ms: Execution time in milliseconds.
             checksum: MD5 checksum of the migration content.
+            commit: Whether to commit the transaction after recording.
         """
 
         applied_by = getpass.getuser()
@@ -523,18 +476,21 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             version, version_type, execution_sequence, description, execution_time_ms, checksum, applied_by
         )
         await driver.execute(record_sql)
-        await driver.commit()
+        if commit:
+            await driver.commit()
 
-    async def remove_migration(self, driver: "AsyncDriverAdapterBase", version: str) -> None:
+    async def remove_migration(self, driver: "AsyncDriverAdapterBase", version: str, *, commit: bool = True) -> None:
         """Remove a migration record.
 
         Args:
             driver: The database driver to use.
             version: Version number to remove.
+            commit: Whether to commit the transaction after removal.
         """
         remove_sql = self._remove_migration_statement(version)
         await driver.execute(remove_sql)
-        await driver.commit()
+        if commit:
+            await driver.commit()
 
     async def update_version_record(
         self,
@@ -580,3 +536,65 @@ class OracleAsyncMigrationTracker(OracleMigrationTrackerMixin, BaseMigrationTrac
             raise ValueError(msg)
 
         await driver.commit()
+
+    async def _migrate_schema_if_needed(self, driver: "AsyncDriverAdapterBase") -> None:
+        """Check for and add any missing columns to the tracking table.
+
+        Uses the driver's data dictionary to query existing columns from Oracle's
+        USER_TAB_COLUMNS metadata table.
+
+        Args:
+            driver: The database driver to use.
+        """
+        try:
+            if self.version_table_schema:
+                columns_data = await driver.data_dictionary.get_columns(
+                    driver, self.version_table_name, schema=self.version_table_schema
+                )
+            else:
+                columns_data = await driver.data_dictionary.get_columns(driver, self.version_table_name)
+            existing_columns = {str(row["column_name"]).upper() for row in columns_data}
+            missing_columns = self._detect_missing_columns(existing_columns)
+
+            if not missing_columns:
+                logger.debug("Migration tracking table schema is up-to-date")
+                return
+
+            if self._should_echo():
+                console.print(
+                    f"[cyan]Migrating tracking table schema, adding columns: {', '.join(sorted(missing_columns))}[/]"
+                )
+
+            for col_name in sorted(missing_columns):
+                await self._add_column(driver, col_name)
+
+            await driver.commit()
+            if self._should_echo():
+                console.print("[green]Migration tracking table schema updated successfully[/]")
+
+        except Exception as e:
+            logger.warning("Could not check or migrate tracking table schema: %s", e)
+
+    async def _add_column(self, driver: "AsyncDriverAdapterBase", column_name: str) -> None:
+        """Add a single column to the tracking table.
+
+        Args:
+            driver: The database driver to use.
+            column_name: Name of the column to add (lowercase).
+        """
+        target_create = self._tracking_table_ddl()
+        column_def = next((col for col in target_create.columns if col.name.lower() == column_name), None)
+
+        if not column_def:
+            return
+
+        default_clause = f" DEFAULT {column_def.default}" if column_def.default else ""
+        not_null_clause = " NOT NULL" if column_def.not_null else ""
+
+        alter_sql = f"""
+            ALTER TABLE {self.version_table}
+            ADD {column_def.name} {column_def.dtype}{default_clause}{not_null_clause}
+        """
+
+        await driver.execute(alter_sql)
+        logger.debug("Added column %s to tracking table", column_name)

@@ -85,6 +85,20 @@ class StatementFilter:
 
     _is_statement_filter: bool = True
 
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via ``cls(*ctor_args)`` — works on mypyc native classes."""
+        return (type(self), self._reconstruction_args())
+
+    def __eq__(self, other: object) -> bool:
+        """Compare filters by their cache key for round-trip and deduplication checks."""
+        if not isinstance(other, StatementFilter):
+            return NotImplemented
+        return self.get_cache_key() == other.get_cache_key()
+
+    def __hash__(self) -> int:
+        """Hash via the canonical filter key so unhashable members are normalized."""
+        return hash(_canonical_filter_key(self))
+
     @abstractmethod
     def append_to_statement(self, statement: "SQL") -> "SQL":
         """Append the filter to the statement.
@@ -106,6 +120,14 @@ class StatementFilter:
             - named_parameters: Dict of parameter name to value
         """
         return [], {}
+
+    @abstractmethod
+    def get_cache_key(self) -> "tuple[Any, ...]":
+        """Return a cache key for this filter's configuration.
+
+        Returns:
+            Tuple of hashable values representing the filter's configuration
+        """
 
     def _resolve_parameter_conflicts(self, statement: "SQL", proposed_names: "list[str]") -> "list[str]":
         """Resolve parameter name conflicts.
@@ -170,28 +192,6 @@ class StatementFilter:
             "override it to support copy.deepcopy and pickle"
         )
         raise NotImplementedError(msg)
-
-    def __reduce__(self) -> "tuple[Any, ...]":
-        """Reconstruct via ``cls(*ctor_args)`` — works on mypyc native classes."""
-        return (type(self), self._reconstruction_args())
-
-    def __eq__(self, other: object) -> bool:
-        """Compare filters by their cache key for round-trip and deduplication checks."""
-        if not isinstance(other, StatementFilter):
-            return NotImplemented
-        return self.get_cache_key() == other.get_cache_key()
-
-    def __hash__(self) -> int:
-        """Hash via the canonical filter key so unhashable members are normalized."""
-        return hash(_canonical_filter_key(self))
-
-    @abstractmethod
-    def get_cache_key(self) -> "tuple[Any, ...]":
-        """Return a cache key for this filter's configuration.
-
-        Returns:
-            Tuple of hashable values representing the filter's configuration
-        """
 
 
 class _DatetimeBoundFilter(StatementFilter):
@@ -383,19 +383,6 @@ class InAnyFilter(StatementFilter, Generic[T]):
                 named_parameters[param_names[i]] = value
         return [], named_parameters
 
-    def _build_collection_condition(self, col_expr: exp.Expr, placeholders: "list[exp.Expr]") -> exp.Expr:
-        condition_type = self._condition_type
-        if condition_type == "in":
-            return exp.In(this=col_expr, expressions=placeholders)
-        if condition_type == "not_in":
-            return exp.Not(this=exp.In(this=col_expr, expressions=placeholders))
-
-        array_expr = exp.Array(expressions=placeholders)
-        condition = exp.EQ(this=col_expr, expression=exp.Any(this=array_expr))
-        if condition_type == "not_any":
-            return exp.Not(this=condition)
-        return condition
-
     def append_to_statement(self, statement: "SQL") -> "SQL":
         values = self.values
         if values is None:
@@ -417,6 +404,19 @@ class InAnyFilter(StatementFilter, Generic[T]):
         """Return cache key for this filter configuration."""
         values_tuple = tuple(self.values) if self.values is not None else None
         return (self._cache_key_name, self.field_name, values_tuple)
+
+    def _build_collection_condition(self, col_expr: exp.Expr, placeholders: "list[exp.Expr]") -> exp.Expr:
+        condition_type = self._condition_type
+        if condition_type == "in":
+            return exp.In(this=col_expr, expressions=placeholders)
+        if condition_type == "not_in":
+            return exp.Not(this=exp.In(this=col_expr, expressions=placeholders))
+
+        array_expr = exp.Array(expressions=placeholders)
+        condition = exp.EQ(this=col_expr, expression=exp.Any(this=array_expr))
+        if condition_type == "not_any":
+            return exp.Not(this=condition)
+        return condition
 
     def _reconstruction_args(self) -> "tuple[Any, ...]":
         return (self._field_name, self._values)
@@ -597,6 +597,20 @@ class CursorKey:
         self._nulls = nulls
         self._result_name = name
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CursorKey):
+            return NotImplemented
+        return self._identity() == other._identity()
+
+    def __hash__(self) -> int:
+        return hash(self._identity())
+
+    def __repr__(self) -> str:
+        return f"CursorKey({self._field_name!r}, {self._sort_order!r}, nulls={self._nulls!r}, result_name={self._result_name!r})"
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return CursorKey, self._identity()
+
     @property
     def field_name(self) -> str:
         return self._field_name
@@ -613,32 +627,8 @@ class CursorKey:
     def result_name(self) -> str:
         return self._result_name
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, CursorKey):
-            return NotImplemented
-        return self._identity() == other._identity()
-
-    def __hash__(self) -> int:
-        return hash(self._identity())
-
-    def __repr__(self) -> str:
-        return f"CursorKey({self._field_name!r}, {self._sort_order!r}, nulls={self._nulls!r}, result_name={self._result_name!r})"
-
-    def __reduce__(self) -> tuple[Any, ...]:
-        return CursorKey, self._identity()
-
     def _identity(self) -> tuple[str, str, str | None, str]:
         return self._field_name, self._sort_order, self._nulls, self._result_name
-
-
-def _fold_or(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
-    if a is True or b is True:
-        return True
-    if a is False:
-        return b
-    if b is False:
-        return a
-    return exp.Paren(this=exp.Or(this=a, expression=b))
 
 
 _CURSOR_KEY_PAIR_LENGTH = 2
@@ -674,16 +664,6 @@ def normalize_cursor_keys(keys: CursorKeys) -> tuple[CursorKey, ...]:
         msg = "CursorFilter requires at least one cursor key"
         raise ValueError(msg)
     return tuple(normalized)
-
-
-def _fold_and(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
-    if a is False or b is False:
-        return False
-    if a is True:
-        return b
-    if b is True:
-        return a
-    return exp.And(this=a, expression=b)
 
 
 class CursorFilter(PaginationFilter):
@@ -838,20 +818,6 @@ class CursorFilter(PaginationFilter):
         """
         return encode_cursor(self._row_values(row), self._fingerprint, backward=backward, secret=self._secret)
 
-    def _row_values(self, row: abc.Mapping[str, Any]) -> list[Any]:
-        values = []
-        for key in self._keys:
-            try:
-                value = row[key.result_name]
-            except KeyError as exc:
-                msg = f"Cursor key column '{key.result_name}' is not present in the result row; select it or set CursorKey.result_name"
-                raise ImproperConfigurationError(msg) from exc
-            if value is None and key.nulls is None:
-                msg = f"Cursor key '{key.field_name}' returned NULL; declare nulls='first' or nulls='last'"
-                raise ImproperConfigurationError(msg)
-            values.append(value)
-        return values
-
     def build_page(self, rows: list[dict[str, Any]]) -> CursorPagination[dict[str, Any]]:
         """Trim the sentinel and mint adjacent-page cursors.
 
@@ -882,9 +848,6 @@ class CursorFilter(PaginationFilter):
         """Return SQL-affecting configuration without the signing secret."""
         return ("CursorFilter", tuple(key._identity() for key in self._keys), self._limit, self._cursor)
 
-    def _reconstruction_args(self) -> tuple[Any, ...]:
-        return self._keys, self._limit, self._cursor, self._secret
-
     def extract_parameters(self) -> tuple[list[Any], dict[str, Any]]:
         """Return the proposed names and values for cursor parameters."""
         parameters: dict[str, Any] = {"cursor_limit": self._limit + 1}
@@ -893,6 +856,23 @@ class CursorFilter(PaginationFilter):
                 f"cursor_k{index}": value for index, value in enumerate(self._values) if value is not None
             })
         return [], parameters
+
+    def _row_values(self, row: abc.Mapping[str, Any]) -> list[Any]:
+        values = []
+        for key in self._keys:
+            try:
+                value = row[key.result_name]
+            except KeyError as exc:
+                msg = f"Cursor key column '{key.result_name}' is not present in the result row; select it or set CursorKey.result_name"
+                raise ImproperConfigurationError(msg) from exc
+            if value is None and key.nulls is None:
+                msg = f"Cursor key '{key.field_name}' returned NULL; declare nulls='first' or nulls='last'"
+                raise ImproperConfigurationError(msg)
+            values.append(value)
+        return values
+
+    def _reconstruction_args(self) -> tuple[Any, ...]:
+        return self._keys, self._limit, self._cursor, self._secret
 
 
 class OrderByFilter(StatementFilter):
@@ -1309,6 +1289,26 @@ def canonicalize_filters(filters: "abc.Sequence[StatementFilter]") -> "tuple[Sta
     for filter_ in filters:
         unique_filters.setdefault(_canonical_filter_key(filter_), filter_)
     return tuple(sorted(unique_filters.values(), key=_filter_sort_key))
+
+
+def _fold_or(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
+    if a is True or b is True:
+        return True
+    if a is False:
+        return b
+    if b is False:
+        return a
+    return exp.Paren(this=exp.Or(this=a, expression=b))
+
+
+def _fold_and(a: exp.Expr | bool, b: exp.Expr | bool) -> exp.Expr | bool:
+    if a is False or b is False:
+        return False
+    if a is True:
+        return b
+    if b is True:
+        return a
+    return exp.And(this=a, expression=b)
 
 
 def _filter_sort_key(f: "StatementFilter") -> "tuple[str, str, str]":

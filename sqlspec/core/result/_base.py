@@ -117,6 +117,15 @@ class StatementResult:
     def __iter__(self) -> "Iterator[Any]":
         """Iterate over result rows."""
 
+    @property
+    def operation_type(self) -> "OperationType":
+        """Get operation type from the statement.
+
+        Returns:
+            The type of SQL operation that produced this result.
+        """
+        return self._operation_type
+
     @abstractmethod
     def is_success(self) -> bool:
         """Check if the operation was successful.
@@ -153,15 +162,6 @@ class StatementResult:
             value: The value to set.
         """
         self.metadata[key] = value
-
-    @property
-    def operation_type(self) -> "OperationType":
-        """Get operation type from the statement.
-
-        Returns:
-            The type of SQL operation that produced this result.
-        """
-        return self._operation_type
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -273,63 +273,36 @@ class SQLResult(StatementResult):
         if self.total_count is None:
             self.total_count = len(data) if data is not None else 0
 
-    def _get_rows(self) -> "list[dict[str, Any]]":
-        """Get row data as list of dicts, materializing lazily from raw format.
+    def __len__(self) -> int:
+        """Get the number of rows in the result set.
 
         Returns:
-            List of row dictionaries, empty list if no data.
+            Number of rows in the data.
         """
-        if self._materialized_dicts is not None:
-            return self._materialized_dicts
-        if self.data is None:
-            return []
-        if not isinstance(self.data, list):
-            return []
-        raw = self.data
-        if not raw:
-            self._materialized_dicts = []
-            return self._materialized_dicts
-        self._assert_row_format_fidelity(raw)
-        fmt = self._row_format
-        if fmt == "dict":
-            self._materialized_dicts = raw
-        elif fmt == "tuple":
-            col_names = self.column_names
-            if not col_names:
-                self._materialized_dicts = []
-            elif len(col_names) == 1:
-                key = col_names[0]
-                self._materialized_dicts = [{key: row[0]} for row in raw]
-            elif len(col_names) == _TWO_COLUMN_THRESHOLD:
-                key0, key1 = col_names
-                self._materialized_dicts = [{key0: row[0], key1: row[1]} for row in raw]
-            else:
-                self._materialized_dicts = [dict(zip(col_names, row, strict=False)) for row in raw]
-        else:
-            # "record" — dict-like objects (asyncpg.Record, sqlite3.Row, bigquery.Row)
-            self._materialized_dicts = [dict(record) for record in raw]
-        return self._materialized_dicts
+        return len(self.data) if self.data is not None else 0
 
-    def _assert_row_format_fidelity(self, rows: "list[Any]") -> None:
-        """Debug-only row-format shape check for first-row fidelity."""
-        if not __debug__ or not rows:
-            return
+    def __getitem__(self, index: int) -> "dict[str, Any]":
+        """Get a row by index.
 
-        first_row = rows[0]
-        row_format = self._row_format
-        if row_format == "dict":
-            assert isinstance(first_row, dict), "row_format='dict' requires dict rows"
-            return
-        if row_format == "tuple":
-            assert isinstance(first_row, tuple), "row_format='tuple' requires tuple rows"
-            return
-        if row_format == "record":
-            try:
-                keys = first_row.keys
-            except AttributeError as exc:
-                msg = "row_format='record' requires dict-like rows"
-                raise AssertionError(msg) from exc
-            assert callable(keys), "row_format='record' requires dict-like rows"
+        Args:
+            index: Row index
+
+        Returns:
+            The row at the specified index
+        """
+        rows = self._get_rows()
+        if not rows:
+            msg = "No data available"
+            raise IndexError(msg)
+        return rows[index]
+
+    def __iter__(self) -> "Iterator[dict[str, Any]]":
+        """Iterate over the rows in the result.
+
+        Returns:
+            Iterator that yields each row as a dictionary
+        """
+        return iter(self._get_rows())
 
     @property
     def raw_data(self) -> "tuple[list[Any], list[str]]":
@@ -339,6 +312,24 @@ class SQLResult(StatementResult):
             Tuple of (raw_rows, column_names).
         """
         return (self.data if self.data is not None else [], self.column_names)
+
+    @property
+    def num_rows(self) -> int:
+        """Get the number of rows affected (alias for get_total_rows_affected).
+
+        Returns:
+            Total rows affected.
+        """
+        return self.get_total_rows_affected()
+
+    @property
+    def num_columns(self) -> int:
+        """Get the number of columns in the result data.
+
+        Returns:
+            Number of columns.
+        """
+        return len(self.column_names) if self.column_names else 0
 
     def is_success(self) -> bool:
         """Check if the operation was successful.
@@ -354,17 +345,18 @@ class SQLResult(StatementResult):
         if op_type == "SELECT":
             return self.data is not None and self.rows_affected >= 0
 
-        if op_type in {"INSERT", "UPDATE", "DELETE", "EXECUTE"}:
-            return self.rows_affected >= 0
+        if op_type in {"INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "EXECUTE"}:
+            return not self.errors and self.rows_affected >= 0
+
+        if op_type in {"DDL", "PRAGMA", "COPY", "COPY_FROM", "COPY_TO", "COMMAND"}:
+            return not self.errors and self.rows_affected >= -1
 
         return False
 
     @overload
     def get_data(self, *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
-
     @overload
     def get_data(self, *, schema_type: None = None) -> "list[dict[str, Any]]": ...
-
     def get_data(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[SchemaT] | list[dict[str, Any]]":
         """Get the data from the result.
 
@@ -392,38 +384,13 @@ class SQLResult(StatementResult):
                     "total_rows_affected": self.get_total_rows_affected(),
                 }
             ]
-        data = self._get_rows()
         if schema_type:
-            return cast("list[SchemaT]", self._get_schema_rows(schema_type, data))
-        return data
-
-    def _get_schema_rows(self, schema_type: "type[SchemaT]", rows: "list[dict[str, Any]]") -> "list[SchemaT]":
-        cache = self._schema_rows_cache
-        if cache is not None:
-            cached_rows = cache.get(schema_type)
-            if cached_rows is not None:
-                return cast("list[SchemaT]", cached_rows)
-        converted_rows = cast("list[SchemaT]", to_schema(rows, schema_type=schema_type))
-        self._materialized_dicts = None
-        if cache is None:
-            self._schema_rows_cache = {schema_type: converted_rows}
-        else:
-            cache[schema_type] = converted_rows
-        return converted_rows
-
-    def _get_schema_row(self, schema_type: "type[SchemaT]", row: "dict[str, Any]") -> "SchemaT":
-        row_cache = self._schema_row_cache
-        if row_cache is not None:
-            cached_row = row_cache.get(schema_type)
-            if cached_row is not None:
-                return cast("SchemaT", cached_row)
-        converted_row = to_schema(row, schema_type=schema_type)
-        self._materialized_dicts = None
-        if row_cache is None:
-            self._schema_row_cache = {schema_type: converted_row}
-        else:
-            row_cache[schema_type] = converted_row
-        return converted_row
+            if self._schema_rows_cache is not None and schema_type in self._schema_rows_cache:
+                return cast("list[SchemaT]", self._schema_rows_cache[schema_type])
+            had_materialized = self._materialized_dicts is not None
+            data = self._get_rows()
+            return cast("list[SchemaT]", self._get_schema_rows(schema_type, data, preserve_dicts=had_materialized))
+        return self._get_rows()
 
     def add_statement_result(self, result: "SQLResult") -> None:
         """Add a statement result to the script execution results.
@@ -450,30 +417,10 @@ class SQLResult(StatementResult):
             return total
         return self.rows_affected if self.rows_affected and self.rows_affected > 0 else 0
 
-    @property
-    def num_rows(self) -> int:
-        """Get the number of rows affected (alias for get_total_rows_affected).
-
-        Returns:
-            Total rows affected.
-        """
-        return self.get_total_rows_affected()
-
-    @property
-    def num_columns(self) -> int:
-        """Get the number of columns in the result data.
-
-        Returns:
-            Number of columns.
-        """
-        return len(self.column_names) if self.column_names else 0
-
     @overload
     def get_first(self, *, schema_type: "type[SchemaT]") -> "SchemaT | None": ...
-
     @overload
     def get_first(self, *, schema_type: None = None) -> "dict[str, Any] | None": ...
-
     def get_first(self, *, schema_type: "type[SchemaT] | None" = None) -> "SchemaT | dict[str, Any] | None":
         """Get the first row from the result, if any.
 
@@ -540,43 +487,10 @@ class SQLResult(StatementResult):
         """
         return self.operation_type == "DELETE"
 
-    def __len__(self) -> int:
-        """Get the number of rows in the result set.
-
-        Returns:
-            Number of rows in the data.
-        """
-        return len(self.data) if self.data is not None else 0
-
-    def __getitem__(self, index: int) -> "dict[str, Any]":
-        """Get a row by index.
-
-        Args:
-            index: Row index
-
-        Returns:
-            The row at the specified index
-        """
-        rows = self._get_rows()
-        if not rows:
-            msg = "No data available"
-            raise IndexError(msg)
-        return rows[index]
-
-    def __iter__(self) -> "Iterator[dict[str, Any]]":
-        """Iterate over the rows in the result.
-
-        Returns:
-            Iterator that yields each row as a dictionary
-        """
-        return iter(self._get_rows())
-
     @overload
     def all(self, *, schema_type: "type[SchemaT]") -> "list[SchemaT]": ...
-
     @overload
     def all(self, *, schema_type: None = None) -> "list[dict[str, Any]]": ...
-
     def all(self, *, schema_type: "type[SchemaT] | None" = None) -> "list[SchemaT] | list[dict[str, Any]]":
         """Return all rows as a list.
 
@@ -587,17 +501,18 @@ class SQLResult(StatementResult):
         Returns:
             List of all rows (optionally transformed to schema_type)
         """
-        data = self._get_rows()
         if schema_type:
-            return cast("list[SchemaT]", self._get_schema_rows(schema_type, data))
-        return data
+            if self._schema_rows_cache is not None and schema_type in self._schema_rows_cache:
+                return cast("list[SchemaT]", self._schema_rows_cache[schema_type])
+            had_materialized = self._materialized_dicts is not None
+            data = self._get_rows()
+            return cast("list[SchemaT]", self._get_schema_rows(schema_type, data, preserve_dicts=had_materialized))
+        return self._get_rows()
 
     @overload
     def one(self, *, schema_type: "type[SchemaT]") -> "SchemaT": ...
-
     @overload
     def one(self, *, schema_type: None = None) -> "dict[str, Any]": ...
-
     def one(self, *, schema_type: "type[SchemaT] | None" = None) -> "SchemaT | dict[str, Any]":
         """Return exactly one row.
 
@@ -628,10 +543,8 @@ class SQLResult(StatementResult):
 
     @overload
     def one_or_none(self, *, schema_type: "type[SchemaT]") -> "SchemaT | None": ...
-
     @overload
     def one_or_none(self, *, schema_type: None = None) -> "dict[str, Any] | None": ...
-
     def one_or_none(self, *, schema_type: "type[SchemaT] | None" = None) -> "SchemaT | dict[str, Any] | None":
         """Return at most one row.
 
@@ -757,6 +670,93 @@ class SQLResult(StatementResult):
             rows, destination, format_hint=format_hint, storage_options=storage_options
         )
 
+    def _get_rows(self) -> "list[dict[str, Any]]":
+        """Get row data as list of dicts, materializing lazily from raw format.
+
+        Returns:
+            List of row dictionaries, empty list if no data.
+        """
+        if self._materialized_dicts is not None:
+            return self._materialized_dicts
+        if self.data is None:
+            return []
+        if not isinstance(self.data, list):
+            return []
+        raw = self.data
+        if not raw:
+            self._materialized_dicts = []
+            return self._materialized_dicts
+        self._assert_row_format_fidelity(raw)
+        fmt = self._row_format
+        if fmt == "dict":
+            self._materialized_dicts = raw
+        elif fmt == "tuple":
+            col_names = self.column_names
+            if not col_names:
+                self._materialized_dicts = []
+            elif len(col_names) == 1:
+                key = col_names[0]
+                self._materialized_dicts = [{key: row[0]} for row in raw]
+            elif len(col_names) == _TWO_COLUMN_THRESHOLD:
+                key0, key1 = col_names
+                self._materialized_dicts = [{key0: row[0], key1: row[1]} for row in raw]
+            else:
+                self._materialized_dicts = [dict(zip(col_names, row, strict=False)) for row in raw]
+        else:
+            self._materialized_dicts = [dict(record) for record in raw]
+        return self._materialized_dicts
+
+    def _assert_row_format_fidelity(self, rows: "list[Any]") -> None:
+        """Debug-only row-format shape check for first-row fidelity."""
+        if not __debug__ or not rows:
+            return
+
+        first_row = rows[0]
+        row_format = self._row_format
+        if row_format == "dict":
+            assert isinstance(first_row, dict), "row_format='dict' requires dict rows"
+            return
+        if row_format == "tuple":
+            assert isinstance(first_row, tuple), "row_format='tuple' requires tuple rows"
+            return
+        if row_format == "record":
+            try:
+                keys = first_row.keys
+            except AttributeError as exc:
+                msg = "row_format='record' requires dict-like rows"
+                raise AssertionError(msg) from exc
+            assert callable(keys), "row_format='record' requires dict-like rows"
+
+    def _get_schema_rows(
+        self, schema_type: "type[SchemaT]", rows: "list[dict[str, Any]]", *, preserve_dicts: bool = False
+    ) -> "list[SchemaT]":
+        cache = self._schema_rows_cache
+        if cache is not None:
+            cached_rows = cache.get(schema_type)
+            if cached_rows is not None:
+                return cast("list[SchemaT]", cached_rows)
+        converted_rows = cast("list[SchemaT]", to_schema(rows, schema_type=schema_type))
+        if not preserve_dicts:
+            self._materialized_dicts = None
+        if cache is None:
+            self._schema_rows_cache = {schema_type: converted_rows}
+        else:
+            cache[schema_type] = converted_rows
+        return converted_rows
+
+    def _get_schema_row(self, schema_type: "type[SchemaT]", row: "dict[str, Any]") -> "SchemaT":
+        row_cache = self._schema_row_cache
+        if row_cache is not None:
+            cached_row = row_cache.get(schema_type)
+            if cached_row is not None:
+                return cast("SchemaT", cached_row)
+        converted_row = to_schema(row, schema_type=schema_type)
+        if row_cache is None:
+            self._schema_row_cache = {schema_type: converted_row}
+        else:
+            row_cache[schema_type] = converted_row
+        return converted_row
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class ArrowResult(StatementResult):
@@ -804,35 +804,21 @@ class ArrowResult(StatementResult):
 
         self.schema = schema
 
-    def is_success(self) -> bool:
-        """Check if the operation was successful.
+    def __len__(self) -> int:
+        """Return number of rows in the Arrow table.
 
         Returns:
-            True if Arrow table data is available, False otherwise.
+            Number of rows.
         """
-        return self.data is not None
+        return arrow_table_num_rows(self._as_table())
 
-    def get_data(self) -> "Any":
-        """Get the Arrow payload from the result.
+    def __iter__(self) -> "Iterator[dict[str, Any]]":
+        """Iterate over rows as dictionaries.
 
-        Returns the value shaped by ``arrow_table_to_return_format``: a
-        ``pa.Table`` for ``return_format='table'``, a ``pa.RecordBatchReader``
-        for ``'reader'``, a single ``pa.RecordBatch`` for ``'batch'``, or a
-        ``list[pa.RecordBatch]`` for ``'batches'``.
-
-        Raises:
-            ValueError: If no Arrow data is available.
+        Returns:
+            Iterator of row dictionaries.
         """
-        if self.data is None:
-            msg = "No Arrow data available for this result"
-            raise ValueError(msg)
-        return self.data
-
-    def _as_table(self) -> "ArrowTable":
-        if self.data is None:
-            msg = "No Arrow table available for this result"
-            raise ValueError(msg)
-        return ensure_arrow_table(self.data)
+        return iter(arrow_table_to_pylist(self._as_table()))
 
     @property
     def column_names(self) -> "list[str]":
@@ -862,6 +848,30 @@ class ArrowResult(StatementResult):
             Number of columns.
         """
         return arrow_table_num_columns(self._as_table())
+
+    def is_success(self) -> bool:
+        """Check if the operation was successful.
+
+        Returns:
+            True if Arrow table data is available, False otherwise.
+        """
+        return self.data is not None
+
+    def get_data(self) -> "Any":
+        """Get the Arrow payload from the result.
+
+        Returns the value shaped by ``arrow_table_to_return_format``: a
+        ``pa.Table`` for ``return_format='table'``, a ``pa.RecordBatchReader``
+        for ``'reader'``, a single ``pa.RecordBatch`` for ``'batch'``, or a
+        ``list[pa.RecordBatch]`` for ``'batches'``.
+
+        Raises:
+            ValueError: If no Arrow data is available.
+        """
+        if self.data is None:
+            msg = "No Arrow data available for this result"
+            raise ValueError(msg)
+        return self.data
 
     def to_pandas(self) -> "PandasDataFrame":
         """Convert Arrow data to pandas DataFrame.
@@ -917,21 +927,11 @@ class ArrowResult(StatementResult):
             table, destination, format_hint=format_hint, storage_options=storage_options, compression=compression
         )
 
-    def __len__(self) -> int:
-        """Return number of rows in the Arrow table.
-
-        Returns:
-            Number of rows.
-        """
-        return arrow_table_num_rows(self._as_table())
-
-    def __iter__(self) -> "Iterator[dict[str, Any]]":
-        """Iterate over rows as dictionaries.
-
-        Returns:
-            Iterator of row dictionaries.
-        """
-        return iter(arrow_table_to_pylist(self._as_table()))
+    def _as_table(self) -> "ArrowTable":
+        if self.data is None:
+            msg = "No Arrow table available for this result"
+            raise ValueError(msg)
+        return ensure_arrow_table(self.data)
 
 
 class EmptyResult(StatementResult):
@@ -965,8 +965,6 @@ class DMLResult(SQLResult):
     def __init__(
         self, op_type: "OperationType", rows_affected: int = 0, last_inserted_id: int | str | None = None
     ) -> None:
-        # Fast-path initialization for DML results: assign slot values directly
-        # instead of routing through SQLResult.__init__.
         self.statement = _EMPTY_RESULT_STATEMENT
         self.data = _EMPTY_RESULT_DATA
         self.rows_affected = rows_affected
@@ -1002,7 +1000,6 @@ class DMLResult(SQLResult):
         return []
 
     def set_metadata(self, key: str, value: Any) -> None:
-        # Copy-on-write to preserve low-allocation defaults for hot DML paths.
         if self.metadata is _DEFAULT_DML_METADATA:
             self.metadata = {key: value}
             return
@@ -1029,7 +1026,6 @@ class StackResult:
             self.rows_affected = rows_affected
         else:
             try:
-                # Direct access on this compiled union currently segfaults mypyc during full-graph builds.
                 result_rows = object.__getattribute__(self.result, "rows_affected")
             except AttributeError:
                 self.rows_affected = 0
@@ -1038,11 +1034,6 @@ class StackResult:
         self.error = error
         self.warning = warning
         self.metadata = dict(metadata) if metadata else None
-
-    def get_result(self) -> "StatementResult | ArrowResult":
-        """Return the underlying driver result."""
-
-        return self.result
 
     @property
     def result_type(self) -> str:
@@ -1053,6 +1044,11 @@ class StackResult:
         if isinstance(self.result, SQLResult):
             return self.result.operation_type
         return type(self.result).__name__.upper()
+
+    def get_result(self) -> "StatementResult | ArrowResult":
+        """Return the underlying driver result."""
+
+        return self.result
 
     def is_sql_result(self) -> bool:
         """Return True when the underlying result is an SQLResult."""

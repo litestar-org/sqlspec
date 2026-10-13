@@ -10,23 +10,23 @@ URI. Versioning is append-only with monotonically increasing version numbers
 starting from 0.
 """
 
-import json
+import inspect
 import logging
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from google.adk.artifacts.base_artifact_service import BaseArtifactService
+from google.adk.artifacts.base_artifact_service import ArtifactVersion, BaseArtifactService, ensure_part
+from google.genai import types
 
 from sqlspec.extensions.adk.artifact._types import StoredArtifact
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.logging import get_logger, log_with_context
+from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from google.adk.artifacts.base_artifact_service import ArtifactVersion
-    from google.genai import types
-
-    from sqlspec.extensions.adk.artifact.store import BaseAsyncADKArtifactStore
+    from sqlspec.extensions.adk.artifact.store import BaseAsyncADKArtifactStore, BaseSyncADKArtifactStore
 
 __all__ = ("SQLSpecArtifactService",)
 
@@ -45,21 +45,24 @@ class SQLSpecArtifactService(BaseArtifactService):
     via the storage registry.
 
     Args:
-        store: Artifact metadata store implementation.
+        store: Artifact metadata store implementation (async or sync).
         artifact_storage_uri: Base URI for content storage.
             Can also be a registered alias in the storage registry.
         registry: Storage registry to use. Defaults to the global singleton.
     """
 
     def __init__(
-        self, store: "BaseAsyncADKArtifactStore", artifact_storage_uri: str, registry: "StorageRegistry | None" = None
+        self,
+        store: "BaseAsyncADKArtifactStore | BaseSyncADKArtifactStore",
+        artifact_storage_uri: str,
+        registry: "StorageRegistry | None" = None,
     ) -> None:
         self._store = store
         self._artifact_storage_uri = artifact_storage_uri.rstrip("/")
         self._registry = registry or storage_registry
 
     @property
-    def store(self) -> "BaseAsyncADKArtifactStore":
+    def store(self) -> "BaseAsyncADKArtifactStore | BaseSyncADKArtifactStore":
         """Return the artifact metadata store."""
         return self._store
 
@@ -96,11 +99,9 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             The version number (0-based, incrementing).
         """
-        from google.adk.artifacts.base_artifact_service import ensure_part
-
         artifact_part: types.Part = ensure_part(artifact)
-        version = await self._store.get_next_version(
-            app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+        version = await self._call_store(
+            "get_next_version", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
         )
         content_path = _build_content_path(
             app_name=app_name, user_id=user_id, filename=filename, version=version, session_id=session_id
@@ -121,7 +122,7 @@ class SQLSpecArtifactService(BaseArtifactService):
             custom_metadata=custom_metadata,
             created_at=datetime.now(tz=UTC),
         )
-        await self._store.insert_artifact(record)
+        await self._call_store("insert_artifact", record)
 
         log_with_context(
             logger,
@@ -134,7 +135,7 @@ class SQLSpecArtifactService(BaseArtifactService):
             session_id=session_id,
             mime_type=mime_type,
         )
-        return version
+        return int(version)
 
     async def load_artifact(
         self,
@@ -157,8 +158,13 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             Deserialized Part, or None if not found.
         """
-        record = await self._store.get_artifact(
-            app_name=app_name, user_id=user_id, filename=filename, session_id=session_id, version=version
+        record = await self._call_store(
+            "get_artifact",
+            app_name=app_name,
+            user_id=user_id,
+            filename=filename,
+            session_id=session_id,
+            version=version,
         )
         if record is None:
             log_with_context(
@@ -202,7 +208,9 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             List of artifact filenames.
         """
-        keys = await self._store.list_artifact_keys(app_name=app_name, user_id=user_id, session_id=session_id)
+        keys: list[str] = list(
+            await self._call_store("list_artifact_keys", app_name=app_name, user_id=user_id, session_id=session_id)
+        )
         log_with_context(
             logger,
             logging.DEBUG,
@@ -228,8 +236,8 @@ class SQLSpecArtifactService(BaseArtifactService):
             filename: Artifact filename.
             session_id: Session identifier (None for user-scoped).
         """
-        deleted_records = await self._store.delete_artifact(
-            app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+        deleted_records = await self._call_store(
+            "delete_artifact", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
         )
         await self._delete_content(deleted_records)
 
@@ -261,7 +269,7 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             Number of artifact version rows deleted from metadata storage.
         """
-        deleted_records = await self._store.delete_artifacts_older_than(before, app_name=app_name)
+        deleted_records = await self._call_store("delete_artifacts_older_than", before, app_name=app_name)
         await self._delete_content(deleted_records)
 
         log_with_context(
@@ -288,8 +296,8 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             Sorted list of version numbers.
         """
-        records = await self._store.list_artifact_versions(
-            app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+        records = await self._call_store(
+            "list_artifact_versions", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
         )
         return [r["version"] for r in records]
 
@@ -307,8 +315,8 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             List of ArtifactVersion objects ordered by version ascending.
         """
-        records = await self._store.list_artifact_versions(
-            app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
+        records = await self._call_store(
+            "list_artifact_versions", app_name=app_name, user_id=user_id, filename=filename, session_id=session_id
         )
         return [_record_to_artifact_version(r) for r in records]
 
@@ -333,12 +341,24 @@ class SQLSpecArtifactService(BaseArtifactService):
         Returns:
             ArtifactVersion if found, None otherwise.
         """
-        record = await self._store.get_artifact(
-            app_name=app_name, user_id=user_id, filename=filename, session_id=session_id, version=version
+        record = await self._call_store(
+            "get_artifact",
+            app_name=app_name,
+            user_id=user_id,
+            filename=filename,
+            session_id=session_id,
+            version=version,
         )
         if record is None:
             return None
         return _record_to_artifact_version(record)
+
+    async def _call_store(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Invoke an async or sync artifact store method, bridging sync stores via async_()."""
+        method = getattr(self._store, method_name)
+        if inspect.iscoroutinefunction(method):
+            return await method(*args, **kwargs)
+        return await async_(method)(*args, **kwargs)
 
     async def _delete_content(self, records: "list[StoredArtifact]") -> None:
         """Remove stored content for deleted metadata records on a best-effort basis.
@@ -368,14 +388,14 @@ class SQLSpecArtifactService(BaseArtifactService):
                 )
 
 
-_UNSAFE_PATH_CHARS = re.compile(r"(?:^|/)\.\.(?:/|$)|[\x00]")
+_UNSAFE_PATH_CHARS = re.compile(r"(?:^|/)\.\.(?:/|$)|[/\\\x00]")
 
 
 def _sanitize_path_component(value: str) -> str:
-    """Sanitize a path component to prevent directory traversal.
+    """Sanitize a path component to prevent directory traversal and namespace injection.
 
-    Removes leading/trailing slashes, rejects ``..`` traversals, and
-    replaces NUL bytes.
+    Removes leading/trailing slashes and rejects empty values, ``..`` traversals,
+    internal slashes/backslashes, and NUL bytes.
 
     Args:
         value: Raw path component.
@@ -384,10 +404,10 @@ def _sanitize_path_component(value: str) -> str:
         Sanitized path component.
 
     Raises:
-        ValueError: If the value contains path traversal sequences.
+        ValueError: If the value is empty or contains unsafe path sequences.
     """
     value = value.strip("/")
-    if _UNSAFE_PATH_CHARS.search(value):
+    if not value or _UNSAFE_PATH_CHARS.search(value):
         msg = f"Unsafe path component: {value!r}"
         raise ValueError(msg)
     return value
@@ -450,9 +470,9 @@ def _extract_mime_type(artifact: "types.Part | dict[str, Any]") -> "str | None":
 def _serialize_artifact(artifact: "types.Part | dict[str, Any]") -> bytes:
     """Serialize an artifact Part to bytes for content storage.
 
-    The artifact is serialized as JSON via ``model_dump(exclude_none=True)``.
-    This preserves the full Part structure including text, inline_data,
-    file_data, and any future Part fields.
+    The artifact is serialized as JSON via ``model_dump(exclude_none=True, mode='json')``.
+    This preserves the full Part structure including binary ``inline_data.data``,
+    text, file_data, and any future Part fields.
 
     Args:
         artifact: ADK Part or dict representation.
@@ -461,13 +481,13 @@ def _serialize_artifact(artifact: "types.Part | dict[str, Any]") -> bytes:
         JSON-encoded bytes.
     """
     if isinstance(artifact, dict):
-        return json.dumps(artifact, default=str).encode("utf-8")
+        return to_json(artifact, as_bytes=True)
 
     if hasattr(artifact, "model_dump"):
-        data = artifact.model_dump(exclude_none=True)
-        return json.dumps(data, default=str).encode("utf-8")
+        data = artifact.model_dump(exclude_none=True, mode="json")
+        return to_json(data, as_bytes=True)
 
-    return json.dumps({"text": str(artifact)}).encode("utf-8")
+    return to_json({"text": str(artifact)}, as_bytes=True)
 
 
 def _deserialize_artifact(data: bytes) -> "types.Part":
@@ -479,9 +499,7 @@ def _deserialize_artifact(data: bytes) -> "types.Part":
     Returns:
         Reconstructed Part object.
     """
-    from google.genai import types
-
-    parsed = json.loads(data.decode("utf-8"))
+    parsed = from_json(data)
     return types.Part.model_validate(parsed)
 
 
@@ -494,8 +512,6 @@ def _record_to_artifact_version(record: "StoredArtifact") -> "ArtifactVersion":
     Returns:
         ArtifactVersion model instance.
     """
-    from google.adk.artifacts.base_artifact_service import ArtifactVersion
-
     return ArtifactVersion(
         version=record["version"],
         canonical_uri=record["canonical_uri"],
@@ -512,4 +528,4 @@ async def _call_storage_backend(
     async_method = getattr(backend, async_method_name, None)
     if async_method is not None:
         return await async_method(*args, **kwargs)
-    return getattr(backend, sync_method_name)(*args, **kwargs)
+    return await async_(getattr(backend, sync_method_name))(*args, **kwargs)

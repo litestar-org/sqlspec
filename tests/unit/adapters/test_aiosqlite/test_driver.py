@@ -8,6 +8,7 @@ from typing import Any, cast
 import aiosqlite
 import pytest
 
+import sqlspec.adapters.aiosqlite as aiosqlite_adapter
 from sqlspec.adapters.aiosqlite._typing import AiosqliteCursor
 from sqlspec.adapters.aiosqlite.core import (
     build_profile,
@@ -413,3 +414,26 @@ async def test_aiosqlite_begin_honors_mode_and_rejects_invalid_mode() -> None:
     with pytest.raises(ValueError, match="Transaction mode"):
         await driver.begin(mode=cast("Any", "INVALID"))
     assert connection.statements == ["BEGIN DEFERRED", "BEGIN EXCLUSIVE"]
+
+
+def test_aiosqlite_adapter_exports_pool_types() -> None:
+    for name in (
+        "AiosqliteConnectionPool",
+        "AiosqliteConnectTimeoutError",
+        "AiosqlitePoolClosedError",
+        "AiosqlitePoolConnection",
+    ):
+        assert name in aiosqlite_adapter.__all__
+        assert getattr(aiosqlite_adapter, name) is not None
+
+
+async def test_aiosqlite_pool_tracks_in_flight_creations_and_connection_registry() -> None:
+    pool = AiosqliteConnectionPool(connection_parameters={"database": ":memory:"})
+    try:
+        assert pool._in_flight_creations == 0
+        async with pool.get_connection() as conn:
+            assert conn is not None
+            assert pool.size() == 1
+    finally:
+        await pool.close()
+        assert pool.size() == 0

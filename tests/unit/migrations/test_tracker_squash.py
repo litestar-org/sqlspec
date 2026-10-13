@@ -96,7 +96,9 @@ def test_sync_tracker_squash_methods_is_squash_already_applied_returns_true_when
 
     tracker = SyncMigrationTracker()
     driver = Mock()
-    driver.execute.return_value = _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
+    driver.execute.return_value = _mock_result(
+        data=[{"version_num": "0001"}, {"version_num": "0002"}, {"version_num": "0003"}]
+    )
     result = tracker.is_squash_already_applied(
         driver=driver, squashed_version="0001", replaced_versions=["0001", "0002", "0003"]
     )
@@ -155,7 +157,7 @@ async def test_async_tracker_squash_methods_async_is_squash_already_applied_retu
     driver = Mock()
 
     async def mock_execute(sql: Any) -> Mock:
-        return _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
+        return _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}, {"version_num": "0003"}])
 
     driver.execute = mock_execute
     result = await tracker.is_squash_already_applied(
@@ -197,7 +199,7 @@ def test_sync_is_squash_already_applied_executes_filtered_where_in_query() -> No
 
     tracker = SyncMigrationTracker()
     driver = Mock()
-    driver.execute.return_value = _mock_result(data=[{"version_num": "0001"}])
+    driver.execute.return_value = _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
     result = tracker.is_squash_already_applied(
         driver=driver, squashed_version="0009", replaced_versions=["0001", "0002"]
     )
@@ -230,7 +232,7 @@ async def test_async_is_squash_already_applied_executes_filtered_where_in_query(
 
     async def execute(query: Any) -> Mock:
         captured.append(query)
-        return _mock_result(data=[{"version_num": "0001"}])
+        return _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
 
     driver.execute = execute
     result = await tracker.is_squash_already_applied(
@@ -252,7 +254,7 @@ async def test_async_is_squash_already_applied_returns_true_for_filtered_result(
 
     async def execute(query: Any) -> Mock:
         _ = query
-        return _mock_result(data=[{"version_num": "0001"}])
+        return _mock_result(data=[{"version_num": "0001"}, {"version_num": "0002"}])
 
     driver.execute = execute
     assert (
@@ -281,3 +283,33 @@ async def test_async_is_squash_already_applied_returns_false_for_empty_filtered_
         )
         is False
     )
+
+
+def test_sync_is_squash_already_applied_raises_on_partial_overlap() -> None:
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.migrations.tracker import SyncMigrationTracker
+
+    tracker = SyncMigrationTracker()
+    driver = Mock()
+    driver.execute.return_value = _mock_result(data=[{"version_num": "0001"}])
+    with pytest.raises(MigrationError, match="Partial squash state detected"):
+        tracker.is_squash_already_applied(driver=driver, squashed_version="0009", replaced_versions=["0001", "0002"])
+
+
+@pytest.mark.anyio
+async def test_async_is_squash_already_applied_raises_on_partial_overlap() -> None:
+    from sqlspec.exceptions import MigrationError
+    from sqlspec.migrations.tracker import AsyncMigrationTracker
+
+    tracker = AsyncMigrationTracker()
+    driver = Mock()
+
+    async def execute(query: Any) -> Mock:
+        _ = query
+        return _mock_result(data=[{"version_num": "0001"}])
+
+    driver.execute = execute
+    with pytest.raises(MigrationError, match="Partial squash state detected"):
+        await tracker.is_squash_already_applied(
+            driver=driver, squashed_version="0009", replaced_versions=["0001", "0002"]
+        )

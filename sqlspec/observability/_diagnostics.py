@@ -48,9 +48,10 @@ class TelemetryDiagnostics:
 
         for key, value in get_storage_bridge_diagnostics().items():
             _increment_metric(numeric_payload, key, float(value))
-        for _prefix, counters in self._lifecycle_sections:
+        for prefix, counters in self._lifecycle_sections:
             for metric, value in counters.items():
-                _increment_metric(numeric_payload, metric, value)
+                prefixed = f"{prefix}.{metric}" if prefix and not metric.startswith(f"{prefix}.") else metric
+                _increment_metric(numeric_payload, prefixed, value)
         for metric, value in self._metrics.items():
             _increment_metric(numeric_payload, metric, float(value))
 

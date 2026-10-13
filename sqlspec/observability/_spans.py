@@ -4,7 +4,7 @@ from importlib import import_module
 from typing import Any
 
 from sqlspec.exceptions import MissingDependencyError
-from sqlspec.observability._common import resolve_db_system
+from sqlspec.observability._common import redact_sql_literals, resolve_db_system
 from sqlspec.observability._config import TelemetryConfig
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import ensure_opentelemetry
@@ -20,10 +20,12 @@ class SpanManager:
     """Lazy OpenTelemetry span manager with graceful degradation."""
 
     __slots__ = (
+        "_context_api",
         "_enabled",
         "_provider_factory",
         "_resource_attributes",
         "_span_kind",
+        "_span_tokens",
         "_status_cls",
         "_status_code_cls",
         "_trace_api",
@@ -35,11 +37,13 @@ class SpanManager:
         self._enabled = bool(telemetry.enable_spans)
         self._provider_factory = telemetry.provider_factory
         self._resource_attributes = dict(telemetry.resource_attributes or {})
+        self._context_api: Any | None = None
         self._trace_api: Any | None = None
         self._status_cls: Any | None = None
         self._status_code_cls: Any | None = None
         self._span_kind: Any | None = None
         self._tracer: Any | None = None
+        self._span_tokens: dict[int, Any] = {}
         if self._enabled:
             self._resolve_api()
 
@@ -65,11 +69,10 @@ class SpanManager:
 
         if not self._enabled:
             return None
-        attributes: dict[str, Any] = {
-            "db.system": resolve_db_system(adapter),
-            "db.operation": operation,
-            "sqlspec.driver": driver,
-        }
+        db_system = resolve_db_system(adapter)
+        if db_system == "other_sql" and driver:
+            db_system = resolve_db_system(driver)
+        attributes: dict[str, Any] = {"db.system": db_system, "db.operation": operation, "sqlspec.driver": driver}
         if sql:
             attributes["db.statement"] = sql
         if bind_key:
@@ -98,10 +101,16 @@ class SpanManager:
 
         if span is None:
             return
+        token = self._span_tokens.pop(id(span), None)
+        if token is not None and self._context_api is not None:
+            try:
+                self._context_api.detach(token)
+            except Exception as exc:  # pragma: no cover
+                logger.debug("Failed to detach span context: %s", exc)
         try:
             if error and self._status_cls and self._status_code_cls:
                 span.record_exception(error)
-                status = self._status_cls(self._status_code_cls.ERROR, str(error))
+                status = self._status_cls(self._status_code_cls.ERROR, redact_sql_literals(str(error)))
                 span.set_status(status)
             span.end()
         except Exception as exc:  # pragma: no cover
@@ -112,9 +121,20 @@ class SpanManager:
         if tracer is None:
             return None
         span_kind = self._span_kind
-        if span_kind is None:
-            return tracer.start_span(name=name, attributes=attributes)
-        return tracer.start_span(name=name, attributes=attributes, kind=span_kind)
+        span = (
+            tracer.start_span(name=name, attributes=attributes)
+            if span_kind is None
+            else tracer.start_span(name=name, attributes=attributes, kind=span_kind)
+        )
+        if span is not None and self._context_api is not None and self._trace_api is not None:
+            set_span = getattr(self._trace_api, "set_span_in_context", None)
+            if callable(set_span):
+                try:
+                    token = self._context_api.attach(set_span(span))
+                    self._span_tokens[id(span)] = token
+                except Exception as exc:  # pragma: no cover
+                    logger.debug("Failed to attach span context: %s", exc)
+        return span
 
     def _get_tracer(self) -> Any:
         if not self._enabled:
@@ -140,6 +160,11 @@ class SpanManager:
             self._enabled = False
             self._tracer = None
             return
+
+        try:
+            self._context_api = import_module("opentelemetry.context")
+        except ImportError:
+            self._context_api = None
 
         span_kind_cls = trace.SpanKind
         status_cls = status_module.Status

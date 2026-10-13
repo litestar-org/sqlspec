@@ -213,3 +213,50 @@ def test_db2_direct_generation_preserves_query_and_pagination_ownership() -> Non
     assert union == union_snapshot
     assert union.args["limit"].expression.parent is union.args["limit"]
     assert union.sql(dialect="db2") == set_operation_sql(dialect.generator(), union)
+
+
+def test_db2_temporal_system_time_and_business_time_queries() -> None:
+    """Verify Db2 FOR SYSTEM_TIME and FOR BUSINESS_TIME period specifications parse and round-trip."""
+    queries = [
+        "SELECT * FROM policy FOR SYSTEM_TIME AS OF '2026-01-01-00.00.00.000000'",
+        "SELECT * FROM policy FOR SYSTEM_TIME FROM '2025-01-01' TO '2026-01-01'",
+        "SELECT * FROM policy FOR SYSTEM_TIME BETWEEN '2025-01-01' AND '2026-01-01'",
+        "SELECT * FROM policy FOR BUSINESS_TIME AS OF '2026-06-01'",
+        "SELECT * FROM policy FOR BUSINESS_TIME FROM '2025-01-01' TO '2026-01-01'",
+        "SELECT * FROM policy FOR BUSINESS_TIME BETWEEN '2025-01-01' AND '2026-01-01'",
+    ]
+    for sql in queries:
+        parsed = parse_one(sql, dialect="db2")
+        version = parsed.find(exp.Version)
+        assert version is not None
+        assert parsed.sql(dialect="db2") == sql
+
+
+def test_dateadd_compound_amount_and_string_unit() -> None:
+    """Verify DATEADD handles compound duration amounts, string-literal units, and Identifier this."""
+    anon_expr = exp.Anonymous(
+        this=exp.to_identifier("DATEADD"),
+        expressions=[
+            exp.Literal.string("day"),
+            exp.Sub(this=exp.column("a"), expression=exp.column("b")),
+            exp.column("ts"),
+        ],
+    )
+    assert anon_expr.sql(dialect="db2") == "ts + (a - b) DAY"
+
+    dateadd_expr = exp.DateAdd(
+        this=exp.column("ts"), expression=exp.Literal.number(2), unit=exp.Literal.string("month")
+    )
+    assert dateadd_expr.sql(dialect="db2") == "ts + 2 MONTH"
+
+
+def test_db2_tail_permutations_and_xml_and_dbclob_units() -> None:
+    """Verify Db2 tail clause permutations, trailing comment preservation, XML type, and DBCLOB(1M)."""
+    assert transpile("SELECT * FROM t WITH UR FOR READ ONLY", read="db2", write="db2")[0] == (
+        "SELECT * FROM t FOR READ ONLY WITH UR"
+    )
+    assert transpile("SELECT * FROM t FOR READ ONLY FETCH FIRST 10 ROWS ONLY", read="db2", write="db2")[0] == (
+        "SELECT * FROM t FETCH FIRST 10 ROWS ONLY FOR READ ONLY"
+    )
+    assert transpile("SELECT CAST(x AS XML) FROM t", read="db2", write="db2")[0] == "SELECT CAST(x AS XML) FROM t"
+    assert transpile("CREATE TABLE t (d DBCLOB(1M))", read="db2", write="db2")[0] == "CREATE TABLE t (d DBCLOB(1M))"

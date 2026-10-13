@@ -1,8 +1,17 @@
+"""CockroachDB dialect static configuration and reflection helpers."""
+
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
 
-__all__ = ("resolve_cockroachdb_json_type",)
+__all__ = (
+    "COCKROACHDB_CONFIG",
+    "COCKROACHDB_FEATURE_FLAGS",
+    "COCKROACHDB_FEATURE_VERSIONS",
+    "COCKROACHDB_TYPE_MAPPINGS",
+    "COCKROACHDB_VERSION_PATTERN",
+    "resolve_cockroachdb_json_type",
+)
 
 
 COCKROACHDB_VERSION_PATTERN = re.compile(r"CockroachDB (?:CCL )?v(\d+)\.(\d+)\.(\d+)")

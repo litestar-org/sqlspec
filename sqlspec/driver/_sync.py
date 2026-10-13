@@ -10,6 +10,17 @@ from mypy_extensions import mypyc_attr
 from sqlspec.core import SQL, StackResult, create_arrow_result
 from sqlspec.core.result import DMLResult
 from sqlspec.core.stack import StackOperation, StatementStack
+from sqlspec.data_dictionary import (
+    DEFAULT_SYSTEM_METADATA_DOMAINS,
+    DDLResult,
+    MetadataCapabilityProfile,
+    MetadataResult,
+    ObjectIdentity,
+    ensure_system_metadata_request,
+    system_metadata_capabilities_from_domains,
+    system_metadata_gated_result,
+    unsupported_system_metadata_capability,
+)
 from sqlspec.driver._common import (
     CommonDriverAttributesMixin,
     DataDictionaryDialectMixin,
@@ -22,11 +33,12 @@ from sqlspec.driver._common import (
     handle_single_row_error,
     validate_savepoint_name,
 )
+from sqlspec.driver._exception_handler import _run_with_sync_exception_handler
 from sqlspec.driver._query_cache import CachedQuery
 from sqlspec.driver._sql_helpers import DEFAULT_PRETTY
 from sqlspec.driver._sql_helpers import convert_to_dialect as _convert_to_dialect_impl
 from sqlspec.driver._storage_helpers import stringify_storage_target
-from sqlspec.driver._stream import EagerSyncRowSource, SyncRowStream
+from sqlspec.driver._stream import SyncRowStream, _LazyEagerSyncRowSource
 from sqlspec.exceptions import ImproperConfigurationError, StackExecutionError
 from sqlspec.observability import _runtime as observability_runtime
 from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry, SyncStoragePipeline
@@ -36,7 +48,7 @@ from sqlspec.utils.schema import ValueT, to_value_type
 from sqlspec.utils.type_guards import resolve_row_format
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from types import TracebackType
 
     from sqlglot.dialects.dialect import DialectType
@@ -45,11 +57,8 @@ if TYPE_CHECKING:
     from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.data_dictionary import (
         ColumnMetadata,
-        DDLResult,
         ForeignKeyMetadata,
         IndexMetadata,
-        MetadataCapabilityProfile,
-        MetadataResult,
         SystemMetadataCapability,
         SystemMetadataRequest,
         SystemMetadataResult,
@@ -62,6 +71,7 @@ __all__ = ("SyncDataDictionaryBase", "SyncDriverAdapterBase", "SyncPoolConnectio
 
 _LOGGER_NAME: Final[str] = "sqlspec.driver"
 logger = get_logger(_LOGGER_NAME)
+_SyncResultT = TypeVar("_SyncResultT")
 _SyncDriverT = TypeVar("_SyncDriverT", bound="SyncDriverAdapterBase")
 
 
@@ -183,12 +193,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         )
         return True
 
-    @staticmethod
-    def _check_pending_exception(exc_handler: SyncExceptionHandler) -> None:
-        """Raise any pending mapped exception after context manager exit."""
-        if exc_handler.pending_exception is not None:
-            raise exc_handler.pending_exception from None
-
     @final
     def dispatch_statement_execution(self, statement: "SQL", connection: "Any") -> "SQLResult":
         """Central execution dispatcher using the Template Method Pattern.
@@ -202,34 +206,18 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         try:
             runtime = self._observability
-            # Pre-compile the statement so dispatch methods can reuse the processed state
-            # via the fast path in _compiled_statement(). This ensures compile()
-            # is called exactly once per statement execution.
             compiled_sql, execution_parameters = statement.compile()
             result: SQLResult | None = None
 
-            # FAST PATH: Skip all instrumentation if runtime is idle
             if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
-                with exc_handler, self.with_cursor(connection) as cursor:
-                    # Logic mirrors the instrumentation path below but without telemetry
-                    special_result = self.dispatch_special_handling(cursor, statement)
-                    if special_result is not None:
-                        result = special_result
-                    elif statement.is_script:
-                        execution_result = self.dispatch_execute_script(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
-                    elif statement.is_many:
-                        if execution_parameters:
-                            execution_result = self.dispatch_execute_many(cursor, statement)
-                        else:
-                            execution_result = self.create_execution_result(
-                                cursor, rowcount_override=0, is_many_result=True
-                            )
-                        result = self.build_statement_result(statement, execution_result)
-                    else:
-                        execution_result = self.dispatch_execute(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
+                result = self._run_with_exception_handler(
+                    exc_handler,
+                    self._dispatch_statement_with_cursor,
+                    connection,
+                    statement,
+                    has_execution_parameters=bool(execution_parameters),
+                )
                 self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result
@@ -253,24 +241,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             started = perf_counter()
             exc_handler = self.handle_database_exceptions()
             try:
-                with exc_handler, self.with_cursor(connection) as cursor:
-                    special_result = self.dispatch_special_handling(cursor, statement)
-                    if special_result is not None:
-                        result = special_result
-                    elif statement.is_script:
-                        execution_result = self.dispatch_execute_script(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
-                    elif statement.is_many:
-                        if execution_parameters:
-                            execution_result = self.dispatch_execute_many(cursor, statement)
-                        else:
-                            execution_result = self.create_execution_result(
-                                cursor, rowcount_override=0, is_many_result=True
-                            )
-                        result = self.build_statement_result(statement, execution_result)
-                    else:
-                        execution_result = self.dispatch_execute(cursor, statement)
-                        result = self.build_statement_result(statement, execution_result)
+                result = self._run_with_exception_handler(
+                    exc_handler,
+                    self._dispatch_statement_with_cursor,
+                    connection,
+                    statement,
+                    has_execution_parameters=bool(execution_parameters),
+                )
             except Exception as exc:  # pragma: no cover
                 pending_exception = exc_handler.pending_exception
                 if pending_exception is not None:
@@ -289,7 +266,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 runtime.emit_error_sync(mapped_exc, **query_context)
                 _raise_database_exception(exc_handler, None)
 
-            assert result is not None  # Guaranteed: no exception means result was assigned
+            assert result is not None
 
             runtime.span_manager.end_span(span)
             duration = perf_counter() - started
@@ -361,7 +338,10 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         for stmt in statements:
             single_stmt = self._sub_statement(stmt, prepared_parameters)
-            self.dispatch_execute(cursor, single_stmt)
+            try:
+                self.dispatch_execute(cursor, single_stmt)
+            finally:
+                self._release_pooled_statement(single_stmt)
             successful_count += 1
 
         return self.create_execution_result(
@@ -421,97 +401,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         msg = "Adapter must implement resolve_rowcount() for direct execution path"
         raise NotImplementedError(msg)
-
-    def _execute_cache_hit(
-        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
-    ) -> "SQLResult":
-        """Execute pre-compiled query via ultra-fast path (sync).
-
-        Uses a DB-API direct path when available (`cursor.execute`) and falls
-        back to dispatch_execute() for adapters with non-standard cursor APIs.
-        For DML operations, returns DMLResult to avoid full SQLResult costs.
-
-        Args:
-            sql: Raw SQL string (original, not compiled).
-            params: Query parameters.
-            cached: Cached query metadata.
-
-        Returns:
-            SQLResult or DMLResult.
-        """
-        direct_statement: SQL | None = None
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        try:
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                execute = getattr(cursor, "execute", None)
-                fetchall = getattr(cursor, "fetchall", None)
-                returns_rows = cached.operation_profile.returns_rows
-                can_use_cursor_fast_path = execute is not None and (
-                    (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
-                )
-                if can_use_cursor_fast_path:
-                    assert execute is not None
-                    execute(cached.compiled_sql, params)
-                    if returns_rows:
-                        assert fetchall is not None
-                        fetched_data = fetchall()
-                        data, column_names, row_count = self.collect_rows(cursor, fetched_data)
-                        execution_result = self.create_execution_result(
-                            cursor,
-                            selected_data=data,
-                            column_names=column_names,
-                            data_row_count=row_count,
-                            is_select_result=True,
-                            row_format=resolve_row_format(data),
-                        )
-                        direct_statement = self._cached_statement(
-                            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-                        )
-                        result = self.build_statement_result(direct_statement, execution_result)
-                    else:
-                        affected_rows = self.resolve_rowcount(cursor)
-                        result = DMLResult(cached.operation_type, affected_rows)
-                else:
-                    direct_statement = self._cached_statement(
-                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-                    )
-                    execution_result = self.dispatch_execute(cursor, direct_statement)
-                    if returns_rows:
-                        result = self.build_statement_result(direct_statement, execution_result)
-                    else:
-                        affected_rows = (
-                            execution_result.rowcount_override
-                            if execution_result.rowcount_override is not None
-                            and execution_result.rowcount_override >= 0
-                            else 0
-                        )
-                        result = DMLResult(cached.operation_type, affected_rows)
-
-            self._check_pending_exception(exc_handler)
-            assert result is not None
-            return result
-        finally:
-            if direct_statement is not None:
-                self._release_pooled_statement(direct_statement)
-
-    def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
-        """Execute pre-compiled query via fast path.
-
-        The statement is already compiled by _cached_execution, so dispatch_execute
-        will hit the fast path in _compiled_statement (is_processed check).
-        """
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        try:
-            with exc_handler, self.with_cursor(self.connection) as cursor:
-                execution_result = self.dispatch_execute(cursor, statement)
-                result = self.build_statement_result(statement, execution_result)
-            self._check_pending_exception(exc_handler)
-            assert result is not None
-            return result
-        finally:
-            self._release_pooled_statement(statement)
 
     @abstractmethod
     def begin(self) -> None:
@@ -590,31 +479,24 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         **kwargs: Any,
     ) -> "SQLResult":
         """Execute a statement with parameter handling."""
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        with exc_handler:
-            fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
-            if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
-                fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
-            elif not parameters and kwargs:
-                fast_params = kwargs
-            if (
-                self._stmt_cache_enabled
-                and (statement_config is None or statement_config is self.statement_config)
-                and isinstance(statement, str)
-                and fast_params is not None
-            ):
-                fast_result = self._cached_execution(statement, fast_params)
-                if fast_result is not None:
-                    result = cast("SQLResult", fast_result)
-            if result is None:
-                sql_statement = self.prepare_statement(
-                    statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
-                )
-                result = self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
+        fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
+        if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
+            fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
+        elif not parameters and kwargs:
+            fast_params = kwargs
+        if (
+            self._stmt_cache_enabled
+            and (statement_config is None or statement_config is self.statement_config)
+            and isinstance(statement, str)
+            and fast_params is not None
+        ):
+            fast_result = self._cached_execution(statement, fast_params)
+            if fast_result is not None:
+                return cast("SQLResult", fast_result)
+        sql_statement = self.prepare_statement(
+            statement, parameters, statement_config=statement_config or self.statement_config, kwargs=kwargs
+        )
+        return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     def execute_many(
         self,
@@ -629,25 +511,19 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         Parameters passed will be used as the batch execution sequence.
         """
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        with exc_handler:
-            config = statement_config or self.statement_config
+        config = statement_config or self.statement_config
 
-            if isinstance(statement, str) and not filters and not kwargs:
-                sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
-            elif isinstance(statement, SQL):
-                statement_seed = statement.raw_expression or statement.raw_sql
-                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
-            else:
-                base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
-                statement_seed = base_statement.raw_expression or base_statement.raw_sql
-                sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+        if isinstance(statement, str) and not filters and not kwargs:
+            sql_statement = SQL(statement, parameters, statement_config=config, is_many=True)
+        elif isinstance(statement, SQL):
+            statement_seed = statement.raw_expression or statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
+        else:
+            base_statement = self.prepare_statement(statement, filters, statement_config=config, kwargs=kwargs)
+            statement_seed = base_statement.raw_expression or base_statement.raw_sql
+            sql_statement = SQL(statement_seed, parameters, statement_config=config, is_many=True, **kwargs)
 
-            result = self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
+        return self.dispatch_statement_execution(statement=sql_statement, connection=self.connection)
 
     def execute_script(
         self,
@@ -662,15 +538,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         By default, validates each statement and logs warnings for dangerous
         operations. Use suppress_warnings=True for migrations and admin scripts.
         """
-        exc_handler = self.handle_database_exceptions()
-        result: SQLResult | None = None
-        with exc_handler:
-            config = statement_config or self.statement_config
-            sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
-            result = self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
-        self._check_pending_exception(exc_handler)
-        assert result is not None
-        return result
+        config = statement_config or self.statement_config
+        sql_statement = self.prepare_statement(statement, parameters, statement_config=config, kwargs=kwargs)
+        return self.dispatch_statement_execution(statement=sql_statement.as_script(), connection=self.connection)
 
     @overload
     def select(
@@ -682,7 +552,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[SchemaT]": ...
-
     @overload
     def select(
         self,
@@ -693,7 +562,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[dict[str, Any]]": ...
-
     def select(
         self,
         statement: "Statement | QueryBuilder",
@@ -717,7 +585,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[SchemaT]": ...
-
     @overload
     def fetch(
         self,
@@ -728,7 +595,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "list[dict[str, Any]]": ...
-
     def fetch(
         self,
         statement: "Statement | QueryBuilder",
@@ -758,7 +624,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT": ...
-
     @overload
     def select_one(
         self,
@@ -769,7 +634,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
-
     def select_one(
         self,
         statement: "Statement | QueryBuilder",
@@ -799,7 +663,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT": ...
-
     @overload
     def fetch_one(
         self,
@@ -810,7 +673,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any]": ...
-
     def fetch_one(
         self,
         statement: "Statement | QueryBuilder",
@@ -844,7 +706,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT | None": ...
-
     @overload
     def select_one_or_none(
         self,
@@ -855,7 +716,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any] | None": ...
-
     def select_one_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -885,7 +745,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "SchemaT | None": ...
-
     @overload
     def fetch_one_or_none(
         self,
@@ -896,7 +755,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "dict[str, Any] | None": ...
-
     def fetch_one_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -931,7 +789,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT": ...
-
     @overload
     def select_value(
         self,
@@ -942,7 +799,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     def select_value(
         self,
         statement: "Statement | QueryBuilder",
@@ -990,7 +846,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT": ...
-
     @overload
     def fetch_value(
         self,
@@ -1001,7 +856,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     def fetch_value(
         self,
         statement: "Statement | QueryBuilder",
@@ -1036,7 +890,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT | None": ...
-
     @overload
     def select_value_or_none(
         self,
@@ -1047,7 +900,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     def select_value_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -1095,7 +947,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> "ValueT | None": ...
-
     @overload
     def fetch_value_or_none(
         self,
@@ -1106,7 +957,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None" = None,
         **kwargs: Any,
     ) -> Any: ...
-
     def fetch_value_or_none(
         self,
         statement: "Statement | QueryBuilder",
@@ -1143,7 +993,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
-
     @overload
     def select_with_total(
         self,
@@ -1155,7 +1004,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
-
     def select_with_total(
         self,
         statement: "Statement | QueryBuilder",
@@ -1192,7 +1040,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         if count_with_window:
             modified_sql = self._with_total_count(sql_statement)
-            result = self.dispatch_statement_execution(modified_sql, self.connection)
+            result = self.execute(modified_sql)
             rows = result.all()
             data, total = self._extract_total_from_rows(rows)
 
@@ -1200,8 +1048,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 return (cast("list[SchemaT]", self.to_schema(data, schema_type=schema_type)), total)
             return (data, total)
 
-        count_result = self.dispatch_statement_execution(self._count_query(sql_statement), self.connection)
-        select_result = self.dispatch_statement_execution(sql_statement, self.connection)
+        count_result = self.execute(self._count_query(sql_statement))
+        select_result = self.execute(sql_statement)
 
         return (select_result.get_data(schema_type=schema_type), count_result.scalar())
 
@@ -1216,7 +1064,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[SchemaT], int]": ...
-
     @overload
     def fetch_with_total(
         self,
@@ -1228,7 +1075,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         count_with_window: bool = False,
         **kwargs: Any,
     ) -> "tuple[list[dict[str, Any]], int]": ...
-
     def fetch_with_total(
         self,
         statement: "Statement | QueryBuilder",
@@ -1364,7 +1210,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "SyncRowStream[SchemaT]": ...
-
     @overload
     def select_stream(
         self,
@@ -1377,7 +1222,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "SyncRowStream[dict[str, Any]]": ...
-
     def select_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
@@ -1406,8 +1250,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 "or switch to an adapter with native row streaming support."
             )
             raise ImproperConfigurationError(msg)
-        result = self.execute(sql_statement)
-        return SyncRowStream(EagerSyncRowSource(result.get_data(), chunk_size), schema_type=schema_type)
+        return SyncRowStream(_LazyEagerSyncRowSource(self, sql_statement, chunk_size), schema_type=schema_type)
 
     @overload
     def fetch_stream(
@@ -1421,7 +1264,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "SyncRowStream[SchemaT]": ...
-
     @overload
     def fetch_stream(
         self,
@@ -1434,7 +1276,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         native_only: bool = False,
         **kwargs: Any,
     ) -> "SyncRowStream[dict[str, Any]]": ...
-
     def fetch_stream(
         self,
         statement: "SQL | Statement | QueryBuilder",
@@ -1483,9 +1324,13 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         with StackExecutionObserver(self, stack, continue_on_error, native_pipeline=False) as observer:
             started_transaction = False
+            try:
+                caller_in_transaction = self._connection_in_transaction()
+            except NotImplementedError:
+                caller_in_transaction = False
 
             try:
-                if single_transaction and not self._connection_in_transaction():
+                if single_transaction and not caller_in_transaction:
                     self.begin()
                     started_transaction = True
 
@@ -1509,7 +1354,8 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                             started_transaction = False
 
                         if continue_on_error:
-                            self._rollback_failed_stack()
+                            if not caller_in_transaction:
+                                self._rollback_failed_stack()
                             observer.record_operation_error(stack_error)
                             results.append(StackResult.from_error(stack_error))
                             continue
@@ -1518,7 +1364,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
                     results.append(StackResult(result=result))
 
-                    if continue_on_error:
+                    if continue_on_error and not caller_in_transaction:
                         self._commit_stack_success()
 
                 if started_transaction:
@@ -1559,7 +1405,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageBridgeJob with execution telemetry.
         """
         self._raise_storage_not_implemented("select_to_storage")
-        raise NotImplementedError
 
     def load_from_arrow(
         self,
@@ -1581,7 +1426,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageBridgeJob with execution telemetry.
         """
         self._raise_storage_not_implemented("load_from_arrow")
-        raise NotImplementedError
 
     def load_from_storage(
         self,
@@ -1605,7 +1449,6 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             StorageBridgeJob with execution telemetry.
         """
         self._raise_storage_not_implemented("load_from_storage")
-        raise NotImplementedError
 
     def load_from_records(
         self,
@@ -1649,6 +1492,165 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             SQL string in target dialect.
         """
         return _convert_to_dialect_impl(statement, self.dialect, to_dialect, pretty)
+
+    @staticmethod
+    def _check_pending_exception(exc_handler: SyncExceptionHandler) -> None:
+        """Raise any pending mapped exception after context manager exit."""
+        pending = exc_handler.pending_exception
+        if pending is not None:
+            if pending.__cause__ is not None:
+                raise pending
+            raise pending from None
+
+    def _run_with_exception_handler(
+        self, exc_handler: SyncExceptionHandler, operation: "Callable[..., _SyncResultT]", *args: Any, **kwargs: Any
+    ) -> "_SyncResultT | None":
+        """Run a sync operation without inheriting the caller's active exception state."""
+        return _run_with_sync_exception_handler(exc_handler, operation, *args, **kwargs)
+
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
+    ) -> "SQLResult":
+        """Execute pre-compiled query via ultra-fast path (sync).
+
+        Uses a DB-API direct path when available (`cursor.execute`) and falls
+        back to dispatch_execute() for adapters with non-standard cursor APIs.
+        For DML operations, returns DMLResult to avoid full SQLResult costs.
+
+        Args:
+            sql: Raw SQL string (original, not compiled).
+            params: Query parameters.
+            cached: Cached query metadata.
+
+        Returns:
+            SQLResult or DMLResult.
+        """
+        exc_handler = self.handle_database_exceptions()
+        result = self._run_with_exception_handler(exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached)
+        self._check_pending_exception(exc_handler)
+        assert result is not None
+        return result
+
+    def _execute_cached_statement(self, statement: "SQL") -> "SQLResult":
+        """Execute pre-compiled query via fast path.
+
+        The statement is already compiled by _cached_execution, so dispatch_execute
+        will hit the fast path in _compiled_statement (is_processed check).
+        """
+        exc_handler = self.handle_database_exceptions()
+        try:
+            result = self._run_with_exception_handler(
+                exc_handler, self._execute_cached_statement_with_cursor, statement
+            )
+            self._check_pending_exception(exc_handler)
+            assert result is not None
+            return result
+        finally:
+            self._release_pooled_statement(statement)
+
+    def _dispatch_statement_with_cursor(
+        self, connection: Any, statement: "SQL", *, has_execution_parameters: bool
+    ) -> "SQLResult":
+        """Execute a statement while owning only the cursor context."""
+        cursor_manager = self.with_cursor(connection)
+        cursor_entered = False
+        exit_suppressed = False
+        error: Exception | None = None
+        execution_result: ExecutionResult | None = None
+        result: SQLResult | None = None
+        try:
+            cursor = cursor_manager.__enter__()
+            cursor_entered = True
+            special_result = self.dispatch_special_handling(cursor, statement)
+            if special_result is not None:
+                result = special_result
+            elif statement.is_script:
+                execution_result = self.dispatch_execute_script(cursor, statement)
+            elif statement.is_many:
+                if has_execution_parameters:
+                    execution_result = self.dispatch_execute_many(cursor, statement)
+                else:
+                    execution_result = self.create_execution_result(cursor, rowcount_override=0, is_many_result=True)
+            else:
+                execution_result = self.dispatch_execute(cursor, statement)
+            if special_result is None:
+                assert execution_result is not None
+                result = self.build_statement_result(statement, execution_result)
+        except Exception as exc:
+            error = exc
+        finally:
+            if cursor_entered:
+                if error is None:
+                    cursor_manager.__exit__(None, None, None)
+                else:
+                    exit_suppressed = bool(cursor_manager.__exit__(type(error), error, error.__traceback__))
+        if error is not None and not exit_suppressed:
+            raise error
+        assert result is not None
+        return result
+
+    def _execute_cache_hit_with_cursor(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
+    ) -> "SQLResult":
+        """Execute a cached query while owning only the cursor context."""
+        direct_statement: SQL | None = None
+        result: SQLResult | None = None
+        try:
+            with self.with_cursor(self.connection) as cursor:
+                execute = getattr(cursor, "execute", None)
+                fetchall = getattr(cursor, "fetchall", None)
+                returns_rows = cached.operation_profile.returns_rows
+                can_use_cursor_fast_path = execute is not None and (
+                    (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
+                )
+                if can_use_cursor_fast_path:
+                    assert execute is not None
+                    execute(cached.compiled_sql, params)
+                    if returns_rows:
+                        assert fetchall is not None
+                        fetched_data = fetchall()
+                        data, column_names, row_count = self.collect_rows(cursor, fetched_data)
+                        execution_result = self.create_execution_result(
+                            cursor,
+                            selected_data=data,
+                            column_names=column_names,
+                            data_row_count=row_count,
+                            is_select_result=True,
+                            row_format=resolve_row_format(data),
+                        )
+                        direct_statement = self._cached_statement(
+                            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                        )
+                        result = self.build_statement_result(direct_statement, execution_result)
+                    else:
+                        affected_rows = self.resolve_rowcount(cursor)
+                        result = DMLResult(cached.operation_type, affected_rows)
+                else:
+                    direct_statement = self._cached_statement(
+                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                    )
+                    execution_result = self.dispatch_execute(cursor, direct_statement)
+                    if returns_rows:
+                        result = self.build_statement_result(direct_statement, execution_result)
+                    else:
+                        affected_rows = (
+                            execution_result.rowcount_override
+                            if execution_result.rowcount_override is not None
+                            and execution_result.rowcount_override >= 0
+                            else 0
+                        )
+                        result = DMLResult(cached.operation_type, affected_rows)
+            assert result is not None
+            return result
+        finally:
+            if direct_statement is not None:
+                self._release_pooled_statement(direct_statement)
+
+    def _execute_cached_statement_with_cursor(self, statement: "SQL") -> "SQLResult":
+        """Execute a prepared statement while owning only the cursor context."""
+        with self.with_cursor(self.connection) as cursor:
+            execution_result = self.dispatch_execute(cursor, statement)
+            return self.build_statement_result(statement, execution_result)
 
     def _connection_in_transaction(self) -> bool:
         """Check if the connection is inside a transaction.
@@ -1805,8 +1807,6 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns:
             Capability profile. Base implementations report requested domains as unsupported.
         """
-        from sqlspec.data_dictionary import MetadataCapabilityProfile
-
         requested_domains: tuple[str, ...] = (
             "schemas",
             "objects",
@@ -1836,8 +1836,6 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         Returns:
             System metadata capabilities. Base implementations report requested domains as unsupported.
         """
-        from sqlspec.data_dictionary import DEFAULT_SYSTEM_METADATA_DOMAINS, system_metadata_capabilities_from_domains
-
         requested_domains = DEFAULT_SYSTEM_METADATA_DOMAINS if domains is None else tuple(domains)
         return system_metadata_capabilities_from_domains(requested_domains)
 
@@ -1931,12 +1929,6 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         self, driver: Any, request: "SystemMetadataRequest | str | None" = None, **kwargs: Any
     ) -> "SystemMetadataResult":
         """Get opt-in system metadata or a gated/unsupported result."""
-        from sqlspec.data_dictionary import (
-            ensure_system_metadata_request,
-            system_metadata_gated_result,
-            unsupported_system_metadata_capability,
-        )
-
         metadata_request = ensure_system_metadata_request(request, **kwargs)
         capability = unsupported_system_metadata_capability(metadata_request.domain)
         return system_metadata_gated_result(metadata_request, capability)
@@ -2034,19 +2026,16 @@ class SyncDataDictionaryBase(DataDictionaryDialectMixin, DataDictionaryMixin):
         """
 
     def _unsupported_metadata(self, domain: str) -> "MetadataResult":
-        from sqlspec.data_dictionary import MetadataResult
-
         return MetadataResult.unsupported(domain)
 
     def _unsupported_ddl(self, object_name: str, *, schema: "str | None", object_type: str) -> "DDLResult":
-        from sqlspec.data_dictionary import DDLResult, ObjectIdentity
-
         return DDLResult.unsupported(
             ObjectIdentity(object_name, object_type, schema=schema, dialect=self.dialect),
             warnings=(f"{self.dialect} DDL extraction is not implemented",),
         )
 
 
+@mypyc_attr(allow_interpreted_subclasses=False)
 class _SyncDriverTransaction(Generic[_SyncDriverT]):
     """Context manager that commits on success and rolls back on error.
 

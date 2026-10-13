@@ -134,6 +134,7 @@ _SKIP_LOCKED_DATA: Final[tuple[frozenset[str] | None, ...]] = (
     frozenset({"LOCKED"}),
     frozenset({"DATA"}),
 )
+
 _ISOLATION_WITH_LOCK_REQUEST: Final[tuple[frozenset[str] | None, ...]] = (
     frozenset({"WITH"}),
     _LOCK_REQUEST_ISOLATION_LEVELS,
@@ -143,13 +144,16 @@ _ISOLATION_WITH_LOCK_REQUEST: Final[tuple[frozenset[str] | None, ...]] = (
     _LOCK_REQUESTS,
     frozenset({"LOCKS"}),
 )
+
 _ISOLATION: Final[tuple[frozenset[str] | None, ...]] = (frozenset({"WITH"}), _ISOLATION_LEVELS)
+
 _OPTIMIZE_FOR_ROWS: Final[tuple[frozenset[str] | None, ...]] = (
     frozenset({"OPTIMIZE"}),
     frozenset({"FOR"}),
     None,
     frozenset({"ROW", "ROWS"}),
 )
+
 _READ_ONLY: Final[tuple[frozenset[str] | None, ...]] = (
     frozenset({"FOR"}),
     frozenset({"READ", "FETCH"}),
@@ -157,24 +161,31 @@ _READ_ONLY: Final[tuple[frozenset[str] | None, ...]] = (
 )
 
 
-def _ends_with(words: "list[str]", end: int, pattern: "tuple[frozenset[str] | None, ...]") -> bool:
-    start = end - len(pattern)
-    if start < 0:
-        return False
-    return all(options is None or words[start + offset] in options for offset, options in enumerate(pattern))
+_FETCH_FIRST_COUNT: Final[tuple[frozenset[str] | None, ...]] = (
+    frozenset({"FETCH"}),
+    frozenset({"FIRST", "NEXT"}),
+    None,
+    frozenset({"ROW", "ROWS"}),
+    frozenset({"ONLY"}),
+)
 
-
-def _words(tokens: "list[Token]") -> "list[str]":
-    return ["" if token.token_type in _QUOTED_TOKEN_TYPES else token.text.upper() for token in tokens]
+_FETCH_FIRST_NO_COUNT: Final[tuple[frozenset[str] | None, ...]] = (
+    frozenset({"FETCH"}),
+    frozenset({"FIRST", "NEXT"}),
+    frozenset({"ROW", "ROWS"}),
+    frozenset({"ONLY"}),
+)
 
 
 def split_statement_tail(tokens: "list[Token]") -> "tuple[list[Token], Db2StatementTail | None]":
     """Remove the Db2 select-statement tail from the tokens of one statement.
 
-    Clauses are matched from the end in Db2 order: ``SKIP LOCKED DATA``, then
-    ``WITH RR|RS|CS|UR`` (optionally ``USE AND KEEP SHARE|UPDATE|EXCLUSIVE LOCKS``
-    after ``RR`` or ``RS``), then ``OPTIMIZE FOR n ROW|ROWS``, then
-    ``FOR READ ONLY`` or ``FOR FETCH ONLY``.
+    Clauses are matched iteratively from the end in any Db2 permutation order:
+    ``SKIP LOCKED DATA``, ``WITH RR|RS|CS|UR`` (optionally
+    ``USE AND KEEP SHARE|UPDATE|EXCLUSIVE LOCKS`` after ``RR`` or ``RS``),
+    ``OPTIMIZE FOR n ROW|ROWS``, and ``FOR READ ONLY`` or ``FOR FETCH ONLY``,
+    even when ``FETCH FIRST|NEXT ... ROW|ROWS ONLY`` appears after a tail
+    clause.
 
     Args:
         tokens: Tokens of a single statement.
@@ -187,38 +198,79 @@ def split_statement_tail(tokens: "list[Token]") -> "tuple[list[Token], Db2Statem
     end = len(tokens)
     tail = Db2StatementTail()
     matched = False
+    fetch_tokens: list[Token] = []
+    stripped_comments: list[str] = []
 
-    if _ends_with(words, end, _SKIP_LOCKED_DATA):
-        tail.skip_locked = True
-        end -= len(_SKIP_LOCKED_DATA)
-        matched = True
-
-    if _ends_with(words, end, _ISOLATION_WITH_LOCK_REQUEST):
-        start = end - len(_ISOLATION_WITH_LOCK_REQUEST)
-        tail.isolation = words[start + 1]
-        tail.lock_request = words[start + 5]
-        end = start
-        matched = True
-    elif _ends_with(words, end, _ISOLATION):
-        tail.isolation = words[end - 1]
-        end -= len(_ISOLATION)
-        matched = True
-
-    if _ends_with(words, end, _OPTIMIZE_FOR_ROWS):
-        rows_token = tokens[end - 2]
-        if rows_token.token_type == TokenType.NUMBER and rows_token.text.isdigit():
-            tail.optimize_rows = int(rows_token.text)
-            end -= len(_OPTIMIZE_FOR_ROWS)
+    while end > 0:
+        if _ends_with(words, end, _SKIP_LOCKED_DATA):
+            start = end - len(_SKIP_LOCKED_DATA)
+            tail.skip_locked = True
+            stripped_comments = _collect_token_comments(tokens[start:end]) + stripped_comments
+            end = start
             matched = True
+            continue
 
-    if _ends_with(words, end, _READ_ONLY):
-        tail.read_only = True
-        end -= len(_READ_ONLY)
-        matched = True
+        if _ends_with(words, end, _ISOLATION_WITH_LOCK_REQUEST):
+            start = end - len(_ISOLATION_WITH_LOCK_REQUEST)
+            tail.isolation = words[start + 1]
+            tail.lock_request = words[start + 5]
+            stripped_comments = _collect_token_comments(tokens[start:end]) + stripped_comments
+            end = start
+            matched = True
+            continue
+
+        if _ends_with(words, end, _ISOLATION):
+            start = end - len(_ISOLATION)
+            tail.isolation = words[end - 1]
+            stripped_comments = _collect_token_comments(tokens[start:end]) + stripped_comments
+            end = start
+            matched = True
+            continue
+
+        if _ends_with(words, end, _OPTIMIZE_FOR_ROWS):
+            rows_token = tokens[end - 2]
+            if rows_token.token_type == TokenType.NUMBER and rows_token.text.isdigit():
+                start = end - len(_OPTIMIZE_FOR_ROWS)
+                tail.optimize_rows = int(rows_token.text)
+                stripped_comments = _collect_token_comments(tokens[start:end]) + stripped_comments
+                end = start
+                matched = True
+                continue
+
+        if _ends_with(words, end, _READ_ONLY):
+            start = end - len(_READ_ONLY)
+            tail.read_only = True
+            stripped_comments = _collect_token_comments(tokens[start:end]) + stripped_comments
+            end = start
+            matched = True
+            continue
+
+        if not fetch_tokens and _ends_with(words, end, _FETCH_FIRST_COUNT):
+            count_token = tokens[end - 3]
+            if count_token.token_type == TokenType.NUMBER and count_token.text.isdigit():
+                start = end - len(_FETCH_FIRST_COUNT)
+                fetch_tokens = tokens[start:end]
+                end = start
+                continue
+
+        if not fetch_tokens and _ends_with(words, end, _FETCH_FIRST_NO_COUNT):
+            start = end - len(_FETCH_FIRST_NO_COUNT)
+            fetch_tokens = tokens[start:end]
+            end = start
+            continue
+
+        break
 
     if not matched:
         return tokens, None
-    return tokens[:end], tail
+
+    kept = [*tokens[:end], *fetch_tokens]
+    if stripped_comments and kept:
+        last = kept[-1]
+        kept[-1] = Token(
+            last.token_type, last.text, last.line, last.col, last.start, last.end, [*last.comments, *stripped_comments]
+        )
+    return kept, tail
 
 
 def split_statement_tails(tokens: "list[Token]") -> "tuple[list[Token], list[Db2StatementTail | None]]":
@@ -320,7 +372,69 @@ def mark_native_locks(expression: exp.Expr) -> None:
         lock.set("sqlspec_db2_native", True)
 
 
+def normalize_db2_expression(expression: exp.Expr) -> exp.Expr:
+    """Rewrite Db2-only spellings into canonical sqlglot expressions.
+
+    ``POSSTR(haystack, needle)`` becomes ``exp.StrPosition``,
+    ``VARCHAR_FORMAT(value, 'format')`` becomes ``exp.TimeToStr`` with the Db2
+    format elements translated, and the ``CURRENT SCHEMA`` special register
+    becomes ``exp.CurrentSchema``.
+
+    Args:
+        expression: Expression parsed from Db2 SQL.
+
+    Returns:
+        The normalised expression.
+    """
+    return expression.transform(_canonical_db2_node, copy=False)
+
+
+def normalize_db2_tokens(tokens: "list[Token]") -> "list[Token]":
+    """Rewrite Db2-only token sequences into forms sqlglot's parser accepts.
+
+    Special registers without a sqlglot node (``CURRENT TIME ZONE``,
+    ``CURRENT SERVER``, ...) become one identifier token carrying the register
+    name; LOB sizes such as ``CLOB(1M)`` become one size token; labeled
+    durations such as ``a + 1 DAYS`` gain an ``INTERVAL`` token; and a
+    statement-level ``VALUES`` list without parentheses gets one parenthesised
+    row per item.
+
+    Args:
+        tokens: Tokens produced by the Db2 tokenizer.
+
+    Returns:
+        The normalised token list.
+    """
+    tokens = _merge_special_registers(tokens)
+    tokens = _merge_lob_sizes(tokens)
+    tokens = _normalize_temporal_periods(tokens)
+    tokens = _mark_labeled_durations(tokens)
+    return _wrap_statement_values(tokens)
+
+
+def _collect_token_comments(tokens: "list[Token]") -> "list[str]":
+    return [comment for token in tokens for comment in token.comments]
+
+
+def _ends_with(words: "list[str]", end: int, pattern: "tuple[frozenset[str] | None, ...]") -> bool:
+    start = end - len(pattern)
+    if start < 0:
+        return False
+    return all(options is None or words[start + offset] in options for offset, options in enumerate(pattern))
+
+
+def _words(tokens: "list[Token]") -> "list[str]":
+    return ["" if token.token_type in _QUOTED_TOKEN_TYPES else token.text.upper() for token in tokens]
+
+
 def _canonical_db2_node(node: exp.Expr) -> exp.Expr:
+    if isinstance(node, exp.Version):
+        period = str(node.this).upper()
+        if period == "TIMESTAMP":
+            node.set("this", "SYSTEM_TIME")
+        elif period == "VERSION":
+            node.set("this", "BUSINESS_TIME")
+        return node
     if (
         isinstance(node, exp.Column)
         and not node.table
@@ -349,27 +463,34 @@ def _canonical_db2_node(node: exp.Expr) -> exp.Expr:
     return node
 
 
-def normalize_db2_expression(expression: exp.Expr) -> exp.Expr:
-    """Rewrite Db2-only spellings into canonical sqlglot expressions.
-
-    ``POSSTR(haystack, needle)`` becomes ``exp.StrPosition``,
-    ``VARCHAR_FORMAT(value, 'format')`` becomes ``exp.TimeToStr`` with the Db2
-    format elements translated, and the ``CURRENT SCHEMA`` special register
-    becomes ``exp.CurrentSchema``.
-
-    Args:
-        expression: Expression parsed from Db2 SQL.
-
-    Returns:
-        The normalised expression.
-    """
-    return expression.transform(_canonical_db2_node, copy=False)
-
-
 def _merged_token(token_type: TokenType, text: str, parts: "list[Token]") -> Token:
     first = parts[0]
     comments = [comment for part in parts for comment in part.comments]
     return Token(token_type, text, first.line, first.col, first.start, parts[-1].end, comments)
+
+
+def _normalize_temporal_periods(tokens: "list[Token]") -> "list[Token]":
+    result: list[Token] = []
+    index = 0
+    total = len(tokens)
+    while index < total:
+        token = tokens[index]
+        result.append(token)
+        index += 1
+        if token.token_type == TokenType.FOR and index < total and tokens[index].token_type not in _QUOTED_TOKEN_TYPES:
+            next_tok = tokens[index]
+            if next_tok.text.upper() == "BUSINESS_TIME":
+                result.append(_merged_token(TokenType.VAR, "VERSION", [next_tok]))
+                index += 1
+            elif (
+                next_tok.text.upper() == "BUSINESS"
+                and index + 1 < total
+                and tokens[index + 1].token_type not in _QUOTED_TOKEN_TYPES
+                and tokens[index + 1].text.upper() == "TIME"
+            ):
+                result.append(_merged_token(TokenType.VAR, "VERSION", [next_tok, tokens[index + 1]]))
+                index += 2
+    return result
 
 
 def _merge_special_registers(tokens: "list[Token]") -> "list[Token]":
@@ -425,7 +546,7 @@ def _merge_lob_sizes(tokens: "list[Token]") -> "list[Token]":
         ):
             number, unit = tokens[index + 1], tokens[index + 2]
             result.append(tokens[index])
-            result.append(_merged_token(TokenType.VAR, f"{number.text}{unit.text.upper()}", [number, unit]))
+            result.append(_merged_token(TokenType.NUMBER, f"{number.text}{unit.text.upper()}", [number, unit]))
             index += 3
     return result
 
@@ -534,25 +655,3 @@ def _wrap_statement_values(tokens: "list[Token]") -> "list[Token]":
             statement.append(token)
     result.extend(_wrap_values_rows(statement))
     return result
-
-
-def normalize_db2_tokens(tokens: "list[Token]") -> "list[Token]":
-    """Rewrite Db2-only token sequences into forms sqlglot's parser accepts.
-
-    Special registers without a sqlglot node (``CURRENT TIME ZONE``,
-    ``CURRENT SERVER``, ...) become one identifier token carrying the register
-    name; LOB sizes such as ``CLOB(1M)`` become one size token; labeled
-    durations such as ``a + 1 DAYS`` gain an ``INTERVAL`` token; and a
-    statement-level ``VALUES`` list without parentheses gets one parenthesised
-    row per item.
-
-    Args:
-        tokens: Tokens produced by the Db2 tokenizer.
-
-    Returns:
-        The normalised token list.
-    """
-    tokens = _merge_special_registers(tokens)
-    tokens = _merge_lob_sizes(tokens)
-    tokens = _mark_labeled_durations(tokens)
-    return _wrap_statement_values(tokens)

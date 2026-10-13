@@ -28,43 +28,6 @@ ParamTypeMatcher: TypeAlias = type | tuple[type, ...] | Callable[[object], bool]
 _JSON_VALUE_TYPES: Final[tuple[type, ...]] = (dict, list, str, int, float, bool)
 
 
-def _is_json_value(value: object) -> bool:
-    """Return whether a value can be encoded by SQLSpec's JSON serializer."""
-    if not isinstance(value, _JSON_VALUE_TYPES):
-        return False
-    try:
-        to_json(value)
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
-_TYPE_REGISTRY: Final[dict[str, ParamTypeMatcher]] = {
-    "str": str,
-    "int": int,
-    "float": float,
-    "bool": bool,
-    "bytes": bytes,
-    "date": date,
-    "datetime": datetime,
-    "time": time,
-    "decimal": Decimal,
-    "uuid": UUID,
-    "uuid.uuid": UUID,
-    "dict": dict,
-    "dict[str,any]": dict,
-    "dict[str,object]": dict,
-    "json": _is_json_value,
-    "jsonb": _is_json_value,
-    "list[int]": list,
-    "list[str]": list,
-    "list[float]": list,
-    "list[bool]": list,
-    "list": list,
-    "tuple": tuple,
-}
-
-
 class ParameterDeclaration:
     """A single parameter declared in a SQL file header."""
 
@@ -136,6 +99,43 @@ def matches_param_type(type_str: str, value: object) -> bool:
     if isinstance(resolved, type):
         return isinstance(value, resolved)
     return resolved(value)
+
+
+def _is_json_value(value: object) -> bool:
+    """Return whether a value can be encoded by SQLSpec's JSON serializer."""
+    if not isinstance(value, _JSON_VALUE_TYPES):
+        return False
+    try:
+        to_json(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+_TYPE_REGISTRY: Final[dict[str, ParamTypeMatcher]] = {
+    "str": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "bytes": bytes,
+    "date": date,
+    "datetime": datetime,
+    "time": time,
+    "decimal": Decimal,
+    "uuid": UUID,
+    "uuid.uuid": UUID,
+    "dict": dict,
+    "dict[str,any]": dict,
+    "dict[str,object]": dict,
+    "json": _is_json_value,
+    "jsonb": _is_json_value,
+    "list[int]": list,
+    "list[str]": list,
+    "list[float]": list,
+    "list[bool]": list,
+    "list": list,
+    "tuple": tuple,
+}
 
 
 def _normalize_type_key(type_str: str) -> str:

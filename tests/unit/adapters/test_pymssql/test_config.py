@@ -44,7 +44,7 @@ def test_config_defaults_server_port_and_features() -> None:
     assert config.connection_config["port"] == 1433
     assert config.driver_type is PymssqlDriver
     assert config.supports_transactional_ddl is True
-    assert config.supports_native_arrow_export is False
+    assert config.supports_native_arrow_export is True
     assert config.driver_features["enable_events"] is True
 
 
@@ -132,3 +132,29 @@ def test_pymssql_runtime_aliases_resolve_to_installed_classes() -> None:
     assert namespace["PymssqlConnection"] is pymssql.Connection
     assert namespace["PymssqlRawCursor"] is pymssql.Cursor
     assert isinstance(object(), PymssqlConnection) is False
+
+
+def test_pymssql_session_clean_exit_rolls_back_active_transaction() -> None:
+    """PymssqlSessionContext rolls back an active transaction even when exiting without an exception."""
+    from typing import Any, cast
+
+    from sqlspec.adapters.pymssql._typing import PymssqlSessionContext
+    from tests.unit.adapters.test_pymssql._fakes import FakeConnection
+
+    calls: list[str] = []
+    conn = FakeConnection()
+    conn.autocommit(False)
+
+    context = PymssqlSessionContext(
+        acquire_connection=lambda: cast("Any", conn),
+        release_connection=lambda _c, **_kw: calls.append("release"),
+        statement_config=PymssqlConfig().statement_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with context as session:
+        session.begin()
+
+    assert conn.rollbacks == 1
+    assert calls == ["release"]

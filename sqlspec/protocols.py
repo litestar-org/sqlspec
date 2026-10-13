@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.config import ExtensionConfigs
-    from sqlspec.core import StatementConfig
+    from sqlspec.core import ArrowResult, StatementConfig
     from sqlspec.data_dictionary import (
         ColumnMetadata,
         DDLResult,
@@ -392,12 +392,12 @@ class MappingLikeProtocol(Protocol):
     that support dictionary-like access with keys() method.
     """
 
-    def keys(self) -> "Iterator[str]":
-        """Return an iterator over the keys."""
-        ...
-
     def __getitem__(self, key: str) -> Any:
         """Get item by key."""
+        ...
+
+    def keys(self) -> "Iterator[str]":
+        """Return an iterator over the keys."""
         ...
 
 
@@ -481,6 +481,16 @@ class ObjectStoreProtocol(Protocol):
 
     def __init__(self, uri: str, **kwargs: Any) -> None:
         return
+
+    @property
+    def supports_signing(self) -> bool:
+        """Whether this backend supports URL signing.
+
+        Returns:
+            True if the backend supports generating signed URLs, False otherwise.
+            Only S3, GCS, and Azure backends via obstore support signing.
+        """
+        return False
 
     def resolve_uri(self, path: "str | Path") -> str:
         """Resolve a backend-relative path to its unsigned address."""
@@ -627,30 +637,20 @@ class ObjectStoreProtocol(Protocol):
         msg = "Async arrow writing not implemented"
         raise NotImplementedError(msg)
 
-    # NOTE: Returns AsyncIterator directly; this is intentionally not async def.
     def stream_arrow_async(
         self, pattern: str, *, file_format: Literal["parquet"] = "parquet", batch_size: int = 65_536, **kwargs: Any
     ) -> "AsyncIterator[ArrowRecordBatch]":
-        """Stream Arrow record batches from matching objects."""
+        """Stream Arrow record batches from matching objects.
+
+        Returns AsyncIterator directly (not a coroutine).
+        """
         msg = "Async arrow streaming not implemented"
         raise NotImplementedError(msg)
 
-    @property
-    def supports_signing(self) -> bool:
-        """Whether this backend supports URL signing.
-
-        Returns:
-            True if the backend supports generating signed URLs, False otherwise.
-            Only S3, GCS, and Azure backends via obstore support signing.
-        """
-        return False
-
     @overload
     def sign_sync(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
-
     @overload
     def sign_sync(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
-
     def sign_sync(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
@@ -673,10 +673,8 @@ class ObjectStoreProtocol(Protocol):
 
     @overload
     async def sign_async(self, paths: str, expires_in: int = 3600, for_upload: bool = False) -> str: ...
-
     @overload
     async def sign_async(self, paths: list[str], expires_in: int = 3600, for_upload: bool = False) -> list[str]: ...
-
     async def sign_async(
         self, paths: "str | list[str]", expires_in: int = 3600, for_upload: bool = False
     ) -> "str | list[str]":
@@ -753,10 +751,13 @@ class SQLBuilderProtocol(Protocol):
     _parameters: dict[str, Any]
     _parameter_counter: int
     _parameter_name_counters: dict[str, int]
-    _columns: Any  # Optional attribute for some builders
-    _with_ctes: Any  # Optional attribute for some builders
+    _with_ctes: Any
     dialect: Any
-    dialect_name: "str | None"
+
+    @property
+    def dialect_name(self) -> "str | None":
+        """Return the name of the dialect."""
+        ...
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -771,32 +772,12 @@ class SQLBuilderProtocol(Protocol):
         """Add a parameter to the builder."""
         ...
 
-    def _next_parameter_name(self, base_name: str) -> str:
-        """Generate a unique parameter name."""
-        ...
-
     def create_placeholder(self, value: Any, base_name: str) -> "tuple[exp.Placeholder, str]":
         """Create placeholder expression with bound parameter (public)."""
         ...
 
-    def _parameterize_expression(self, expression: "exp.Expr") -> "exp.Expr":
-        """Replace literal values in an expression with bound parameters."""
-        ...
-
     def build(self) -> "exp.Expr | Any":
         """Build and return the final expression."""
-        ...
-
-    def _merge_parameters(self, sql_obj: Any) -> None:
-        """Merge parameters from SQL objects into the builder."""
-        ...
-
-    def _build_final_expression(self, *, copy: bool = False) -> "exp.Expr":
-        """Return the expression with attached CTEs."""
-        ...
-
-    def _spawn_like_self(self) -> "Self":
-        """Create a new builder with matching configuration."""
         ...
 
     def set_expression(self, expression: "exp.Expr") -> None:
@@ -821,6 +802,26 @@ class SQLBuilderProtocol(Protocol):
         """Compile a pre-built expression with optional caching and parameters."""
         ...
 
+    def _next_parameter_name(self, base_name: str) -> str:
+        """Generate a unique parameter name."""
+        ...
+
+    def _parameterize_expression(self, expression: "exp.Expr") -> "exp.Expr":
+        """Replace literal values in an expression with bound parameters."""
+        ...
+
+    def _merge_parameters(self, sql_obj: Any) -> Any:
+        """Merge parameters from SQL objects into the builder."""
+        ...
+
+    def _build_final_expression(self, *, copy: bool = False) -> "exp.Expr":
+        """Return the expression with attached CTEs."""
+        ...
+
+    def _spawn_like_self(self) -> "Self":
+        """Create a new builder with matching configuration."""
+        ...
+
 
 @runtime_checkable
 class SupportsArrowResults(Protocol):
@@ -842,7 +843,7 @@ class SupportsArrowResults(Protocol):
         batch_size: int | None = None,
         arrow_schema: Any | None = None,
         **kwargs: Any,
-    ) -> "ArrowTable | ArrowRecordBatch":
+    ) -> "ArrowResult":
         """Execute query and return results as Apache Arrow Table or RecordBatch.
 
         Args:
@@ -899,6 +900,7 @@ class HasMigrationConfigProtocol(Protocol):
     migration_config: "Mapping[str, Any] | None"
 
 
+@runtime_checkable
 class SyncDataDictionaryProtocol(Protocol):
     """Protocol for sync data dictionary implementations."""
 
@@ -997,6 +999,7 @@ class SyncDataDictionaryProtocol(Protocol):
     def list_available_features(self) -> "list[str]": ...
 
 
+@runtime_checkable
 class AsyncDataDictionaryProtocol(Protocol):
     """Protocol for async data dictionary implementations."""
 

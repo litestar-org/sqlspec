@@ -1,3 +1,5 @@
+"""Google Cloud BigQuery adapter for SQLSpec."""
+
 from sqlspec.adapters.bigquery._typing import BigQueryConnection, BigQueryCursor
 from sqlspec.adapters.bigquery.config import (
     BigQueryConfig,

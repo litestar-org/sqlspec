@@ -372,3 +372,104 @@ def test_close_pool_clears_connection_instance(monkeypatch: pytest.MonkeyPatch) 
     config.close_pool()
 
     assert config.connection_instance is None
+
+
+def test_session_clean_exit_rolls_back_active_transaction() -> None:
+    """A session exiting cleanly with an uncommitted transaction must roll back before release."""
+    calls: list[str] = []
+
+    class _Connection:
+        autocommit = False
+
+        def cursor(self) -> object:
+            return object()
+
+        def rollback(self) -> None:
+            calls.append("rollback")
+
+        def commit(self) -> None:
+            calls.append("commit")
+
+    context = MssqlPythonSessionContext(
+        acquire_connection=cast("Any", _Connection),
+        release_connection=lambda _conn, **_kwargs: calls.append("release"),
+        statement_config=MssqlPythonConfig().statement_config,
+        driver_features={},
+        prepare_driver=lambda driver: driver,
+    )
+
+    with context as session:
+        session.begin()
+
+    assert calls == ["rollback", "release"]
+
+
+def test_connection_context_rolls_back_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """provide_connection should roll back the connection when exiting with an exception."""
+    rolled_back = False
+
+    class _Conn(DummyConnection):
+        def rollback(self) -> None:
+            nonlocal rolled_back
+            rolled_back = True
+
+    conn = _Conn()
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **_: None)
+    monkeypatch.setattr("sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.connect", lambda *_a, **_kw: conn)
+    config = MssqlPythonConfig(connection_config={"server": "localhost"})
+
+    with pytest.raises(RuntimeError), config.provide_connection():
+        raise RuntimeError
+
+    assert rolled_back is True
+    assert conn.closed is True
+
+
+def test_pool_disabled_does_not_mutate_process_wide_pooling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """enabled=False preserves connection_string without calling MSSQL_PYTHON_MODULE.pooling."""
+    pooling_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(_mssql_pool, "_POOLING_PARAMS", None)
+    monkeypatch.setattr(
+        "sqlspec.adapters.mssql_python.pool.MSSQL_PYTHON_MODULE.pooling", lambda **kw: pooling_calls.append(kw)
+    )
+
+    pool = MssqlPythonConnectionPool(connection_string="Server=localhost;", enabled=False)
+
+    assert pool.connection_string == "Server=localhost;"
+    assert pooling_calls == []
+
+
+def test_config_applies_driver_features_to_custom_statement_config() -> None:
+    """driver_features json_serializer/json_deserializer should apply even when statement_config is passed explicitly."""
+    from sqlspec.core import StatementConfig
+
+    def custom_to_json(val: Any) -> str:
+        return f"custom:{val}"
+
+    def custom_from_json(val: str) -> Any:
+        return {"raw": val}
+
+    custom_stmt = StatementConfig(dialect="tsql")
+    config = MssqlPythonConfig(
+        connection_config={"server": "localhost"},
+        statement_config=custom_stmt,
+        driver_features={"json_serializer": custom_to_json, "json_deserializer": custom_from_json},
+    )
+
+    assert config.statement_config.parameter_config.json_serializer is custom_to_json
+    assert config.statement_config.parameter_config.json_deserializer is custom_from_json
+
+
+def test_config_event_runtime_hints_and_exports() -> None:
+    """MssqlPythonConfig exposes poll_queue event runtime hints and does not re-export MssqlPythonConnectionPool in config.__all__."""
+    import sqlspec.adapters.mssql_python.config as config_mod
+
+    config = MssqlPythonConfig(connection_config={"server": "localhost"})
+    hints = config.get_event_runtime_hints()
+
+    assert hints.poll_interval == 0.25
+    assert hints.lease_seconds == 5
+    assert hints.select_for_update is False
+    assert hints.skip_locked is False
+    assert "MssqlPythonConnectionPool" not in config_mod.__all__

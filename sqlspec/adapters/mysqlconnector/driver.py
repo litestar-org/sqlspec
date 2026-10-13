@@ -4,13 +4,12 @@ Provides MySQL/MariaDB connectivity with parameter style conversion,
 type coercion, error handling, and transaction management.
 """
 
+import asyncio
 import os
 import tempfile
 from collections.abc import Callable, Sized
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
-
-import anyio
 
 from sqlspec.adapters.mysqlconnector._typing import (
     MysqlConnectorAsyncCursor,
@@ -25,6 +24,7 @@ from sqlspec.adapters.mysqlconnector.core import (
     MysqlConnectorSyncStreamSource,
     build_insert_statement,
     build_load_data_statement,
+    can_use_local_infile_records,
     collect_rows,
     create_mapped_exception,
     default_statement_config,
@@ -51,7 +51,6 @@ from sqlspec.driver import (
     SyncDriverAdapterBase,
     SyncRowStream,
 )
-from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json
 from sqlspec.utils.type_guards import supports_json_type
@@ -137,6 +136,12 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
         )
 
+    @property
+    def data_dictionary(self) -> "MysqlConnectorSyncDataDictionary":
+        if self._data_dictionary is None:
+            self._data_dictionary = MysqlConnectorSyncDataDictionary()
+        return self._data_dictionary
+
     def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
@@ -182,6 +187,8 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
 
         for stmt in statements:
             cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            if getattr(cursor, "with_rows", False):
+                cursor.fetchall()
             successful_count += 1
 
         return self.create_execution_result(
@@ -193,22 +200,28 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
             with MysqlConnectorSyncCursor(self.connection) as cursor:
                 cursor.execute("BEGIN")
         except MysqlConnectorError as e:
-            msg = f"Failed to begin MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from e
 
     def commit(self) -> None:
         try:
             self.connection.commit()
         except MysqlConnectorError as e:
-            msg = f"Failed to commit MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from e
 
     def rollback(self) -> None:
         try:
             self.connection.rollback()
         except MysqlConnectorError as e:
-            msg = f"Failed to rollback MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from e
 
     def with_cursor(self, connection: "MysqlConnectorSyncConnection") -> "MysqlConnectorSyncCursor":
         cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
@@ -272,7 +285,11 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             needs_preparation = self._arrow_rows_need_preparation(arrow_table)
-            use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
+            use_infile = (
+                bool(self.driver_features.get("enable_local_infile_bulk_load"))
+                and not needs_preparation
+                and can_use_local_infile_records(arrow_table, records)
+            )
             if use_infile:
                 payload = encode_records_for_local_infile(records)
                 fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
@@ -316,12 +333,6 @@ class MysqlConnectorSyncDriver(SyncDriverAdapterBase):
     ) -> "StorageBridgeJob":
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
-
-    @property
-    def data_dictionary(self) -> "MysqlConnectorSyncDataDictionary":
-        if self._data_dictionary is None:
-            self._data_dictionary = MysqlConnectorSyncDataDictionary()
-        return self._data_dictionary
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector sync rows for the direct execution path."""
@@ -380,6 +391,12 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             "Callable[[Any], Any]", self.driver_features.get("json_deserializer", from_json)
         )
 
+    @property
+    def data_dictionary(self) -> "MysqlConnectorAsyncDataDictionary":
+        if self._data_dictionary is None:
+            self._data_dictionary = MysqlConnectorAsyncDataDictionary()
+        return self._data_dictionary
+
     async def dispatch_execute(self, cursor: Any, statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         await cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
@@ -425,6 +442,8 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
 
         for stmt in statements:
             await cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            if getattr(cursor, "with_rows", False):
+                await cursor.fetchall()
             successful_count += 1
 
         return self.create_execution_result(
@@ -436,22 +455,28 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
             async with MysqlConnectorAsyncCursor(self.connection) as cursor:
                 await cursor.execute("BEGIN")
         except MysqlConnectorError as e:
-            msg = f"Failed to begin MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from e
 
     async def commit(self) -> None:
         try:
             await self.connection.commit()
         except MysqlConnectorError as e:
-            msg = f"Failed to commit MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from e
 
     async def rollback(self) -> None:
         try:
             await self.connection.rollback()
         except MysqlConnectorError as e:
-            msg = f"Failed to rollback MySQL transaction: {e}"
-            raise SQLSpecError(msg) from e
+            mapped = create_mapped_exception(e, logger=logger)
+            if isinstance(mapped, bool):
+                return
+            raise mapped from e
 
     def with_cursor(self, connection: "MysqlConnectorAsyncConnection") -> "MysqlConnectorAsyncCursor":
         cursor_options = cast("dict[str, Any]", self.driver_features.get("cursor_options") or {})
@@ -515,7 +540,11 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         columns, records = self._arrow_table_to_rows(arrow_table)
         if records:
             needs_preparation = self._arrow_rows_need_preparation(arrow_table)
-            use_infile = bool(self.driver_features.get("enable_local_infile_bulk_load")) and not needs_preparation
+            use_infile = (
+                bool(self.driver_features.get("enable_local_infile_bulk_load"))
+                and not needs_preparation
+                and can_use_local_infile_records(arrow_table, records)
+            )
             if use_infile:
                 payload = encode_records_for_local_infile(records)
                 fd, tmp_name = tempfile.mkstemp(suffix=".tsv")
@@ -529,7 +558,7 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
                     if exc_handler.pending_exception is not None:
                         raise exc_handler.pending_exception from None
                 finally:
-                    await anyio.Path(tmp_name).unlink(missing_ok=True)
+                    await asyncio.to_thread(Path(tmp_name).unlink, True)
             else:
                 insert_sql = build_insert_statement(table, columns)
                 prepared_records = (
@@ -561,12 +590,6 @@ class MysqlConnectorAsyncDriver(AsyncDriverAdapterBase):
         return await self.load_from_arrow(
             table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound
         )
-
-    @property
-    def data_dictionary(self) -> "MysqlConnectorAsyncDataDictionary":
-        if self._data_dictionary is None:
-            self._data_dictionary = MysqlConnectorAsyncDataDictionary()
-        return self._data_dictionary
 
     def collect_rows(self, cursor: Any, fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
         """Collect mysql-connector async rows for the direct execution path."""

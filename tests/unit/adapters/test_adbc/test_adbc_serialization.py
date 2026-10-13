@@ -125,3 +125,13 @@ def test_pg_textsearch_converter_keeps_postgres_json_and_array_handling() -> Non
     converter = ADBCOutputConverter("pg_textsearch")
     assert converter.convert_dict({"value": 1}) == to_json({"value": 1})
     assert converter.convert_sequence([1, None, 3]) == [1, None, 3]
+
+
+def test_adbc_output_converter_respects_custom_json_serializer_and_nested_containers() -> None:
+    """ADBCOutputConverter should use custom json_serializer and convert nested containers."""
+    pg_converter = ADBCOutputConverter("postgres", json_serializer=lambda val: f"json:{val}")
+    assert pg_converter.convert_dict({"a": 1}) == "json:{'a': 1}"
+    assert pg_converter.convert_sequence([{"a": 1}, [2, {"b": 3}]]) == ["json:{'a': 1}", [2, "json:{'b': 3}"]]
+
+    duck_converter = ADBCOutputConverter("duckdb", json_serializer=lambda val: f"duck:{val}")
+    assert duck_converter.convert_dict({"nested": (1, 2)}) == {"nested": [1, 2]}

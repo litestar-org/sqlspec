@@ -1,6 +1,7 @@
 """SQLSpec-backed memory service for Google ADK."""
 
 import inspect
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
@@ -16,7 +17,7 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Sequence
 
     from google.adk.events.event import Event
     from google.adk.memory.memory_entry import MemoryEntry
@@ -56,7 +57,9 @@ class SQLSpecMemoryService(BaseMemoryService):
         """Return the database store."""
         return self._store
 
-    async def add_session_to_memory(self, session: "Session", scope: str = "user") -> None:
+    async def add_session_to_memory(
+        self, session: "Session", scope: str = "user", embeddings: "Mapping[str, Sequence[float]] | None" = None
+    ) -> None:
         """Add a completed session to the memory store.
 
         Extracts all events with content from the session and stores them
@@ -69,8 +72,9 @@ class SQLSpecMemoryService(BaseMemoryService):
         Args:
             session: Completed ADK Session with events.
             scope: Visibility scope ('user' or 'app').
+            embeddings: Optional mapping of ``event_id`` to embedding vector.
         """
-        records = session_to_memory_records(session, scope=scope)
+        records = session_to_memory_records(session, scope=scope, embeddings=embeddings)
 
         if not records:
             logger.debug(
@@ -92,6 +96,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         session_id: "str | None" = None,
         custom_metadata: "Mapping[str, object] | None" = None,
         scope: str = "user",
+        embeddings: "Mapping[str, Sequence[float]] | None" = None,
     ) -> None:
         """Add an explicit list of events to the memory service.
 
@@ -108,13 +113,20 @@ class SQLSpecMemoryService(BaseMemoryService):
             custom_metadata: Optional portable metadata stored in
                 ``StoredMemory.metadata_json``.
             scope: Visibility scope ('user' or 'app').
+            embeddings: Optional mapping of ``event_id`` to embedding vector.
         """
         metadata_dict = dict(custom_metadata) if custom_metadata else None
         resolved_session_id = session_id or _UNKNOWN_SESSION_ID
         records = []
         for event in events:
+            event_embedding = embeddings.get(event.id) if embeddings and event.id else None
             record = event_to_memory_record(
-                event=event, session_id=resolved_session_id, app_name=app_name, user_id=user_id, scope=scope
+                event=event,
+                session_id=resolved_session_id,
+                app_name=app_name,
+                user_id=user_id,
+                scope=scope,
+                embedding=event_embedding,
             )
             if record is not None:
                 if metadata_dict:
@@ -140,6 +152,7 @@ class SQLSpecMemoryService(BaseMemoryService):
         memories: "Sequence[MemoryEntry]",
         custom_metadata: "Mapping[str, object] | None" = None,
         scope: str = "user",
+        embeddings: "Mapping[str, Sequence[float]] | Sequence[Sequence[float] | None] | None" = None,
     ) -> None:
         """Add explicit memory items directly to the memory service.
 
@@ -155,12 +168,25 @@ class SQLSpecMemoryService(BaseMemoryService):
             custom_metadata: Optional portable metadata for memory writes.
                 Merged with each entry's ``custom_metadata``.
             scope: Visibility scope ('user' or 'app').
+            embeddings: Optional mapping of ``entry.id`` to embedding vector or
+                positional sequence of embedding vectors matching ``memories``.
         """
         call_metadata = dict(custom_metadata) if custom_metadata else {}
         records = []
-        for entry in memories:
+        for idx, entry in enumerate(memories):
+            entry_embedding: Sequence[float] | None = None
+            if isinstance(embeddings, Mapping):
+                if entry.id:
+                    entry_embedding = embeddings.get(entry.id)
+            elif embeddings is not None and idx < len(embeddings):
+                entry_embedding = embeddings[idx]
             record = memory_entry_to_record(
-                entry=entry, app_name=app_name, user_id=user_id, extra_metadata=call_metadata, scope=scope
+                entry=entry,
+                app_name=app_name,
+                user_id=user_id,
+                extra_metadata=call_metadata,
+                scope=scope,
+                embedding=entry_embedding,
             )
             if record is not None:
                 records.append(record)
@@ -255,7 +281,9 @@ class SQLSpecSyncMemoryService:
         """Return the database store."""
         return self._store
 
-    def add_session_to_memory(self, session: "Session", scope: str = "user") -> None:
+    def add_session_to_memory(
+        self, session: "Session", scope: str = "user", embeddings: "Mapping[str, Sequence[float]] | None" = None
+    ) -> None:
         """Add a completed session to the memory store.
 
         Extracts all events with content from the session and stores them
@@ -264,8 +292,9 @@ class SQLSpecSyncMemoryService:
         Args:
             session: Completed ADK Session with events.
             scope: Visibility scope ('user' or 'app').
+            embeddings: Optional mapping of ``event_id`` to embedding vector.
         """
-        records = session_to_memory_records(session, scope=scope)
+        records = session_to_memory_records(session, scope=scope, embeddings=embeddings)
 
         if not records:
             logger.debug(
@@ -287,6 +316,7 @@ class SQLSpecSyncMemoryService:
         session_id: "str | None" = None,
         custom_metadata: "Mapping[str, object] | None" = None,
         scope: str = "user",
+        embeddings: "Mapping[str, Sequence[float]] | None" = None,
     ) -> None:
         """Add an explicit list of events to the memory service.
 
@@ -303,13 +333,20 @@ class SQLSpecSyncMemoryService:
             custom_metadata: Optional portable metadata stored in
                 ``StoredMemory.metadata_json``.
             scope: Visibility scope ('user' or 'app').
+            embeddings: Optional mapping of ``event_id`` to embedding vector.
         """
         metadata_dict = dict(custom_metadata) if custom_metadata else None
         resolved_session_id = session_id or _UNKNOWN_SESSION_ID
         records = []
         for event in events:
+            event_embedding = embeddings.get(event.id) if embeddings and event.id else None
             record = event_to_memory_record(
-                event=event, session_id=resolved_session_id, app_name=app_name, user_id=user_id, scope=scope
+                event=event,
+                session_id=resolved_session_id,
+                app_name=app_name,
+                user_id=user_id,
+                scope=scope,
+                embedding=event_embedding,
             )
             if record is not None:
                 if metadata_dict:
@@ -335,6 +372,7 @@ class SQLSpecSyncMemoryService:
         memories: "Sequence[MemoryEntry]",
         custom_metadata: "Mapping[str, object] | None" = None,
         scope: str = "user",
+        embeddings: "Mapping[str, Sequence[float]] | Sequence[Sequence[float] | None] | None" = None,
     ) -> None:
         """Add explicit memory items directly to the memory service.
 
@@ -350,12 +388,25 @@ class SQLSpecSyncMemoryService:
             custom_metadata: Optional portable metadata for memory writes.
                 Merged with each entry's ``custom_metadata``.
             scope: Visibility scope ('user' or 'app').
+            embeddings: Optional mapping of ``entry.id`` to embedding vector or
+                positional sequence of embedding vectors matching ``memories``.
         """
         call_metadata = dict(custom_metadata) if custom_metadata else {}
         records = []
-        for entry in memories:
+        for idx, entry in enumerate(memories):
+            entry_embedding: Sequence[float] | None = None
+            if isinstance(embeddings, Mapping):
+                if entry.id:
+                    entry_embedding = embeddings.get(entry.id)
+            elif embeddings is not None and idx < len(embeddings):
+                entry_embedding = embeddings[idx]
             record = memory_entry_to_record(
-                entry=entry, app_name=app_name, user_id=user_id, extra_metadata=call_metadata, scope=scope
+                entry=entry,
+                app_name=app_name,
+                user_id=user_id,
+                extra_metadata=call_metadata,
+                scope=scope,
+                embedding=entry_embedding,
             )
             if record is not None:
                 records.append(record)

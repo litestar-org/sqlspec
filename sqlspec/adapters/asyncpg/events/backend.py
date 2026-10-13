@@ -169,24 +169,29 @@ class AsyncpgHybridEventsBackend:
     ) -> None:
         now = datetime.now(UTC)
         async with self._config.provide_session() as driver:
-            await driver.execute(
-                SQL(
-                    self._queue._insert_statement,
-                    {
-                        "event_id": event_id,
-                        "channel": channel,
-                        "payload_json": to_json(payload),
-                        "metadata_json": to_json(metadata) if metadata is not None else None,
-                        "status": "pending",
-                        "available_at": now,
-                        "lease_expires_at": None,
-                        "attempts": 0,
-                        "created_at": now,
-                    },
-                    statement_config=self._queue._statement_config,
+            await driver.begin()
+            try:
+                await driver.execute(
+                    SQL(
+                        self._queue._insert_statement,
+                        {
+                            "event_id": event_id,
+                            "channel": channel,
+                            "payload_json": to_json(payload),
+                            "metadata_json": to_json(metadata) if metadata is not None else None,
+                            "status": "pending",
+                            "available_at": now,
+                            "lease_expires_at": None,
+                            "attempts": 0,
+                            "created_at": now,
+                        },
+                        statement_config=self._queue._statement_config,
+                    )
                 )
-            )
-            await driver.execute(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
+                await driver.execute(SQL("SELECT pg_notify($1, $2)", channel, to_json({"event_id": event_id})))
+            except BaseException:
+                await driver.rollback()
+                raise
             await driver.commit()
 
 
@@ -223,7 +228,6 @@ class AsyncpgEventsBackend:
             await driver.execute(
                 SQL("SELECT pg_notify($1, $2)", channel, encode_notify_payload(event_id, payload, metadata))
             )
-            await driver.commit()
         self._runtime.increment_metric("events.publish.native")
         return event_id
 

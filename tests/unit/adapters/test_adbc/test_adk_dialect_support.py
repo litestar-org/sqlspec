@@ -1,9 +1,16 @@
 """Tests for ADBC ADK store dialect-specific DDL generation."""
 
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import MagicMock
+
 import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKMemoryStore, AdbcADKStore
+from sqlspec.adapters.adbc.adk.store import _postgresql_store_sql
+from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
+from sqlspec.adapters.adbc.litestar.store import ADBCStore
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
@@ -296,10 +303,80 @@ def test_store_placeholder_formatting_preserves_sql_text(store_type: type, drive
 
 
 def test_store_placeholder_formatting_reuses_cached_sql() -> None:
-    from sqlspec.adapters.adbc.adk.store import _postgresql_store_sql
-
     _postgresql_store_sql.cache_clear()
     sql = "SELECT ?::jsonb /* cached store query */"
     assert _postgresql_store_sql(sql) == "SELECT $1::jsonb /* cached store query */"
     assert _postgresql_store_sql(sql) == "SELECT $1::jsonb /* cached store query */"
     assert _postgresql_store_sql.cache_info().hits == 1
+
+
+def test_detect_dialect_bigquery_and_ddl() -> None:
+    """AdbcADKStore and AdbcADKMemoryStore should detect BigQuery and generate BigQuery DDL."""
+    config = AdbcConfig(connection_config={"driver_name": "bigquery"})
+    store = AdbcADKStore(config)
+    mem_store = AdbcADKMemoryStore(config)
+
+    assert store._dialect == "bigquery"  # pyright: ignore[reportPrivateUsage]
+    assert mem_store.dialect == "bigquery"
+    assert "STRING" in store._sessions_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    assert "JSON" in store._events_table_ddl()  # pyright: ignore[reportPrivateUsage]
+    assert "STRING" in mem_store._memory_table_ddl()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_sqlite_adk_store_encodes_and_decodes_timestamps() -> None:
+    """AdbcADKStore on SQLite encodes timestamps as floats and decodes them to UTC datetimes."""
+    config = AdbcConfig(connection_config={"driver_name": "sqlite", "uri": ":memory:"})
+    store = AdbcADKStore(config)
+    now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+    encoded = store._encode_timestamp(now)  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(encoded, float)
+    decoded = store._decode_timestamp(encoded)  # pyright: ignore[reportPrivateUsage]
+    assert decoded == now
+
+
+def test_adbc_litestar_store_handles_pg_extensions_and_bigquery_snowflake(monkeypatch: Any) -> None:
+    """ADBCStore should recognize Postgres extension dialects, omit indexes on BigQuery/Snowflake, and use select_one_or_none."""
+    config = AdbcConfig(connection_config={"driver_name": "bigquery"})
+    store = ADBCStore(config)
+    store._dialect = "bigquery"  # pyright: ignore[reportPrivateUsage]
+
+    ddl = store._table_ddl()  # pyright: ignore[reportPrivateUsage]
+    assert "CREATE INDEX" not in ddl
+    assert store._drop_table_sql() == [f"DROP TABLE IF EXISTS {store._table_name}"]  # pyright: ignore[reportPrivateUsage]
+
+    store._dialect = "pgvector"  # pyright: ignore[reportPrivateUsage]
+    assert store._get_param_placeholder(1) == "$1"  # pyright: ignore[reportPrivateUsage]
+    assert "BYTEA" in store._table_ddl()  # pyright: ignore[reportPrivateUsage]
+
+    mock_driver = MagicMock()
+    mock_driver.select_one_or_none.return_value = None
+    mock_session = MagicMock()
+    mock_session.__enter__.return_value = mock_driver
+    mock_session.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_session", lambda *_a, **_k: mock_session)
+
+    assert store._expires_in("missing") is None  # pyright: ignore[reportPrivateUsage]
+    mock_driver.select_one_or_none.assert_called_once()
+
+
+def test_adbc_events_store_delegates_dialect_resolution() -> None:
+    """AdbcEventQueueStore should resolve dialects via resolve_dialect_from_config and preserve flightsql."""
+    bq_config = AdbcConfig(connection_config={"driver_name": "bigquery"}, extension_config={"events": {}})
+    assert AdbcEventQueueStore(bq_config).dialect == "bigquery"
+
+    gizmo_sqlite_config = AdbcConfig(
+        connection_config={"uri": "grpc+tls://localhost:31337", "gizmosql_backend": "sqlite"},
+        extension_config={"events": {}},
+    )
+    assert AdbcEventQueueStore(gizmo_sqlite_config).dialect == "sqlite"
+
+    so_config = AdbcConfig(
+        connection_config={"driver_name": "/opt/lib/libadbc_driver_postgresql.so"}, extension_config={"events": {}}
+    )
+    assert AdbcEventQueueStore(so_config).dialect == "postgres"
+
+    flight_config = AdbcConfig(
+        connection_config={"driver_name": "flightsql", "uri": "grpc://localhost:8815"}, extension_config={"events": {}}
+    )
+    assert AdbcEventQueueStore(flight_config).dialect == "flightsql"

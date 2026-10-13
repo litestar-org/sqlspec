@@ -82,15 +82,20 @@ def render_duration_amount(generator: Any, node: exp.Expr) -> "tuple[str, str | 
 
 def render_anonymous(generator: Any, expression: exp.Anonymous) -> str:
     """Transform anonymous functions such as DATEADD into Db2 syntax."""
-    if expression.this.upper() == "DATEADD" and len(expression.expressions) == _EXPECTED_DATEADD_ARGS_LEN:
-        unit = generator.sql(expression.expressions[0]).upper()
-        amount = generator.sql(expression.expressions[1])
+    if expression.name.upper() == "DATEADD" and len(expression.expressions) == _EXPECTED_DATEADD_ARGS_LEN:
+        unit_node = expression.expressions[0]
+        amount_node = expression.expressions[1]
         this = generator.sql(expression.expressions[2])
         op = "+"
-        if amount.startswith("-"):
+        if isinstance(amount_node, exp.Neg):
+            amount_node = amount_node.this
             op = "-"
-            amount = amount[1:].lstrip()
-        return f"{this} {op} {amount} {unit}"
+        amount_sql, embedded_unit = render_duration_amount(generator, amount_node)
+        if amount_sql.startswith("-"):
+            op = "+" if op == "-" else "-"
+            amount_sql = amount_sql[1:].lstrip()
+        unit = _render_duration_unit(generator, unit_node) or embedded_unit or "DAY"
+        return f"{this} {op} {amount_sql} {unit}"
     return str(generator.anonymous_sql(expression))
 
 
@@ -112,7 +117,7 @@ def render_date_add(generator: Any, expression: exp.DateAdd | exp.DateSub | exp.
         amount = amount.this
         op = "+" if op == "-" else "-"
     amount_sql, embedded_unit = render_duration_amount(generator, amount)
-    unit_str = generator.sql(unit_node).upper() if unit_node else embedded_unit or "DAY"
+    unit_str = _render_duration_unit(generator, unit_node) if unit_node else embedded_unit or "DAY"
     if amount_sql.startswith("-"):
         amount_sql = amount_sql[1:].lstrip()
         op = "+" if op == "-" else "-"
@@ -162,3 +167,9 @@ def render_varchar_format(generator: Any, expression: exp.TimeToStr | exp.ToChar
     if fmt:
         return f"VARCHAR_FORMAT({this}, {fmt})"
     return f"VARCHAR_FORMAT({this})"
+
+
+def _render_duration_unit(generator: Any, unit_node: exp.Expr) -> str:
+    if isinstance(unit_node, exp.Literal) and unit_node.is_string:
+        return unit_node.name.upper()
+    return str(generator.sql(unit_node)).upper()

@@ -4,7 +4,13 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.pymssql._typing import PymssqlCursor, PymssqlError
-from sqlspec.adapters.pymssql.core import extract_error_number, resolve_rowcount
+from sqlspec.adapters.pymssql.core import (
+    escape_sql_literal,
+    extract_error_number,
+    quote_bracket_identifier,
+    resolve_rowcount,
+    split_schema_and_table,
+)
 from sqlspec.adapters.pymssql.data_dictionary import MssqlVersionInfo
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
@@ -67,19 +73,19 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             driver.execute_script(self._app_states_table_ddl())
             driver.execute_script(self._user_states_table_ddl())
             driver.execute_script(self._metadata_table_ddl())
-            existing_indexes = _casefold_names(
-                driver.data_dictionary.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name"
-            )
-            for index_name, index_table, columns in self._index_specs():
+            index_specs = self._index_specs()
+            existing_indexes = _existing_index_names(driver, index_specs)
+            for index_name, index_table, columns in index_specs:
                 if _bare_name(index_name) not in existing_indexes:
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
+        self.reconcile_schema(assume_existing=True)
 
     def create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> StoredSession:
         """Create a new ADK session."""
-        owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
+        owner_column = f", {quote_bracket_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_param = ", %s" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {_table_ref(self._session_table)} (
@@ -196,7 +202,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         OUTPUT inserted.id, inserted.app_name, inserted.user_id, inserted.state, inserted.create_time, inserted.update_time
         WHERE app_name = %s AND user_id = %s AND id = %s
         """
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_connection() as conn, PymssqlCursor(conn, as_dict=False) as cursor:
             try:
                 cursor.execute(update_sql, (to_json(state), app_name, user_id, session_id))
                 row = cursor.fetchone()
@@ -285,7 +291,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             if _is_mssql_table_missing(exc):
                 return None
             raise
-        return _json_dict(row[0]) if row is not None else None
+        return _json_dict(_row_value(row, "state", 0)) if row is not None else None
 
     def get_user_state(self, app_name: str, user_id: str) -> "dict[str, Any] | None":
         """Return user-scoped state."""
@@ -302,7 +308,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             if _is_mssql_table_missing(exc):
                 return None
             raise
-        return _json_dict(row[0]) if row is not None else None
+        return _json_dict(_row_value(row, "state", 0)) if row is not None else None
 
     def upsert_app_state(self, app_name: str, state: "dict[str, Any]") -> None:
         """Insert or replace app-scoped state."""
@@ -322,7 +328,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             if _is_mssql_table_missing(exc):
                 return None
             raise
-        return str(row[0]) if row is not None else None
+        return str(_row_value(row, "value", 0)) if row is not None else None
 
     def set_metadata(self, key: str, value: str) -> None:
         """Set an ADK metadata value."""
@@ -401,7 +407,7 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
         return self._json_column_type
 
     def _execute_fetchone(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> "Any | None":
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_connection() as conn, PymssqlCursor(conn, as_dict=False) as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             if commit:
@@ -409,12 +415,12 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
             return row
 
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_connection() as conn, PymssqlCursor(conn, as_dict=False) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_connection() as conn, PymssqlCursor(conn, as_dict=False) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit:
@@ -425,10 +431,14 @@ class PymssqlADKStore(BaseSyncADKStore["PymssqlConfig"]):
 class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
     """SQL Server ADK memory store using pymssql."""
 
-    __slots__ = ()
+    __slots__ = ("_json_column_type", "_native_json")
 
     def __init__(self, config: "PymssqlConfig") -> None:
         super().__init__(config)
+        adk_config = _adk_config(config)
+        native_json = adk_config.get("native_json")
+        self._native_json: bool | None = native_json if isinstance(native_json, bool) else None
+        self._json_column_type: str | None = None
 
     def create_tables(self) -> None:
         """Create the memory table (idempotent T-SQL) and DD-gated indexes."""
@@ -439,14 +449,19 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         if not self._enabled:
             return
         with self._config.provide_session() as driver:
+            if self._json_column_type is None:
+                configured = _configured_json_column_type(self._native_json)
+                self._json_column_type = (
+                    configured if configured is not None else _json_column_type_from_sync_driver(driver)
+                )
             driver.execute_script(self._memory_table_ddl())
-            existing_indexes = _casefold_names(
-                driver.data_dictionary.get_indexes(driver, schema=MSSQL_SCHEMA), "index_name"
-            )
-            for index_name, index_table, columns in self._memory_index_specs():
+            index_specs = self._memory_index_specs()
+            existing_indexes = _existing_index_names(driver, index_specs)
+            for index_name, index_table, columns in index_specs:
                 if _bare_name(index_name) not in existing_indexes:
                     driver.execute(_create_index_sql(index_table, index_name, columns))
             driver.commit()
+        self.reconcile_schema(assume_existing=True)
 
     def insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         """Bulk insert memory entries with event-id deduplication."""
@@ -456,7 +471,7 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         if not entries:
             return 0
 
-        owner_column = f", {_quote_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
+        owner_column = f", {quote_bracket_identifier(self._owner_id_column_name)}" if self._owner_id_column_name else ""
         owner_value = ", %s" if self._owner_id_column_name else ""
         sql = f"""
         INSERT INTO {_table_ref(self._memory_table)} (
@@ -470,25 +485,29 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
         );
         """
         inserted = 0
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
-            for entry in entries:
-                params: tuple[Any, ...] = (
-                    entry["id"],
-                    entry["session_id"],
-                    entry["app_name"],
-                    entry["user_id"],
-                    entry.get("scope", "user"),
-                    entry["event_id"],
-                    entry.get("author"),
-                    entry["timestamp"],
-                    to_json(entry["content_json"]),
-                    entry["content_text"],
-                    to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
-                )
-                if self._owner_id_column_name:
-                    params = (*params, owner_id)
-                cursor.execute(sql, (*params, entry["event_id"]))
-                inserted += resolve_rowcount(cursor)
+        with self._config.provide_connection() as conn, PymssqlCursor(conn, as_dict=False) as cursor:
+            try:
+                for entry in entries:
+                    params: tuple[Any, ...] = (
+                        entry["id"],
+                        entry["session_id"],
+                        entry["app_name"],
+                        entry["user_id"],
+                        entry.get("scope", "user"),
+                        entry["event_id"],
+                        entry.get("author"),
+                        entry["timestamp"],
+                        to_json(entry["content_json"]),
+                        entry["content_text"],
+                        to_json(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
+                    )
+                    if self._owner_id_column_name:
+                        params = (*params, owner_id)
+                    cursor.execute(sql, (*params, entry["event_id"]))
+                    inserted += resolve_rowcount(cursor)
+            except Exception:
+                conn.rollback()
+                raise
             conn.commit()
         return inserted
 
@@ -507,15 +526,16 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
             raise RuntimeError(msg)
         limit_value = limit or self._max_results
         where_scope, scope_params = _build_mssql_scope_where(app_name, user_id, scope_filter)
+        escaped_query = _escape_like_pattern(query)
         sql = f"""
         SELECT TOP (%s)
             id, session_id, app_name, user_id, scope, event_id, author, timestamp,
             content_json, content_text, metadata_json, inserted_at
         FROM {_table_ref(self._memory_table)}
-        WHERE {where_scope} AND content_text LIKE %s
+        WHERE {where_scope} AND content_text LIKE %s ESCAPE N'\\'
         ORDER BY timestamp DESC
         """
-        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{query}%"))
+        rows = self._execute_fetchall(sql, (limit_value, *scope_params, f"%{escaped_query}%"))
         return [_memory_record_from_row(row) for row in rows]
 
     def delete_entries_by_session(self, session_id: str) -> int:
@@ -541,9 +561,11 @@ class PymssqlADKMemoryStore(BaseSyncADKMemoryStore["PymssqlConfig"]):
 
     def _memory_table_ddl(self) -> str:
         owner_line = f",\n            {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        json_column_type = self._json_column_type_sync()
+        schema_name, table_name = split_schema_and_table(self._memory_table)
         return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(self._memory_table)}'
-    AND schema_id = SCHEMA_ID(N'dbo'))
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{escape_sql_literal(table_name)}'
+    AND schema_id = SCHEMA_ID(N'{escape_sql_literal(schema_name)}'))
 BEGIN
     CREATE TABLE {_table_ref(self._memory_table)} (
         id NVARCHAR(128) NOT NULL,
@@ -554,9 +576,9 @@ BEGIN
         event_id NVARCHAR(128) NOT NULL,
         author NVARCHAR(256) NULL,
         timestamp DATETIME2(6) NOT NULL,
-        content_json NVARCHAR(MAX) NOT NULL,
+        content_json {json_column_type} NOT NULL,
         content_text NVARCHAR(MAX) NOT NULL,
-        metadata_json NVARCHAR(MAX) NULL,
+        metadata_json {json_column_type} NULL,
         inserted_at DATETIME2(6) NOT NULL CONSTRAINT {_constraint_ref("df", self._memory_table, "inserted_at")}
             DEFAULT SYSUTCDATETIME(){owner_line},
         CONSTRAINT {_constraint_ref("pk", self._memory_table, "id")} PRIMARY KEY (id),
@@ -567,27 +589,38 @@ END;
 
     def _memory_index_specs(self) -> "list[tuple[str, str, str]]":
         """Return ``(index_name, table, columns)`` specs for memory-table indexes."""
+        _, table_name = split_schema_and_table(self._memory_table)
         return [
-            (
-                f"idx_{self._memory_table}_app_scope_user_time",
-                self._memory_table,
-                "app_name, scope, user_id, timestamp DESC",
-            ),
-            (f"idx_{self._memory_table}_scope", self._memory_table, "app_name, scope"),
-            (f"idx_{self._memory_table}_session", self._memory_table, "session_id"),
-            (f"idx_{self._memory_table}_timestamp", self._memory_table, "timestamp DESC"),
+            (f"idx_{table_name}_app_scope_user_time", self._memory_table, "app_name, scope, user_id, timestamp DESC"),
+            (f"idx_{table_name}_scope", self._memory_table, "app_name, scope"),
+            (f"idx_{table_name}_session", self._memory_table, "session_id"),
+            (f"idx_{table_name}_timestamp", self._memory_table, "timestamp DESC"),
         ]
 
     def _drop_memory_table_sql(self) -> "list[str]":
         return [f"DROP TABLE IF EXISTS {_table_ref(self._memory_table)}"]
 
+    def _json_column_type_sync(self) -> str:
+        if self._json_column_type is not None:
+            return self._json_column_type
+        configured = _configured_json_column_type(self._native_json)
+        if configured is not None:
+            self._json_column_type = configured
+            return configured
+        try:
+            with self._config.provide_session() as driver:
+                self._json_column_type = _json_column_type_from_sync_driver(driver)
+        except Exception:
+            return JSON_FALLBACK_COLUMN_TYPE
+        return self._json_column_type
+
     def _execute_fetchall(self, sql: str, params: "tuple[Any, ...]" = ()) -> "list[Any]":
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_connection() as conn, PymssqlCursor(conn, as_dict=False) as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
     def _execute(self, sql: str, params: "tuple[Any, ...]" = (), *, commit: bool = False) -> int:
-        with self._config.provide_connection() as conn, PymssqlCursor(conn) as cursor:
+        with self._config.provide_connection() as conn, PymssqlCursor(conn, as_dict=False) as cursor:
             cursor.execute(sql, params)
             rowcount = resolve_rowcount(cursor)
             if commit:
@@ -620,10 +653,19 @@ def _json_column_type_from_sync_driver(driver: "PymssqlDriver") -> str:
     return JSON_FALLBACK_COLUMN_TYPE
 
 
+def _existing_index_names(driver: "PymssqlDriver", index_specs: "list[tuple[str, str, str]]") -> "set[str]":
+    schemas = {split_schema_and_table(index_table)[0] for _, index_table, _ in index_specs} or {MSSQL_SCHEMA}
+    existing: set[str] = set()
+    for schema_name in schemas:
+        existing.update(_casefold_names(driver.data_dictionary.get_indexes(driver, schema=schema_name), "index_name"))
+    return existing
+
+
 def _sessions_table_ddl(table: str, json_column_type: str, owner_id_column_ddl: "str | None") -> str:
     owner_line = f",\n        {owner_id_column_ddl}" if owner_id_column_ddl else ""
+    schema_name, table_name = split_schema_and_table(table)
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{escape_sql_literal(table_name)}' AND schema_id = SCHEMA_ID(N'{escape_sql_literal(schema_name)}'))
 BEGIN
     CREATE TABLE {_table_ref(table)} (
         row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT {_constraint_ref("df", table, "row_id")} DEFAULT NEWSEQUENTIALID(),
@@ -641,15 +683,17 @@ END;
 
 
 def _sessions_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    _, table_name = split_schema_and_table(table)
     return [
-        (f"idx_{table}_app_user", table, "app_name, user_id"),
-        (f"idx_{table}_update_time", table, "update_time DESC"),
+        (f"idx_{table_name}_app_user", table, "app_name, user_id"),
+        (f"idx_{table_name}_update_time", table, "update_time DESC"),
     ]
 
 
 def _events_table_ddl(table: str, session_table: str, json_column_type: str) -> str:
+    schema_name, table_name = split_schema_and_table(table)
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{escape_sql_literal(table_name)}' AND schema_id = SCHEMA_ID(N'{escape_sql_literal(schema_name)}'))
 BEGIN
     CREATE TABLE {_table_ref(table)} (
         row_id UNIQUEIDENTIFIER NOT NULL CONSTRAINT {_constraint_ref("df", table, "row_id")} DEFAULT NEWSEQUENTIALID(),
@@ -670,18 +714,20 @@ END;
 
 
 def _events_index_specs(table: str) -> "list[tuple[str, str, str]]":
+    _, table_name = split_schema_and_table(table)
     return [
-        (f"idx_{table}_scope", table, "app_name, user_id, session_id, timestamp ASC"),
-        (f"idx_{table}_session", table, "session_id, timestamp ASC"),
-        (f"idx_{table}_invocation", table, "invocation_id"),
-        (f"idx_{table}_timestamp", table, "timestamp ASC"),
-        (f"idx_{table}_app_timestamp", table, "app_name, timestamp ASC"),
+        (f"idx_{table_name}_scope", table, "app_name, user_id, session_id, timestamp ASC"),
+        (f"idx_{table_name}_session", table, "session_id, timestamp ASC"),
+        (f"idx_{table_name}_invocation", table, "invocation_id"),
+        (f"idx_{table_name}_timestamp", table, "timestamp ASC"),
+        (f"idx_{table_name}_app_timestamp", table, "app_name, timestamp ASC"),
     ]
 
 
 def _app_states_table_ddl(table: str, json_column_type: str) -> str:
+    schema_name, table_name = split_schema_and_table(table)
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{escape_sql_literal(table_name)}' AND schema_id = SCHEMA_ID(N'{escape_sql_literal(schema_name)}'))
 BEGIN
     CREATE TABLE {_table_ref(table)} (
         app_name NVARCHAR(128) NOT NULL,
@@ -694,8 +740,9 @@ END;
 
 
 def _user_states_table_ddl(table: str, json_column_type: str) -> str:
+    schema_name, table_name = split_schema_and_table(table)
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{escape_sql_literal(table_name)}' AND schema_id = SCHEMA_ID(N'{escape_sql_literal(schema_name)}'))
 BEGIN
     CREATE TABLE {_table_ref(table)} (
         app_name NVARCHAR(128) NOT NULL,
@@ -709,8 +756,9 @@ END;
 
 
 def _metadata_table_ddl(table: str) -> str:
+    schema_name, table_name = split_schema_and_table(table)
     return f"""
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{_escape_sql_literal(table)}' AND schema_id = SCHEMA_ID(N'dbo'))
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'{escape_sql_literal(table_name)}' AND schema_id = SCHEMA_ID(N'{escape_sql_literal(schema_name)}'))
 BEGIN
     CREATE TABLE {_table_ref(table)} (
         [key] NVARCHAR(128) NOT NULL,
@@ -722,7 +770,7 @@ END;
 
 
 def _create_index_sql(table: str, index_name: str, columns: str) -> str:
-    return f"CREATE INDEX {_quote_identifier(index_name)} ON {_table_ref(table)} ({columns})"
+    return f"CREATE INDEX {quote_bracket_identifier(index_name)} ON {_table_ref(table)} ({columns})"
 
 
 def _casefold_names(rows: "list[Any]", key: str) -> "set[str]":
@@ -746,13 +794,14 @@ def _insert_event_sql(table: str) -> str:
 
 def _upsert_state_sql(table: str, key_columns: "tuple[str, ...]", key_params: "tuple[str, ...]") -> str:
     source_columns = ", ".join(
-        f"{param} AS {_quote_identifier(column)}" for column, param in zip(key_columns, key_params, strict=False)
+        f"{param} AS {quote_bracket_identifier(column)}" for column, param in zip(key_columns, key_params, strict=False)
     )
     source_columns = f"{source_columns}, %s AS state"
-    insert_columns = ", ".join(_quote_identifier(column) for column in (*key_columns, "state", "update_time"))
-    insert_values = ", ".join(f"source.{_quote_identifier(column)}" for column in (*key_columns, "state"))
+    insert_columns = ", ".join(quote_bracket_identifier(column) for column in (*key_columns, "state", "update_time"))
+    insert_values = ", ".join(f"source.{quote_bracket_identifier(column)}" for column in (*key_columns, "state"))
     match_clause = " AND ".join(
-        f"target.{_quote_identifier(column)} = source.{_quote_identifier(column)}" for column in key_columns
+        f"target.{quote_bracket_identifier(column)} = source.{quote_bracket_identifier(column)}"
+        for column in key_columns
     )
     return f"""
     MERGE INTO {_table_ref(table)} WITH (HOLDLOCK) AS target
@@ -810,40 +859,59 @@ def _event_insert_params(event_record: StoredEvent) -> "tuple[Any, ...]":
     )
 
 
+def _row_value(row: object, key: str, index: int) -> Any:
+    if isinstance(row, dict):
+        if key in row:
+            return row[key]
+        upper_key = key.upper()
+        if upper_key in row:
+            return row[upper_key]
+        return None
+    if isinstance(row, (list, tuple)) and len(row) > index:
+        return row[index]
+    return getattr(row, key, None)
+
+
 def _session_record_from_row(row: Any) -> StoredSession:
     return StoredSession(
-        id=row[0], app_name=row[1], user_id=row[2], state=_json_dict(row[3]), create_time=row[4], update_time=row[5]
+        id=_row_value(row, "id", 0),
+        app_name=_row_value(row, "app_name", 1),
+        user_id=_row_value(row, "user_id", 2),
+        state=_json_dict(_row_value(row, "state", 3)),
+        create_time=_row_value(row, "create_time", 4),
+        update_time=_row_value(row, "update_time", 5),
     )
 
 
 def _event_record_from_row(row: Any) -> StoredEvent:
     return StoredEvent(
-        id=row[0],
-        app_name=row[1],
-        user_id=row[2],
-        session_id=row[3],
-        invocation_id=row[4],
-        timestamp=row[5],
-        event_data=_json_dict(row[6]),
+        id=_row_value(row, "id", 0),
+        app_name=_row_value(row, "app_name", 1),
+        user_id=_row_value(row, "user_id", 2),
+        session_id=_row_value(row, "session_id", 3),
+        invocation_id=_row_value(row, "invocation_id", 4),
+        timestamp=_row_value(row, "timestamp", 5),
+        event_data=_json_dict(_row_value(row, "event_data", 6)),
     )
 
 
 def _memory_record_from_row(row: Any) -> "StoredMemory":
+    metadata_raw = _row_value(row, "metadata_json", 10)
     return cast(
         "StoredMemory",
         {
-            "id": row[0],
-            "session_id": row[1],
-            "app_name": row[2],
-            "user_id": row[3],
-            "scope": row[4],
-            "event_id": row[5],
-            "author": row[6],
-            "timestamp": row[7],
-            "content_json": _json_dict(row[8]),
-            "content_text": row[9],
-            "metadata_json": _json_dict(row[10]) if row[10] is not None else None,
-            "inserted_at": row[11],
+            "id": _row_value(row, "id", 0),
+            "session_id": _row_value(row, "session_id", 1),
+            "app_name": _row_value(row, "app_name", 2),
+            "user_id": _row_value(row, "user_id", 3),
+            "scope": _row_value(row, "scope", 4),
+            "event_id": _row_value(row, "event_id", 5),
+            "author": _row_value(row, "author", 6),
+            "timestamp": _row_value(row, "timestamp", 7),
+            "content_json": _json_dict(_row_value(row, "content_json", 8)),
+            "content_text": _row_value(row, "content_text", 9),
+            "metadata_json": _json_dict(metadata_raw) if metadata_raw is not None else None,
+            "inserted_at": _row_value(row, "inserted_at", 11),
             "embedding": None,
         },
     )
@@ -866,20 +934,14 @@ def _is_mssql_table_missing(exc: BaseException) -> bool:
     return "invalid object name" in text or extract_error_number(exc) == MSSQL_TABLE_NOT_FOUND_ERROR
 
 
-def _quote_identifier(identifier: str) -> str:
-    return f"[{identifier.replace(']', ']]')}]"
-
-
 def _table_ref(table: str) -> str:
-    return f"{_quote_identifier(MSSQL_SCHEMA)}.{_quote_identifier(table)}"
+    schema_name, table_name = split_schema_and_table(table)
+    return f"{quote_bracket_identifier(schema_name)}.{quote_bracket_identifier(table_name)}"
 
 
 def _constraint_ref(prefix: str, table: str, suffix: str) -> str:
-    return _quote_identifier(f"{prefix}_{table}_{suffix}")
-
-
-def _escape_sql_literal(value: str) -> str:
-    return value.replace("'", "''")
+    _, table_name = split_schema_and_table(table)
+    return quote_bracket_identifier(f"{prefix}_{table_name}_{suffix}")
 
 
 def _raise_session_not_found(session_id: str) -> None:
@@ -895,6 +957,10 @@ def _build_mssql_scope_where(
     if scope_filter == "user":
         return "app_name = %s AND scope = 'user' AND user_id = %s", (app_name, user_id)
     return "app_name = %s AND scope = 'app'", (app_name,)
+
+
+def _escape_like_pattern(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_").replace("[", "\\[")
 
 
 def _session_list_query(

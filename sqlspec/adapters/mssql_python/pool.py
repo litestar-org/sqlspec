@@ -1,5 +1,6 @@
 """mssql-python pool facade."""
 
+import threading
 import warnings
 from typing import TYPE_CHECKING, Any, cast
 
@@ -11,6 +12,7 @@ if TYPE_CHECKING:
 __all__ = ("MssqlPythonConnectionPool",)
 
 _POOLING_PARAMS: "tuple[int, int, bool] | None" = None
+_POOL_LOCK = threading.Lock()
 
 
 class MssqlPythonConnectionPool:
@@ -43,17 +45,20 @@ class MssqlPythonConnectionPool:
         self.enabled = enabled
         self.on_connection_create = on_connection_create
         self._closed = False
+        if not enabled:
+            return
         global _POOLING_PARAMS
-        new_params = (max_size, idle_timeout, enabled)
-        if _POOLING_PARAMS is not None and new_params != _POOLING_PARAMS:
-            warnings.warn(
-                f"mssql-python pooling config already set to {_POOLING_PARAMS}; "
-                f"overwriting with {new_params}. Only one pool config per process is supported.",
-                stacklevel=2,
-            )
-        if _POOLING_PARAMS is None or new_params != _POOLING_PARAMS:
-            MSSQL_PYTHON_MODULE.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=enabled)
-            _POOLING_PARAMS = new_params
+        new_params = (max_size, idle_timeout, True)
+        with _POOL_LOCK:
+            if _POOLING_PARAMS is not None and new_params != _POOLING_PARAMS:
+                warnings.warn(
+                    f"mssql-python pooling config already set to {_POOLING_PARAMS}; "
+                    f"overwriting with {new_params}. Only one pool config per process is supported.",
+                    stacklevel=2,
+                )
+            if _POOLING_PARAMS is None or new_params != _POOLING_PARAMS:
+                MSSQL_PYTHON_MODULE.pooling(max_size=max_size, idle_timeout=idle_timeout, enabled=True)
+                _POOLING_PARAMS = new_params
 
     def acquire(self) -> "MssqlPythonConnection":
         if self._closed:

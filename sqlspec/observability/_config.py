@@ -49,14 +49,6 @@ class RedactionConfig:
         msg = "RedactionConfig objects are mutable and unhashable"
         raise TypeError(msg)
 
-    def copy(self) -> "RedactionConfig":
-        """Return a copy to avoid sharing mutable state."""
-
-        allow_list = tuple(self.parameter_allow_list) if self.parameter_allow_list else None
-        return RedactionConfig(
-            mask_parameters=self.mask_parameters, mask_literals=self.mask_literals, parameter_allow_list=allow_list
-        )
-
     def __repr__(self) -> str:
         return f"RedactionConfig(mask_parameters={self.mask_parameters!r}, mask_literals={self.mask_literals!r}, parameter_allow_list={self.parameter_allow_list!r})"
 
@@ -67,6 +59,14 @@ class RedactionConfig:
             self.mask_parameters == other.mask_parameters
             and self.mask_literals == other.mask_literals
             and self.parameter_allow_list == other.parameter_allow_list
+        )
+
+    def copy(self) -> "RedactionConfig":
+        """Return a copy to avoid sharing mutable state."""
+
+        allow_list = tuple(self.parameter_allow_list) if self.parameter_allow_list else None
+        return RedactionConfig(
+            mask_parameters=self.mask_parameters, mask_literals=self.mask_literals, parameter_allow_list=allow_list
         )
 
 
@@ -90,14 +90,6 @@ class TelemetryConfig:
         msg = "TelemetryConfig objects are mutable and unhashable"
         raise TypeError(msg)
 
-    def copy(self) -> "TelemetryConfig":
-        """Return a shallow copy preserving optional dictionaries."""
-
-        attributes = dict(self.resource_attributes) if self.resource_attributes else None
-        return TelemetryConfig(
-            enable_spans=self.enable_spans, provider_factory=self.provider_factory, resource_attributes=attributes
-        )
-
     def __repr__(self) -> str:
         return f"TelemetryConfig(enable_spans={self.enable_spans!r}, provider_factory={self.provider_factory!r}, resource_attributes={self.resource_attributes!r})"
 
@@ -108,6 +100,14 @@ class TelemetryConfig:
             self.enable_spans == other.enable_spans
             and self.provider_factory == other.provider_factory
             and self.resource_attributes == other.resource_attributes
+        )
+
+    def copy(self) -> "TelemetryConfig":
+        """Return a shallow copy preserving optional dictionaries."""
+
+        attributes = dict(self.resource_attributes) if self.resource_attributes else None
+        return TelemetryConfig(
+            enable_spans=self.enable_spans, provider_factory=self.provider_factory, resource_attributes=attributes
         )
 
 
@@ -141,17 +141,6 @@ class LoggingConfig:
         msg = "LoggingConfig objects are mutable and unhashable"
         raise TypeError(msg)
 
-    def copy(self) -> "LoggingConfig":
-        """Return a shallow copy of the logging configuration."""
-
-        return LoggingConfig(
-            include_sql_hash=self.include_sql_hash,
-            sql_truncation_length=self.sql_truncation_length,
-            parameter_truncation_count=self.parameter_truncation_count,
-            include_trace_context=self.include_trace_context,
-            include_driver_name=self.include_driver_name,
-        )
-
     def __repr__(self) -> str:
         return (
             f"LoggingConfig(include_sql_hash={self.include_sql_hash!r}, sql_truncation_length={self.sql_truncation_length!r}, "
@@ -168,6 +157,17 @@ class LoggingConfig:
             and self.parameter_truncation_count == other.parameter_truncation_count
             and self.include_trace_context == other.include_trace_context
             and self.include_driver_name == other.include_driver_name
+        )
+
+    def copy(self) -> "LoggingConfig":
+        """Return a shallow copy of the logging configuration."""
+
+        return LoggingConfig(
+            include_sql_hash=self.include_sql_hash,
+            sql_truncation_length=self.sql_truncation_length,
+            parameter_truncation_count=self.parameter_truncation_count,
+            include_trace_context=self.include_trace_context,
+            include_driver_name=self.include_driver_name,
         )
 
 
@@ -209,6 +209,26 @@ class ObservabilityConfig:
     def __hash__(self) -> int:  # pragma: no cover
         msg = "ObservabilityConfig objects are mutable and unhashable"
         raise TypeError(msg)
+
+    def __repr__(self) -> str:
+        return (
+            f"ObservabilityConfig(lifecycle={self.lifecycle!r}, print_sql={self.print_sql!r}, statement_observers={self.statement_observers!r}, telemetry={self.telemetry!r}, "
+            f"redaction={self.redaction!r}, logging={self.logging!r}, sampling={self.sampling!r}, cloud_formatter={self.cloud_formatter!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ObservabilityConfig):
+            return NotImplemented
+        return (
+            _normalize_lifecycle(self.lifecycle) == _normalize_lifecycle(other.lifecycle)
+            and self.print_sql == other.print_sql
+            and self.statement_observers == other.statement_observers
+            and self.telemetry == other.telemetry
+            and self.redaction == other.redaction
+            and self.logging == other.logging
+            and self.sampling == other.sampling
+            and self.cloud_formatter == other.cloud_formatter
+        )
 
     def copy(self) -> "ObservabilityConfig":
         """Return a deep copy of the configuration."""
@@ -274,26 +294,6 @@ class ObservabilityConfig:
             cloud_formatter=cloud_formatter,
         )
 
-    def __repr__(self) -> str:
-        return (
-            f"ObservabilityConfig(lifecycle={self.lifecycle!r}, print_sql={self.print_sql!r}, statement_observers={self.statement_observers!r}, telemetry={self.telemetry!r}, "
-            f"redaction={self.redaction!r}, logging={self.logging!r}, sampling={self.sampling!r}, cloud_formatter={self.cloud_formatter!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ObservabilityConfig):
-            return NotImplemented
-        return (
-            _normalize_lifecycle(self.lifecycle) == _normalize_lifecycle(other.lifecycle)
-            and self.print_sql == other.print_sql
-            and self.statement_observers == other.statement_observers
-            and self.telemetry == other.telemetry
-            and self.redaction == other.redaction
-            and self.logging == other.logging
-            and self.sampling == other.sampling
-            and self.cloud_formatter == other.cloud_formatter
-        )
-
 
 def _merge_redaction(base: "RedactionConfig | None", override: "RedactionConfig | None") -> "RedactionConfig | None":
     if base is None and override is None:
@@ -331,8 +331,9 @@ def _merge_sampling(base: "SamplingConfig | None", override: "SamplingConfig | N
     merged.sample_rate = override.sample_rate
     merged.deterministic = override.deterministic
     merged.force_sample_on_error = override.force_sample_on_error
-    if override.force_sample_slow_queries_ms is not None:
+    if override._slow_query_explicit:
         merged.force_sample_slow_queries_ms = override.force_sample_slow_queries_ms
+        merged._slow_query_explicit = True
     return merged
 
 

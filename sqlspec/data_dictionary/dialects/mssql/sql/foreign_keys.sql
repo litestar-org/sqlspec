@@ -2,6 +2,7 @@
 -- dialect: mssql
 SELECT
     OBJECT_SCHEMA_NAME(fk.parent_object_id) AS schema_name,
+    OBJECT_SCHEMA_NAME(fk.parent_object_id) AS table_schema,
     fk.name AS constraint_name,
     OBJECT_NAME(fk.parent_object_id) AS table_name,
     cpa.name AS column_name,
@@ -22,6 +23,7 @@ ORDER BY fk.name, fkc.constraint_column_id;
 -- dialect: mssql
 SELECT
     OBJECT_SCHEMA_NAME(fk.parent_object_id) AS schema_name,
+    OBJECT_SCHEMA_NAME(fk.parent_object_id) AS table_schema,
     fk.name AS constraint_name,
     OBJECT_NAME(fk.parent_object_id) AS table_name,
     cpa.name AS column_name,

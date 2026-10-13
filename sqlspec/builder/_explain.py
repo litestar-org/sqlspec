@@ -286,6 +286,25 @@ class Explain:
 
         self._statement_sql = self._resolve_statement_sql(statement)
 
+    def __repr__(self) -> str:
+        """String representation."""
+        return f"Explain({self._statement_sql!r}, dialect={self._dialect!r}, options={self._options!r})"
+
+    @property
+    def options(self) -> "ExplainOptions":
+        """Get current ExplainOptions."""
+        return self._options
+
+    @property
+    def dialect(self) -> "DialectType | None":
+        """Get current dialect."""
+        return self._dialect
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        """Get parameters from the underlying statement."""
+        return self._parameters.copy()
+
     def analyze(self, enabled: bool = True) -> Self:
         """Enable ANALYZE option (execute statement for real statistics).
 
@@ -432,21 +451,6 @@ class Explain:
         self._options = options
         return self
 
-    @property
-    def options(self) -> "ExplainOptions":
-        """Get current ExplainOptions."""
-        return self._options
-
-    @property
-    def dialect(self) -> "DialectType | None":
-        """Get current dialect."""
-        return self._dialect
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        """Get parameters from the underlying statement."""
-        return self._parameters.copy()
-
     def build(self, dialect: "DialectType | None" = None) -> "SQL":
         """Build the EXPLAIN statement as a SQL object.
 
@@ -459,9 +463,7 @@ class Explain:
         target_dialect = dialect or self._dialect
         statement_config = self._resolve_statement_config(target_dialect)
         if normalize_dialect_name(target_dialect) in ORACLE_DIALECTS:
-            oracle_statement = exp.Command(
-                this="EXPLAIN", expression=exp.Literal.string(f"PLAN FOR {self._statement_sql}")
-            )
+            oracle_statement = exp.Command(this="EXPLAIN PLAN FOR", expression=exp.var(self._statement_sql))
             oracle_statement.meta[ORACLE_MANAGED_EXPLAIN_META_KEY] = True
             statement: str | exp.Expr = oracle_statement
         else:
@@ -486,10 +488,6 @@ class Explain:
         """
         target_dialect = dialect or self._dialect
         return build_explain_sql(self._statement_sql, self._options, target_dialect)
-
-    def __repr__(self) -> str:
-        """String representation."""
-        return f"Explain({self._statement_sql!r}, dialect={self._dialect!r}, options={self._options!r})"
 
     def _resolve_statement_sql(self, statement: "str | exp.Expr | SQL | SQLBuilderProtocol") -> str:
         """Resolve statement to SQL string.

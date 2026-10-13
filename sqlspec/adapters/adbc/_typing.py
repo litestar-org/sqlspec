@@ -1,4 +1,3 @@
-# pyright: reportCallIssue=false, reportAttributeAccessIssue=false, reportArgumentType=false
 """ADBC adapter type definitions.
 
 This module contains type aliases and classes that are excluded from mypyc
@@ -6,7 +5,7 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from adbc_driver_manager import Error as _AdbcNativeError
 from adbc_driver_manager import NotSupportedError as AdbcNotSupportedError
@@ -14,27 +13,21 @@ from adbc_driver_manager import OperationalError as AdbcOperationalError
 from adbc_driver_manager.dbapi import Connection
 from adbc_driver_manager.dbapi import Cursor as _AdbcRawCursor
 
+from sqlspec.adapters.adbc.core import resolve_dialect_name
 from sqlspec.typing import import_optional_attr
-
-_AdbcConnection = Connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import TypeAlias
 
     from adbc_driver_flightsql import DatabaseOptions as AdbcFlightSqlDatabaseOptions
 
     from sqlspec.adapters.adbc.driver import AdbcDriver
     from sqlspec.core import StatementConfig
 
-    AdbcConnection: TypeAlias = _AdbcConnection
-    AdbcRawCursor: TypeAlias = _AdbcRawCursor
-    AdbcNativeError: TypeAlias = _AdbcNativeError
-else:
-    AdbcConnection = _AdbcConnection
-    AdbcRawCursor = _AdbcRawCursor
-    AdbcNativeError = _AdbcNativeError
+AdbcConnection: TypeAlias = Connection
+AdbcRawCursor: TypeAlias = _AdbcRawCursor
+AdbcNativeError: TypeAlias = _AdbcNativeError
 
 __all__ = (
     "AdbcConnection",
@@ -105,7 +98,6 @@ class AdbcSessionContext:
         self._driver: AdbcDriver | None = None
 
     def __enter__(self) -> "AdbcDriver":
-        from sqlspec.adapters.adbc.core import resolve_dialect_name
         from sqlspec.adapters.adbc.driver import AdbcDriver
 
         self._connection = self._acquire_connection()

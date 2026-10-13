@@ -250,6 +250,5 @@ def test_uuid_handlers_use_generic_chained_wrappers() -> None:
 
     assert callable(connection.inputtypehandler)
     assert callable(connection.outputtypehandler)
-    # oracledb keys its calling convention on inspect.signature parameter count.
     assert len(inspect.signature(connection.outputtypehandler).parameters) == 2
     assert len(inspect.signature(connection.inputtypehandler).parameters) == 3

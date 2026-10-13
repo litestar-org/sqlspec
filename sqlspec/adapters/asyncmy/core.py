@@ -8,6 +8,7 @@ from sqlspec.adapters.asyncmy._typing import AsyncmySSCursor
 from sqlspec.adapters.mysql_common import (
     bool_to_int,
     build_insert_statement,
+    can_use_local_infile_records,
     collect_rows,
     collect_stream_rows,
     create_mapped_exception,
@@ -25,6 +26,7 @@ from sqlspec.adapters.mysql_common import (
     resolve_rowcount,
 )
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 
@@ -38,6 +40,7 @@ __all__ = (
     "build_load_data_statement",
     "build_profile",
     "build_statement_config",
+    "can_use_local_infile_records",
     "collect_rows",
     "collect_stream_rows",
     "create_mapped_exception",
@@ -57,6 +60,8 @@ __all__ = (
     "resolve_rowcount",
 )
 
+logger = get_logger("sqlspec.adapters.asyncmy")
+
 _MYSQL_ACCESS_ERROR_DISPATCH = mysql_common.MYSQL_ACCESS_ERROR_DISPATCH
 _MYSQL_CONNECTION_ERROR_DISPATCH = mysql_common.MYSQL_CONNECTION_ERROR_DISPATCH
 _MYSQL_CONSTRAINT_ERROR_DISPATCH = mysql_common.MYSQL_CONSTRAINT_ERROR_DISPATCH
@@ -73,7 +78,16 @@ def build_load_data_statement(table: str, columns: "list[str]") -> str:
 class AsyncmyStreamSource:
     """Compiled async chunk source streaming dict rows from an asyncmy unbuffered ``SSCursor``."""
 
-    __slots__ = ("_chunk_size", "_cursor", "_driver", "_json_type_codes", "_parameters", "_row_plan", "_sql")
+    __slots__ = (
+        "_chunk_size",
+        "_cursor",
+        "_deserializer",
+        "_driver",
+        "_json_type_codes",
+        "_parameters",
+        "_row_plan",
+        "_sql",
+    )
 
     def __init__(self, driver: Any, sql: str, parameters: Any, chunk_size: int, json_type_codes: "set[int]") -> None:
         self._driver = driver
@@ -83,11 +97,32 @@ class AsyncmyStreamSource:
         self._cursor: Any = None
         self._json_type_codes = json_type_codes
         self._row_plan: tuple[list[str], list[int] | None] | None = None
+        self._deserializer: Callable[[Any], Any] = cast(
+            "Callable[[Any], Any]",
+            getattr(driver, "_json_deserializer", None) or driver.driver_features.get("json_deserializer", from_json),
+        )
 
     async def start(self) -> None:
         handler = self._driver.handle_database_exceptions()
         await self._driver._run_with_exception_handler(handler, self._start)
         self._driver._check_pending_exception(handler)
+
+    async def fetch_chunk(self) -> "list[dict[str, Any]]":
+        handler = self._driver.handle_database_exceptions()
+        rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
+        self._driver._check_pending_exception(handler)
+        if not rows:
+            return []
+        if self._row_plan is None:
+            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
+        return collect_stream_rows(rows, self._row_plan, self._deserializer, logger=logger)
+
+    async def close(self, error: bool = False) -> None:
+        cursor = self._cursor
+        self._cursor = None
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                await cursor.close()
 
     async def _start(self) -> None:
         try:
@@ -98,28 +133,6 @@ class AsyncmyStreamSource:
         except BaseException:
             await self.close(error=True)
             raise
-
-    async def fetch_chunk(self) -> "list[dict[str, Any]]":
-        handler = self._driver.handle_database_exceptions()
-        rows = await self._driver._run_with_exception_handler(handler, self._cursor.fetchmany, self._chunk_size)
-        self._driver._check_pending_exception(handler)
-        if not rows:
-            return []
-        if self._row_plan is None:
-            self._row_plan = resolve_row_plan(self._cursor.description, self._json_type_codes)
-        deserializer = cast(
-            "Callable[[Any], Any]",
-            getattr(self._driver, "_json_deserializer", None)
-            or self._driver.driver_features.get("json_deserializer", from_json),
-        )
-        return collect_stream_rows(rows, self._row_plan, deserializer)
-
-    async def close(self, error: bool = False) -> None:
-        cursor = self._cursor
-        self._cursor = None
-        if cursor is not None:
-            with contextlib.suppress(Exception):
-                await cursor.close()
 
 
 def build_profile() -> "DriverParameterProfile":

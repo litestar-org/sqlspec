@@ -3,26 +3,49 @@
 import importlib
 from collections.abc import ItemsView, Iterable, Iterator, Mapping
 from contextlib import nullcontext
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
+from google.cloud import bigquery
 from google.cloud.bigquery import QueryJobConfig
+from google.cloud.exceptions import Forbidden, GoogleCloudError
 
+from sqlspec.adapters.bigquery import BigQueryConfig
+from sqlspec.adapters.bigquery._typing import BigQueryCursor, BigQuerySessionContext
+from sqlspec.adapters.bigquery.adk.store import BigQueryADKStore
 from sqlspec.adapters.bigquery.core import (
     _COPY_JOB_FIELDS,
     DEFAULT_REQUEST_TIMEOUT,
     BigQueryStreamSource,
+    build_dml_rowcount,
     build_profile,
     build_retry,
     collect_rows,
     copy_job_config,
+    create_mapped_exception,
+    create_parameters,
     driver_profile,
     resolve_column_names,
     run_query_job,
+    try_bulk_insert,
 )
+from sqlspec.adapters.bigquery.data_dictionary import BigQueryDataDictionary
 from sqlspec.adapters.bigquery.driver import BigQueryDriver
-from sqlspec.core import ParameterStyle
+from sqlspec.adapters.bigquery.events.store import BigQueryEventQueueStore
+from sqlspec.adapters.bigquery.litestar.store import BigQueryStore
+from sqlspec.core import ParameterStyle, TypedParameter
+from sqlspec.exceptions import (
+    ImproperConfigurationError,
+    NotFoundError,
+    OperationalError,
+    PermissionDeniedError,
+    QueryTimeoutError,
+    SQLParsingError,
+    UniqueViolationError,
+)
 from sqlspec.utils.serializers import to_json
 
 
@@ -566,3 +589,334 @@ def test_native_default_job_config_guides_fast_path() -> None:
     driver = BigQueryDriver(cast("Any", connection))
     assert driver._default_query_job_config is native_defaults
     assert driver._can_use_query_and_wait(SQL("SELECT 1"), "SELECT 1") is False
+
+
+def test_exception_mapping_permission_denied_unauthenticated_and_timeout() -> None:
+    """Verify BigQuery exception mapping: 403 -> PermissionDeniedError, timeout -> QueryTimeoutError, 503 -> OperationalError."""
+    forbidden = cast("Any", Forbidden)("Access Denied", errors=[{"reason": "accessDenied"}])
+    timeout_err = _cloud_error("Query timed out", code=504, errors=[{"reason": "timeout"}])
+    server_err = _cloud_error("Service unavailable", code=503, errors=[{"reason": "backendError"}])
+    syntax_err = _cloud_error("Syntax error at [1:5]", code=400, errors=[{"reason": "invalidQuery"}])
+    conflict_err = _cloud_error("Already exists", code=409, errors=[{"reason": "duplicate"}])
+    not_found_err = _cloud_error("Not found", code=404, errors=[{"reason": "notFound"}])
+
+    assert isinstance(create_mapped_exception(forbidden), PermissionDeniedError)
+    assert isinstance(create_mapped_exception(timeout_err), QueryTimeoutError)
+    assert isinstance(create_mapped_exception(server_err), OperationalError)
+    assert isinstance(create_mapped_exception(syntax_err), SQLParsingError)
+    assert isinstance(create_mapped_exception(conflict_err), UniqueViolationError)
+    assert isinstance(create_mapped_exception(not_found_err), NotFoundError)
+
+
+def test_adk_store_maps_google_cloud_errors_and_returns_dml_rowcount(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify BigQueryADKStore._run_query maps GoogleCloudError and delete helpers return affected rows."""
+    config = BigQueryConfig(
+        connection_config={"project": "p", "dataset_id": "ds"}, extension_config={"adk": {"enable_memory": False}}
+    )
+    store = BigQueryADKStore(config)
+
+    class _Job:
+        num_dml_affected_rows = 4
+
+        def result(self) -> list[dict[str, Any]]:
+            return []
+
+    class _Client:
+        def query(self, _sql: str, **_kwargs: Any) -> _Job:
+            return _Job()
+
+    monkeypatch.setattr(config, "create_connection", _Client)
+    deleted = store.delete_expired_events(datetime.now(UTC))
+    assert deleted == 4
+
+    class _FailingClient:
+        def query(self, _sql: str, **_kwargs: Any) -> Any:
+            raise cast("Any", Forbidden)("Permission denied", errors=[{"reason": "accessDenied"}])
+
+    monkeypatch.setattr(config, "create_connection", _FailingClient)
+    with pytest.raises(PermissionDeniedError):
+        store.delete_expired_events(datetime.now(UTC))
+
+
+def test_adk_store_json_param_avoids_double_encoding_and_infers_owner_id_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify _json_param passes parsed JSON value to ScalarQueryParameter and infers INT64 owner_id."""
+    custom_serialized: list[Any] = []
+
+    def custom_to_json(val: Any) -> str:
+        custom_serialized.append(val)
+        return '{"ok":true}'
+
+    config = BigQueryConfig(
+        connection_config={"project": "p", "dataset_id": "ds"},
+        driver_features={"json_serializer": custom_to_json},
+        extension_config={"adk": {"enable_memory": False, "owner_id_column": "owner_id INT64"}},
+    )
+    store = BigQueryADKStore(config)
+    param = store._json_param("state", {"ok": True})
+    assert param.type_ == "JSON"
+    assert param.value == {"ok": True}
+    assert custom_serialized == [{"ok": True}]
+
+    captured_params: list[Any] = []
+
+    def capture_query(_self: BigQueryADKStore, _sql: str, parameters: Any = None) -> list[dict[str, Any]]:
+        captured_params.extend(parameters or [])
+        return []
+
+    monkeypatch.setattr(BigQueryADKStore, "_run_query", capture_query)
+    store.create_session("s1", "app", "u1", {"a": 1}, owner_id=99)
+    owner_param = next(p for p in captured_params if p.name == "owner_id")
+    assert owner_param.type_ == "INT64"
+    assert owner_param.value == 99
+
+
+def test_bigquery_driver_session_transactions_and_dry_run() -> None:
+    """Verify BigQueryDriver begin/commit/rollback session propagation and dry_run bytes processed."""
+    queries: list[tuple[str, Any]] = []
+
+    class _Job:
+        statement_type = "SCRIPT"
+        schema: list[Any] = []
+        total_bytes_processed = 2048
+        session_info = SimpleNamespace(session_id="bq-session-123")
+
+        def result(self, **_kwargs: Any) -> list[Any]:
+            return []
+
+    class _Conn:
+        def query(self, sql: str, *, job_config: Any = None, **_kwargs: Any) -> _Job:
+            queries.append((sql, job_config))
+            return _Job()
+
+    driver = BigQueryDriver(cast("Any", _Conn()))
+    assert driver._connection_in_transaction() is False
+
+    driver.begin()
+    assert driver._connection_in_transaction() is True
+    assert driver._session_id == "bq-session-123"
+    assert queries[-1][0] == "BEGIN TRANSACTION"
+    assert queries[-1][1].create_session is True
+
+    driver.commit()
+    assert driver._connection_in_transaction() is False
+    assert queries[-1][0] == "COMMIT TRANSACTION"
+    conn_props = queries[-1][1].connection_properties
+    assert any(p.key == "session_id" and p.value == "bq-session-123" for p in conn_props)
+
+    estimated = driver.dry_run("SELECT 1")
+    assert estimated == 2048
+    assert queries[-1][1].dry_run is True
+    assert queries[-1][1].use_query_cache is False
+
+
+def test_select_to_arrow_reader_handles_empty_batches_and_local_emulator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify select_to_arrow('reader') does not re-execute on empty batches and checks native_only on emulator."""
+    query_calls = 0
+
+    class _EmptyRowIterator:
+        schema = [SimpleNamespace(name="id")]
+
+        def to_arrow_iterable(self, *, bqstorage_client: Any = None) -> Any:
+            del bqstorage_client
+            return iter(())
+
+    class _Job:
+        statement_type = "SELECT"
+        schema = [SimpleNamespace(name="id")]
+
+        def result(self, **_kwargs: Any) -> _EmptyRowIterator:
+            return _EmptyRowIterator()
+
+    class _Conn:
+        _connection = SimpleNamespace(API_BASE_URL="https://bigquery.googleapis.com")
+
+        def query(self, _sql: str, **_kwargs: Any) -> _Job:
+            nonlocal query_calls
+            query_calls += 1
+            return _Job()
+
+    driver = BigQueryDriver(cast("Any", _Conn()))
+    result = driver.select_to_arrow("SELECT id FROM t WHERE 1=0", return_format="reader")
+    assert query_calls == 1
+    assert result.get_data().read_all().num_rows == 0
+    assert result.get_data().schema.names == ["id"]
+
+    local_conn = _Conn()
+    local_conn._connection = SimpleNamespace(API_BASE_URL="http://127.0.0.1:9050")
+    local_driver = BigQueryDriver(cast("Any", local_conn))
+    monkeypatch.setattr("sqlspec.adapters.bigquery.driver.storage_api_available", lambda: False)
+    with pytest.raises(ImproperConfigurationError):
+        local_driver.select_to_arrow("SELECT 1", return_format="reader", native_only=True)
+
+
+def test_parameter_creation_resolves_typed_empty_arrays_and_json_dicts() -> None:
+    """Verify create_parameters handles TypedParameter([], list[int]) and JSON dicts."""
+    params = {
+        "empty_int_list": TypedParameter([], list[int]),
+        "null_int_list": TypedParameter([None], list[int]),
+        "nested": {"outer": {"inner": 42}, "tags": ["a", "b"]},
+    }
+    bq_params = create_parameters(params, json_serializer=to_json)
+    by_name = {p.name: p for p in bq_params}
+
+    assert isinstance(by_name["empty_int_list"], bigquery.ArrayQueryParameter)
+    assert by_name["empty_int_list"].array_type == "INT64"
+    assert isinstance(by_name["null_int_list"], bigquery.ArrayQueryParameter)
+    assert by_name["null_int_list"].array_type == "INT64"
+    assert isinstance(by_name["nested"], bigquery.ScalarQueryParameter)
+    assert by_name["nested"].type_ == "JSON"
+
+
+def test_default_dataset_qualifies_unqualified_tables_in_bulk_insert_and_stores() -> None:
+    """Verify default_dataset qualifies tables across bulk insert, data dictionary, events, and Litestar."""
+    loaded_tables: list[str] = []
+
+    class _LoadJob:
+        output_rows = 2
+
+        def result(self, **_kwargs: Any) -> None:
+            return None
+
+    class _Conn:
+        def load_table_from_file(self, _buf: Any, table_id: str, **_kwargs: Any) -> _LoadJob:
+            loaded_tables.append(table_id)
+            return _LoadJob()
+
+    rowcount = try_bulk_insert(
+        cast("Any", _Conn()),
+        "INSERT INTO users (id, name) VALUES (@p1, @p2)",
+        [{"p1": 1, "p2": "a"}, {"p1": 2, "p2": "b"}],
+        None,
+        allow_parse=True,
+        default_dataset="my_proj.my_ds",
+    )
+    assert rowcount == 2
+    assert loaded_tables == ["my_proj.my_ds.users"]
+
+    config = BigQueryConfig(
+        connection_config={"project": "my_proj", "dataset_id": "my_ds"},
+        extension_config={"litestar": {"require_partition_filter": True}},
+    )
+    events_store = BigQueryEventQueueStore(config)
+    assert events_store.table_name == "my_ds.sqlspec_event_queue"
+    assert "my_ds.sqlspec_event_queue" in events_store.create_statements()[0]
+
+    litestar_store = BigQueryStore(config)
+    assert litestar_store.table_name == "my_ds.litestar_session"
+    executed_sql: list[str] = []
+
+    class _FakeDriver:
+        def execute(self, sql: str, **_kwargs: Any) -> Any:
+            executed_sql.append(sql)
+            return SimpleNamespace(get_affected_count=lambda: 1)
+
+    cast("Any", config).provide_session = lambda *_args, **_kwargs: nullcontext(_FakeDriver())
+    litestar_store._delete_expired()
+    assert "my_ds.litestar_session" in executed_sql[0]
+    assert "1970-01-01" in executed_sql[0]
+
+    dd = BigQueryDataDictionary()
+    dd_queries: list[tuple[str, dict[str, Any]]] = []
+
+    class _DDDriver:
+        _default_query_job_config = SimpleNamespace(default_dataset="my_proj.my_ds")
+
+        def select(self, query: str, **kwargs: Any) -> list[Any]:
+            dd_queries.append((query, kwargs))
+            return []
+
+    dd.get_tables(cast("Any", _DDDriver()))
+    assert dd_queries[0][1]["schema_name"] == "my_ds"
+    assert "`my_proj.my_ds.INFORMATION_SCHEMA.TABLES`" in dd_queries[0][0]
+
+
+def test_bigquery_stream_source_closes_and_cancels_active_job() -> None:
+    """Verify BigQueryStreamSource.close cancels active query job and BigQueryCursor cleans up safely."""
+    cancelled: list[bool] = []
+
+    class _Job:
+        state = "RUNNING"
+        schema = [SimpleNamespace(name="x")]
+
+        def cancel(self) -> None:
+            cancelled.append(True)
+
+        def result(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(pages=iter([[{"x": 1}]]))
+
+    class _Driver:
+        connection = SimpleNamespace()
+        _job_retry = None
+        _job_retry_deadline = 0.0
+        _job_result_timeout = None
+
+        def handle_database_exceptions(self) -> Any:
+            return nullcontext()
+
+        def _check_pending_exception(self, _handler: Any) -> None:
+            return None
+
+        def _run_query_job(self, *_args: Any) -> _Job:
+            return _Job()
+
+    source = BigQueryStreamSource(cast("Any", _Driver()), "SELECT 1 AS x", None, 10)
+    source.start()
+    chunk = source.fetch_chunk()
+    assert chunk == [{"x": 1}]
+    source.close()
+    assert cancelled == [True]
+
+    cursor = BigQueryCursor(cast("Any", SimpleNamespace()))
+    cursor.job = cast("Any", _Job())
+    with cursor:
+        pass
+    assert cursor.job is None
+    assert len(cancelled) == 2
+
+
+def test_bigquery_session_context_rolls_back_on_exception_when_in_transaction() -> None:
+    """Verify BigQuerySessionContext.__exit__ rolls back active transaction on exception."""
+    rolled_back: list[bool] = []
+    released: list[bool] = []
+
+    class _Driver:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def rollback(self) -> None:
+            rolled_back.append(True)
+
+        def _connection_in_transaction(self) -> bool:
+            return True
+
+    ctx = BigQuerySessionContext(
+        acquire_connection=lambda: SimpleNamespace(),
+        release_connection=lambda *_args, **_kwargs: released.append(True),
+        statement_config=BigQueryDriver(cast("Any", SimpleNamespace())).statement_config,
+        driver_features={},
+        prepare_driver=lambda d: d,
+    )
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        patch("sqlspec.adapters.bigquery._typing._get_driver_type", return_value=_Driver),
+        ctx,
+    ):
+        raise RuntimeError("boom")
+
+    assert rolled_back == [True]
+    assert released == [True]
+
+
+def test_build_dml_rowcount_preserves_zero_affected_rows() -> None:
+    """Verify build_dml_rowcount returns 0 when num_dml_affected_rows is 0 instead of falling back."""
+    job_zero = SimpleNamespace(num_dml_affected_rows=0)
+    job_none = SimpleNamespace(num_dml_affected_rows=None, total_rows=0)
+    assert build_dml_rowcount(job_zero, 5) == 0
+    assert build_dml_rowcount(job_none, 5) == 5
+
+
+def _cloud_error(message: str, *, code: int, errors: list[dict[str, str]] | None = None) -> GoogleCloudError:
+    err: Any = cast("Any", GoogleCloudError)(message)
+    err.code = code
+    err._errors = errors or []
+    return cast("GoogleCloudError", err)

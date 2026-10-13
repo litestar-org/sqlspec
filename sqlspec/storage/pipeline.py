@@ -5,14 +5,14 @@ from functools import partial
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypeAlias, cast
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypedDict
 
 from sqlspec.exceptions import ImproperConfigurationError, StorageCapabilityError
 from sqlspec.storage._arrow_payload import StorageFormat, decode_arrow_payload, encode_arrow_payload
-from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, strip_windows_drive_prefix
+from sqlspec.storage._paths import FILE_PROTOCOL, FILE_SCHEME_PREFIX, parse_file_uri_path
 from sqlspec.storage.errors import execute_async_storage_operation, execute_sync_storage_operation
 from sqlspec.storage.registry import StorageRegistry, storage_registry
 from sqlspec.utils.serializers import get_serializer_metrics, serialize_collection, to_json
@@ -123,6 +123,7 @@ _RECENT_STORAGE_EVENTS: "deque[StorageTelemetry]" = deque(maxlen=25)
 _EMPTY_STORAGE_OPTIONS: dict[str, Any] = {}
 _ARROW_WRITE_FORMATS = frozenset({"parquet", "arrow-ipc", "csv"})
 _ROW_WRITE_FORMATS = frozenset({"json", "jsonl"})
+_CLOUD_OBJECT_STORE_SCHEMES = frozenset({"s3", "gs", "gcs", "az", "azure"})
 
 
 def get_storage_bridge_metrics() -> "dict[str, int]":
@@ -140,7 +141,7 @@ def reset_storage_bridge_metrics() -> None:
 def record_storage_diagnostic_event(telemetry: StorageTelemetry) -> None:
     """Record telemetry for inclusion in diagnostics snapshots."""
 
-    _RECENT_STORAGE_EVENTS.append(cast("StorageTelemetry", dict(telemetry)))
+    _RECENT_STORAGE_EVENTS.appendleft(cast("StorageTelemetry", dict(telemetry)))
 
 
 def get_recent_storage_events() -> "list[StorageTelemetry]":
@@ -182,7 +183,7 @@ class _StoragePipelineBase:
     def __init__(
         self, *, registry: StorageRegistry | None = None, storage_options: "dict[str, Any] | None" = None
     ) -> None:
-        self.registry = registry or storage_registry
+        self.registry = storage_registry if registry is None else registry
         self._resolved_backend_cache: dict[str, tuple[ObjectStoreProtocol, str, str]] = {}
         self._storage_options = _EMPTY_STORAGE_OPTIONS if storage_options is None else storage_options
         self._csv_write_options = _csv_write_options_from_kwargs(self._storage_options)
@@ -190,20 +191,6 @@ class _StoragePipelineBase:
     def clear_cache(self) -> None:
         """Clear cached storage backend resolutions for this pipeline instance."""
         self._resolved_backend_cache.clear()
-
-    def _backend(
-        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
-    ) -> "tuple[ObjectStoreProtocol, str, str]":
-        """Resolve storage backend and normalized path for a destination."""
-        cache_key = _backend_cache_key(destination, backend_options)
-        if cache_key is None:
-            return _storage_backend(self.registry, destination, backend_options)
-        cached = self._resolved_backend_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        resolved = _storage_backend(self.registry, destination, backend_options)
-        self._resolved_backend_cache[cache_key] = resolved
-        return resolved
 
     def resolve_destination(
         self, destination: StorageDestination, storage_options: "dict[str, Any] | None" = None
@@ -232,11 +219,25 @@ class _StoragePipelineBase:
             uri = backend.resolve_uri(path)
         elif backend.protocol == FILE_PROTOCOL:
             if destination_str.startswith(FILE_SCHEME_PREFIX):
-                path = strip_windows_drive_prefix(unquote(urlparse(destination_str).path))
+                path = parse_file_uri_path(destination_str)
             uri = backend.resolve_uri(Path(path).expanduser().resolve())
         else:
             uri = destination_str
         return ResolvedStorageTarget(uri, backend.protocol)
+
+    def _backend(
+        self, destination: StorageDestination, backend_options: "dict[str, Any] | None"
+    ) -> "tuple[ObjectStoreProtocol, str, str]":
+        """Resolve storage backend and normalized path for a destination."""
+        cache_key = _backend_cache_key(destination, backend_options)
+        if cache_key is None:
+            return _storage_backend(self.registry, destination, backend_options)
+        cached = self._resolved_backend_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        resolved = _storage_backend(self.registry, destination, backend_options)
+        self._resolved_backend_cache[cache_key] = resolved
+        return resolved
 
 
 @mypyc_attr(allow_interpreted_subclasses=True)
@@ -359,11 +360,10 @@ class AsyncStoragePipeline(_StoragePipelineBase):
     ) -> StorageTelemetry:
         format_choice = format_hint or "jsonl"
         _validate_row_write_format(format_choice)
-        serialized = serialize_collection(rows)
-        payload = await async_(_encode_row_payload)(serialized, format_choice)
+        payload, row_count = await async_(_serialize_and_encode_row_payload)(rows, format_choice)
         resolved_options = _storage_options(self._storage_options, storage_options)
         return await self._write_bytes_async(
-            payload, destination, rows=len(serialized), format_label=format_choice, storage_options=resolved_options
+            payload, destination, rows=row_count, format_label=format_choice, storage_options=resolved_options
         )
 
     async def write_arrow(
@@ -387,6 +387,39 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         return await self._write_bytes_async(
             payload, destination, rows=int(table.num_rows), format_label=format_choice, storage_options=resolved_options
         )
+
+    async def read_arrow_async(
+        self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
+    ) -> "tuple[ArrowTable, StorageTelemetry]":
+        backend, path, backend_name = self._backend(source, storage_options)
+        if supports_async_read_bytes(backend):
+            payload = await execute_async_storage_operation(
+                partial(backend.read_bytes_async, path), backend=backend_name, operation="read_bytes", path=path
+            )
+        else:
+            payload = await async_(_read_backend_sync)(backend=backend, path=path, backend_name=backend_name)
+
+        table = await async_(_decode_arrow_payload)(payload, file_format)
+        rows_processed = int(table.num_rows)
+        telemetry: StorageTelemetry = {
+            "destination": path,
+            "bytes_processed": len(payload),
+            "rows_processed": rows_processed,
+            "format": file_format,
+            "backend": backend_name,
+        }
+        return table, telemetry
+
+    async def stream_read_async(
+        self,
+        source: StorageDestination,
+        *,
+        chunk_size: int | None = None,
+        storage_options: "dict[str, Any] | None" = None,
+    ) -> "AsyncIterator[bytes]":
+        """Stream bytes from an artifact asynchronously."""
+        backend, path, _backend_name = self._backend(source, storage_options)
+        return await backend.stream_read_async(path, chunk_size=chunk_size)
 
     async def _write_bytes_async(
         self,
@@ -422,39 +455,6 @@ class AsyncStoragePipeline(_StoragePipelineBase):
         }
         return telemetry
 
-    async def read_arrow_async(
-        self, source: StorageDestination, *, file_format: StorageFormat, storage_options: "dict[str, Any] | None" = None
-    ) -> "tuple[ArrowTable, StorageTelemetry]":
-        backend, path, backend_name = self._backend(source, storage_options)
-        if supports_async_read_bytes(backend):
-            payload = await execute_async_storage_operation(
-                partial(backend.read_bytes_async, path), backend=backend_name, operation="read_bytes", path=path
-            )
-        else:
-            payload = await async_(_read_backend_sync)(backend=backend, path=path, backend_name=backend_name)
-
-        table = await async_(_decode_arrow_payload)(payload, file_format)
-        rows_processed = int(table.num_rows)
-        telemetry: StorageTelemetry = {
-            "destination": path,
-            "bytes_processed": len(payload),
-            "rows_processed": rows_processed,
-            "format": file_format,
-            "backend": backend_name,
-        }
-        return table, telemetry
-
-    async def stream_read_async(
-        self,
-        source: StorageDestination,
-        *,
-        chunk_size: int | None = None,
-        storage_options: "dict[str, Any] | None" = None,
-    ) -> "AsyncIterator[bytes]":
-        """Stream bytes from an artifact asynchronously."""
-        backend, path, _backend_name = self._backend(source, storage_options)
-        return await backend.stream_read_async(path, chunk_size=chunk_size)
-
 
 def _storage_options(default_options: "dict[str, Any]", storage_options: "dict[str, Any] | None") -> "dict[str, Any]":
     return default_options if storage_options is None else storage_options
@@ -485,6 +485,11 @@ def _encode_row_payload(rows: "list[Any]", format_hint: StorageFormat) -> bytes:
         buffer.extend(to_json(row, as_bytes=True))
         buffer.extend(b"\n")
     return bytes(buffer)
+
+
+def _serialize_and_encode_row_payload(rows: "list[dict[str, Any]]", format_hint: StorageFormat) -> "tuple[bytes, int]":
+    serialized = serialize_collection(rows)
+    return _encode_row_payload(serialized, format_hint), len(serialized)
 
 
 def _validate_arrow_write_format(format_choice: StorageFormat) -> None:
@@ -566,9 +571,13 @@ def _resolve_alias_destination(
 
 def _backend_path(destination: str) -> str:
     if destination.startswith("file://"):
-        return destination.removeprefix("file://")
+        return parse_file_uri_path(destination)
     if "://" in destination:
-        _, remainder = destination.split("://", 1)
+        scheme, remainder = destination.split("://", 1)
+        if scheme.lower() in _CLOUD_OBJECT_STORE_SCHEMES:
+            parsed = urlparse(destination)
+            if parsed.netloc:
+                return parsed.path.lstrip("/")
         return remainder.lstrip("/")
     return destination
 
@@ -583,6 +592,8 @@ def _storage_backend(
         return alias_resolution
     backend = registry.get(destination_str, **options)
     normalized_path = _backend_path(destination_str)
+    if getattr(backend, "protocol", None) == FILE_PROTOCOL:
+        normalized_path = Path(normalized_path).expanduser().resolve().as_posix()
     return backend, normalized_path, backend.backend_type
 
 

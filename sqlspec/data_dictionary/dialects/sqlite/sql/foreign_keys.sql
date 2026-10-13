@@ -2,6 +2,7 @@
 -- dialect: sqlite
 SELECT
     tl.schema AS schema_name,
+    tl.schema AS table_schema,
     tl.name AS table_name,
     fk."from" AS column_name,
     fk."table" AS referenced_table_name,
@@ -21,7 +22,8 @@ ORDER BY tl.name, fk.id, fk.seq;
 -- name: by_table
 -- dialect: sqlite
 SELECT
-    :schema_name AS schema_name,
+    COALESCE(:schema_name, 'main') AS schema_name,
+    COALESCE(:schema_name, 'main') AS table_schema,
     :table_name AS table_name,
     fk."from" AS column_name,
     fk."table" AS referenced_table_name,

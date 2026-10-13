@@ -5,11 +5,10 @@ compilation to avoid ABI boundary issues.
 """
 
 import contextlib
-import sqlite3
 import sqlite3 as sqlite_module
 from typing import TYPE_CHECKING, Any
 
-_SqliteConnection = sqlite3.Connection
+_SqliteConnection = sqlite_module.Connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -20,12 +19,12 @@ if TYPE_CHECKING:
     from sqlspec.core import StatementConfig
 
     SqliteConnection: TypeAlias = _SqliteConnection
-    SqliteConnectionFactory: TypeAlias = type[sqlite3.Connection]
-    SqliteRawCursor: TypeAlias = sqlite3.Cursor
+    SqliteConnectionFactory: TypeAlias = type[sqlite_module.Connection]
+    SqliteRawCursor: TypeAlias = sqlite_module.Cursor
 else:
     SqliteConnection = _SqliteConnection
-    SqliteConnectionFactory = type[sqlite3.Connection]
-    SqliteRawCursor = sqlite3.Cursor
+    SqliteConnectionFactory = type[sqlite_module.Connection]
+    SqliteRawCursor = sqlite_module.Cursor
 
 __all__ = (
     "SqliteConnection",

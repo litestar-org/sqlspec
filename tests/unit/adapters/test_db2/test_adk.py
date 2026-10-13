@@ -269,28 +269,25 @@ async def test_get_session_returns_none_when_table_missing(db2_mode: DriverMode)
 
 
 async def test_delete_entries_older_than_binds_cutoff(db2_mode: DriverMode) -> None:
-    """Memory retention binds a naive-UTC cutoff computed from the day count."""
-    count = FakeDb2Cursor(rows=[(2,)], description=db2_description("row_count"))
-    store, config = _memory_store(db2_mode, count, FakeDb2Cursor(rowcount=2))
+    """Memory retention binds a naive-UTC cutoff computed from the day count in a single DELETE."""
+    store, config = _memory_store(db2_mode, FakeDb2Cursor(rowcount=2))
 
     assert await db2_mode.call(store.delete_entries_older_than, 30, app_name="app") == 2
 
-    (count_sql, count_params), (delete_sql, delete_params) = config.executed
-    _assert_naive_utc_near(count_params[0], _utc_naive_now() - timedelta(days=30))
-    assert count_params[1] == "app"
-    assert delete_params == count_params
+    [(delete_sql, delete_params)] = config.executed
+    _assert_naive_utc_near(delete_params[0], _utc_naive_now() - timedelta(days=30))
+    assert delete_params[1] == "app"
     assert delete_sql.startswith(f"DELETE FROM {store.memory_table} WHERE inserted_at < ?")
-    assert "COUNT(*)" in count_sql
 
 
 async def test_memory_store_search_query(db2_mode: DriverMode) -> None:
-    """Memory search matches case-insensitively with POSSTR and caps rows with FETCH FIRST."""
+    """Memory search matches case-insensitively with LOCATE and typed CAST and caps rows with FETCH FIRST."""
     store, config = _memory_store(db2_mode)
 
     assert await db2_mode.call(store.search_entries, query="hello", app_name="test_app", user_id="user_1") == []
 
     [(sql, params)] = config.executed
-    assert "POSSTR(LOWER(content_text), LOWER(?)) > 0" in sql
+    assert "LOCATE(LOWER(CAST(? AS VARCHAR(4000))), LOWER(content_text)) > 0" in sql
     assert "FETCH FIRST 20 ROWS ONLY" in sql
     assert params == ("test_app", "user_1", "hello")
 
@@ -306,17 +303,16 @@ async def test_memory_store_search_query(db2_mode: DriverMode) -> None:
 async def test_retention_deletes_bind_naive_utc_cutoff(
     db2_mode: DriverMode, method: str, table_attr: str, column: str
 ) -> None:
-    """Retention deletes bind the aware cutoff as naive UTC and report the counted rows."""
-    count = FakeDb2Cursor(rows=[(4,)], description=db2_description("row_count"))
-    store, config = _session_store(db2_mode, count)
+    """Retention deletes bind the aware cutoff as naive UTC and report the deleted rows."""
+    store, config = _session_store(db2_mode, FakeDb2Cursor(rowcount=4))
     cutoff = datetime(2026, 9, 24, 14, tzinfo=timezone(timedelta(hours=2)))
 
     assert await db2_mode.call(getattr(store, method), cutoff, app_name="app") == 4
 
-    (_, count_params), (delete_sql, delete_params) = config.executed
+    [(delete_sql, delete_params)] = config.executed
     table = getattr(store, table_attr)
     assert delete_sql == f"DELETE FROM {table} WHERE {column} < ? AND app_name = ?"
-    assert count_params == delete_params == (datetime(2026, 9, 24, 12), "app")
+    assert delete_params == (datetime(2026, 9, 24, 12), "app")
 
 
 @pytest.mark.parametrize(
@@ -477,9 +473,7 @@ async def test_memory_search_decodes_rows_and_session_delete_counts(db2_mode: Dr
         "inserted_at",
     )
     store, config = _memory_store(
-        db2_mode,
-        FakeDb2Cursor(rows=[row], description=db2_description(*columns)),
-        FakeDb2Cursor(rows=[(1,)], description=db2_description("row_count")),
+        db2_mode, FakeDb2Cursor(rows=[row], description=db2_description(*columns)), FakeDb2Cursor(rowcount=1)
     )
 
     [memory] = await db2_mode.call(store.search_entries, query="hi", app_name="app", user_id="u1", scope_filter="user")
@@ -609,3 +603,43 @@ async def test_memory_empty_inputs_skip_the_database(db2_mode: DriverMode) -> No
     assert await db2_mode.call(store.insert_memory_entries, []) == 0
     assert await db2_mode.call(store.search_entries, query="q", app_name="app", user_id="u1", limit=0) == []
     assert config.executed == []
+
+
+async def test_memory_operations_on_missing_table_return_empty_or_zero(db2_mode: DriverMode) -> None:
+    """Memory search and delete operations against an absent table return empty or zero."""
+
+    def missing_cursor() -> FakeDb2Cursor:
+        return FakeDb2Cursor(error=db2_error(-204, "42704", UNDEFINED_NAME_TEXT))
+
+    store1, _ = _memory_store(db2_mode, missing_cursor())
+    assert await db2_mode.call(store1.search_entries, query="q", app_name="app", user_id="u1") == []
+
+    store2, _ = _memory_store(db2_mode, missing_cursor())
+    assert await db2_mode.call(store2.delete_entries_by_session, "s1") == 0
+
+    store3, _ = _memory_store(db2_mode, missing_cursor())
+    assert await db2_mode.call(store3.delete_entries_older_than, 7) == 0
+
+
+async def test_schema_qualified_adk_tables_sanitize_constraint_and_index_names(db2_mode: DriverMode) -> None:
+    """Schema-qualified ADK table names produce dot-free constraint and index names."""
+    store, _ = _session_store(db2_mode)
+    store._session_table = "app.adk_session"
+    store._events_table = "app.adk_event"
+    store._app_state_table = "app.adk_app_state"
+    store._user_state_table = "app.adk_user_state"
+    store._metadata_table = "app.adk_metadata"
+    mem_store, _ = _memory_store(db2_mode)
+    mem_store._memory_table = "app.adk_memory"
+
+    sessions_ddl = await db2_mode.call(store._sessions_table_ddl)
+    events_ddl = await db2_mode.call(store._events_table_ddl)
+    memory_ddl = await db2_mode.call(mem_store._memory_table_ddl)
+
+    assert "CONSTRAINT pk_app_adk_session_id" in sessions_ddl
+    assert "CONSTRAINT pk_app_adk_event_id" in events_ddl
+    assert "CONSTRAINT fk_app_adk_event_session" in events_ddl
+    assert "CONSTRAINT pk_app_adk_memory_id" in memory_ddl
+    assert "CONSTRAINT uq_app_adk_memory_event" in memory_ddl
+    assert all("." not in index_name for index_name, _, _ in store._index_specs())
+    assert all("." not in index_name for index_name, _, _ in mem_store._memory_index_specs())

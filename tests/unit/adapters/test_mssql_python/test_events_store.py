@@ -7,10 +7,6 @@ from sqlspec.adapters.mssql_python import MssqlPythonConfig
 from sqlspec.adapters.mssql_python.events.store import MssqlPythonEventQueueStore, _object_name
 
 
-def _config(extension_config: dict[str, Any] | None = None) -> Any:
-    return SimpleNamespace(extension_config=extension_config or {"events": {}})
-
-
 def test_event_queue_store_uses_tsql_column_types_and_idempotency() -> None:
     """Event queue DDL should use T-SQL types and sys catalog guards."""
     store = MssqlPythonEventQueueStore(cast(MssqlPythonConfig, _config()))
@@ -48,3 +44,7 @@ def test_event_queue_guards_use_configured_schema_and_index() -> None:
     assert store.drop_statements() == [
         "IF OBJECT_ID(N'[app].[app_events]', N'U') IS NOT NULL DROP TABLE app.app_events;"
     ]
+
+
+def _config(extension_config: dict[str, Any] | None = None) -> Any:
+    return SimpleNamespace(extension_config=extension_config or {"events": {}})

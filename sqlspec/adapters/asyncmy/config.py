@@ -2,7 +2,7 @@
 
 import contextlib
 import inspect
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
 from weakref import WeakSet
 
 from mypy_extensions import mypyc_attr
@@ -48,16 +48,6 @@ _ASYNCMY_POOL_ONLY_KEYS = frozenset(("minsize", "maxsize", "pool_recycle"))
 _ASYNCMY_POOL_KEYS = _ASYNCMY_POOL_ONLY_KEYS | {"echo"}
 _ASYNCMY_SHARED_POOL_KEYS = frozenset(("echo",))
 asyncmy: "AsyncmyModule" = cast("AsyncmyModule", AsyncmyModule)
-
-
-def _connect_parameter_names() -> "frozenset[str]":
-    try:
-        return frozenset(inspect.signature(asyncmy.connect).parameters)
-    except (TypeError, ValueError):
-        return frozenset()
-
-
-_ASYNCMY_CONNECT_PARAMETER_NAMES = _connect_parameter_names()
 
 
 class AsyncmySSLParams(TypedDict):
@@ -121,47 +111,6 @@ class AsyncmyPoolParams(AsyncmyConnectionParams):
     pool_recycle: NotRequired[int]
 
 
-def _normalize_connection_config(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
-    """Normalize SQLSpec asyncmy config keys before storing them."""
-    config = normalize_connection_config(connection_config)
-
-    if "cursor_class" in config:
-        cursor_class = config.pop("cursor_class")
-        existing_cursor_cls = config.get("cursor_cls")
-        if existing_cursor_cls is not None and existing_cursor_cls is not cursor_class:
-            msg = "Asyncmy connection_config received conflicting 'cursor_cls' and legacy 'cursor_class' values."
-            raise ImproperConfigurationError(msg)
-        config["cursor_cls"] = cursor_class
-
-    allow_local_infile = bool(config.pop("allow_local_infile", False))
-    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
-
-    return config
-
-
-def _split_pool_config(connection_config: "Mapping[str, Any]") -> "tuple[dict[str, Any], dict[str, Any]]":
-    """Split pool constructor settings from connection settings."""
-    pool_kwargs: dict[str, Any] = {}
-    connection_kwargs: dict[str, Any] = {}
-
-    for key, value in connection_config.items():
-        if value is None:
-            continue
-        if key in _ASYNCMY_POOL_KEYS:
-            pool_kwargs[key] = value
-            continue
-        if key == "write_timeout" and key not in _ASYNCMY_CONNECT_PARAMETER_NAMES:
-            continue
-        connection_kwargs[key] = value
-
-    return pool_kwargs, connection_kwargs
-
-
-def _pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    pool_kwargs, connection_kwargs = _split_pool_config(connection_config)
-    return {**connection_kwargs, **pool_kwargs}
-
-
 def build_connection_config(
     connection_config: "AsyncmyPoolParams | dict[str, Any] | Mapping[str, Any] | None",
 ) -> dict[str, Any]:
@@ -171,6 +120,8 @@ def build_connection_config(
     user_alias = config.pop("username", None)
     if user_alias is not None and "user" not in config:
         config["user"] = user_alias
+    if "database" in config and "db" in config:
+        config.pop("db", None)
     if dsn is not None and isinstance(dsn, str):
         dsn_params = parse_mysql_dsn(dsn)
         for key, value in dsn_params.items():
@@ -227,10 +178,7 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
         self._contexts: dict[int, Any] = {}
 
     async def acquire_connection(self) -> "AsyncmyConnection":
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        pool = await self._config.provide_pool()
         ctx = pool.acquire()
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
         self._contexts[id(connection)] = ctx
@@ -247,6 +195,9 @@ class _AsyncmySessionFactory(AsyncPoolSessionFactory):
     async def release_connection(self, _conn: "AsyncmyConnection", **kwargs: Any) -> None:
         ctx = self._contexts.pop(id(_conn), None)
         if ctx is not None:
+            if _conn is not None and bool(getattr(_conn, "server_status", 0) & 1):
+                with contextlib.suppress(Exception):
+                    await _conn.rollback()
             await ctx.__aexit__(kwargs.get("exc_type"), kwargs.get("exc_val"), kwargs.get("exc_tb"))
 
 
@@ -260,10 +211,7 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
         self._ctx: Any = None
 
     async def __aenter__(self) -> AsyncmyConnection:
-        pool = self._config.connection_instance
-        if pool is None:
-            pool = await self._config.create_pool()
-            self._config.connection_instance = pool
+        pool = await self._config.provide_pool()
         ctx = pool.acquire()
         self._ctx = ctx
         connection = cast("AsyncmyConnection", await ctx.__aenter__())
@@ -282,7 +230,11 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
     async def __aexit__(
         self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
     ) -> bool | None:
+        conn = self._connection
         self._connection = None
+        if conn is not None and bool(getattr(conn, "server_status", 0) & 1):
+            with contextlib.suppress(Exception):
+                await conn.rollback()
         if self._ctx:
             ctx = self._ctx
             self._ctx = None
@@ -293,6 +245,8 @@ class AsyncmyConnectionContext(AsyncPoolConnectionContext):
 @mypyc_attr(native_class=False)
 class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", AsyncmyDriver]):
     """Configuration for Asyncmy database connections."""
+
+    __slots__ = ("_initialized_connections", "_user_connection_hook")
 
     driver_type: ClassVar[type[AsyncmyDriver]] = AsyncmyDriver
     connection_type: "ClassVar[type[Any]]" = cast("type[Any]", AsyncmyConnection)
@@ -363,35 +317,6 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
             **kwargs,
         )
 
-    async def _create_pool(self) -> "AsyncmyPool":
-        """Create the actual async connection pool.
-
-        MySQL/MariaDB handle JSON types natively without requiring connection-level
-        type handlers. JSON serialization is handled via type_coercion_map in the
-        driver's statement_config (see driver.py).
-
-        Future driver_features can be added here if needed.
-        """
-        return await asyncmy.create_pool(**_pool_config(self.connection_config))
-
-    async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
-        """Ensure connection callback has been called exactly once for this connection.
-
-        Uses WeakSet tracking to ensure the callback runs once per physical connection.
-        """
-        if self._user_connection_hook is None:
-            return
-        if connection not in self._initialized_connections:
-            await self._user_connection_hook(connection)
-            self._initialized_connections.add(connection)
-
-    async def _close_pool(self) -> None:
-        """Close the actual async connection pool."""
-        if self.connection_instance:
-            self.connection_instance.close()
-            await self.connection_instance.wait_closed()
-            self.connection_instance = None
-
     async def create_connection(self) -> AsyncmyConnection:
         """Open a standalone connection owned by the caller.
 
@@ -445,3 +370,116 @@ class AsyncmyConfig(AsyncDatabaseConfig[AsyncmyConnection, "AsyncmyPool", Asyncm
         """Return queue polling defaults for Asyncmy adapters."""
 
         return EventRuntimeHints(poll_interval=0.25, lease_seconds=5, select_for_update=True, skip_locked=True)
+
+    async def _create_pool(self) -> "AsyncmyPool":
+        """Create the actual async connection pool.
+
+        MySQL/MariaDB handle JSON types natively without requiring connection-level
+        type handlers. JSON serialization is handled via type_coercion_map in the
+        driver's statement_config (see driver.py).
+
+        Future driver_features can be added here if needed.
+        """
+        return await asyncmy.create_pool(**_pool_config(self.connection_config))
+
+    async def _ensure_connection(self, connection: "AsyncmyConnection") -> None:
+        """Ensure connection callback has been called exactly once for this connection.
+
+        Uses WeakSet tracking to ensure the callback runs once per physical connection.
+        """
+        if self._user_connection_hook is None:
+            return
+        if connection not in self._initialized_connections:
+            await self._user_connection_hook(connection)
+            self._initialized_connections.add(connection)
+
+    async def _close_pool(self) -> None:
+        """Close the actual async connection pool."""
+        if self.connection_instance:
+            self.connection_instance.close()
+            await self.connection_instance.wait_closed()
+            self.connection_instance = None
+
+
+_FALLBACK_ASYNCMY_CONNECT_PARAMS: Final[frozenset[str]] = frozenset({
+    "host",
+    "user",
+    "password",
+    "database",
+    "db",
+    "port",
+    "unix_socket",
+    "charset",
+    "sql_mode",
+    "read_default_file",
+    "conv",
+    "use_unicode",
+    "client_flag",
+    "cursor_cls",
+    "init_command",
+    "connect_timeout",
+    "read_default_group",
+    "autocommit",
+    "local_infile",
+    "max_allowed_packet",
+    "auth_plugin_map",
+    "read_timeout",
+    "binary_prefix",
+    "program_name",
+    "server_public_key",
+    "ssl",
+    "stmt_cache_size",
+    "echo",
+})
+
+
+def _connect_parameter_names() -> "frozenset[str]":
+    try:
+        names = frozenset(inspect.signature(asyncmy.connect).parameters)
+    except (TypeError, ValueError):
+        return _FALLBACK_ASYNCMY_CONNECT_PARAMS
+    return names or _FALLBACK_ASYNCMY_CONNECT_PARAMS
+
+
+_ASYNCMY_CONNECT_PARAMETER_NAMES = _connect_parameter_names()
+
+
+def _normalize_connection_config(connection_config: "Mapping[str, Any] | None") -> "dict[str, Any]":
+    """Normalize SQLSpec asyncmy config keys before storing them."""
+    config = normalize_connection_config(connection_config)
+
+    if "cursor_class" in config:
+        cursor_class = config.pop("cursor_class")
+        existing_cursor_cls = config.get("cursor_cls")
+        if existing_cursor_cls is not None and existing_cursor_cls is not cursor_class:
+            msg = "Asyncmy connection_config received conflicting 'cursor_cls' and legacy 'cursor_class' values."
+            raise ImproperConfigurationError(msg)
+        config["cursor_cls"] = cursor_class
+
+    allow_local_infile = bool(config.pop("allow_local_infile", False))
+    config["local_infile"] = bool(config.get("local_infile", False) or allow_local_infile)
+
+    return config
+
+
+def _split_pool_config(connection_config: "Mapping[str, Any]") -> "tuple[dict[str, Any], dict[str, Any]]":
+    """Split pool constructor settings from connection settings."""
+    pool_kwargs: dict[str, Any] = {}
+    connection_kwargs: dict[str, Any] = {}
+
+    for key, value in connection_config.items():
+        if value is None:
+            continue
+        if key in _ASYNCMY_POOL_KEYS:
+            pool_kwargs[key] = value
+            continue
+        if key == "write_timeout" and key not in _ASYNCMY_CONNECT_PARAMETER_NAMES:
+            continue
+        connection_kwargs[key] = value
+
+    return pool_kwargs, connection_kwargs
+
+
+def _pool_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    pool_kwargs, connection_kwargs = _split_pool_config(connection_config)
+    return {**connection_kwargs, **pool_kwargs}

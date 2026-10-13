@@ -1,6 +1,7 @@
-"""mssql-python sync and async drivers."""
+"""mssql-python sync driver."""
 
 import contextlib
+from collections.abc import Sized
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.mssql_python._typing import (
@@ -8,13 +9,18 @@ from sqlspec.adapters.mssql_python._typing import (
     MssqlPythonCursor,
     MssqlPythonError,
     MssqlPythonRawCursor,
-    MssqlPythonSessionContext,
 )
 from sqlspec.adapters.mssql_python.core import (
+    collect_rows,
     create_mapped_exception,
     default_statement_config,
     driver_profile,
+    format_identifier,
     materialize_tuple_rows,
+    quote_bracket_identifier,
+    resolve_column_names,
+    resolve_many_rowcount,
+    resolve_rowcount,
 )
 from sqlspec.adapters.mssql_python.data_dictionary import MssqlPythonSyncDataDictionary
 from sqlspec.core import (
@@ -33,29 +39,21 @@ from sqlspec.driver import (
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close
 from sqlspec.utils.logging import get_logger
-from sqlspec.utils.module_loader import ensure_pyarrow
-from sqlspec.utils.text import split_qualified_identifier
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import SQL, ArrowResult, Statement, StatementConfig, StatementFilter
-    from sqlspec.driver import ExecutionResult
+    from sqlspec.core import SQL, ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.driver import CachedQuery, ExecutionResult
     from sqlspec.storage import StorageBridgeJob, StorageDestination, StorageFormat, StorageTelemetry
     from sqlspec.typing import ArrowRecordBatchReader, ArrowReturnFormat, StatementParameters
 
 
-__all__ = (
-    "MssqlPythonBulkCopyResult",
-    "MssqlPythonCursor",
-    "MssqlPythonDriver",
-    "MssqlPythonExceptionHandler",
-    "MssqlPythonSessionContext",
-)
+__all__ = ("MssqlPythonBulkCopyResult", "MssqlPythonDriver", "MssqlPythonExceptionHandler")
 
 logger = get_logger("sqlspec.adapters.mssql_python")
-_COLUMN_CACHE_MAX_SIZE = 256
 
 
 class MssqlPythonBulkCopyResult(TypedDict):
@@ -121,7 +119,7 @@ class MssqlPythonStreamSource:
             return []
         column_names = self._column_names
         if column_names is None:
-            column_names = _resolve_column_names(cursor.description, self._driver._column_name_cache)
+            column_names = resolve_column_names(cursor.description, self._driver._column_name_cache)
             self._column_names = column_names
         return rows_to_dicts(rows, column_names)
 
@@ -173,23 +171,26 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         _execute_cursor(cursor, sql, prepared_parameters)
 
         if statement.returns_rows():
-            fetched = materialize_tuple_rows(cursor.fetchall())
-            column_names = _resolve_column_names(cursor.description, self._column_name_cache)
+            fetched, column_names, row_format = collect_rows(
+                cursor.fetchall(), cursor.description, self._column_name_cache
+            )
             return self.create_execution_result(
                 cursor,
                 selected_data=fetched,
                 column_names=column_names,
                 data_row_count=len(fetched),
                 is_select_result=True,
-                row_format="tuple",
+                row_format=row_format,
             )
 
-        return self.create_execution_result(cursor, rowcount_override=_cursor_rowcount(cursor))
+        return self.create_execution_result(cursor, rowcount_override=resolve_rowcount(cursor))
 
     def dispatch_execute_many(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        parameter_count = len(prepared_parameters) if isinstance(prepared_parameters, Sized) else None
         cursor.executemany(sql, cast("Any", prepared_parameters))
-        return self.create_execution_result(cursor, rowcount_override=_cursor_rowcount(cursor), is_many_result=True)
+        affected_rows = resolve_many_rowcount(cursor, prepared_parameters, fallback_count=parameter_count)
+        return self.create_execution_result(cursor, rowcount_override=affected_rows, is_many_result=True)
 
     def dispatch_execute_script(self, cursor: "MssqlPythonRawCursor", statement: "SQL") -> "ExecutionResult":
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
@@ -203,12 +204,12 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         )
 
     def collect_rows(self, cursor: "MssqlPythonRawCursor", fetched: "list[Any]") -> "tuple[list[Any], list[str], int]":
-        column_names = _resolve_column_names(cursor.description, self._column_name_cache)
+        column_names = resolve_column_names(cursor.description, self._column_name_cache)
         rows = materialize_tuple_rows(fetched)
         return rows, column_names, len(rows)
 
     def resolve_rowcount(self, cursor: "MssqlPythonRawCursor") -> int:
-        return _cursor_rowcount(cursor)
+        return resolve_rowcount(cursor)
 
     def begin(self) -> None:
         if self._transaction_active:
@@ -266,31 +267,45 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Point the database user's default schema at the migration schema, remembering the prior one."""
-        with self.with_cursor(self.connection) as cursor:
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler, self.with_cursor(self.connection) as cursor:
             if self._migration_schema_restore is None:
                 _execute_cursor(cursor, "SELECT USER_NAME() AS user_name, SCHEMA_NAME() AS schema_name;", None)
                 row: Any = cursor.fetchone()
-                user_name, current_schema = row[0], row[1]
+                if row is None:
+                    return
+                user_name, current_schema = (
+                    (row["user_name"], row["schema_name"]) if isinstance(row, dict) else (row[0], row[1])
+                )
+                resolved_schema = str(current_schema or "dbo")
                 _execute_cursor(cursor, _alter_default_schema_sql(str(user_name), schema), None)
-                self._migration_schema_restore = (str(user_name), str(current_schema))
-                return
-            _execute_cursor(cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None)
+                self._migration_schema_restore = (str(user_name), resolved_schema)
+            else:
+                _execute_cursor(cursor, _alter_default_schema_sql(self._migration_schema_restore[0], schema), None)
+        self._check_pending_exception(exc_handler)
 
     def reset_migration_session_schema(self) -> None:
         """Restore the user's default schema captured by set_migration_session_schema and commit it."""
         if self._migration_schema_restore is None:
             return
         user_name, previous_schema = self._migration_schema_restore
-        with self.with_cursor(self.connection) as cursor:
-            _execute_cursor(cursor, _alter_default_schema_sql(user_name, previous_schema), None)
-        self.connection.commit()
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler:
+            with self.with_cursor(self.connection) as cursor:
+                _execute_cursor(cursor, _alter_default_schema_sql(user_name, previous_schema), None)
+            self.connection.commit()
+        self._check_pending_exception(exc_handler)
         self._migration_schema_restore = None
 
     def has_schema(self, schema: str) -> bool:
         """Return whether the specified schema exists."""
-        with self.with_cursor(self.connection) as cursor:
+        result = False
+        exc_handler = self.handle_database_exceptions()
+        with exc_handler, self.with_cursor(self.connection) as cursor:
             _execute_cursor(cursor, "SELECT 1 FROM sys.schemas WHERE name = ?", (schema,))
-            return cursor.fetchone() is not None
+            result = cursor.fetchone() is not None
+        self._check_pending_exception(exc_handler)
+        return result
 
     def select_to_arrow(
         self,
@@ -436,7 +451,7 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         """
         self._require_capability("arrow_import_enabled")
         ensure_pyarrow()
-        import pyarrow as pa
+        pa = cast("Any", import_optional("pyarrow"))
 
         if batch_size < 0 or timeout < 0:
             msg = "batch_size and timeout must be non-negative"
@@ -527,6 +542,16 @@ class MssqlPythonDriver(SyncDriverAdapterBase):
         arrow_table, inbound = self._read_storage_arrow(source, file_format=file_format)
         return self.load_from_arrow(table, arrow_table, partitioner=partitioner, overwrite=overwrite, telemetry=inbound)
 
+    def _execute_cache_hit(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult":
+        if not params:
+            statement = self._cached_statement(
+                sql, params, cached, None, params_are_simple=True, compiled_sql=cached.compiled_sql
+            )
+            return self._execute_cached_statement(statement)
+        return super()._execute_cache_hit(sql, params, cached)
+
     def _connection_in_transaction(self) -> bool:
         return self._transaction_active
 
@@ -549,33 +574,14 @@ def _quote_mssql_table(table: str) -> str:
     setting is, unlike double quotes which parse as a string literal when it is
     off.
     """
-    return ".".join(_quote_tsql_identifier(part) for part in split_qualified_identifier(table))
+    return format_identifier(table)
 
 
 def _execute_cursor(cursor: "MssqlPythonRawCursor", sql: str, parameters: Any) -> None:
-    if parameters is None:
+    if parameters is None or parameters == ():
         cursor.execute(sql)
     else:
         cursor.execute(sql, parameters)
-
-
-def _cursor_rowcount(cursor: "MssqlPythonRawCursor") -> int:
-    rowcount = getattr(cursor, "rowcount", 0)
-    return rowcount if isinstance(rowcount, int) and rowcount > 0 else 0
-
-
-def _resolve_column_names(description: Any, cache: "dict[int, tuple[Any, list[str]]]") -> list[str]:
-    if not description:
-        return []
-    cache_key = id(description)
-    cached = cache.get(cache_key)
-    if cached is not None and cached[0] is description:
-        return cached[1]
-    column_names = [desc[0] for desc in description]
-    if len(cache) >= _COLUMN_CACHE_MAX_SIZE:
-        cache.pop(next(iter(cache)))
-    cache[cache_key] = (description, column_names)
-    return column_names
 
 
 def _cursor_arrow_reader(
@@ -590,16 +596,11 @@ def _cursor_arrow_reader(
 def _coerce_bulk_copy_result(result: Any, cursor: "MssqlPythonRawCursor") -> MssqlPythonBulkCopyResult:
     if isinstance(result, dict):
         return cast("MssqlPythonBulkCopyResult", dict(result))
-    return {"rows_copied": _cursor_rowcount(cursor)}
-
-
-def _quote_tsql_identifier(identifier: str) -> str:
-    """Bracket-quote an identifier so the statement is valid regardless of the session's QUOTED_IDENTIFIER setting."""
-    return f"[{identifier.replace(']', ']]')}]"
+    return {"rows_copied": resolve_rowcount(cursor)}
 
 
 def _alter_default_schema_sql(user_name: str, schema: str) -> str:
-    return f"ALTER USER {_quote_tsql_identifier(user_name)} WITH DEFAULT_SCHEMA = {_quote_tsql_identifier(schema)};"
+    return f"ALTER USER {quote_bracket_identifier(user_name)} WITH DEFAULT_SCHEMA = {quote_bracket_identifier(schema)};"
 
 
-register_driver_profile("mssql_python", driver_profile, allow_override=True)
+register_driver_profile("mssql_python", driver_profile)

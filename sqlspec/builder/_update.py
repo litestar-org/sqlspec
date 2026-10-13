@@ -59,14 +59,6 @@ class Update(
         if table:
             self.table(table)
 
-    def _create_base_expression(self) -> exp.Update:
-        """Create a base UPDATE expression.
-
-        Returns:
-            A new sqlglot Update expression with empty clauses.
-        """
-        return exp.Update(this=None, expressions=[])
-
     def join(
         self,
         table: "str | exp.Expr | Select",
@@ -114,6 +106,10 @@ class Update(
         Raises:
             SQLBuilderError: If no table is set or expression is not an UPDATE.
         """
+        return super().build(dialect=dialect)
+
+    def _prepare_expression_for_build(self, dialect: "DialectType" = None, *, copy: bool = True) -> exp.Expr:
+        """Validate that the UPDATE target table and SET clauses are set before building."""
         if self._expression is None:
             msg = "UPDATE expression not initialized."
             raise SQLBuilderError(msg)
@@ -130,4 +126,12 @@ class Update(
             msg = "At least one SET clause must be specified for UPDATE statement."
             raise SQLBuilderError(msg)
 
-        return super().build(dialect=dialect)
+        return super()._prepare_expression_for_build(dialect=dialect, copy=copy)
+
+    def _create_base_expression(self) -> exp.Update:
+        """Create a base UPDATE expression.
+
+        Returns:
+            A new sqlglot Update expression with empty clauses.
+        """
+        return exp.Update(this=None, expressions=[])

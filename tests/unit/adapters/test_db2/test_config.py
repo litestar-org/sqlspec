@@ -1,5 +1,6 @@
 """Tests for IBM Db2 database configuration."""
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 import pytest
@@ -15,7 +16,7 @@ from sqlspec.adapters.db2.config import (
     Db2SyncConfig,
     Db2SyncConnectionContext,
 )
-from sqlspec.adapters.db2.core import _parse_db2_dsn, build_dsn_string
+from sqlspec.adapters.db2.core import _parse_db2_dsn, build_connection_config, build_dsn_string
 from sqlspec.adapters.db2.driver import Db2AsyncDriver, Db2SyncDriver
 from sqlspec.adapters.db2.migrations import Db2AsyncMigrationTracker, Db2SyncMigrationTracker
 from sqlspec.adapters.db2.pool import Db2AsyncConnectionPool, Db2SyncConnectionPool
@@ -384,3 +385,60 @@ async def test_async_create_connection_is_standalone(fake_ibm_db: FakeModules) -
     finally:
         await config.close_pool()
     assert connection.closed is False
+
+
+@pytest.mark.parametrize(
+    "connection_config",
+    [
+        {"database": "d", "port": 0},
+        {"database": "d", "port": -1},
+        {"database": "d", "port": 65536},
+        {"database": "d", "connect_timeout": -1},
+    ],
+    ids=["port-zero", "port-negative", "port-too-high", "negative-timeout"],
+)
+def test_out_of_range_port_and_timeout_are_rejected(connection_config: "dict[str, Any]") -> None:
+    """Port outside 1..65535 and negative connect_timeout are rejected."""
+    with pytest.raises(ImproperConfigurationError):
+        build_connection_config(connection_config)
+
+
+def test_build_connection_config_strips_async_pool_keys() -> None:
+    """build_connection_config accepts Db2AsyncPoolParams and strips max_size and acquire_timeout."""
+    normalized = build_connection_config({"database": "SAMPLE", "max_size": 5, "acquire_timeout": 10.0})
+
+    assert normalized == {"database": "SAMPLE"}
+
+
+@pytest.mark.anyio
+async def test_config_driver_features_defaults_and_events_extension(db2_mode: DriverMode) -> None:
+    """Driver features default enable_events and events_backend and wire extension_config['events']."""
+    default_config = db2_mode.config(connection_config={"database": "SAMPLE"})
+    assert default_config.driver_features["enable_events"] is True
+    assert default_config.driver_features["events_backend"] == "poll_queue"
+
+    explicit_events = db2_mode.config(
+        connection_config={"database": "SAMPLE"},
+        driver_features={"enable_events": True, "events_backend": "poll_queue"},
+    )
+    assert explicit_events.extension_config["events"]["backend"] == "poll_queue"
+
+    disabled_events = db2_mode.config(
+        connection_config={"database": "SAMPLE"},
+        driver_features={"enable_events": False},
+        extension_config={"events": {"backend": "poll_queue"}},
+    )
+    assert "events" not in disabled_events.extension_config
+
+
+@pytest.mark.anyio
+async def test_statement_config_coerces_aware_datetime_to_naive_utc(db2_mode: DriverMode) -> None:
+    """The Db2 statement parameter profile coerces timezone-aware datetimes to naive UTC."""
+    config = db2_mode.config(connection_config={"database": "SAMPLE"})
+    type_coercion_map = config.statement_config.parameter_config.type_coercion_map
+    assert datetime in type_coercion_map
+
+    aware = datetime(2026, 9, 24, 14, 30, tzinfo=timezone(timedelta(hours=2)))
+    coerced = type_coercion_map[datetime](aware)
+    assert coerced == datetime(2026, 9, 24, 12, 30)
+    assert coerced.tzinfo is None

@@ -141,8 +141,17 @@ async def test_ensure_tracking_table_creates_only_when_absent(
         ("ddl_migrations", (None, "DDL_MIGRATIONS")),
         ("AppMigrations", (None, "APPMIGRATIONS")),
         ("App.Tracker", ("APP", "TRACKER")),
+        ('"QuotedMigrations"', (None, "QuotedMigrations")),
+        ('app."QuotedMigrations"', ("APP", "QuotedMigrations")),
     ],
-    ids=["qualified", "unqualified", "mixed-case", "mixed-case-qualified"],
+    ids=[
+        "qualified",
+        "unqualified",
+        "mixed-case",
+        "mixed-case-qualified",
+        "quoted-mixed-case",
+        "qualified-quoted-mixed-case",
+    ],
 )
 async def test_probe_binds_catalog_folded_schema_and_table(
     db2_mode: DriverMode, table_name: str, expected: "tuple[str | None, str]"

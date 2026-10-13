@@ -1,6 +1,6 @@
 """Spanner ADK store."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Protocol, cast
 
@@ -8,18 +8,21 @@ import sqlglot
 from sqlglot import exp
 from typing_extensions import TypedDict
 
-import sqlspec.dialects.spanner  # noqa: F401
+from sqlspec.adapters.spanner._typing import SpannerGoogleAPICallError
 from sqlspec.adapters.spanner._typing import SpannerNotFound as NotFound
 from sqlspec.adapters.spanner._typing import spanner_param_types as param_types
 from sqlspec.adapters.spanner.config import SpannerAsyncConfig, SpannerSyncConfig
 from sqlspec.adapters.spanner.core import (
+    _convert_json_row_value,
+    create_mapped_exception,
     execute_ddl_async,
     execute_ddl_sync,
     list_existing_table_names_async,
     list_existing_table_names_sync,
 )
 from sqlspec.config import ADKConfig
-from sqlspec.exceptions import OperationalError
+from sqlspec.dialects.spanner import Spanner
+from sqlspec.exceptions import OperationalError, SQLSpecError
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
     BaseSyncADKStore,
@@ -52,6 +55,7 @@ __all__ = (
     "SpannerSyncADKStore",
 )
 
+_SPANNER_DIALECT = Spanner
 SPANNER_PARAM_TYPES: SpannerParamTypesProtocol = cast("SpannerParamTypesProtocol", param_types)
 _DDL_TIMEOUT_SECONDS = 300
 _EMBEDDING_ROW_INDEX = 12
@@ -143,6 +147,8 @@ class _SpannerADKStoreMixin:
         _expires_index_options: str | None
         _session_row_deletion_policy: str
         _events_row_deletion_policy: str
+        _json_serializer: Callable[[Any], str]
+        _json_deserializer: Callable[[str], Any]
 
     def _session_param_types(self, include_owner: bool) -> "dict[str, Any]":
         json_type = _json_param_type()
@@ -182,21 +188,16 @@ class _SpannerADKStoreMixin:
         return {"key": SPANNER_PARAM_TYPES.STRING, "value": SPANNER_PARAM_TYPES.STRING}
 
     def _decode_state(self, raw: Any) -> Any:
-        if isinstance(raw, str):
-            return from_json(raw)
-        return raw
+        decoded = _convert_json_row_value(raw, json_deserializer=self._json_deserializer)
+        return decoded if decoded is not None else {}
 
     def _decode_json(self, raw: Any) -> Any:
-        if raw is None:
-            return None
-        if isinstance(raw, str):
-            return from_json(raw)
-        return raw
+        return _convert_json_row_value(raw, json_deserializer=self._json_deserializer)
 
     def _build_create_session_statement(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
     ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
-        state_json = to_json(state)
+        state_json = self._json_serializer(state)
         params: dict[str, Any] = {"id": session_id, "app_name": app_name, "user_id": user_id, "state": state_json}
         columns = "id, app_name, user_id, state, create_time, update_time"
         values = "@id, @app_name, @user_id, @state, PENDING_COMMIT_TIMESTAMP(), PENDING_COMMIT_TIMESTAMP()"
@@ -266,7 +267,7 @@ class _SpannerADKStoreMixin:
     def _build_update_session_state_statement(
         self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]"
     ) -> "tuple[str, dict[str, Any], dict[str, Any]]":
-        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": to_json(state)}
+        params = {"app_name": app_name, "user_id": user_id, "id": session_id, "state": self._json_serializer(state)}
         json_type = _json_param_type()
         sql = f"""
             UPDATE {self._session_table}
@@ -311,8 +312,6 @@ class _SpannerADKStoreMixin:
             sql = f"{sql} AND user_id = @user_id"
             params["user_id"] = user_id
             types["user_id"] = SPANNER_PARAM_TYPES.STRING
-        if self._shard_count > 1:
-            sql = f"{sql} AND shard_id = MOD(FARM_FINGERPRINT(id), {self._shard_count})"
         sql = f"{sql} ORDER BY {column} {direction}, id {direction}"
         if page_limit is not None:
             sql = f"{sql} LIMIT @limit OFFSET @offset"
@@ -328,7 +327,7 @@ class _SpannerADKStoreMixin:
         shard_clause = (
             f" AND shard_id = MOD(FARM_FINGERPRINT(@session_id), {self._shard_count})" if self._shard_count > 1 else ""
         )
-        delete_events_sql = f"DELETE FROM {self._events_table} WHERE session_id = @session_id{shard_clause}"
+        delete_events_sql = f"DELETE FROM {self._events_table} WHERE app_name = @app_name AND user_id = @user_id AND session_id = @session_id{shard_clause}"
         delete_session_sql = f"DELETE FROM {self._session_table} WHERE app_name = @app_name AND user_id = @user_id AND id = @session_id{shard_clause}"
         params = {"app_name": app_name, "user_id": user_id, "session_id": session_id}
         types = {
@@ -348,7 +347,7 @@ class _SpannerADKStoreMixin:
             "session_id": event_record["session_id"],
             "invocation_id": event_record["invocation_id"],
             "timestamp": event_record["timestamp"],
-            "event_data": to_json(event_record["event_data"]),
+            "event_data": self._json_serializer(event_record["event_data"]),
         }
         insert_sql = f"""
             INSERT INTO {self._events_table} (id, app_name, user_id, session_id, invocation_id, timestamp, event_data)
@@ -388,10 +387,11 @@ class _SpannerADKStoreMixin:
         if limit == 0:
             return None
 
+        join_shard_clause = " AND e.shard_id = s.shard_id" if self._shard_count > 1 else ""
         sql = f"""
             SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
             FROM {self._events_table} e
-            JOIN {self._session_table} s ON e.session_id = s.id
+            JOIN {self._session_table} s ON e.session_id = s.id{join_shard_clause}
             WHERE s.app_name = @app_name AND s.user_id = @user_id AND e.session_id = @session_id
         """
         if self._shard_count > 1:
@@ -487,7 +487,7 @@ class _SpannerADKStoreMixin:
             INSERT OR UPDATE {self._app_state_table} (app_name, state, update_time)
             VALUES (@app_name, @state, PENDING_COMMIT_TIMESTAMP())
         """
-        return (sql, {"app_name": app_name, "state": to_json(state)}, self._app_state_param_types())
+        return (sql, {"app_name": app_name, "state": self._json_serializer(state)}, self._app_state_param_types())
 
     def _build_upsert_user_state_statement(
         self, app_name: str, user_id: str, state: "dict[str, Any]"
@@ -498,7 +498,7 @@ class _SpannerADKStoreMixin:
         """
         return (
             sql,
-            {"app_name": app_name, "user_id": user_id, "state": to_json(state)},
+            {"app_name": app_name, "user_id": user_id, "state": self._json_serializer(state)},
             self._user_state_param_types(),
         )
 
@@ -634,6 +634,8 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         "_events_row_deletion_policy",
         "_events_table_options",
         "_expires_index_options",
+        "_json_deserializer",
+        "_json_serializer",
         "_session_row_deletion_policy",
         "_session_table_options",
         "_shard_count",
@@ -651,6 +653,7 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
             self._session_row_deletion_policy,
             self._events_row_deletion_policy,
         ) = _extract_spanner_adk_options(config)
+        self._json_serializer, self._json_deserializer = _extract_spanner_json_codecs(config)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -672,9 +675,11 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         """Get session by ID."""
         try:
             return self._get_session(app_name, user_id, session_id, renew_for=renew_for)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return None
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
 
     def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
@@ -696,9 +701,11 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
             return self._list_sessions(
                 app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
             )
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
 
     def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -736,9 +743,11 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         """Get events for a session."""
         try:
             return self._get_events(app_name, user_id, session_id, after_timestamp, limit)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._events_table, self._session_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
 
     def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
@@ -784,20 +793,32 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
         return _filter_existing_spanner_drops(self._reset_drop_statements(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
-        return list_existing_table_names_sync(self._database())
+        try:
+            return list_existing_table_names_sync(self._database())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
-        with self._config.provide_connection() as snapshot:
-            reader = cast("_SpannerReadProtocol", snapshot)
-            return list(reader.execute_sql(sql, params=params, param_types=types))
+        try:
+            with self._config.provide_connection(transaction=False) as snapshot:
+                reader = cast("_SpannerReadProtocol", snapshot)
+                return list(reader.execute_sql(sql, params=params, param_types=types))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
-        cast("Any", self._database()).run_in_transaction(_SpannerSyncWriteJob(statements))
+        try:
+            cast("Any", self._database()).run_in_transaction(_SpannerSyncWriteJob(statements))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types)))
+        try:
+            return int(cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types)))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -938,7 +959,10 @@ class SpannerSyncADKStore(_SpannerADKStoreMixin, BaseSyncADKStore[SpannerSyncCon
 
     def _create_tables(self) -> None:
         ddl_statements = self._missing_table_ddl_statements(self._existing_tables())
-        execute_ddl_sync(self._database(), ddl_statements, timeout=_DDL_TIMEOUT_SECONDS)
+        try:
+            execute_ddl_sync(self._database(), ddl_statements, timeout=_DDL_TIMEOUT_SECONDS)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _sessions_table_ddl(self) -> str:
         return self._build_sessions_table_ddl()
@@ -963,6 +987,8 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         "_events_row_deletion_policy",
         "_events_table_options",
         "_expires_index_options",
+        "_json_deserializer",
+        "_json_serializer",
         "_session_row_deletion_policy",
         "_session_table_options",
         "_shard_count",
@@ -980,6 +1006,7 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
             self._session_row_deletion_policy,
             self._events_row_deletion_policy,
         ) = _extract_spanner_adk_options(config)
+        self._json_serializer, self._json_deserializer = _extract_spanner_json_codecs(config)
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1001,9 +1028,11 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         """Get session by ID."""
         try:
             return await self._get_session(app_name, user_id, session_id, renew_for=renew_for)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return None
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
 
     async def update_session_state(self, app_name: str, user_id: str, session_id: str, state: "dict[str, Any]") -> None:
@@ -1025,9 +1054,11 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
             return await self._list_sessions(
                 app_name, user_id, order_by=order_by, descending=descending, limit=limit, offset=offset
             )
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._session_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
 
     async def delete_session(self, app_name: str, user_id: str, session_id: str) -> None:
@@ -1065,9 +1096,11 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         """Get events for a session."""
         try:
             return await self._get_events(app_name, user_id, session_id, after_timestamp, limit)
-        except NotFound as exc:
+        except (NotFound, SQLSpecError) as exc:
             if _is_spanner_table_missing(exc, self._events_table, self._session_table):
                 return []
+            if isinstance(exc, SpannerGoogleAPICallError):
+                raise create_mapped_exception(exc) from exc
             raise
 
     async def delete_expired_events(self, before: datetime, app_name: "str | None" = None) -> int:
@@ -1113,7 +1146,10 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
         return _filter_existing_spanner_drops(self._reset_drop_statements(), await self._existing_tables())
 
     async def _existing_tables(self) -> "set[str]":
-        return await list_existing_table_names_async(await self._database())
+        try:
+            return await list_existing_table_names_async(await self._database())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -1122,11 +1158,17 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
 
     async def _run_write(self, statements: "list[tuple[str, dict[str, Any], dict[str, Any]]]") -> None:
         database = await self._database()
-        await database.run_in_transaction(_SpannerAsyncWriteJob(statements))
+        try:
+            await database.run_in_transaction(_SpannerAsyncWriteJob(statements))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         database = await self._database()
-        return int(await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types)))
+        try:
+            return int(await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types)))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _create_session(
         self, session_id: str, app_name: str, user_id: str, state: "dict[str, Any]", owner_id: "Any | None" = None
@@ -1269,7 +1311,10 @@ class SpannerAsyncADKStore(_SpannerADKStoreMixin, BaseAsyncADKStore[SpannerAsync
 
     async def _create_tables(self) -> None:
         ddl_statements = self._missing_table_ddl_statements(await self._existing_tables())
-        await execute_ddl_async(await self._database(), ddl_statements, timeout=_DDL_TIMEOUT_SECONDS)
+        try:
+            await execute_ddl_async(await self._database(), ddl_statements, timeout=_DDL_TIMEOUT_SECONDS)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _sessions_table_ddl(self) -> str:
         return self._build_sessions_table_ddl()
@@ -1311,6 +1356,8 @@ class _SpannerADKMemoryStoreMixin:
         _enable_hybrid_search: bool
         _enable_memory_graph: bool
         _memory_graph_name: str
+        _json_serializer: Callable[[Any], str]
+        _json_deserializer: Callable[[str], Any]
 
     def _memory_param_types(self, include_owner: bool) -> "dict[str, Any]":
         types: dict[str, Any] = {
@@ -1333,11 +1380,7 @@ class _SpannerADKMemoryStoreMixin:
         return types
 
     def _decode_json(self, raw: Any) -> Any:
-        if raw is None:
-            return None
-        if isinstance(raw, str):
-            return from_json(raw)
-        return raw
+        return _convert_json_row_value(raw, json_deserializer=self._json_deserializer)
 
     def _deduplicate_entries(self, entries: "list[StoredMemory]") -> "list[StoredMemory]":
         seen: set[str] = set()
@@ -1466,10 +1509,12 @@ CREATE TABLE {self._memory_table} (
             "event_id": entry["event_id"],
             "author": entry["author"],
             "timestamp": entry["timestamp"],
-            "content_json": to_json(entry["content_json"]),
+            "content_json": self._json_serializer(entry["content_json"]),
             "content_text": entry["content_text"],
             "embedding": embedding_param,
-            "metadata_json": to_json(entry["metadata_json"]) if entry["metadata_json"] is not None else None,
+            "metadata_json": self._json_serializer(entry["metadata_json"])
+            if entry["metadata_json"] is not None
+            else None,
             "inserted_at": entry["inserted_at"],
         }
         if self._owner_id_column_name:
@@ -1671,6 +1716,8 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         "_enable_hybrid_search",
         "_enable_memory_graph",
         "_has_explicit_vector_dimensions",
+        "_json_deserializer",
+        "_json_serializer",
         "_memory_graph_name",
         "_memory_row_deletion_policy",
         "_memory_table_options",
@@ -1697,6 +1744,7 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
             self._enable_memory_graph,
             self._memory_graph_name,
         ) = _extract_spanner_memory_options(config, self._memory_table)
+        self._json_serializer, self._json_deserializer = _extract_spanner_json_codecs(config)
 
     def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1737,22 +1785,34 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
         return _filter_existing_spanner_drops(self._reset_drop_memory_statements(), self._existing_tables())
 
     def _existing_tables(self) -> "set[str]":
-        return list_existing_table_names_sync(self._database())
+        try:
+            return list_existing_table_names_sync(self._database())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
     ) -> "list[Any]":
-        with self._config.provide_connection() as snapshot:
-            reader = cast("_SpannerReadProtocol", snapshot)
-            return list(reader.execute_sql(sql, params=params, param_types=types))
+        try:
+            with self._config.provide_connection(transaction=False) as snapshot:
+                reader = cast("_SpannerReadProtocol", snapshot)
+                return list(reader.execute_sql(sql, params=params, param_types=types))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
-        return int(cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types)))
+        try:
+            return int(cast("Any", self._database()).run_in_transaction(_SpannerSyncUpdateJob(sql, params, types)))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _create_tables(self) -> None:
         if not self._enabled or self._memory_table in self._existing_tables():
             return
-        execute_ddl_sync(self._database(), self._memory_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
+        try:
+            execute_ddl_sync(self._database(), self._memory_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
@@ -1772,7 +1832,10 @@ class SpannerSyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseSyncADKMemorySt
             (entry["event_id"], self._build_insert_memory_entry_statement(entry, owner_id)) for entry in unique_entries
         ]
         job = _SpannerSyncMemoryInsertJob(check_sql, check_params, check_types, candidates)
-        return int(cast("Any", self._database()).run_in_transaction(job))
+        try:
+            return int(cast("Any", self._database()).run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     def _search_entries(
         self,
@@ -1813,6 +1876,8 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         "_enable_hybrid_search",
         "_enable_memory_graph",
         "_has_explicit_vector_dimensions",
+        "_json_deserializer",
+        "_json_serializer",
         "_memory_graph_name",
         "_memory_row_deletion_policy",
         "_memory_table_options",
@@ -1839,6 +1904,7 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
             self._enable_memory_graph,
             self._memory_graph_name,
         ) = _extract_spanner_memory_options(config, self._memory_table)
+        self._json_serializer, self._json_deserializer = _extract_spanner_json_codecs(config)
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist."""
@@ -1881,7 +1947,10 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         return _filter_existing_spanner_drops(self._reset_drop_memory_statements(), await self._existing_tables())
 
     async def _existing_tables(self) -> "set[str]":
-        return await list_existing_table_names_async(await self._database())
+        try:
+            return await list_existing_table_names_async(await self._database())
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _run_read(
         self, sql: str, params: "dict[str, Any] | None" = None, types: "dict[str, Any] | None" = None
@@ -1890,12 +1959,20 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
 
     async def _execute_update(self, sql: str, params: "dict[str, Any]", types: "dict[str, Any]") -> int:
         database = await self._database()
-        return int(await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types)))
+        try:
+            return int(await database.run_in_transaction(_SpannerAsyncUpdateJob(sql, params, types)))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _create_tables(self) -> None:
         if not self._enabled or self._memory_table in await self._existing_tables():
             return
-        await execute_ddl_async(await self._database(), await self._memory_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS)
+        try:
+            await execute_ddl_async(
+                await self._database(), await self._memory_table_ddl(), timeout=_DDL_TIMEOUT_SECONDS
+            )
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _memory_table_ddl(self) -> "list[str]":
         return self._build_memory_table_ddl()
@@ -1916,7 +1993,10 @@ class SpannerAsyncADKMemoryStore(_SpannerADKMemoryStoreMixin, BaseAsyncADKMemory
         ]
         database = await self._database()
         job = _SpannerAsyncMemoryInsertJob(check_sql, check_params, check_types, candidates)
-        return int(await database.run_in_transaction(job))
+        try:
+            return int(await database.run_in_transaction(job))
+        except SpannerGoogleAPICallError as exc:
+            raise create_mapped_exception(exc) from exc
 
     async def _search_entries(
         self,
@@ -1958,9 +2038,12 @@ async def _run_read_async(
     params: "dict[str, Any] | None" = None,
     types: "dict[str, Any] | None" = None,
 ) -> "list[Any]":
-    async with cast("Any", database).snapshot() as snapshot:
-        result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
-        return [row async for row in result_set]
+    try:
+        async with cast("Any", database).snapshot() as snapshot:
+            result_set = await snapshot.execute_sql(sql, params=params, param_types=types)
+            return [row async for row in result_set]
+    except SpannerGoogleAPICallError as exc:
+        raise create_mapped_exception(exc) from exc
 
 
 def _json_param_type() -> Any:
@@ -1968,6 +2051,17 @@ def _json_param_type() -> Any:
         return SPANNER_PARAM_TYPES.JSON
     except AttributeError:
         return SPANNER_PARAM_TYPES.STRING
+
+
+def _extract_spanner_json_codecs(config: Any) -> "tuple[Callable[[Any], str], Callable[[str], Any]]":
+    driver_features = getattr(config, "driver_features", None)
+    features = driver_features if isinstance(driver_features, Mapping) else {}
+    serializer = features.get("json_serializer")
+    deserializer = features.get("json_deserializer")
+    return (
+        cast("Callable[[Any], str]", serializer if callable(serializer) else to_json),
+        cast("Callable[[str], Any]", deserializer if callable(deserializer) else from_json),
+    )
 
 
 def _extract_spanner_adk_options(config: Any) -> "tuple[int, str | None, str | None, str | None, str, str]":
@@ -2053,7 +2147,7 @@ def _adk_config(config: Any) -> SpannerADKConfig:
     return cast("SpannerADKConfig", adk_config)
 
 
-def _is_spanner_table_missing(exc: NotFound, *table_names: str) -> bool:
+def _is_spanner_table_missing(exc: Exception, *table_names: str) -> bool:
     message = str(exc).lower()
     return "not found" in message and any(table_name.lower() in message for table_name in table_names)
 
@@ -2089,6 +2183,14 @@ def _spanner_drop_statement_table(statement: str, existing_tables: "set[str]") -
     return None
 
 
+class _SpannerWriteTransactionProtocol(Protocol):
+    def batch_update(self, statements: "Sequence[Any]") -> "tuple[Any, Sequence[int]]": ...
+
+    def execute_update(
+        self, sql: str, params: "dict[str, Any] | None" = None, param_types: "dict[str, Any] | None" = None
+    ) -> int: ...
+
+
 class _SpannerSyncWriteJob:
     """Callable transaction work item for Spanner sync ADK write batches."""
 
@@ -2098,14 +2200,15 @@ class _SpannerSyncWriteJob:
         self._statements = statements
 
     def __call__(self, transaction: "SpannerTransaction") -> None:
+        writer = cast("_SpannerWriteTransactionProtocol", transaction)
         if len(self._statements) > 1:
-            status, _row_counts = transaction.batch_update(self._statements)  # type: ignore[no-untyped-call]
+            status, _row_counts = writer.batch_update(self._statements)
             if status.code != 0:
                 msg = f"Spanner batch update failed (code {status.code}): {status.message}"
                 raise OperationalError(msg)
             return
         for sql, params, types in self._statements:
-            transaction.execute_update(sql, params=params, param_types=types)  # type: ignore[no-untyped-call]
+            writer.execute_update(sql, params=params, param_types=types)
 
 
 class _SpannerAsyncWriteJob:
@@ -2196,7 +2299,8 @@ class _SpannerSyncUpdateJob:
         self._types = types
 
     def __call__(self, transaction: "SpannerTransaction") -> int:
-        return int(transaction.execute_update(self._sql, params=self._params, param_types=self._types))  # type: ignore[no-untyped-call]
+        writer = cast("_SpannerWriteTransactionProtocol", transaction)
+        return int(writer.execute_update(self._sql, params=self._params, param_types=self._types))
 
 
 class _SpannerAsyncUpdateJob:

@@ -280,24 +280,8 @@ class JoinBuilder:
 
 
 def create_join_builder(join_type: str, lateral: bool = False) -> "JoinBuilder":
-    """Create a JoinBuilder without tripping trait instantiation errors.
-
-    This guards against runtime environments where a trait-decorated JoinBuilder
-    may raise on direct construction.
-    """
-    try:
-        return JoinBuilder(join_type, lateral=lateral)
-    except TypeError as exc:
-        if "traits may not be directly created" not in str(exc):
-            raise
-        builder = object.__new__(JoinBuilder)
-        builder._join_type = join_type.upper()
-        builder._lateral = lateral
-        builder._table = None
-        builder._alias = None
-        builder._as_of = None
-        builder._as_of_type = None
-        return builder
+    """Create a JoinBuilder instance."""
+    return JoinBuilder(join_type, lateral=lateral)
 
 
 def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr, "SQL"] | None) -> exp.Expr | None:
@@ -318,19 +302,22 @@ def _parse_join_condition(builder: "SQLBuilderProtocol", on: Union[str, exp.Expr
 
 def _table_from_builder(table: Any, alias: str | None, builder: "SQLBuilderProtocol") -> exp.Expr:
     subquery_expression: exp.Expr
-    builder_table = cast("HasParameterBuilderProtocol", table)
-    parameters = builder_table.parameters
-
-    if isinstance(table, QueryBuilder):
-        subquery_expression = table._build_final_expression(copy=True)
+    if isinstance(builder, QueryBuilder):
+        subquery_expression = builder._embed_subquery(table, alias_hint=alias or "join_src")
     else:
-        subquery_result = builder_table.build()
-        sql_text = subquery_result.sql if isinstance(subquery_result, BuiltQuery) else str(subquery_result)
-        subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
+        builder_table = cast("HasParameterBuilderProtocol", table)
+        parameters = builder_table.parameters
 
-    if parameters:
-        for param_name, param_value in parameters.items():
-            builder.add_parameter(param_value, name=param_name)
+        if isinstance(table, QueryBuilder):
+            subquery_expression = table._build_final_expression(copy=True)
+        else:
+            subquery_result = builder_table.build()
+            sql_text = subquery_result.sql if isinstance(subquery_result, BuiltQuery) else str(subquery_result)
+            subquery_expression = exp.maybe_parse(sql_text, dialect=builder.dialect) or exp.convert(sql_text)
+
+        if parameters:
+            for param_name, param_value in parameters.items():
+                builder.add_parameter(param_value, name=param_name)
 
     subquery_exp = exp.paren(subquery_expression)
     return exp.alias_(subquery_exp, alias) if alias else subquery_exp

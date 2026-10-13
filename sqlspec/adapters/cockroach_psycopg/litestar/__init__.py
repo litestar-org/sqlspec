@@ -1,3 +1,5 @@
+"""CockroachDB psycopg Litestar session store module."""
+
 from sqlspec.adapters.cockroach_psycopg.litestar.store import (
     CockroachPsycopgAsyncStore,
     CockroachPsycopgLitestarConfig,

@@ -5,14 +5,9 @@ from unittest.mock import MagicMock
 from pytest import MonkeyPatch
 
 from sqlspec.adapters.adbc.config import AdbcConfig
-from sqlspec.adapters.adbc.core import (
-    apply_driver_features,
-    build_postgres_extension_probe_names,
-    detect_postgres_extensions,
-    get_statement_config,
-    resolve_postgres_extension_state,
-)
+from sqlspec.adapters.adbc.core import apply_driver_features, detect_postgres_extensions, get_statement_config
 from sqlspec.core import StatementConfig
+from sqlspec.core.config_runtime import build_postgres_extension_probe_names, resolve_postgres_extension_state
 
 
 class _Cursor:
@@ -47,7 +42,6 @@ def test_apply_driver_features_sets_pgvector_default() -> None:
     statement_config = get_statement_config("postgres")
     _, features = apply_driver_features(statement_config, None)
     assert "enable_pgvector" in features
-    # PGVECTOR_INSTALLED is an OptionalDependencyFlag (truthy/falsy)
     assert features["enable_pgvector"] is not None
 
 

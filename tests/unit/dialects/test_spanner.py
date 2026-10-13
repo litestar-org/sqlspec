@@ -11,6 +11,9 @@ import pytest
 from sqlglot import Dialect, exp, parse_one
 
 from sqlspec.dialects.spanner import (
+    ApproxCosineDistance,
+    GetNextSequenceValue,
+    Score,
     SpannerGraphTable,
     _generators,
     _parsers,
@@ -192,8 +195,9 @@ def test_spanner_property_moves_after_non_spanner_property() -> None:
     assert not _is_post_schema_spanner_property(non_spanner_property)
     properties.set("expressions", [spanner_property, non_spanner_property])
     generator = Dialect.get_or_raise("spanner").generator()
-    _bq_create_transform(generator, parsed)
-    assert properties.expressions == [non_spanner_property, spanner_property]
+    rendered = _bq_create_transform(generator, parsed)
+    assert properties.expressions == [spanner_property, non_spanner_property]
+    assert rendered.index("enable_change_stream_capture") < rendered.index("INTERLEAVE IN PARENT")
 
 
 def test_dedup_normalize_interval_expression_has_single_definition() -> None:
@@ -368,3 +372,39 @@ def test_vector_and_search_expression_builders_and_hidden_tokenlist() -> None:
         ") PRIMARY KEY (id)"
     )
     assert _render(ddl) == ddl
+
+
+def test_approx_cosine_distance_and_pascal_case_matchers() -> None:
+    """Verify approx_cosine_distance options and PascalCase _SpannerAnonymousNodeMeta matchers."""
+    pos_expr = approx_cosine_distance(
+        exp.column("embedding"), exp.Placeholder(this="q"), exp.var("JSON '{\"num_leaves_to_search\": 10}'")
+    )
+    assert isinstance(pos_expr, ApproxCosineDistance)
+    assert pos_expr.sql(dialect="spanner") == (
+        "APPROX_COSINE_DISTANCE(embedding, @q, options => JSON '{\"num_leaves_to_search\": 10}')"
+    )
+
+    parsed_score = parse_one("SELECT SCORE(tokens, 'rock') FROM albums", dialect="spanner")
+    score_node = parsed_score.find(Score)
+    assert score_node is not None
+    assert isinstance(score_node, Score)
+
+    seq_node = GetNextSequenceValue(this="my_seq")
+    assert isinstance(seq_node, GetNextSequenceValue)
+    assert seq_node.sql(dialect="spanner") == "GET_NEXT_SEQUENCE_VALUE(SEQUENCE my_seq)"
+
+
+def test_schema_qualified_spanner_ddl_and_graph_table() -> None:
+    """Verify schema-qualified names round-trip in sequences, change streams, property graphs, and GRAPH_TABLE."""
+    statements = [
+        "CREATE SEQUENCE app.user_seq OPTIONS (sequence_kind = 'bit_reversed_positive')",
+        "ALTER SEQUENCE app.user_seq SET OPTIONS (skip_range_min = 1, skip_range_max = 100)",
+        "CREATE CHANGE STREAM app.cs_users FOR app.users(name, email)",
+        "ALTER CHANGE STREAM app.cs_users SET OPTIONS (retention_period = '36h')",
+        "CREATE PROPERTY GRAPH app.fin_graph NODE TABLES (app.Account KEY (id))",
+        "SELECT id FROM GRAPH_TABLE(app.fin_graph MATCH (a:Account) WHERE a.id = 'two  spaces' COLUMNS (a.id AS id))",
+    ]
+    for sql in statements:
+        parsed = parse_one(sql, dialect="spanner")
+        assert not isinstance(parsed, exp.Command)
+        assert parsed.sql(dialect="spanner") == sql

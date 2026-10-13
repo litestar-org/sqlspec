@@ -80,6 +80,43 @@ class SQLSpecPlugin:
             config_count=len(self._config_states),
         )
 
+    def init_app(self, app: "Sanic[Any, Any]") -> None:
+        """Initialize Sanic application with SQLSpec.
+
+        Args:
+            app: Sanic application instance.
+        """
+        self._ensure_unique_keys()
+        setattr(app.ctx, "sqlspec_plugin", self)
+        self._add_lifecycle_listeners(app)
+        self._add_request_middleware(app)
+
+    def get_session(self, request: Any, key: "str | None" = None) -> Any:
+        """Get or create database session for request.
+
+        Args:
+            request: Sanic request instance.
+            key: Optional session key to retrieve a specific database session.
+
+        Returns:
+            Database session driver instance.
+        """
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        return get_or_create_session(request, config_state)
+
+    def get_connection(self, request: Any, key: "str | None" = None) -> Any:
+        """Get database connection from request context.
+
+        Args:
+            request: Sanic request instance.
+            key: Optional session key to retrieve a specific database connection.
+
+        Returns:
+            Database connection object.
+        """
+        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
+        return get_context_value(request.ctx, config_state.connection_key)
+
     def _extract_extension_settings(self, config: Any) -> "dict[str, Any]":
         """Extract Sanic settings from config.extension_config.
 
@@ -137,17 +174,6 @@ class SQLSpecPlugin:
             sqlcommenter_framework=settings["sqlcommenter_framework"],
         )
 
-    def init_app(self, app: "Sanic[Any, Any]") -> None:
-        """Initialize Sanic application with SQLSpec.
-
-        Args:
-            app: Sanic application instance.
-        """
-        self._ensure_unique_keys()
-        setattr(app.ctx, "sqlspec_plugin", self)
-        self._add_lifecycle_listeners(app)
-        self._add_request_middleware(app)
-
     def _add_lifecycle_listeners(self, app: "Sanic[Any, Any]") -> None:
         """Register Sanic server lifecycle listeners.
 
@@ -172,6 +198,9 @@ class SQLSpecPlugin:
 
         app.on_request(self._on_request)
         app.on_response(self._on_response)  # type: ignore[no-untyped-call]
+        on_exception = getattr(app, "on_exception", None)
+        if callable(on_exception):
+            on_exception(self._on_exception)
         self._request_middleware_added = True
 
     async def _on_request(self, request: Any) -> None:
@@ -208,6 +237,31 @@ class SQLSpecPlugin:
                 await self._finalize_request_connection(request, response, config_state)
         finally:
             self._restore_observability_contexts(request, response)
+
+    async def _on_exception(self, request: Any, exception: BaseException) -> None:
+        """Roll back and release request-scoped connections when an unhandled exception occurs.
+
+        Args:
+            request: Sanic request instance.
+            exception: Unhandled exception raised during request processing.
+        """
+        _ = exception
+        if request is None or not hasattr(request, "ctx"):
+            return
+        try:
+            for config_state in self._config_states[::-1]:
+                if config_state.disable_di:
+                    continue
+                connection = get_context_value(request.ctx, config_state.connection_key, None)
+                if connection is None:
+                    continue
+                try:
+                    if config_state.commit_mode != "manual":
+                        await self._rollback_target(request, connection, config_state)
+                finally:
+                    await self._release_request_connection(request, config_state)
+        finally:
+            self._restore_observability_contexts(request, None)
 
     def _needs_request_middleware(self) -> bool:
         """Return whether this plugin should register request middleware.
@@ -408,11 +462,25 @@ class SQLSpecPlugin:
             if config_state.commit_mode != "manual":
                 status_code = self._response_status_code(response)
                 if self._should_commit(config_state, status_code):
-                    await ensure_async_(connection.commit)()
+                    await self._commit_target(request, connection, config_state)
                 else:
-                    await ensure_async_(connection.rollback)()
+                    await self._rollback_target(request, connection, config_state)
         finally:
             await self._release_request_connection(request, config_state)
+
+    async def _commit_target(self, request: Any, connection: Any, config_state: SanicConfigState) -> None:
+        """Commit transaction using active session or connection."""
+        session = get_context_value(request.ctx, f"{config_state.session_key}_instance", None)
+        target = session if session is not None and hasattr(session, "commit") else connection
+        if hasattr(target, "commit"):
+            await ensure_async_(target.commit)()
+
+    async def _rollback_target(self, request: Any, connection: Any, config_state: SanicConfigState) -> None:
+        """Roll back transaction using active session or connection."""
+        session = get_context_value(request.ctx, f"{config_state.session_key}_instance", None)
+        target = session if session is not None and hasattr(session, "rollback") else connection
+        if hasattr(target, "rollback"):
+            await ensure_async_(target.rollback)()
 
     async def _release_request_connection(self, request: Any, config_state: SanicConfigState) -> None:
         """Release and clear one request connection.
@@ -520,7 +588,7 @@ class SQLSpecPlugin:
 
             try:
                 await ensure_async_(config_state.config.close_pool)()
-            except Exception:
+            except Exception as exc:
                 log_with_context(
                     logger,
                     logging.ERROR,
@@ -528,17 +596,19 @@ class SQLSpecPlugin:
                     framework="sanic",
                     pool_key=config_state.pool_key,
                     session_key=config_state.session_key,
+                    error_type=type(exc).__name__,
                 )
-                raise
-            pop_context_value(app.ctx, config_state.pool_key)
-            log_with_context(
-                logger,
-                logging.DEBUG,
-                "pool.close",
-                framework="sanic",
-                pool_key=config_state.pool_key,
-                session_key=config_state.session_key,
-            )
+            else:
+                log_with_context(
+                    logger,
+                    logging.DEBUG,
+                    "pool.close",
+                    framework="sanic",
+                    pool_key=config_state.pool_key,
+                    session_key=config_state.session_key,
+                )
+            finally:
+                pop_context_value(app.ctx, config_state.pool_key)
 
     def _ensure_unique_keys(self) -> None:
         """Validate that all context keys are unique across configs.
@@ -554,32 +624,6 @@ class SQLSpecPlugin:
                 msg = f"Duplicate context keys found: {duplicates}"
                 raise ImproperConfigurationError(msg)
             all_keys.update(keys)
-
-    def get_session(self, request: Any, key: "str | None" = None) -> Any:
-        """Get or create database session for request.
-
-        Args:
-            request: Sanic request instance.
-            key: Optional session key to retrieve a specific database session.
-
-        Returns:
-            Database session driver instance.
-        """
-        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-        return get_or_create_session(request, config_state)
-
-    def get_connection(self, request: Any, key: "str | None" = None) -> Any:
-        """Get database connection from request context.
-
-        Args:
-            request: Sanic request instance.
-            key: Optional session key to retrieve a specific database connection.
-
-        Returns:
-            Database connection object.
-        """
-        config_state = self._config_states[0] if key is None else self._config_state_by_key(key)
-        return get_context_value(request.ctx, config_state.connection_key)
 
     def _config_state_by_key(self, key: str) -> SanicConfigState:
         """Get configuration state by session key.

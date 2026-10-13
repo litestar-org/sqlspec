@@ -54,72 +54,9 @@ class Insert(
         if table:
             self.into(table)
 
-    def _create_base_expression(self) -> exp.Insert:
-        """Create a base INSERT expression.
-
-        This method is called by the base QueryBuilder during initialization.
-
-        Returns:
-            A new sqlglot Insert expression.
-        """
-        return exp.Insert()
-
-    def _insert_expression(self) -> exp.Insert:
-        """Safely gets and casts the internal expression to exp.Insert.
-
-        Returns:
-            The internal expression as exp.Insert.
-
-        Raises:
-            SQLBuilderError: If the expression is not initialized or is not an Insert.
-        """
-        if self._expression is None:
-            raise SQLBuilderError(ERR_MSG_EXPRESSION_NOT_INITIALIZED)
-        if not isinstance(self._expression, exp.Insert):
-            raise SQLBuilderError(ERR_MSG_INTERNAL_EXPRESSION_TYPE)
-        return self._expression
-
     def get_insert_expression(self) -> exp.Insert:
         """Get the insert expression (public API)."""
         return self._insert_expression()
-
-    def _bind_mapping_values(self, data: "Mapping[str, Any]") -> "Self":
-        """Bind a single mapping row."""
-        insert_expr = self._insert_expression()
-        if insert_expr.args.get("this") is None:
-            raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
-
-        data_keys = list(data.keys())
-        if not self._columns:
-            self.columns(*data_keys)
-        elif set(self._columns) != set(data_keys):
-            msg = f"Dictionary keys {set(data_keys)} do not match existing columns {set(self._columns)}."
-            raise SQLBuilderError(msg)
-
-        return self.values(*[data[col] for col in self._columns])
-
-    def _bind_mapping_values_many(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
-        """Bind many mapping rows."""
-        if not data:
-            return self
-
-        first_dict = data[0]
-        if not self._columns:
-            self.columns(*first_dict.keys())
-
-        expected_keys = set(self._columns)
-        for i, row_dict in enumerate(data):
-            if set(row_dict.keys()) != expected_keys:
-                msg = (
-                    f"Dictionary at index {i} has keys {set(row_dict.keys())} "
-                    f"which do not match expected keys {expected_keys}."
-                )
-                raise SQLBuilderError(msg)
-
-        for row_dict in data:
-            self.values(*[row_dict[col] for col in self._columns])
-
-        return self
 
     def values_from(self, data: Any, *, exclude_unset: bool = True) -> "Self":
         """Add a row of values from a dict, dataclass, msgspec.Struct, Pydantic model, or attrs class.
@@ -206,6 +143,69 @@ class Insert(
         on_conflict = exp.OnConflict(duplicate=True, action=exp.var("UPDATE"), expressions=set_expressions or None)
 
         insert_expr.set("conflict", on_conflict)
+
+        return self
+
+    def _create_base_expression(self) -> exp.Insert:
+        """Create a base INSERT expression.
+
+        This method is called by the base QueryBuilder during initialization.
+
+        Returns:
+            A new sqlglot Insert expression.
+        """
+        return exp.Insert()
+
+    def _insert_expression(self) -> exp.Insert:
+        """Safely gets and casts the internal expression to exp.Insert.
+
+        Returns:
+            The internal expression as exp.Insert.
+
+        Raises:
+            SQLBuilderError: If the expression is not initialized or is not an Insert.
+        """
+        if self._expression is None:
+            raise SQLBuilderError(ERR_MSG_EXPRESSION_NOT_INITIALIZED)
+        if not isinstance(self._expression, exp.Insert):
+            raise SQLBuilderError(ERR_MSG_INTERNAL_EXPRESSION_TYPE)
+        return self._expression
+
+    def _bind_mapping_values(self, data: "Mapping[str, Any]") -> "Self":
+        """Bind a single mapping row."""
+        insert_expr = self._insert_expression()
+        if insert_expr.args.get("this") is None:
+            raise SQLBuilderError(ERR_MSG_TABLE_NOT_SET)
+
+        data_keys = list(data.keys())
+        if not self._columns:
+            self.columns(*data_keys)
+        elif set(self._columns) != set(data_keys):
+            msg = f"Dictionary keys {set(data_keys)} do not match existing columns {set(self._columns)}."
+            raise SQLBuilderError(msg)
+
+        return self.values(*[data[col] for col in self._columns])
+
+    def _bind_mapping_values_many(self, data: "Sequence[Mapping[str, Any]]") -> "Self":
+        """Bind many mapping rows."""
+        if not data:
+            return self
+
+        first_dict = data[0]
+        if not self._columns:
+            self.columns(*first_dict.keys())
+
+        expected_keys = set(self._columns)
+        for i, row_dict in enumerate(data):
+            if set(row_dict.keys()) != expected_keys:
+                msg = (
+                    f"Dictionary at index {i} has keys {set(row_dict.keys())} "
+                    f"which do not match expected keys {expected_keys}."
+                )
+                raise SQLBuilderError(msg)
+
+        for row_dict in data:
+            self.values(*[row_dict[col] for col in self._columns])
 
         return self
 

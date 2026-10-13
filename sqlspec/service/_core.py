@@ -24,6 +24,22 @@ if TYPE_CHECKING:
     from sqlspec.service import SQLSpecAsyncService, SQLSpecSyncService
     from sqlspec.typing import SchemaT, StatementParameters
 
+__all__ = (
+    "_AsyncBeginTransactionContext",
+    "_SyncBeginTransactionContext",
+    "_TransactionState",
+    "_async_exists",
+    "_async_get_one",
+    "_async_paginate",
+    "_async_paginate_cursor",
+    "_cursor_pagination_parameters",
+    "_sync_exists",
+    "_sync_get_one",
+    "_sync_paginate",
+    "_sync_paginate_cursor",
+    "_transaction_session",
+)
+
 AsyncDriverT = TypeVar("AsyncDriverT", bound=AsyncDriverAdapterBase, default=AsyncDriverAdapterBase)
 SyncDriverT = TypeVar("SyncDriverT", bound=SyncDriverAdapterBase, default=SyncDriverAdapterBase)
 
@@ -80,7 +96,8 @@ async def _async_paginate(
         statement, parameters = cursor_parameters
         return await _async_paginate_cursor(context, statement, parameters, schema_type, kwargs)
     async with context as driver:
-        limit_offset: LimitOffsetFilter | None = driver.find_filter(LimitOffsetFilter, parameters)
+        pending = statement.filters if isinstance(statement, SQL) else []
+        limit_offset: LimitOffsetFilter | None = find_filter(LimitOffsetFilter, (*pending, *parameters))
 
         items, total = await driver.select_with_total(
             statement, *parameters, schema_type=schema_type, count_with_window=count_with_window, **kwargs
@@ -136,7 +153,7 @@ async def _async_paginate_cursor(
         if schema_type is None:
             return page
         return CursorPagination(
-            items=cast("list[SchemaT]", driver.to_schema(list(page.items), schema_type=schema_type)),
+            items=cast("list[SchemaT]", driver.to_schema(page.items, schema_type=schema_type)),
             limit=page.limit,
             next_cursor=page.next_cursor,
             previous_cursor=page.previous_cursor,
@@ -168,8 +185,11 @@ async def _async_exists(
     kwargs: dict[str, Any],
 ) -> bool:
     """Execute the async service exists operation in the supplied session context."""
+    pending = statement.filters if isinstance(statement, SQL) else []
+    has_limit = find_filter(LimitOffsetFilter, (*pending, *parameters)) is not None
+    bound_params = parameters if has_limit else (*parameters, LimitOffsetFilter(limit=1, offset=0))
     async with context as driver:
-        return await driver.select_one_or_none(statement, *parameters, **kwargs) is not None
+        return await driver.select_one_or_none(statement, *bound_params, **kwargs) is not None
 
 
 def _sync_paginate(
@@ -196,7 +216,8 @@ def _sync_paginate(
         statement, parameters = cursor_parameters
         return _sync_paginate_cursor(context, statement, parameters, schema_type, kwargs)
     with context as driver:
-        limit_offset: LimitOffsetFilter | None = driver.find_filter(LimitOffsetFilter, parameters)
+        pending = statement.filters if isinstance(statement, SQL) else []
+        limit_offset: LimitOffsetFilter | None = find_filter(LimitOffsetFilter, (*pending, *parameters))
 
         items, total = driver.select_with_total(
             statement, *parameters, schema_type=schema_type, count_with_window=count_with_window, **kwargs
@@ -233,7 +254,7 @@ def _sync_paginate_cursor(
         if schema_type is None:
             return page
         return CursorPagination(
-            items=cast("list[SchemaT]", driver.to_schema(list(page.items), schema_type=schema_type)),
+            items=cast("list[SchemaT]", driver.to_schema(page.items, schema_type=schema_type)),
             limit=page.limit,
             next_cursor=page.next_cursor,
             previous_cursor=page.previous_cursor,
@@ -265,8 +286,11 @@ def _sync_exists(
     kwargs: dict[str, Any],
 ) -> bool:
     """Execute the sync service exists operation in the supplied session context."""
+    pending = statement.filters if isinstance(statement, SQL) else []
+    has_limit = find_filter(LimitOffsetFilter, (*pending, *parameters)) is not None
+    bound_params = parameters if has_limit else (*parameters, LimitOffsetFilter(limit=1, offset=0))
     with context as driver:
-        return driver.select_one_or_none(statement, *parameters, **kwargs) is not None
+        return driver.select_one_or_none(statement, *bound_params, **kwargs) is not None
 
 
 def _active_transaction(key: object) -> _TransactionState | None:
@@ -361,6 +385,10 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
                 nested = session.transaction()
                 await nested.__aenter__()
                 self._nested = nested
+                if active is None:
+                    state = _TransactionState(session)
+                    service._transaction_state = state
+                    self._state = state
                 return session
             if not _connection_in_transaction(session):
                 await service.begin()
@@ -401,8 +429,14 @@ class _AsyncBeginTransactionContext(Generic[AsyncDriverT]):
         self._state = None
         self._stack = None
         if nested is not None:
-            await nested.__aexit__(exc_type, exc, traceback)
-            return False
+            try:
+                await nested.__aexit__(exc_type, exc, traceback)
+                return False
+            finally:
+                if state is not None:
+                    state.driver = None
+                    if service._transaction_state is state:
+                        service._transaction_state = None
         if stack is not None:
             await stack.__aexit__(exc_type, exc, traceback)
             return False
@@ -448,6 +482,10 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
                 nested = session.transaction()
                 nested.__enter__()
                 self._nested = nested
+                if active is None:
+                    state = _TransactionState(session)
+                    service._transaction_state = state
+                    self._state = state
                 return session
             if not _connection_in_transaction(session):
                 service.begin()
@@ -488,8 +526,14 @@ class _SyncBeginTransactionContext(Generic[SyncDriverT]):
         self._state = None
         self._stack = None
         if nested is not None:
-            nested.__exit__(exc_type, exc, traceback)
-            return False
+            try:
+                nested.__exit__(exc_type, exc, traceback)
+                return False
+            finally:
+                if state is not None:
+                    state.driver = None
+                    if service._transaction_state is state:
+                        service._transaction_state = None
         if stack is not None:
             stack.__exit__(exc_type, exc, traceback)
             return False

@@ -118,7 +118,8 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
             return nullcontext(cast("AsyncDriverT", active))
         if self._config is not None:
             return self._config.provide_session()
-        return nullcontext(self.session)
+        msg = "No session or config is available to provide a session."
+        raise ImproperConfigurationError(msg)
 
     @overload
     async def paginate(
@@ -332,16 +333,13 @@ class SQLSpecAsyncService(Generic[AsyncDriverT]):
         Raises:
             ImproperConfigurationError: Filters conflict with the requested pagination mode.
         """
+        if "count_with_window" in kwargs:
+            msg = "count_with_window is incompatible with cursor pagination"
+            raise ImproperConfigurationError(msg)
         return cast(
             "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]",
             await _async_paginate(
-                self.provide_session(session),
-                statement,
-                parameters,
-                schema_type,
-                kwargs.pop("count_with_window", False),
-                kwargs,
-                mode="cursor",
+                self.provide_session(session), statement, parameters, schema_type, False, kwargs, mode="cursor"
             ),
         )
 
@@ -553,7 +551,8 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
             return nullcontext(cast("SyncDriverT", active))
         if self._config is not None:
             return self._config.provide_session()
-        return nullcontext(self.session)
+        msg = "No session or config is available to provide a session."
+        raise ImproperConfigurationError(msg)
 
     @overload
     def paginate(
@@ -767,16 +766,13 @@ class SQLSpecSyncService(Generic[SyncDriverT]):
         Raises:
             ImproperConfigurationError: Filters conflict with the requested pagination mode.
         """
+        if "count_with_window" in kwargs:
+            msg = "count_with_window is incompatible with cursor pagination"
+            raise ImproperConfigurationError(msg)
         return cast(
             "CursorPagination[SchemaT] | CursorPagination[dict[str, Any]]",
             _sync_paginate(
-                self.provide_session(session),
-                statement,
-                parameters,
-                schema_type,
-                kwargs.pop("count_with_window", False),
-                kwargs,
-                mode="cursor",
+                self.provide_session(session), statement, parameters, schema_type, False, kwargs, mode="cursor"
             ),
         )
 

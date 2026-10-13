@@ -1,3 +1,5 @@
+"""Data dictionary metadata types, capabilities, and redaction policies."""
+
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
@@ -124,31 +126,6 @@ class ObjectIdentity:
         self.quoted_name = quoted_name
         self.source = _coerce_source(source)
 
-    def to_dict(self) -> "dict[str, str | None]":
-        """Serialize the identity with stable string enum values."""
-        return {
-            "catalog": self.catalog,
-            "schema": self.schema,
-            "name": self.name,
-            "object_type": self.object_type,
-            "dialect": self.dialect,
-            "quoted_name": self.quoted_name,
-            "source": self.source.value,
-        }
-
-    @classmethod
-    def from_dict(cls, data: "dict[str, Any]") -> "ObjectIdentity":
-        """Create an identity from a serialized payload."""
-        return cls(
-            name=str(data["name"]),
-            object_type=str(data["object_type"]),
-            catalog=cast("str | None", data.get("catalog")),
-            schema=cast("str | None", data.get("schema")),
-            dialect=cast("str | None", data.get("dialect")),
-            quoted_name=cast("str | None", data.get("quoted_name")),
-            source=cast("str", data.get("source", MetadataSource.UNKNOWN.value)),
-        )
-
     def __repr__(self) -> str:
         return (
             f"ObjectIdentity(name={self.name!r}, object_type={self.object_type!r}, catalog={self.catalog!r}, "
@@ -185,6 +162,31 @@ class ObjectIdentity:
             },
         )
 
+    def to_dict(self) -> "dict[str, str | None]":
+        """Serialize the identity with stable string enum values."""
+        return {
+            "catalog": self.catalog,
+            "schema": self.schema,
+            "name": self.name,
+            "object_type": self.object_type,
+            "dialect": self.dialect,
+            "quoted_name": self.quoted_name,
+            "source": self.source.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: "dict[str, Any]") -> "ObjectIdentity":
+        """Create an identity from a serialized payload."""
+        return cls(
+            name=str(data["name"]),
+            object_type=str(data["object_type"]),
+            catalog=cast("str | None", data.get("catalog")),
+            schema=cast("str | None", data.get("schema")),
+            dialect=cast("str | None", data.get("dialect")),
+            quoted_name=cast("str | None", data.get("quoted_name")),
+            source=cast("str", data.get("source", MetadataSource.UNKNOWN.value)),
+        )
+
 
 class MetadataCapability:
     """Capability report for one metadata domain."""
@@ -207,6 +209,21 @@ class MetadataCapability:
         self.source = _coerce_source(source)
         self.risks = tuple(_coerce_risk(risk) for risk in risks)
         self.warnings = warnings
+
+    def __repr__(self) -> str:
+        return (
+            f"MetadataCapability(domain={self.domain!r}, support={self.support!r}, "
+            f"fidelity={self.fidelity!r}, source={self.source!r}, risks={self.risks!r}, "
+            f"warnings={self.warnings!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MetadataCapability):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.domain, self.support, self.fidelity, self.source, self.risks, self.warnings))
 
     def to_dict(self) -> "dict[str, str | tuple[str, ...]]":
         """Serialize the capability with stable string enum values."""
@@ -238,21 +255,6 @@ class MetadataCapability:
         """Create a standard unsupported-domain capability."""
         return cls(domain=domain, support=MetadataSupport.UNSUPPORTED, source=source)
 
-    def __repr__(self) -> str:
-        return (
-            f"MetadataCapability(domain={self.domain!r}, support={self.support!r}, "
-            f"fidelity={self.fidelity!r}, source={self.source!r}, risks={self.risks!r}, "
-            f"warnings={self.warnings!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, MetadataCapability):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((self.domain, self.support, self.fidelity, self.source, self.risks, self.warnings))
-
 
 class MetadataCapabilityProfile:
     """Capability report for one adapter and dialect."""
@@ -265,6 +267,20 @@ class MetadataCapabilityProfile:
         self.dialect = dialect
         self.adapter = adapter
         self.capabilities = capabilities
+
+    def __repr__(self) -> str:
+        return (
+            f"MetadataCapabilityProfile(dialect={self.dialect!r}, adapter={self.adapter!r}, "
+            f"capabilities={self.capabilities!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MetadataCapabilityProfile):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.dialect, self.adapter, self.capabilities))
 
     def get(self, domain: str) -> MetadataCapability:
         """Return capability for a domain, or unknown when it has not been reported."""
@@ -289,20 +305,6 @@ class MetadataCapabilityProfile:
             adapter=adapter,
             capabilities=tuple(MetadataCapability.unsupported(domain) for domain in domains),
         )
-
-    def __repr__(self) -> str:
-        return (
-            f"MetadataCapabilityProfile(dialect={self.dialect!r}, adapter={self.adapter!r}, "
-            f"capabilities={self.capabilities!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, MetadataCapabilityProfile):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((self.dialect, self.adapter, self.capabilities))
 
 
 class MetadataResult:
@@ -333,6 +335,20 @@ class MetadataResult:
         """Iterate over the metadata items in this result envelope."""
         return iter(self.items)
 
+    def __repr__(self) -> str:
+        return (
+            f"MetadataResult(domain={self.domain!r}, capability={self.capability!r}, "
+            f"items={self.items!r}, warnings={self.warnings!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MetadataResult):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.domain, self.capability, self.items, self.warnings))
+
     @classmethod
     def unsupported(cls, domain: str, *, source: "MetadataSource | str" = MetadataSource.UNKNOWN) -> "MetadataResult":
         """Create a standard unsupported-domain result."""
@@ -347,20 +363,6 @@ class MetadataResult:
             "items": tuple(_serialize_metadata_item(item) for item in self.items),
             "warnings": self.warnings,
         }
-
-    def __repr__(self) -> str:
-        return (
-            f"MetadataResult(domain={self.domain!r}, capability={self.capability!r}, "
-            f"items={self.items!r}, warnings={self.warnings!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, MetadataResult):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((self.domain, self.capability, self.items, self.warnings))
 
 
 class MetadataQuery:
@@ -391,6 +393,20 @@ class MetadataQuery:
             source=MetadataSource.CATALOG,
         )
         self.warnings = warnings or self.capability.warnings
+
+    def __repr__(self) -> str:
+        return (
+            f"MetadataQuery(dialect={self.dialect!r}, domain={self.domain!r}, name={self.name!r}, "
+            f"mode={self.mode!r}, capability={self.capability!r}, sql={self.sql!r}, warnings={self.warnings!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MetadataQuery):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.dialect, self.domain, self.name, self.mode, self.capability, self.query_text, self.warnings))
 
     @property
     def is_supported(self) -> bool:
@@ -439,20 +455,6 @@ class MetadataQuery:
             "warnings": self.warnings,
         }
 
-    def __repr__(self) -> str:
-        return (
-            f"MetadataQuery(dialect={self.dialect!r}, domain={self.domain!r}, name={self.name!r}, "
-            f"mode={self.mode!r}, capability={self.capability!r}, sql={self.sql!r}, warnings={self.warnings!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, MetadataQuery):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((self.dialect, self.domain, self.name, self.mode, self.capability, self.query_text, self.warnings))
-
 
 class DDLResult:
     """DDL text and fidelity status for one database object."""
@@ -481,6 +483,24 @@ class DDLResult:
         self.redactions = redactions
         self.context = {} if context is None else context
         self.warnings = warnings
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DDLResult):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((
+            self.identity,
+            self.status,
+            self.fidelity,
+            self.source,
+            self.ddl,
+            self.dependencies,
+            self.redactions,
+            _hashable_mapping(self.context),
+            self.warnings,
+        ))
 
     @classmethod
     def unsupported(
@@ -540,24 +560,6 @@ class DDLResult:
             "context": self.context,
             "warnings": self.warnings,
         }
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, DDLResult):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((
-            self.identity,
-            self.status,
-            self.fidelity,
-            self.source,
-            self.ddl,
-            self.dependencies,
-            self.redactions,
-            _hashable_mapping(self.context),
-            self.warnings,
-        ))
 
 
 class ObjectMetadata:
@@ -657,6 +659,7 @@ _SQL_TEXT_FIELDS = {
     "sql_text",
     "statement",
     "statement_text",
+    "text",
 }
 _USER_FIELDS = {
     "current_user",
@@ -777,6 +780,17 @@ class SystemMetadataRedactionPolicy:
             redacted[field_name] = value
         return redacted, tuple(sorted(fields))
 
+    def to_dict(self) -> "dict[str, bool]":
+        """Serialize redaction settings."""
+        return {
+            "redact_sql_text": self.redact_sql_text,
+            "redact_users": self.redact_users,
+            "redact_hosts": self.redact_hosts,
+            "redact_settings": self.redact_settings,
+            "redact_connection_strings": self.redact_connection_strings,
+            "redact_grants": self.redact_grants,
+        }
+
     def _should_redact_field(self, key: str, value: object, row: "Mapping[str, object]") -> bool:
         normalized = _normalize_redaction_key(key)
         if self.redact_sql_text and (
@@ -798,17 +812,6 @@ class SystemMetadataRedactionPolicy:
         ):
             return True
         return self.redact_grants and normalized in _GRANT_FIELDS
-
-    def to_dict(self) -> "dict[str, bool]":
-        """Serialize redaction settings."""
-        return {
-            "redact_sql_text": self.redact_sql_text,
-            "redact_users": self.redact_users,
-            "redact_hosts": self.redact_hosts,
-            "redact_settings": self.redact_settings,
-            "redact_connection_strings": self.redact_connection_strings,
-            "redact_grants": self.redact_grants,
-        }
 
 
 class SystemMetadataRequest:
@@ -957,6 +960,42 @@ class SystemMetadataCapability:
         self.redaction_fields = redaction_fields
         self.warnings = warnings
 
+    def __repr__(self) -> str:
+        return (
+            f"SystemMetadataCapability(domain={self.domain!r}, support={self.support!r}, "
+            f"source={self.source!r}, risks={self.risks!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SystemMetadataCapability):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((
+            self.domain,
+            self.support,
+            self.fidelity,
+            self.source,
+            self.risks,
+            self.required_privileges,
+            self.cost_implications,
+            self.license_gate,
+            self.managed_service_restricted,
+            self.redaction_fields,
+            self.warnings,
+        ))
+
+    @property
+    def requires_billed_opt_in(self) -> bool:
+        """Return whether this domain requires billed metadata opt-in."""
+        return MetadataRisk.BILLED in self.risks
+
+    @property
+    def requires_license_opt_in(self) -> bool:
+        """Return whether this domain requires license-gated diagnostics opt-in."""
+        return MetadataRisk.LICENSE_GATED in self.risks
+
     @classmethod
     def unsupported(
         cls, domain: str, *, source: "MetadataSource | str" = MetadataSource.SYSTEM_VIEW
@@ -970,16 +1009,6 @@ class SystemMetadataCapability:
             redaction_fields=SystemMetadataRedactionPolicy.sensitive_field_names(),
             warnings=("No system metadata query pack is registered for this domain.",),
         )
-
-    @property
-    def requires_billed_opt_in(self) -> bool:
-        """Return whether this domain requires billed metadata opt-in."""
-        return MetadataRisk.BILLED in self.risks
-
-    @property
-    def requires_license_opt_in(self) -> bool:
-        """Return whether this domain requires license-gated diagnostics opt-in."""
-        return MetadataRisk.LICENSE_GATED in self.risks
 
     def with_support(
         self,
@@ -1019,32 +1048,6 @@ class SystemMetadataCapability:
             "warnings": self.warnings,
         }
 
-    def __repr__(self) -> str:
-        return (
-            f"SystemMetadataCapability(domain={self.domain!r}, support={self.support!r}, "
-            f"source={self.source!r}, risks={self.risks!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SystemMetadataCapability):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((
-            self.domain,
-            self.support,
-            self.fidelity,
-            self.source,
-            self.risks,
-            self.required_privileges,
-            self.cost_implications,
-            self.license_gate,
-            self.managed_service_restricted,
-            self.redaction_fields,
-            self.warnings,
-        ))
-
 
 class SystemMetadataResult:
     """Result envelope for system and performance metadata.
@@ -1076,6 +1079,28 @@ class SystemMetadataResult:
         self.source = capability.source if source is None else _coerce_source(source)
         self.warnings = capability.warnings + warnings
         self.redactions = redactions
+
+    def __repr__(self) -> str:
+        return (
+            f"SystemMetadataResult(request={self.request!r}, capability={self.capability!r}, "
+            f"rows={self.rows!r}, warnings={self.warnings!r}, redactions={self.redactions!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SystemMetadataResult):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        rows_hash = tuple(tuple(sorted((key, repr(value)) for key, value in row.items())) for row in self.rows)
+        return hash((
+            repr(self.request.to_dict()),
+            self.capability,
+            rows_hash,
+            self.source,
+            self.warnings,
+            self.redactions,
+        ))
 
     @classmethod
     def from_rows(
@@ -1113,28 +1138,6 @@ class SystemMetadataResult:
             "warnings": self.warnings,
             "redactions": self.redactions,
         }
-
-    def __repr__(self) -> str:
-        return (
-            f"SystemMetadataResult(request={self.request!r}, capability={self.capability!r}, "
-            f"rows={self.rows!r}, warnings={self.warnings!r}, redactions={self.redactions!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SystemMetadataResult):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        rows_hash = tuple(tuple(sorted((key, repr(value)) for key, value in row.items())) for row in self.rows)
-        return hash((
-            repr(self.request.to_dict()),
-            self.capability,
-            rows_hash,
-            self.source,
-            self.warnings,
-            self.redactions,
-        ))
 
 
 class SystemMetadata(ObjectMetadata):
@@ -1335,11 +1338,6 @@ class VersionInfo:
         self.minor = minor
         self.patch = patch
 
-    @property
-    def version_tuple(self) -> "tuple[int, int, int]":
-        """Get version as tuple for comparison."""
-        return (self.major, self.minor, self.patch)
-
     def __str__(self) -> str:
         """String representation of version info."""
         return f"{self.major}.{self.minor}.{self.patch}"
@@ -1376,6 +1374,11 @@ class VersionInfo:
 
     def __reduce__(self) -> "tuple[type[VersionInfo], tuple[int, int, int]]":
         return (self.__class__, self.version_tuple)
+
+    @property
+    def version_tuple(self) -> "tuple[int, int, int]":
+        """Get version as tuple for comparison."""
+        return (self.major, self.minor, self.patch)
 
 
 VersionCacheResult = tuple[bool, VersionInfo | None]

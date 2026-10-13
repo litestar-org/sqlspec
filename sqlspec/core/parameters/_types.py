@@ -500,9 +500,9 @@ class ParameterProfile:
         self.reused_ordinals = tuple(reused_ordinals)
         self.named_parameters = tuple(named_parameters)
 
-    @classmethod
-    def empty(cls) -> "ParameterProfile":
-        return cls(())
+    def __reduce__(self) -> "tuple[Any, ...]":
+        """Reconstruct via ``ParameterProfile(parameters)`` — fully rebuilds derived state."""
+        return (ParameterProfile, (self._parameters,))
 
     @property
     def parameters(self) -> "tuple[ParameterInfo, ...]":
@@ -512,15 +512,15 @@ class ParameterProfile:
     def total_count(self) -> int:
         return len(self._parameters)
 
+    @classmethod
+    def empty(cls) -> "ParameterProfile":
+        return cls(())
+
     def placeholder_count(self, placeholder: str) -> int:
         return self._placeholder_counts.get(placeholder, 0)
 
     def is_empty(self) -> bool:
         return not self._parameters
-
-    def __reduce__(self) -> "tuple[Any, ...]":
-        """Reconstruct via ``ParameterProfile(parameters)`` — fully rebuilds derived state."""
-        return (ParameterProfile, (self._parameters,))
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)

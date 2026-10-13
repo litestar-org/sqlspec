@@ -1,6 +1,7 @@
 """Unit tests for ADBC core execute-many helpers."""
 
 from collections.abc import Sequence
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -10,16 +11,21 @@ from adbc_driver_manager import AdbcStatusCode, DatabaseError
 from sqlspec.adapters.adbc import AdbcDriver
 from sqlspec.adapters.adbc import core as adbc_core
 from sqlspec.adapters.adbc.core import (
-    _prepare_batch_with_casts,
+    build_connection_config,
     collect_rows,
+    driver_from_uri,
+    driver_kind_from_uri,
     get_statement_config,
+    prepare_batch_with_casts,
     prepare_parameters_with_casts,
     prepare_postgres_parameters,
     prepare_postgres_uuid_bindings,
     resolve_column_names,
+    resolve_dialect_from_config,
     resolve_many_rowcount,
 )
-from sqlspec.core import ParameterStyle
+from sqlspec.core import SQL, ParameterStyle
+from sqlspec.dialects import PGTextSearch
 from sqlspec.exceptions import (
     DeadlockError,
     OperationalError,
@@ -174,7 +180,7 @@ def test_prepare_batch_with_casts_creates_converter_once(monkeypatch: Any) -> No
 
     monkeypatch.setattr(adbc_core, "get_adbc_type_converter", fake_factory)
 
-    prepared = _prepare_batch_with_casts(
+    prepared = prepare_batch_with_casts(
         [(1, {"name": "alice"}), (2, {"name": "bob"}), (3, {"name": "carol"})],
         {1: "INT"},
         statement_config,
@@ -354,8 +360,6 @@ def test_pg_textsearch_retains_postgres_transaction_and_parameter_behavior() -> 
 
 
 def test_pg_textsearch_class_and_instance_resolve_as_postgres_family() -> None:
-    from sqlspec.dialects import PGTextSearch
-
     for dialect in (PGTextSearch, PGTextSearch()):
         name = adbc_core.resolve_dialect_name(dialect)
         assert adbc_core.is_postgres_dialect(name)
@@ -369,3 +373,41 @@ def test_adbc_postgres_uuid_binding_runs_across_mypyc_boundary() -> None:
 
     assert sql == "SELECT CAST($1 AS UUID)"
     assert parameters == [str(value)]
+
+
+def test_create_mapped_exception_maps_serialization_conflict_from_message() -> None:
+    """Message-only serialization conflict patterns map to SerializationConflictError."""
+    error = DatabaseError("Transaction aborted due to concurrent update", status_code=AdbcStatusCode.UNKNOWN)
+
+    mapped = adbc_core.create_mapped_exception(error)
+
+    assert isinstance(mapped, SerializationConflictError)
+
+
+def test_decimal_coercion_preserves_decimal_instance() -> None:
+    """Decimal values should remain Decimal instances so Arrow decimal fidelity is preserved."""
+    amount = Decimal("123.45")
+    assert adbc_core._BASE_TYPE_COERCION_MAP[Decimal](amount) is amount  # pyright: ignore[reportPrivateUsage]
+    config = get_statement_config("postgres")
+    assert config.parameter_config.type_coercion_map[Decimal](amount) is amount
+
+
+def test_duckdb_copy_to_inlines_file_path_parameter() -> None:
+    """DuckDB statement config should inline COPY file target parameters via AST transformer."""
+    config = get_statement_config("duckdb")
+    stmt = SQL("COPY (SELECT ? AS id) TO ? (FORMAT PARQUET)", 7, "/tmp/out.parquet", statement_config=config)
+    compiled_sql, compiled_params = stmt.compile()
+
+    assert "'/tmp/out.parquet'" in compiled_sql
+    assert compiled_params == [7]
+
+
+def test_case_insensitive_uri_and_grpc_tls_resolution() -> None:
+    """URI helpers and build_connection_config must handle uppercase schemes and grpc+tls://."""
+    assert driver_from_uri("POSTGRESQL://localhost/db") == "adbc_driver_postgresql.dbapi.connect"
+    assert driver_kind_from_uri("GRPC+TLS://localhost:31337") == "flightsql"
+    assert resolve_dialect_from_config({"uri": "POSTGRESQL://localhost/db"}) == "postgres"
+    assert resolve_dialect_from_config({"uri": "GRPC+TLS://localhost:31337"}) == "duckdb"
+
+    built = build_connection_config({"uri": "grpc+tls://localhost:31337", "tls_skip_verify": True})
+    assert built["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"

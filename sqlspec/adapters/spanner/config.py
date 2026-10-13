@@ -1,7 +1,8 @@
 """Spanner configuration."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
+import warnings
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, Protocol, TypedDict, cast
 
 from sqlspec.adapters.spanner._typing import SpannerAbstractSessionPool as AbstractSessionPool
 from sqlspec.adapters.spanner._typing import SpannerAsyncAbstractSessionPool as AsyncAbstractSessionPool
@@ -25,7 +26,10 @@ from sqlspec.adapters.spanner._typing import SpannerPingingPool as PingingPool
 from sqlspec.adapters.spanner.core import (
     apply_driver_features,
     build_session_driver_features,
+    create_mapped_exception,
     default_statement_config,
+    execute_partitioned_dml_async,
+    execute_partitioned_dml_sync,
     resolve_transaction_completion,
     run_in_transaction_async,
     run_in_transaction_sync,
@@ -228,94 +232,6 @@ def build_connection_config(
     return config
 
 
-def _prepare_settings(
-    connection_config: "SpannerPoolParams | dict[str, Any] | None",
-    driver_features: "SpannerDriverFeatures | dict[str, Any] | None",
-    *,
-    default_pool_type: type[Any],
-) -> "tuple[dict[str, Any], dict[str, Any]]":
-    """Normalize connection settings and move legacy session labels onto the pool settings."""
-    config = build_connection_config(connection_config)
-    if "min_sessions" in config:
-        msg = "Spanner session pools do not support 'min_sessions'; use 'size' or 'target_size'."
-        raise ImproperConfigurationError(msg)
-
-    raw_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
-    legacy_session_labels = raw_driver_features.pop("session_labels", None)
-    if legacy_session_labels is not None and "session_labels" not in config and "labels" not in config:
-        config["session_labels"] = legacy_session_labels
-
-    config.setdefault("size", config.pop("max_sessions", 10))
-    config.setdefault("pool_type", default_pool_type)
-    return config, raw_driver_features
-
-
-def _require_database_ids(connection_config: "dict[str, Any]") -> "tuple[str, str]":
-    instance_id = connection_config.get("instance_id")
-    database_id = connection_config.get("database_id")
-    if not instance_id or not database_id:
-        msg = "instance_id and database_id are required."
-        raise ImproperConfigurationError(msg)
-    return instance_id, database_id
-
-
-def _connection_kwargs_for(connection_config: "dict[str, Any]", fields: "frozenset[str] | set[str]") -> dict[str, Any]:
-    return {field: connection_config[field] for field in fields if connection_config.get(field) is not None}
-
-
-def _instance_kwargs(connection_config: "dict[str, Any]") -> dict[str, Any]:
-    instance_kwargs = _connection_kwargs_for(connection_config, _INSTANCE_CONFIG_FIELDS)
-    instance_labels = connection_config.get("instance_labels")
-    if instance_labels is not None:
-        instance_kwargs["labels"] = instance_labels
-    return instance_kwargs
-
-
-def _resolve_pool_type(
-    connection_config: "dict[str, Any]", *, base: type[Any], config_name: str, expected: str
-) -> type[Any]:
-    pool_type = connection_config["pool_type"]
-    if not isinstance(pool_type, type) or not issubclass(pool_type, base):
-        msg = f"{config_name} requires {expected} session pool class; got {pool_type!r}."
-        raise ImproperConfigurationError(msg)
-    return pool_type
-
-
-def _pool_kwargs(connection_config: "dict[str, Any]", pool_kind: str) -> dict[str, Any]:
-    """Build session pool constructor arguments for a pool kind.
-
-    Args:
-        connection_config: Normalized connection settings.
-        pool_kind: ``"pinging"``, ``"fixed"``, ``"bursty"``, or ``"custom"``.
-
-    Returns:
-        Keyword arguments for the pool class.
-    """
-    pool_kwargs: dict[str, Any] = {}
-    labels = connection_config.get("session_labels", connection_config.get("labels"))
-    if labels is not None:
-        pool_kwargs["labels"] = labels
-    database_role = connection_config.get("database_role")
-    if database_role is not None:
-        pool_kwargs["database_role"] = database_role
-    if pool_kind == "pinging":
-        pool_kwargs.update(_connection_kwargs_for(connection_config, {"size", "default_timeout"}))
-        pool_kwargs["ping_interval"] = connection_config.get("ping_interval", 1800)
-    elif pool_kind == "fixed":
-        pool_kwargs.update(_connection_kwargs_for(connection_config, {"size", "default_timeout", "max_age_minutes"}))
-    elif pool_kind == "bursty":
-        target_size = connection_config.get("target_size", connection_config.get("size"))
-        if target_size is not None:
-            pool_kwargs["target_size"] = target_size
-    else:
-        pool_kwargs.update(
-            _connection_kwargs_for(
-                connection_config, {"size", "target_size", "default_timeout", "ping_interval", "max_age_minutes"}
-            )
-        )
-    return pool_kwargs
-
-
 class SpannerSyncConnectionContext(SyncPoolConnectionContext):
     """Context manager for sync Spanner connections (Snapshot or Transaction)."""
 
@@ -355,9 +271,16 @@ class SpannerSyncConnectionContext(SyncPoolConnectionContext):
                     txn = cast("Any", self._connection)
                     action = resolve_transaction_completion(txn, failed=exc_type is not None)
                     if action == "commit":
-                        txn.commit()
+                        try:
+                            txn.commit()
+                        except SpannerGoogleAPICallError as exc:
+                            raise create_mapped_exception(exc) from exc
                     elif action == "rollback":
-                        txn.rollback()
+                        try:
+                            txn.rollback()
+                        except SpannerGoogleAPICallError as exc:
+                            if exc_type is None:
+                                raise create_mapped_exception(exc) from exc
             finally:
                 if self._session is not None:
                     cast("Any", self._config.get_database()).sessions_manager.put_session(self._session)
@@ -451,11 +374,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         self._client: Client | None = None
         self._database: Database | None = None
 
-    def _get_client(self) -> "Client":
-        if self._client is None:
-            self._client = Client(**_connection_kwargs_for(self.connection_config, _CLIENT_CONFIG_FIELDS))
-        return self._client
-
     def get_database(self) -> "Database":
         """Return the configured database, creating the pool and client on first use.
 
@@ -491,35 +409,6 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
             A snapshot checkout to be used as a context manager.
         """
         return cast("SpannerSyncConnection", cast("Any", self.get_database()).snapshot(multi_use=True))
-
-    def _create_pool(self) -> "AbstractSessionPool":
-        _require_database_ids(self.connection_config)
-        pool_type = _resolve_pool_type(
-            self.connection_config, base=AbstractSessionPool, config_name="SpannerSyncConfig", expected="a sync"
-        )
-        if issubclass(pool_type, PingingPool):
-            pool_kind = "pinging"
-        elif issubclass(pool_type, FixedSizePool):
-            pool_kind = "fixed"
-        elif issubclass(pool_type, BurstyPool):
-            pool_kind = "bursty"
-        else:
-            pool_kind = "custom"
-        return cast("AbstractSessionPool", pool_type(**_pool_kwargs(self.connection_config, pool_kind)))
-
-    def _close_pool(self) -> None:
-        """Release pooled sessions, then close the database and client."""
-        pool = self.connection_instance
-        if pool is not None:
-            with contextlib.suppress(SpannerGoogleAPICallError):
-                pool.clear()  # type: ignore[no-untyped-call]
-        if self._database is not None:
-            with contextlib.suppress(SpannerGoogleAPICallError):
-                self._database.close()  # type: ignore[no-untyped-call]
-        if self._client is not None:
-            self._client.close()  # type: ignore[no-untyped-call]
-        self._client = None
-        self._database = None
 
     def provide_connection(
         self, *args: Any, transaction: "bool" = _DEFAULT_SESSION_TRANSACTION, **kwargs: Any
@@ -649,12 +538,23 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
         """
         return run_in_transaction_sync(self.get_database(), self._transaction_driver, fn, *args, **kwargs)
 
-    def _transaction_driver(self, transaction: "SpannerSyncConnection") -> "SpannerSyncDriver":
-        driver = self.driver_type(
-            connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
+    def execute_partitioned_dml(
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        param_types: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Execute a Partitioned DML statement against the configured Spanner database."""
+        return execute_partitioned_dml_sync(
+            self.get_database(),
+            sql,
+            params=params,
+            param_types=param_types,
+            json_serializer=self.driver_features.get("json_serializer"),
+            enable_uuid_conversion=self.driver_features.get("enable_uuid_conversion", True),
+            **kwargs,
         )
-        driver._owns_transaction = False  # pyright: ignore[reportPrivateUsage]
-        return self._prepare_driver(driver)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SpannerSyncConfig types.
@@ -678,6 +578,49 @@ class SpannerSyncConfig(SyncDatabaseConfig["SpannerSyncConnection", "AbstractSes
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return queue defaults for Spanner JSON and transaction handling."""
         return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
+
+    def _get_client(self) -> "Client":
+        if self._client is None:
+            self._client = Client(**_connection_kwargs_for(self.connection_config, _CLIENT_CONFIG_FIELDS))
+        return self._client
+
+    def _create_pool(self) -> "AbstractSessionPool":
+        _require_database_ids(self.connection_config)
+        pool_type = _resolve_pool_type(
+            self.connection_config, base=AbstractSessionPool, config_name="SpannerSyncConfig", expected="a sync"
+        )
+        if issubclass(pool_type, PingingPool):
+            pool_kind = "pinging"
+        elif issubclass(pool_type, FixedSizePool):
+            pool_kind = "fixed"
+        elif issubclass(pool_type, BurstyPool):
+            pool_kind = "bursty"
+        else:
+            pool_kind = "custom"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return cast("AbstractSessionPool", pool_type(**_pool_kwargs(self.connection_config, pool_kind)))
+
+    def _close_pool(self) -> None:
+        """Release pooled sessions, then close the database and client."""
+        pool = self.connection_instance
+        if pool is not None:
+            with contextlib.suppress(SpannerGoogleAPICallError):
+                cast("_SyncClearableProtocol", pool).clear()
+        if self._database is not None:
+            with contextlib.suppress(SpannerGoogleAPICallError):
+                cast("_SyncClosableProtocol", self._database).close()
+        if self._client is not None:
+            cast("_SyncClosableProtocol", self._client).close()
+        self._client = None
+        self._database = None
+
+    def _transaction_driver(self, transaction: "SpannerSyncConnection") -> "SpannerSyncDriver":
+        driver = self.driver_type(
+            connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
+        )
+        driver.bind_external_transaction()
+        return self._prepare_driver(driver)
 
 
 class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
@@ -719,9 +662,16 @@ class SpannerAsyncConnectionContext(AsyncPoolConnectionContext):
                     txn = cast("Any", self._connection)
                     action = resolve_transaction_completion(txn, failed=exc_type is not None)
                     if action == "commit":
-                        await txn.commit()
+                        try:
+                            await txn.commit()
+                        except SpannerGoogleAPICallError as exc:
+                            raise create_mapped_exception(exc) from exc
                     elif action == "rollback":
-                        await txn.rollback()
+                        try:
+                            await txn.rollback()
+                        except SpannerGoogleAPICallError as exc:
+                            if exc_type is None:
+                                raise create_mapped_exception(exc) from exc
             finally:
                 if self._session is not None:
                     database = await self._config.get_database()
@@ -816,11 +766,6 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         self._client: AsyncClient | None = None
         self._database: AsyncDatabase | None = None
 
-    def _get_client(self) -> "AsyncClient":
-        if self._client is None:
-            self._client = AsyncClient(**_connection_kwargs_for(self.connection_config, _CLIENT_CONFIG_FIELDS))
-        return self._client
-
     async def get_database(self) -> "AsyncDatabase":
         """Return the configured database, creating the pool and client on first use.
 
@@ -857,35 +802,6 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         """
         database = await self.get_database()
         return cast("SpannerAsyncConnection", cast("Any", database).snapshot(multi_use=True))
-
-    async def _create_pool(self) -> "AsyncAbstractSessionPool":
-        _require_database_ids(self.connection_config)
-        pool_type = _resolve_pool_type(
-            self.connection_config, base=AsyncAbstractSessionPool, config_name="SpannerAsyncConfig", expected="an async"
-        )
-        if issubclass(pool_type, AsyncPingingPool):
-            pool_kind = "pinging"
-        elif issubclass(pool_type, AsyncFixedSizePool):
-            pool_kind = "fixed"
-        elif issubclass(pool_type, AsyncBurstyPool):
-            pool_kind = "bursty"
-        else:
-            pool_kind = "custom"
-        return cast("AsyncAbstractSessionPool", pool_type(**_pool_kwargs(self.connection_config, pool_kind)))
-
-    async def _close_pool(self) -> None:
-        """Release pooled sessions, then close the database and client."""
-        pool = self.connection_instance
-        if pool is not None:
-            with contextlib.suppress(SpannerGoogleAPICallError):
-                await pool.clear()  # type: ignore[no-untyped-call]
-        if self._database is not None:
-            with contextlib.suppress(SpannerGoogleAPICallError):
-                await self._database.close()
-        if self._client is not None:
-            self._client.close()  # type: ignore[no-untyped-call]
-        self._client = None
-        self._database = None
 
     def provide_connection(
         self, *args: Any, transaction: "bool" = _DEFAULT_SESSION_TRANSACTION, **kwargs: Any
@@ -1016,12 +932,24 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
         database = await self.get_database()
         return await run_in_transaction_async(database, self._transaction_driver, fn, *args, **kwargs)
 
-    def _transaction_driver(self, transaction: "SpannerAsyncConnection") -> "SpannerAsyncDriver":
-        driver = self.driver_type(
-            connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
+    async def execute_partitioned_dml(
+        self,
+        sql: str,
+        params: "dict[str, Any] | None" = None,
+        param_types: "dict[str, Any] | None" = None,
+        **kwargs: Any,
+    ) -> int:
+        """Execute a Partitioned DML statement against the configured async Spanner database."""
+        database = await self.get_database()
+        return await execute_partitioned_dml_async(
+            database,
+            sql,
+            params=params,
+            param_types=param_types,
+            json_serializer=self.driver_features.get("json_serializer"),
+            enable_uuid_conversion=self.driver_features.get("enable_uuid_conversion", True),
+            **kwargs,
         )
-        driver._owns_transaction = False  # pyright: ignore[reportPrivateUsage]
-        return self._prepare_driver(driver)
 
     def get_signature_namespace(self) -> "dict[str, Any]":
         """Get the signature namespace for SpannerAsyncConfig types.
@@ -1045,3 +973,146 @@ class SpannerAsyncConfig(AsyncDatabaseConfig["SpannerAsyncConnection", "AsyncAbs
     def get_event_runtime_hints(self) -> "EventRuntimeHints":
         """Return queue defaults for Spanner JSON and transaction handling."""
         return EventRuntimeHints(cleanup_on_ack=False, use_run_in_transaction=True)
+
+    def _get_client(self) -> "AsyncClient":
+        if self._client is None:
+            self._client = AsyncClient(**_connection_kwargs_for(self.connection_config, _CLIENT_CONFIG_FIELDS))
+        return self._client
+
+    async def _create_pool(self) -> "AsyncAbstractSessionPool":
+        _require_database_ids(self.connection_config)
+        pool_type = _resolve_pool_type(
+            self.connection_config, base=AsyncAbstractSessionPool, config_name="SpannerAsyncConfig", expected="an async"
+        )
+        if issubclass(pool_type, AsyncPingingPool):
+            pool_kind = "pinging"
+        elif issubclass(pool_type, AsyncFixedSizePool):
+            pool_kind = "fixed"
+        elif issubclass(pool_type, AsyncBurstyPool):
+            pool_kind = "bursty"
+        else:
+            pool_kind = "custom"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return cast("AsyncAbstractSessionPool", pool_type(**_pool_kwargs(self.connection_config, pool_kind)))
+
+    async def _close_pool(self) -> None:
+        """Release pooled sessions, then close the database and client."""
+        pool = self.connection_instance
+        if pool is not None:
+            with contextlib.suppress(SpannerGoogleAPICallError):
+                await cast("_AsyncClearableProtocol", pool).clear()
+        if self._database is not None:
+            with contextlib.suppress(SpannerGoogleAPICallError):
+                await self._database.close()
+        if self._client is not None:
+            cast("_SyncClosableProtocol", self._client).close()
+        self._client = None
+        self._database = None
+
+    def _transaction_driver(self, transaction: "SpannerAsyncConnection") -> "SpannerAsyncDriver":
+        driver = self.driver_type(
+            connection=transaction, statement_config=self.statement_config, driver_features=self.driver_features
+        )
+        driver.bind_external_transaction()
+        return self._prepare_driver(driver)
+
+
+class _SyncClearableProtocol(Protocol):
+    def clear(self) -> None: ...
+
+
+class _AsyncClearableProtocol(Protocol):
+    async def clear(self) -> None: ...
+
+
+class _SyncClosableProtocol(Protocol):
+    def close(self) -> None: ...
+
+
+def _prepare_settings(
+    connection_config: "SpannerPoolParams | dict[str, Any] | None",
+    driver_features: "SpannerDriverFeatures | dict[str, Any] | None",
+    *,
+    default_pool_type: type[Any],
+) -> "tuple[dict[str, Any], dict[str, Any]]":
+    """Normalize connection settings and move legacy session labels onto the pool settings."""
+    config = build_connection_config(connection_config)
+    if "min_sessions" in config:
+        msg = "Spanner session pools do not support 'min_sessions'; use 'size' or 'target_size'."
+        raise ImproperConfigurationError(msg)
+
+    raw_driver_features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    legacy_session_labels = raw_driver_features.pop("session_labels", None)
+    if legacy_session_labels is not None and "session_labels" not in config and "labels" not in config:
+        config["session_labels"] = legacy_session_labels
+
+    config.setdefault("size", config.pop("max_sessions", 10))
+    config.setdefault("pool_type", default_pool_type)
+    return config, raw_driver_features
+
+
+def _require_database_ids(connection_config: "dict[str, Any]") -> "tuple[str, str]":
+    instance_id = connection_config.get("instance_id")
+    database_id = connection_config.get("database_id")
+    if not instance_id or not database_id:
+        msg = "instance_id and database_id are required."
+        raise ImproperConfigurationError(msg)
+    return instance_id, database_id
+
+
+def _connection_kwargs_for(connection_config: "dict[str, Any]", fields: "frozenset[str] | set[str]") -> dict[str, Any]:
+    return {field: connection_config[field] for field in fields if connection_config.get(field) is not None}
+
+
+def _instance_kwargs(connection_config: "dict[str, Any]") -> dict[str, Any]:
+    instance_kwargs = _connection_kwargs_for(connection_config, _INSTANCE_CONFIG_FIELDS)
+    instance_labels = connection_config.get("instance_labels")
+    if instance_labels is not None:
+        instance_kwargs["labels"] = instance_labels
+    return instance_kwargs
+
+
+def _resolve_pool_type(
+    connection_config: "dict[str, Any]", *, base: type[Any], config_name: str, expected: str
+) -> type[Any]:
+    pool_type = connection_config["pool_type"]
+    if not isinstance(pool_type, type) or not issubclass(pool_type, base):
+        msg = f"{config_name} requires {expected} session pool class; got {pool_type!r}."
+        raise ImproperConfigurationError(msg)
+    return pool_type
+
+
+def _pool_kwargs(connection_config: "dict[str, Any]", pool_kind: str) -> dict[str, Any]:
+    """Build session pool constructor arguments for a pool kind.
+
+    Args:
+        connection_config: Normalized connection settings.
+        pool_kind: ``"pinging"``, ``"fixed"``, ``"bursty"``, or ``"custom"``.
+
+    Returns:
+        Keyword arguments for the pool class.
+    """
+    pool_kwargs: dict[str, Any] = {}
+    labels = connection_config.get("session_labels", connection_config.get("labels"))
+    if labels is not None:
+        pool_kwargs["labels"] = labels
+    database_role = connection_config.get("database_role")
+    if database_role is not None:
+        pool_kwargs["database_role"] = database_role
+    if pool_kind == "pinging":
+        pool_kwargs.update(_connection_kwargs_for(connection_config, {"size", "default_timeout"}))
+        pool_kwargs["ping_interval"] = connection_config.get("ping_interval", 1800)
+    elif pool_kind == "fixed":
+        pool_kwargs.update(_connection_kwargs_for(connection_config, {"size", "default_timeout", "max_age_minutes"}))
+    elif pool_kind == "bursty":
+        target_size = connection_config.get("target_size", connection_config.get("size"))
+        if target_size is not None:
+            pool_kwargs["target_size"] = target_size
+    else:
+        pool_kwargs.update(
+            _connection_kwargs_for(
+                connection_config, {"size", "target_size", "default_timeout", "ping_interval", "max_age_minutes"}
+            )
+        )
+    return pool_kwargs

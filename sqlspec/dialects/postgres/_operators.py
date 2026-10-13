@@ -22,9 +22,14 @@ __all__ = (
 )
 
 _CUSTOM_OPERATOR_META_KEY: Final[str] = "sqlspec_postgres_extension_operator"
+_OPERATOR_PARSERS_REGISTERED_ATTR: Final[str] = "_sqlspec_postgres_operator_parsers"
+_POSTGRES_EXTENSION_DIALECT_NAMES: Final[frozenset[str]] = frozenset({
+    "Postgres",
+    "PGVector",
+    "ParadeDB",
+    "PGTextSearch",
+})
 
-# These token slots are not emitted by the base Postgres tokenizer and are only
-# produced by the extension tokenizers below.
 PGVECTOR_OPERATOR_TOKENS: Final[dict[str, TokenType]] = {
     "<#>": TokenType.GEOGRAPHYPOINT,
     "<=>": TokenType.HLLSKETCH,
@@ -43,26 +48,19 @@ PARADEDB_OPERATOR_TOKENS: Final[dict[str, TokenType]] = {
 }
 PG_TEXTSEARCH_OPERATOR_TOKENS: Final[dict[str, TokenType]] = {"<@>": TokenType.RING}
 
-_REGISTERED = False
-
 
 def register_postgres_extension_operators() -> None:
     """Patch the compiled Postgres parser with PostgreSQL extension operators."""
-    global _REGISTERED
-
-    if _REGISTERED:
+    if getattr(PostgresParser, _OPERATOR_PARSERS_REGISTERED_ATTR, False):
         return
 
-    factor: dict[TokenType, Any] = dict(PostgresParser.FACTOR)
-    extension_tokens = {**PGVECTOR_OPERATOR_TOKENS, **PARADEDB_OPERATOR_TOKENS}
+    operators: dict[TokenType, Any] = dict(PostgresParser.JSON_OPERATORS)
+    extension_tokens = {**PGVECTOR_OPERATOR_TOKENS, **PARADEDB_OPERATOR_TOKENS, **PG_TEXTSEARCH_OPERATOR_TOKENS}
     for operator, token in extension_tokens.items():
-        factor[token] = _build_operator_factory(operator)
+        operators[token] = _build_operator_factory(operator, operators.get(token))
 
-    setattr(PostgresParser, "FACTOR", factor)
-    operators = dict(PostgresParser.JSON_OPERATORS)
-    operators[PG_TEXTSEARCH_OPERATOR_TOKENS["<@>"]] = _parse_pg_textsearch_operator
     setattr(PostgresParser, "JSON_OPERATORS", operators)
-    _REGISTERED = True
+    setattr(PostgresParser, _OPERATOR_PARSERS_REGISTERED_ATTR, True)
 
 
 def is_postgres_extension_operator(expression: object) -> bool:
@@ -78,18 +76,20 @@ def postgres_extension_operator(expression: exp.Operator) -> str:
     return expression.text("operator")
 
 
-def _build_operator_factory(operator: str) -> Callable[[exp.Expr | None, exp.Expr | None], exp.Operator]:
-    def _factory(this: exp.Expr | None, expression: exp.Expr | None) -> exp.Operator:
+def _build_operator_factory(
+    operator: str, original: Any = None
+) -> Callable[[PostgresParser | None, exp.Expr | None, exp.Expr | None], exp.Expr]:
+    def _factory(parser: PostgresParser | None, this: exp.Expr | None, expression: exp.Expr | None) -> exp.Expr:
+        if parser is not None:
+            dialect = getattr(parser, "dialect", None)
+            if (
+                dialect is not None
+                and type(dialect).__name__ not in _POSTGRES_EXTENSION_DIALECT_NAMES
+                and original is not None
+            ):
+                return original(parser, this, expression)  # type: ignore[no-any-return]
         node = exp.Operator(this=this, expression=expression, operator=operator)
         node.meta[_CUSTOM_OPERATOR_META_KEY] = operator
         return node
 
     return _factory
-
-
-def _parse_pg_textsearch_operator(
-    _parser: PostgresParser, this: exp.Expr | None, expression: exp.Expr | None
-) -> exp.Operator:
-    node = exp.Operator(this=this, expression=expression, operator="<@>")
-    node.meta[_CUSTOM_OPERATOR_META_KEY] = "<@>"
-    return node

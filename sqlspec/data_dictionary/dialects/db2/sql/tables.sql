@@ -18,6 +18,7 @@ WITH dependency_tree (schema_name, table_name, level, path) AS (
           FROM SYSCAT.REFERENCES r
           WHERE r.TABSCHEMA = t.TABSCHEMA
             AND r.TABNAME = t.TABNAME
+            AND (r.REFTABSCHEMA <> t.TABSCHEMA OR r.REFTABNAME <> t.TABNAME)
       )
 
     UNION ALL
@@ -32,6 +33,7 @@ WITH dependency_tree (schema_name, table_name, level, path) AS (
       AND r.TABNAME = child.TABNAME
       AND r.REFTABSCHEMA = dt.schema_name
       AND r.REFTABNAME = dt.table_name
+      AND (r.REFTABSCHEMA <> child.TABSCHEMA OR r.REFTABNAME <> child.TABNAME)
       AND child.TYPE = 'T'
       AND child.TABSCHEMA NOT LIKE 'SYS%'
       AND child.TABSCHEMA NOT LIKE 'NULLID%'

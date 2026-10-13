@@ -257,6 +257,7 @@ async def test_close_closes_idle_and_released_connections(fake_ibm_db: FakeModul
     await pool.release(busy)
     assert busy.sync_connection.closed is True
     assert (pool.size(), pool.checked_out()) == (0, 0)
+    assert pool._semaphore_instance is None
     with pytest.raises(DatabaseConnectionError, match="Db2 async connection pool is closed"):
         await pool.acquire()
 

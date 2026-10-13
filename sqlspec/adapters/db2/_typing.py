@@ -1,7 +1,8 @@
 """IBM Db2 adapter type definitions and context managers."""
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+import importlib
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlspec.exceptions import MissingDependencyError
 from sqlspec.typing import import_optional_attr
@@ -116,6 +117,7 @@ class Db2SyncSessionContext:
         "_connection",
         "_driver",
         "_driver_features",
+        "_driver_type",
         "_prepare_driver",
         "_release_connection",
         "_statement_config",
@@ -129,6 +131,7 @@ class Db2SyncSessionContext:
         driver_features: dict[str, Any],
         prepare_driver: "Callable[[Any], Any]",
         *,
+        driver_type: "Callable[..., Any] | None" = None,
         autocommit_baseline: bool = True,
         begin_transaction: bool = False,
     ) -> None:
@@ -140,6 +143,7 @@ class Db2SyncSessionContext:
             statement_config: SQL compilation configuration.
             driver_features: Feature flags and hooks for driver instance.
             prepare_driver: Hook to customize or decorate driver before yielding.
+            driver_type: Optional driver class/factory override.
             autocommit_baseline: Autocommit mode the pool opens connections in.
             begin_transaction: Begin a transaction before yielding the driver.
         """
@@ -148,6 +152,7 @@ class Db2SyncSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
+        self._driver_type = driver_type
         self._autocommit_baseline = autocommit_baseline
         self._begin_transaction = begin_transaction
         self._connection: Any = None
@@ -159,16 +164,15 @@ class Db2SyncSessionContext:
         Returns:
             Any: Initialized driver adapter.
         """
-        from sqlspec.adapters.db2.driver import Db2SyncDriver
-
+        driver_factory = self._driver_type or _resolve_sync_driver_type()
         self._connection = self._acquire_connection()
         try:
-            self._driver = Db2SyncDriver(
+            self._driver = driver_factory(
                 connection=self._connection,
                 statement_config=self._statement_config,
                 driver_features=self._driver_features,
             )
-            if self._begin_transaction:
+            if self._begin_transaction and self._driver is not None:
                 self._driver.begin()
             return self._prepare_driver(self._driver)
         except BaseException as exc:
@@ -236,6 +240,7 @@ class Db2AsyncSessionContext:
         "_connection",
         "_driver",
         "_driver_features",
+        "_driver_type",
         "_prepare_driver",
         "_release_connection",
         "_statement_config",
@@ -249,6 +254,7 @@ class Db2AsyncSessionContext:
         driver_features: dict[str, Any],
         prepare_driver: "Callable[[Any], Any]",
         *,
+        driver_type: "Callable[..., Any] | None" = None,
         autocommit_baseline: bool = True,
         begin_transaction: bool = False,
     ) -> None:
@@ -260,6 +266,7 @@ class Db2AsyncSessionContext:
             statement_config: SQL compilation configuration.
             driver_features: Feature flags and hooks for driver instance.
             prepare_driver: Hook to customize or decorate driver before yielding.
+            driver_type: Optional driver class/factory override.
             autocommit_baseline: Autocommit mode the pool opens connections in.
             begin_transaction: Begin a transaction before yielding the driver.
         """
@@ -268,6 +275,7 @@ class Db2AsyncSessionContext:
         self._statement_config = statement_config
         self._driver_features = driver_features
         self._prepare_driver = prepare_driver
+        self._driver_type = driver_type
         self._autocommit_baseline = autocommit_baseline
         self._begin_transaction = begin_transaction
         self._connection: Any = None
@@ -279,16 +287,15 @@ class Db2AsyncSessionContext:
         Returns:
             Any: Initialized driver adapter.
         """
-        from sqlspec.adapters.db2.driver import Db2AsyncDriver
-
+        driver_factory = self._driver_type or _resolve_async_driver_type()
         self._connection = await self._acquire_connection()
         try:
-            self._driver = Db2AsyncDriver(
+            self._driver = driver_factory(
                 connection=self._connection,
                 statement_config=self._statement_config,
                 driver_features=self._driver_features,
             )
-            if self._begin_transaction:
+            if self._begin_transaction and self._driver is not None:
                 await self._driver.begin()
             return self._prepare_driver(self._driver)
         except BaseException as exc:
@@ -309,3 +316,13 @@ class Db2AsyncSessionContext:
             self._connection = None
             self._driver = None
         return None
+
+
+def _resolve_sync_driver_type() -> "Callable[..., Any]":
+    """Resolve Db2SyncDriver without a function-scoped import."""
+    return cast("Callable[..., Any]", importlib.import_module("sqlspec.adapters.db2.driver").Db2SyncDriver)
+
+
+def _resolve_async_driver_type() -> "Callable[..., Any]":
+    """Resolve Db2AsyncDriver without a function-scoped import."""
+    return cast("Callable[..., Any]", importlib.import_module("sqlspec.adapters.db2.driver").Db2AsyncDriver)

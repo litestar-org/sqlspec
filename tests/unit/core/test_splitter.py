@@ -281,3 +281,11 @@ def test_db2_script_keeps_begin_atomic_block() -> None:
     assert len(statements) == 2
     assert statements[0].endswith("BEGIN ATOMIC UPDATE u SET c = c + 1; END;")
     assert statements[1] == "SELECT 1 FROM SYSIBM.SYSDUMMY1"
+
+
+def test_oracle_create_or_replace_procedure_strips_slash_keep_end_semicolon() -> None:
+    script = "CREATE OR REPLACE PROCEDURE test_proc AS\nBEGIN\n    NULL;\nEND;\n/\nSELECT 1 FROM DUAL;"
+    statements = split_sql_script(script, dialect="oracle", strip_trailing_terminator=True)
+    assert len(statements) == 2
+    assert statements[0].endswith("END;")
+    assert statements[1] == "SELECT 1 FROM DUAL"

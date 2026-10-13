@@ -22,17 +22,17 @@ class ExpressionWrapper:
     def __init__(self, expression: exp.Expr) -> None:
         self._expression = expression
 
-    def as_(self, alias: str) -> exp.Alias:
-        """Create an aliased expression."""
-        return cast("exp.Alias", exp.alias_(self._expression, alias))
+    def __str__(self) -> str:
+        return str(self.expression)
 
     @property
     def expression(self) -> exp.Expr:
         """Get the underlying SQLGlot expression."""
         return self._expression
 
-    def __str__(self) -> str:
-        return str(self._expression)
+    def as_(self, alias: str) -> exp.Alias:
+        """Create an aliased expression."""
+        return cast("exp.Alias", exp.alias_(self.expression, alias))
 
 
 @final

@@ -2,18 +2,25 @@
 
 import functools
 import hashlib
+import re
 from typing import Any
 
-__all__ = ("compute_sql_hash", "get_trace_context", "resolve_db_system")
+__all__ = ("compute_sql_hash", "get_trace_context", "redact_sql_literals", "resolve_db_system")
+
+_LITERAL_PATTERN = re.compile(r"\$([A-Za-z0-9_]*)\$.*?\$\1\$|'(?:''|\\.|[^'\\])*'", re.DOTALL)
 
 _DB_SYSTEM_MAP: "tuple[tuple[str, str], ...]" = (
+    ("cockroach", "cockroachdb"),
     ("asyncpg", "postgresql"),
     ("psycopg", "postgresql"),
     ("psqlpy", "postgresql"),
     ("postgres", "postgresql"),
     ("asyncmy", "mysql"),
+    ("mariadb", "mariadb"),
     ("mysql", "mysql"),
-    ("mariadb", "mysql"),
+    ("mssql", "mssql"),
+    ("sqlserver", "mssql"),
+    ("pyodbc", "mssql"),
     ("aiosqlite", "sqlite"),
     ("sqlite", "sqlite"),
     ("duckdb", "duckdb"),
@@ -78,3 +85,8 @@ def compute_sql_hash(sql: str) -> str:
         SHA256 hash prefix.
     """
     return hashlib.sha256(sql.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
+
+def redact_sql_literals(sql: str) -> str:
+    """Mask single-quoted (including backslash escapes) and dollar-quoted SQL literals."""
+    return _LITERAL_PATTERN.sub("'***'", sql)

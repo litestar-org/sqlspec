@@ -1,7 +1,7 @@
 """Private JSON serialization engine for ``sqlspec.utils.serializers``."""
 
 import contextlib
-import datetime
+import datetime as dt
 import enum
 import json
 import threading
@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 if TYPE_CHECKING:
     from typing import Self
 
-from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED
+from sqlspec.typing import MSGSPEC_INSTALLED, NUMPY_INSTALLED, ORJSON_INSTALLED, PYDANTIC_INSTALLED, UNSET
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.module_loader import import_optional_attr
 from sqlspec.utils.serializers._numpy import numpy_array_enc_hook
@@ -42,70 +42,19 @@ TypeEncodersMap = Mapping[type, Callable[[Any], Any]]
 StructuralEncoder = Callable[[Any], Any]
 
 
-def _uuid_utils_type() -> "type[Any] | None":
-    return cast("type[Any] | None", import_optional_attr("uuid_utils", "UUID"))
-
-
-_UUID_UTILS_TYPE: "type[Any] | None" = _uuid_utils_type()
 logger = get_logger(__name__)
 
 
-def convert_datetime_to_gmt_iso(value: datetime.datetime) -> str:
+def convert_datetime_to_gmt_iso(value: dt.datetime) -> str:
     """Normalize datetime values to ISO 8601 strings."""
     if value.tzinfo is None:
-        value = value.replace(tzinfo=datetime.UTC)
+        value = value.replace(tzinfo=dt.UTC)
     return value.isoformat().replace("+00:00", "Z")
 
 
-def convert_date_to_iso(value: datetime.date) -> str:
+def convert_date_to_iso(value: dt.date) -> str:
     """Normalize date values to ISO 8601 strings."""
     return value.isoformat()
-
-
-def _dump_pydantic_model(value: Any) -> Any:
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json")
-    return value.dict()
-
-
-def _dump_msgspec_struct_fields(value: Any) -> "dict[str, Any]":
-    return {field_name: value.__getattribute__(field_name) for field_name in value.__struct_fields__}
-
-
-def _default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
-    """Construct the default type encoder registry.
-
-    Mirrors ``advanced_alchemy.utils.serialization.DEFAULT_TYPE_ENCODERS`` in
-    shape, with one deliberate divergence: ``Decimal`` encodes to ``float`` to
-    preserve SQLSpec's historical JSON normalization behavior.
-    """
-    encoders: dict[type, Callable[[Any], Any]] = {
-        datetime.datetime: convert_datetime_to_gmt_iso,
-        datetime.date: convert_date_to_iso,
-        datetime.time: lambda v: v.isoformat(),
-        datetime.timedelta: lambda v: v.total_seconds(),
-        # NOTE: Diverges from advanced_alchemy (str): sqlspec keeps Decimal -> float
-        # to match the historical JSON normalization behavior.
-        Decimal: float,
-        uuid_mod.UUID: str,
-        Path: str,
-        PurePath: str,
-        IPv4Address: str,
-        IPv4Interface: str,
-        IPv4Network: str,
-        IPv6Address: str,
-        IPv6Interface: str,
-        IPv6Network: str,
-        frozenset: list,
-        set: list,
-        bytes: lambda v: v.decode("utf-8", errors="replace"),
-        enum.Enum: lambda v: v.value,
-    }
-
-    if _UUID_UTILS_TYPE is not None:
-        encoders[_UUID_UTILS_TYPE] = str
-
-    return encoders
 
 
 class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
@@ -118,29 +67,6 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
         super().__init__(encoders)
         self._load_lock = threading.Lock()
         self._loaded = False
-
-    def _ensure_loaded(self) -> None:
-        if self._loaded:
-            return
-        with self._load_lock:
-            if self._loaded:
-                return
-            optional_encoders: dict[type, Callable[[Any], Any]] = {}
-            with contextlib.suppress(ImportError):
-                # Register driver UUIDs for direct consumers as well as frameworks.
-                from asyncpg.pgproto import pgproto  # pyright: ignore[reportMissingImports]
-
-                optional_encoders[pgproto.UUID] = str
-            if NUMPY_INSTALLED:
-                ndarray = cast("type[Any]", import_optional_attr("numpy", "ndarray"))
-                generic = cast("type[Any]", import_optional_attr("numpy", "generic"))
-                optional_encoders[ndarray] = numpy_array_enc_hook
-                optional_encoders[generic] = numpy_array_enc_hook
-            if PYDANTIC_INSTALLED:
-                base_model = cast("type[Any]", import_optional_attr("pydantic", "BaseModel"))
-                optional_encoders[base_model] = _dump_pydantic_model
-            dict.update(self, optional_encoders)
-            self._loaded = True
 
     def __contains__(self, key: object) -> bool:
         self._ensure_loaded()
@@ -232,68 +158,30 @@ class _LazyTypeEncoders(dict[type, Callable[[Any], Any]]):
         self._ensure_loaded()
         return super().values()
 
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        with self._load_lock:
+            if self._loaded:
+                return
+            optional_encoders: dict[type, Callable[[Any], Any]] = {}
+            with contextlib.suppress(ImportError):
+                from asyncpg.pgproto import pgproto  # pyright: ignore[reportMissingImports]
 
-DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _LazyTypeEncoders(_default_type_encoders())
+                optional_encoders[pgproto.UUID] = str
+            if NUMPY_INSTALLED:
+                ndarray = cast("type[Any]", import_optional_attr("numpy", "ndarray"))
+                generic = cast("type[Any]", import_optional_attr("numpy", "generic"))
+                optional_encoders[ndarray] = numpy_array_enc_hook
+                optional_encoders[generic] = numpy_array_enc_hook
+            if PYDANTIC_INSTALLED:
+                base_model = cast("type[Any]", import_optional_attr("pydantic", "BaseModel"))
+                optional_encoders[base_model] = _dump_pydantic_model
+            dict.update(self, optional_encoders)
+            self._loaded = True
+
+
 _STRUCTURAL_ENCODER_CACHE: Final["dict[type[Any], StructuralEncoder | None]"] = {}
-
-
-def _dump_attrs_instance(value: Any) -> Any:
-    attrs_asdict = import_optional_attr("attrs", "asdict")
-    return attrs_asdict(value, recurse=True)
-
-
-def _structural_encoder(value: Any) -> Any:
-    """Probe-based fallback for types that aren't keyed by class.
-
-    ``dataclass``/``attrs``/``msgspec.Struct`` rely on ``is_*`` runtime probes
-    rather than ``isinstance`` against a single base type, so they can't live
-    in the type-keyed registry.
-    """
-    value_type = type(value)
-    encoder = _STRUCTURAL_ENCODER_CACHE.get(value_type)
-    if encoder is not None:
-        return encoder(value)
-    if value_type in _STRUCTURAL_ENCODER_CACHE:
-        return None
-
-    if is_dataclass_instance(value):
-        _STRUCTURAL_ENCODER_CACHE[value_type] = dataclass_to_dict
-        return dataclass_to_dict(value)
-    if is_attrs_instance(value):
-        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_attrs_instance
-        return _dump_attrs_instance(value)
-    if is_msgspec_struct(value):
-        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_msgspec_struct_fields
-        return _dump_msgspec_struct_fields(value)
-    _STRUCTURAL_ENCODER_CACHE[value_type] = None
-    return None
-
-
-def _enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "Callable[[Any], Any]":
-    """Build an MRO-walking enc_hook bound to the supplied registry.
-
-    Walks ``value.__class__.__mro__[:-1]`` (skipping ``object``) and returns
-    the first matching encoder. Falls through to structural probes
-    (dataclass / attrs / msgspec.Struct), then raises
-    ``TypeError("unsupported JSON value: ...")`` — strict sqlspec semantics,
-    divergent from advanced-alchemy's ``str`` fallback.
-    """
-
-    def enc_hook(value: Any) -> Any:
-        for base in value.__class__.__mro__[:-1]:
-            encoder = type_encoders.get(base)
-            if encoder is not None:
-                return encoder(value)
-        structural = _structural_encoder(value)
-        if structural is not None:
-            return structural
-        msg = f"unsupported JSON value: {type(value).__name__}"
-        raise TypeError(msg)
-
-    return enc_hook
-
-
-_DEFAULT_ENC_HOOK: Final["Callable[[Any], Any]"] = _enc_hook(DEFAULT_TYPE_ENCODERS)
 
 
 class JSONSerializer(Protocol):
@@ -325,7 +213,9 @@ class BaseJSONSerializer:
 
 
 _orjson_fallback_serializer: "OrjsonSerializer | None" = None
+
 _stdlib_fallback_serializer: "StandardLibSerializer | None" = None
+
 _default_serializer: "JSONSerializer | None" = None
 
 
@@ -471,6 +361,130 @@ def encode_json(data: Any, *, as_bytes: bool = False) -> "str | bytes":
 def decode_json(data: "str | bytes", *, decode_bytes: bool = True) -> Any:
     """Decode JSON input into Python data."""
     return get_default_serializer().decode(data, decode_bytes=decode_bytes)
+
+
+def _uuid_utils_type() -> "type[Any] | None":
+    return cast("type[Any] | None", import_optional_attr("uuid_utils", "UUID"))
+
+
+_UUID_UTILS_TYPE: "type[Any] | None" = _uuid_utils_type()
+
+
+def _dump_pydantic_model(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value.dict()
+
+
+def _dump_msgspec_struct_fields(value: Any) -> "dict[str, Any]":
+    return {
+        field_name: field_val
+        for field_name in value.__struct_fields__
+        if (field_val := value.__getattribute__(field_name)) is not UNSET
+    }
+
+
+def _default_type_encoders() -> "dict[type, Callable[[Any], Any]]":
+    """Construct the default type encoder registry.
+
+    Mirrors ``advanced_alchemy.utils.serialization.DEFAULT_TYPE_ENCODERS`` in
+    shape, with one deliberate divergence: ``Decimal`` encodes to ``float`` to
+    preserve SQLSpec's historical JSON normalization behavior.
+    """
+    encoders: dict[type, Callable[[Any], Any]] = {
+        dt.datetime: convert_datetime_to_gmt_iso,
+        dt.date: convert_date_to_iso,
+        dt.time: lambda v: v.isoformat(),
+        dt.timedelta: lambda v: v.total_seconds(),
+        Decimal: float,
+        uuid_mod.UUID: str,
+        Path: str,
+        PurePath: str,
+        IPv4Address: str,
+        IPv4Interface: str,
+        IPv4Network: str,
+        IPv6Address: str,
+        IPv6Interface: str,
+        IPv6Network: str,
+        frozenset: list,
+        set: list,
+        bytes: lambda v: v.decode("utf-8", errors="replace"),
+        enum.Enum: lambda v: v.value,
+    }
+
+    if _UUID_UTILS_TYPE is not None:
+        encoders[_UUID_UTILS_TYPE] = str
+
+    return encoders
+
+
+DEFAULT_TYPE_ENCODERS: Final["dict[type, Callable[[Any], Any]]"] = _LazyTypeEncoders(_default_type_encoders())
+_STRUCTURAL_ENCODER_CACHE_MAX_SIZE: Final[int] = 1024
+
+
+def _reset_structural_encoder_cache() -> None:
+    _STRUCTURAL_ENCODER_CACHE.clear()
+
+
+def _dump_attrs_instance(value: Any) -> Any:
+    attrs_asdict = import_optional_attr("attrs", "asdict")
+    return attrs_asdict(value, recurse=True)
+
+
+def _structural_encoder(value: Any) -> Any:
+    """Probe-based fallback for types that aren't keyed by class.
+
+    ``dataclass``/``attrs``/``msgspec.Struct`` rely on ``is_*`` runtime probes
+    rather than ``isinstance`` against a single base type, so they can't live
+    in the type-keyed registry.
+    """
+    value_type = type(value)
+    encoder = _STRUCTURAL_ENCODER_CACHE.get(value_type)
+    if encoder is not None:
+        return encoder(value)
+    if value_type in _STRUCTURAL_ENCODER_CACHE:
+        return None
+
+    if len(_STRUCTURAL_ENCODER_CACHE) >= _STRUCTURAL_ENCODER_CACHE_MAX_SIZE:
+        _STRUCTURAL_ENCODER_CACHE.clear()
+    if is_dataclass_instance(value):
+        _STRUCTURAL_ENCODER_CACHE[value_type] = dataclass_to_dict
+        return dataclass_to_dict(value)
+    if is_attrs_instance(value):
+        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_attrs_instance
+        return _dump_attrs_instance(value)
+    if is_msgspec_struct(value):
+        _STRUCTURAL_ENCODER_CACHE[value_type] = _dump_msgspec_struct_fields
+        return _dump_msgspec_struct_fields(value)
+    _STRUCTURAL_ENCODER_CACHE[value_type] = None
+    return None
+
+
+def _enc_hook(type_encoders: "Mapping[type, Callable[[Any], Any]]") -> "Callable[[Any], Any]":
+    """Build an MRO-walking enc_hook bound to the supplied registry.
+
+    Walks ``value.__class__.__mro__[:-1]`` (skipping ``object``) and returns
+    the first matching encoder. Falls through to structural probes
+    (dataclass / attrs / msgspec.Struct), then raises
+    ``TypeError("unsupported JSON value: ...")`` — strict sqlspec semantics,
+    divergent from advanced-alchemy's ``str`` fallback.
+    """
+
+    def enc_hook(value: Any) -> Any:
+        for base in value.__class__.__mro__[:-1]:
+            encoder = type_encoders.get(base)
+            if encoder is not None:
+                return encoder(value)
+        structural = _structural_encoder(value)
+        if structural is not None:
+            return structural
+        msg = f"unsupported JSON value: {type(value).__name__}"
+        raise TypeError(msg)
+
+    return enc_hook
+
+
+_DEFAULT_ENC_HOOK: Final["Callable[[Any], Any]"] = _enc_hook(DEFAULT_TYPE_ENCODERS)
 
 
 def _is_explicit_unsupported_error(exc: Exception) -> bool:

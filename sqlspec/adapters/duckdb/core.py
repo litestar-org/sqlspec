@@ -36,6 +36,9 @@ from sqlspec.exceptions import (
     SQLSpecError,
     UniqueViolationError,
 )
+from sqlspec.storage import ResolvedStorageTarget
+from sqlspec.storage.backends.fsspec import FSSpecBackend
+from sqlspec.storage.backends.obstore import ObStoreBackend
 from sqlspec.utils.serializers import to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
@@ -45,7 +48,7 @@ from sqlspec.utils.uuids import uuid_from_string
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from sqlspec.storage import ResolvedStorageTarget, StorageDestination, SyncStoragePipeline
+    from sqlspec.storage import StorageDestination, SyncStoragePipeline
 
 
 __all__ = (
@@ -175,14 +178,12 @@ def resolve_rowcount(cursor: Any) -> int:
     Returns:
         Rowcount value derived from cursor output.
     """
-    try:
+    with contextlib.suppress(Exception):
         result = cursor.fetchone()
         if result and isinstance(result, tuple) and len(result) == 1:
             return int(result[0])
-    except Exception:
-        if has_rowcount(cursor):
-            return max(cursor.rowcount, 0)
-        return 0
+    if has_rowcount(cursor):
+        return max(cursor.rowcount, 0)
     return 0
 
 
@@ -202,7 +203,7 @@ def build_profile() -> "DriverParameterProfile":
         preserve_original_params_for_many=False,
         json_serializer_strategy="helper",
         custom_type_coercions={
-            bool: _bool_to_int,
+            bool: _identity,
             datetime: _TIME_TO_ISO,
             date: _TIME_TO_ISO,
             Decimal: _DECIMAL_TO_STRING,
@@ -217,6 +218,8 @@ def apply_driver_features(
 ) -> "tuple[StatementConfig, dict[str, Any]]":
     """Apply DuckDB-specific driver features to statement configuration."""
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
+    features.setdefault("enable_events", True)
+    features.setdefault("events_backend", "poll_queue")
 
     param_config = statement_config.parameter_config
     json_serializer = features.get("json_serializer")
@@ -384,10 +387,6 @@ def _resolve_native_storage_target(
     native secret, and that account name is not treated as a backend option
     because the provisioned secret owns the credentials.
     """
-    from sqlspec.storage import ResolvedStorageTarget
-    from sqlspec.storage.backends.fsspec import FSSpecBackend
-    from sqlspec.storage.backends.obstore import ObStoreBackend
-
     protocols = driver_features.get("_duckdb_storage_protocols", ())
     if not driver_features.get("_duckdb_storage_extensions") and not protocols:
         return None
@@ -658,8 +657,8 @@ def _map_transaction_exception(error: "BaseException") -> SQLSpecError:
     return _create_duckdb_error(error, OperationalError, "transaction error")
 
 
-def _bool_to_int(value: bool) -> int:
-    return int(value)
+def _identity(value: Any) -> Any:
+    return value
 
 
 class _DuckDBStreamSource:

@@ -91,15 +91,6 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
         requested_domains = tuple(_POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
         return tuple(_postgres_system_metadata_capability(domain) for domain in requested_domains)
 
-    def _select_domain(
-        self, driver: "PsycopgSyncDriver", domain: str, query_name: str, **parameters: Any
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
-        rows = driver.select(query.sql, **parameters)
-        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
-
     def get_schemas(self, driver: "PsycopgSyncDriver") -> MetadataResult:
         """Get schema metadata."""
         return self._select_domain(driver, "schemas", "list")
@@ -209,14 +200,16 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
     def get_version(self, driver: "PsycopgSyncDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
+        Uses an inline cache check to avoid cross-module method calls that can
+        trigger MyPyC boundary issues.
+
         Args:
             driver: Sync database driver instance.
 
         Returns:
             PostgreSQL version information or None if detection fails.
         """
-        driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        driver_id = id(getattr(driver, "connection", None) or driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -344,6 +337,15 @@ class PsycopgSyncDataDictionary(SyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
+    def _select_domain(
+        self, driver: "PsycopgSyncDriver", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
+
 
 @mypyc_attr(allow_interpreted_subclasses=True, native_class=False)
 class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
@@ -367,15 +369,6 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
         _ = driver
         requested_domains = tuple(_POSTGRES_SYSTEM_METADATA_QUERIES) if domains is None else tuple(domains)
         return tuple(_postgres_system_metadata_capability(domain) for domain in requested_domains)
-
-    async def _select_domain(
-        self, driver: "PsycopgAsyncDriver", domain: str, query_name: str, **parameters: Any
-    ) -> MetadataResult:
-        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
-        if not query.is_supported or query.sql is None:
-            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
-        rows = await driver.select(query.sql, **parameters)
-        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
 
     async def get_schemas(self, driver: "PsycopgAsyncDriver") -> MetadataResult:
         """Get schema metadata."""
@@ -488,14 +481,16 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
     async def get_version(self, driver: "PsycopgAsyncDriver") -> "VersionInfo | None":
         """Get PostgreSQL database version information.
 
+        Uses an inline cache check to avoid cross-module method calls that can
+        trigger MyPyC boundary issues.
+
         Args:
             driver: Async database driver instance.
 
         Returns:
             PostgreSQL version information or None if detection fails.
         """
-        driver_id = id(driver)
-        # Inline cache check to avoid cross-module method call that causes mypyc segfault
+        driver_id = id(getattr(driver, "connection", None) or driver)
         if driver_id in self._version_fetch_attempted:
             return self._version_cache.get(driver_id)
 
@@ -622,6 +617,15 @@ class PsycopgAsyncDataDictionary(AsyncDataDictionaryBase):
             table_name=table_name,
             schema_type=ForeignKeyMetadata,
         )
+
+    async def _select_domain(
+        self, driver: "PsycopgAsyncDriver", domain: str, query_name: str, **parameters: Any
+    ) -> MetadataResult:
+        query = get_data_dictionary_loader().get_domain_query(type(self).dialect, domain, query_name)
+        if not query.is_supported or query.sql is None:
+            return MetadataResult(domain, capability=query.capability, warnings=query.warnings)
+        rows = await driver.select(query.sql, **parameters)
+        return _metadata_result(domain, _postgres_metadata_capability(domain), rows)
 
 
 def _postgres_metadata_capability(domain: str) -> MetadataCapability:

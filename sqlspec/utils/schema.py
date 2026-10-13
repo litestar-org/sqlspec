@@ -1,6 +1,6 @@
 """Schema transformation utilities for converting data to various schema types."""
 
-import datetime
+import datetime as dt
 from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -36,6 +36,7 @@ __all__ = (
     "_convert_numpy_to_list",
     "_default_msgspec_deserializer",
     "_is_list_type_target",
+    "_reset_schema_caches",
     "to_schema",
     "to_value_type",
     "transform_dict_keys",
@@ -44,9 +45,10 @@ __all__ = (
 DataT = TypeVar("DataT", default=dict[str, Any])
 ValueT = TypeVar("ValueT")
 
-_DATETIME_TYPES: Final[set[type]] = {datetime.datetime, datetime.date, datetime.time}
-_DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (datetime.datetime, datetime.date, datetime.time)
+_DATETIME_TYPES: Final[set[type]] = {dt.datetime, dt.date, dt.time}
+_DATETIME_TYPE_TUPLE: Final[tuple[type, ...]] = (dt.datetime, dt.date, dt.time)
 _MAPPING_TYPE_ARGUMENT_COUNT: Final = 2
+_SCHEMA_CACHE_MAX_SIZE: Final[int] = 1024
 _MSGSPEC_FIELD_CACHE: "dict[type, tuple[tuple[tuple[str, str, Any], ...], frozenset[str], frozenset[str]]]" = {}
 _NUMPY_RECURSIVE_DISPATCHER: "TypeDispatcher[Callable[[Any], Any]] | None" = None
 _NULLABLE_UNION_ARGUMENT_COUNT: Final = 2
@@ -157,11 +159,11 @@ def to_value_type(value: Any, value_type: "type[ValueT]") -> "ValueT":
         return cast("ValueT", _convert_to_float(value))
     if value_type is bool:
         return cast("ValueT", _convert_to_bool(value))
-    if value_type is datetime.datetime:
+    if value_type is dt.datetime:
         return cast("ValueT", _convert_to_datetime(value))
-    if value_type is datetime.date:
+    if value_type is dt.date:
         return cast("ValueT", _convert_to_date(value))
-    if value_type is datetime.time:
+    if value_type is dt.time:
         return cast("ValueT", _convert_to_time(value))
     if value_type is Decimal:
         return cast("ValueT", _convert_to_decimal(value))
@@ -238,6 +240,11 @@ def _transform_list(data: list, converter: Callable[[str], str]) -> list:
     return [transform_dict_keys(item, converter) for item in data]
 
 
+def _is_sequence_input(data: Any) -> bool:
+    """Check if data is a non-string, non-bytes sequence."""
+    return isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray))
+
+
 def _is_list_type_target(target_type: Any) -> "TypeGuard[list[object]]":
     """Check if target type is a list type."""
     try:
@@ -263,9 +270,9 @@ def _convert_numpy_to_list(target_type: Any, value: Any) -> Any:
 def _convert_foreign_key_metadata(data: Any, schema_type: Any) -> Any:
     """Convert data to ForeignKeyMetadata schema type.
 
-    Handles both single items and lists for consistency with other converters.
+    Handles both single items and sequences for consistency with other converters.
     """
-    if isinstance(data, list):
+    if _is_sequence_input(data):
         return [_coerce_foreign_key_item(item, schema_type) for item in data]
     return _coerce_foreign_key_item(data, schema_type)
 
@@ -288,12 +295,18 @@ def _coerce_foreign_key_item(data: Any, schema_type: Any) -> Any:
 
 def _convert_typed_dict(data: Any, schema_type: Any) -> Any:
     """Convert data to TypedDict."""
+    if isinstance(data, list):
+        return data
+    if _is_sequence_input(data):
+        return [dict(item) if isinstance(item, Mapping) and not isinstance(item, dict) else item for item in data]
+    if isinstance(data, Mapping) and not isinstance(item := data, dict):
+        return dict(item)
     return data
 
 
 def _convert_dataclass(data: Any, schema_type: Any) -> Any:
     """Convert data to dataclass."""
-    if isinstance(data, list):
+    if _is_sequence_input(data):
         return [schema_type(**item) if is_dict(item) else item for item in data]
     return schema_type(**data) if is_dict(data) else data
 
@@ -310,13 +323,39 @@ class _IsTypePredicate:
         return x is self._type
 
 
+class _IsSubclassPredicate:
+    """Callable predicate to check if a type is a subclass of a target type."""
+
+    __slots__ = ("_type",)
+
+    def __init__(self, target_type: type) -> None:
+        self._type = target_type
+
+    def __call__(self, x: Any) -> bool:
+        return isinstance(x, type) and issubclass(x, self._type)
+
+
 class _UUIDDecoder:
     """Decoder for UUID types."""
 
     __slots__ = ()
 
     def __call__(self, t: type, v: Any) -> Any:
-        return t(v.hex)
+        if isinstance(v, t):
+            return v
+        if isinstance(v, UUID):
+            return t(v.hex)
+        if isinstance(v, (bytes, bytearray, memoryview)):
+            raw_bytes = bytes(v)
+            return uuid_from_bytes(raw_bytes) if t is UUID else t(bytes=raw_bytes)
+        if isinstance(v, int) and not isinstance(v, bool):
+            return t(int=v)
+        if isinstance(v, str):
+            return uuid_from_string(v) if t is UUID else t(v)
+        hex_attr = getattr(v, "hex", None)
+        if isinstance(hex_attr, str):
+            return t(hex_attr)
+        return t(str(v))
 
 
 class _ISOFormatDecoder:
@@ -325,7 +364,20 @@ class _ISOFormatDecoder:
     __slots__ = ()
 
     def __call__(self, t: type, v: Any) -> Any:
-        return t(v.isoformat())
+        if type(v) is t:
+            return v
+        if t is dt.date:
+            return _convert_to_date(v)
+        if t is dt.time:
+            return _convert_to_time(v)
+        if t is dt.datetime:
+            return _convert_to_datetime(v)
+        if isinstance(v, str) and hasattr(t, "fromisoformat"):
+            return t.fromisoformat(v)
+        iso_method = getattr(v, "isoformat", None)
+        if callable(iso_method) and hasattr(t, "fromisoformat"):
+            return t.fromisoformat(iso_method())
+        return t(v)
 
 
 class _EnumDecoder:
@@ -334,15 +386,19 @@ class _EnumDecoder:
     __slots__ = ()
 
     def __call__(self, t: type, v: Any) -> Any:
-        return t(v.value)
+        if isinstance(v, t):
+            return v
+        if isinstance(v, Enum):
+            return t(v.value)
+        return t(v)
 
 
 _DEFAULT_TYPE_DECODERS: Final[list[tuple[Callable[[Any], bool], Callable[[Any, Any], Any]]]] = [
     (_IsTypePredicate(UUID), _UUIDDecoder()),
-    (_IsTypePredicate(datetime.datetime), _ISOFormatDecoder()),
-    (_IsTypePredicate(datetime.date), _ISOFormatDecoder()),
-    (_IsTypePredicate(datetime.time), _ISOFormatDecoder()),
-    (_IsTypePredicate(Enum), _EnumDecoder()),
+    (_IsTypePredicate(dt.datetime), _ISOFormatDecoder()),
+    (_IsTypePredicate(dt.date), _ISOFormatDecoder()),
+    (_IsTypePredicate(dt.time), _ISOFormatDecoder()),
+    (_IsSubclassPredicate(Enum), _EnumDecoder()),
     (_is_list_type_target, _convert_numpy_to_list),
 ]
 
@@ -371,15 +427,14 @@ def _default_msgspec_deserializer(
             if predicate(target_type):
                 return decoder(target_type, value)
 
-    if target_type is UUID and isinstance(value, UUID):
-        return value.hex
+    if target_type is UUID:
+        return _UUIDDecoder()(target_type, value)
 
-    if target_type in _DATETIME_TYPES and isinstance(value, _DATETIME_TYPE_TUPLE):
-        datetime_value = cast("datetime.datetime | datetime.date | datetime.time", value)
-        return datetime_value.isoformat()
+    if target_type in _DATETIME_TYPES:
+        return _ISOFormatDecoder()(target_type, value)
 
-    if isinstance(target_type, type) and issubclass(target_type, Enum) and isinstance(value, Enum):
-        return value.value
+    if isinstance(target_type, type) and issubclass(target_type, Enum):
+        return _EnumDecoder()(target_type, value)
 
     try:
         if isinstance(target_type, type) and isinstance(value, target_type):
@@ -454,11 +509,11 @@ def _convert_msgspec(data: Any, schema_type: Any) -> Any:
     """Convert data to msgspec Struct."""
     transformed_data = (
         [_normalize_msgspec_input(item, schema_type) for item in data]
-        if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray))
+        if _is_sequence_input(data)
         else _normalize_msgspec_input(data, schema_type)
     )
 
-    target_type = list[schema_type] if isinstance(transformed_data, Sequence) else schema_type
+    target_type = list[schema_type] if _is_sequence_input(transformed_data) else schema_type
 
     try:
         return convert(
@@ -494,7 +549,7 @@ def _normalize_msgspec_input(data: Any, target_type: Any) -> Any:
         return {key: _normalize_msgspec_input(value, value_type) for key, value in data.items()}
 
     if _is_sequence_origin(origin):
-        if not isinstance(data, Sequence) or isinstance(data, (str, bytes, bytearray)):
+        if not _is_sequence_input(data):
             return data
         if origin is tuple and len(args) > 1 and args[1] is not Ellipsis:
             return [
@@ -533,6 +588,8 @@ def _msgspec_field_plan(schema_type: type) -> "tuple[tuple[tuple[str, str, Any],
             (field.name, field.encode_name, field.type) for field in structs.fields(cast("Any", schema_type))
         )
         plan = fields, frozenset(field[0] for field in fields), frozenset(field[1] for field in fields)
+        if len(_MSGSPEC_FIELD_CACHE) >= _SCHEMA_CACHE_MAX_SIZE:
+            _MSGSPEC_FIELD_CACHE.pop(next(iter(_MSGSPEC_FIELD_CACHE)), None)
         _MSGSPEC_FIELD_CACHE[schema_type] = plan
         return plan
 
@@ -567,9 +624,20 @@ def _is_sequence_origin(origin: Any) -> bool:
 
 def _convert_pydantic(data: Any, schema_type: Any) -> Any:
     """Convert data to Pydantic model."""
-    if isinstance(data, Sequence):
+    if _is_sequence_input(data):
         return get_type_adapter(list[schema_type]).validate_python(data, from_attributes=True)
     return get_type_adapter(schema_type).validate_python(data, from_attributes=True)
+
+
+def _coerce_attrs_item(item: Any, schema_type: Any, attrs_asdict: "Callable[[Any], dict[str, Any]]") -> Any:
+    if isinstance(item, schema_type):
+        return item
+    if is_dict(item):
+        return schema_type(**item)
+    if is_attrs_instance(item):
+        return schema_type(**attrs_asdict(item))
+    msg = f"Cannot convert {type(item).__name__} to {schema_type.__name__}"
+    raise TypeError(msg)
 
 
 def _convert_attrs(data: Any, schema_type: Any) -> Any:
@@ -577,18 +645,32 @@ def _convert_attrs(data: Any, schema_type: Any) -> Any:
     if CATTRS_INSTALLED:
         cattrs_structure = import_optional_attr("cattrs", "structure")
         cattrs_unstructure = import_optional_attr("cattrs", "unstructure")
-        if isinstance(data, Sequence):
-            return cattrs_structure(data, list[schema_type])
+        if _is_sequence_input(data):
+            for item in data:
+                if not isinstance(item, (Mapping, schema_type)) and not is_attrs_instance(item):
+                    msg = f"Cannot convert {type(item).__name__} to {schema_type.__name__}"
+                    raise TypeError(msg)
+            items = [cattrs_unstructure(item) if is_attrs_instance(item) else item for item in data]
+            return cattrs_structure(items, list[schema_type])
+        if not isinstance(data, (Mapping, schema_type)) and not is_attrs_instance(data):
+            msg = f"Cannot convert {type(data).__name__} to {schema_type.__name__}"
+            raise TypeError(msg)
         structured = cattrs_unstructure(data) if is_attrs_instance(data) else data
         return cattrs_structure(structured, schema_type)
 
-    if isinstance(data, list):
-        attrs_asdict = import_optional_attr("attrs", "asdict")
-        return [schema_type(**item) if is_dict(item) else schema_type(**attrs_asdict(item)) for item in data]
-    return schema_type(**data) if is_dict(data) else data
+    attrs_asdict = import_optional_attr("attrs", "asdict")
+    if _is_sequence_input(data):
+        return [_coerce_attrs_item(item, schema_type, attrs_asdict) for item in data]
+    return _coerce_attrs_item(data, schema_type, attrs_asdict)
 
 
 _SCHEMA_CONVERTER_CACHE: "dict[type, Callable[[Any, Any], Any] | None]" = {}
+
+
+def _reset_schema_caches() -> None:
+    """Clear internal schema converter and msgspec field caches."""
+    _MSGSPEC_FIELD_CACHE.clear()
+    _SCHEMA_CONVERTER_CACHE.clear()
 
 
 def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | None":
@@ -620,6 +702,8 @@ def _get_schema_converter(schema_type: type) -> "Callable[[Any, Any], Any] | Non
             conv = _convert_foreign_key_metadata
         else:
             conv = None
+        if len(_SCHEMA_CONVERTER_CACHE) >= _SCHEMA_CACHE_MAX_SIZE:
+            _SCHEMA_CONVERTER_CACHE.pop(next(iter(_SCHEMA_CONVERTER_CACHE)), None)
         _SCHEMA_CONVERTER_CACHE[schema_type] = conv  # pyright: ignore[reportArgumentType]
         return conv
 
@@ -660,7 +744,8 @@ def _try_parse_json(value: str) -> Any:
 
 
 _BOOL_TRUE_VALUES: Final[frozenset[str]] = frozenset({"true", "1", "yes", "y", "t", "on"})
-_STRICT_IDENTITY_TYPES: Final[tuple[type, ...]] = (int, bool, datetime.date, datetime.time)
+_BOOL_FALSE_VALUES: Final[frozenset[str]] = frozenset({"false", "0", "no", "n", "f", "off", ""})
+_STRICT_IDENTITY_TYPES: Final[tuple[type, ...]] = (int, bool, dt.date, dt.time)
 
 
 def _convert_to_int(value: Any) -> int:
@@ -678,14 +763,20 @@ def _convert_to_int(value: Any) -> int:
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, (int, float, Decimal)):
-        return int(value)
+        try:
+            return int(value)
+        except (ValueError, OverflowError) as e:
+            msg = f"Cannot convert {type(value).__name__} to int"
+            raise TypeError(msg) from e
     if isinstance(value, str):
         try:
             return int(value)
         except ValueError:
             try:
-                return int(float(value))
-            except ValueError:
+                parsed_float = float(value)
+                if parsed_float.is_integer():
+                    return int(parsed_float)
+            except (ValueError, OverflowError):
                 pass
     msg = f"Cannot convert {type(value).__name__} to int"
     raise TypeError(msg)
@@ -733,12 +824,16 @@ def _convert_to_bool(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     if isinstance(value, str):
-        return value.lower() in _BOOL_TRUE_VALUES
+        normalized = value.strip().lower()
+        if normalized in _BOOL_TRUE_VALUES:
+            return True
+        if normalized in _BOOL_FALSE_VALUES:
+            return False
     msg = f"Cannot convert {type(value).__name__} to bool"
     raise TypeError(msg)
 
 
-def _convert_to_datetime(value: Any) -> datetime.datetime:
+def _convert_to_datetime(value: Any) -> dt.datetime:
     """Convert a value to datetime.
 
     Args:
@@ -750,20 +845,20 @@ def _convert_to_datetime(value: Any) -> datetime.datetime:
     Raises:
         TypeError: If value cannot be converted to datetime.
     """
-    if isinstance(value, datetime.datetime):
+    if isinstance(value, dt.datetime):
         return value
     if isinstance(value, str):
         try:
-            return datetime.datetime.fromisoformat(value)
+            return dt.datetime.fromisoformat(value)
         except ValueError:
             pass
-    if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
-        return datetime.datetime.combine(value, datetime.time.min)
+    if isinstance(value, dt.date) and not isinstance(value, dt.datetime):
+        return dt.datetime.combine(value, dt.time.min)
     msg = f"Cannot convert {type(value).__name__} to datetime"
     raise TypeError(msg)
 
 
-def _convert_to_date(value: Any) -> datetime.date:
+def _convert_to_date(value: Any) -> dt.date:
     """Convert a value to date.
 
     Args:
@@ -775,23 +870,23 @@ def _convert_to_date(value: Any) -> datetime.date:
     Raises:
         TypeError: If value cannot be converted to date.
     """
-    if isinstance(value, datetime.datetime):
+    if isinstance(value, dt.datetime):
         return value.date()
-    if isinstance(value, datetime.date):
+    if isinstance(value, dt.date):
         return value
     if isinstance(value, str):
         try:
-            return datetime.date.fromisoformat(value)
+            return dt.date.fromisoformat(value)
         except ValueError:
             try:
-                return datetime.datetime.fromisoformat(value).date()
+                return dt.datetime.fromisoformat(value).date()
             except ValueError:
                 pass
     msg = f"Cannot convert {type(value).__name__} to date"
     raise TypeError(msg)
 
 
-def _convert_to_time(value: Any) -> datetime.time:
+def _convert_to_time(value: Any) -> dt.time:
     """Convert a value to time.
 
     Args:
@@ -803,15 +898,19 @@ def _convert_to_time(value: Any) -> datetime.time:
     Raises:
         TypeError: If value cannot be converted to time.
     """
-    if isinstance(value, datetime.datetime):
-        return value.time()
-    if isinstance(value, datetime.time):
+    if isinstance(value, dt.datetime):
+        return value.timetz() if value.tzinfo is not None else value.time()
+    if isinstance(value, dt.time):
         return value
     if isinstance(value, str):
         try:
-            return datetime.time.fromisoformat(value)
+            return dt.time.fromisoformat(value)
         except ValueError:
-            pass
+            try:
+                parsed_dt = dt.datetime.fromisoformat(value)
+                return parsed_dt.timetz() if parsed_dt.tzinfo is not None else parsed_dt.time()
+            except ValueError:
+                pass
     msg = f"Cannot convert {type(value).__name__} to time"
     raise TypeError(msg)
 

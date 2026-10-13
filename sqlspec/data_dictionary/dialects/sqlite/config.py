@@ -1,8 +1,18 @@
+"""SQLite dialect static configuration and reflection helpers."""
+
 import re
 
 from sqlspec.data_dictionary import DialectConfig, FeatureFlags, FeatureVersions, VersionInfo, register_dialect
 
-__all__ = ("list_sqlite_available_features", "resolve_sqlite_json_type")
+__all__ = (
+    "SQLITE_CONFIG",
+    "SQLITE_FEATURE_FLAGS",
+    "SQLITE_FEATURE_VERSIONS",
+    "SQLITE_TYPE_MAPPINGS",
+    "SQLITE_VERSION_PATTERN",
+    "list_sqlite_available_features",
+    "resolve_sqlite_json_type",
+)
 
 
 SQLITE_VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")

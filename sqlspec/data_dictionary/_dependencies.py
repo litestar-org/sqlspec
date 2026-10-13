@@ -1,5 +1,6 @@
 """Typed dependency graph helpers for data-dictionary DDL ordering."""
 
+import heapq
 from collections import defaultdict
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -108,19 +109,6 @@ class DependencyEdge:
         self.source = _coerce_source(source)
         self.confidence = confidence
 
-    def to_dict(self) -> "dict[str, object]":
-        """Serialize the edge with stable string enum values."""
-        return {
-            "from": self.from_object.to_dict(),
-            "to": self.to_object.to_dict(),
-            "kind": self.kind.value,
-            "strength": self.strength.value,
-            "create_direction": self.create_direction.value,
-            "drop_direction": self.drop_direction.value,
-            "source": self.source.value,
-            "confidence": self.confidence,
-        }
-
     def __repr__(self) -> str:
         return (
             f"DependencyEdge(from_object={self.from_object!r}, to_object={self.to_object!r}, "
@@ -145,6 +133,19 @@ class DependencyEdge:
             self.confidence,
         ))
 
+    def to_dict(self) -> "dict[str, object]":
+        """Serialize the edge with stable string enum values."""
+        return {
+            "from": self.from_object.to_dict(),
+            "to": self.to_object.to_dict(),
+            "kind": self.kind.value,
+            "strength": self.strength.value,
+            "create_direction": self.create_direction.value,
+            "drop_direction": self.drop_direction.value,
+            "source": self.source.value,
+            "confidence": self.confidence,
+        }
+
 
 class DependencyCycle:
     """Named dependency cycle with participating objects and edge diagnostics."""
@@ -154,6 +155,17 @@ class DependencyCycle:
     def __init__(self, objects: "tuple[ObjectIdentity, ...]", edges: "tuple[DependencyEdge, ...]") -> None:
         self.objects = objects
         self.edges = edges
+
+    def __repr__(self) -> str:
+        return f"DependencyCycle(objects={self.objects!r}, edges={self.edges!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DependencyCycle):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.objects, self.edges))
 
     def describe(self) -> str:
         """Return a compact human-readable cycle diagnostic."""
@@ -170,17 +182,6 @@ class DependencyCycle:
             "objects": tuple(identity.to_dict() for identity in self.objects),
             "edges": tuple(edge.to_dict() for edge in self.edges),
         }
-
-    def __repr__(self) -> str:
-        return f"DependencyCycle(objects={self.objects!r}, edges={self.edges!r})"
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, DependencyCycle):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((self.objects, self.edges))
 
 
 class DependencyCycleError(SQLSpecError):
@@ -203,6 +204,17 @@ class DependencySortResult:
         self.ordered = ordered
         self.cycles = cycles
 
+    def __repr__(self) -> str:
+        return f"DependencySortResult(ordered={self.ordered!r}, cycles={self.cycles!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DependencySortResult):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash((self.ordered, self.cycles))
+
     @property
     def is_acyclic(self) -> bool:
         """Return whether sorting completed without cycles."""
@@ -219,17 +231,6 @@ class DependencySortResult:
             "ordered": tuple(identity.to_dict() for identity in self.ordered),
             "cycles": tuple(cycle.to_dict() for cycle in self.cycles),
         }
-
-    def __repr__(self) -> str:
-        return f"DependencySortResult(ordered={self.ordered!r}, cycles={self.cycles!r})"
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, DependencySortResult):
-            return NotImplemented
-        return self.to_dict() == other.to_dict()
-
-    def __hash__(self) -> int:
-        return hash((self.ordered, self.cycles))
 
 
 def dependency_edges_from_foreign_keys(
@@ -337,37 +338,104 @@ def sort_dependencies(
         *(edge.from_object for edge in edge_tuple),
         *(edge.to_object for edge in edge_tuple),
     ))
+    node_index = {node: idx for idx, node in enumerate(nodes)}
     dependencies: dict[ObjectIdentity, set[ObjectIdentity]] = {node: set() for node in nodes}
-    dependents: dict[ObjectIdentity, set[ObjectIdentity]] = defaultdict(set)
+    dependents: dict[ObjectIdentity, list[ObjectIdentity]] = defaultdict(list)
 
     for edge in edge_tuple:
         dependent, dependency = _edge_order(edge, order)
-        dependencies.setdefault(dependent, set()).add(dependency)
-        dependencies.setdefault(dependency, set())
-        dependents[dependency].add(dependent)
+        if dependency not in dependencies[dependent]:
+            dependencies[dependent].add(dependency)
+            dependents[dependency].append(dependent)
+
+    for dep_list in dependents.values():
+        dep_list.sort(key=lambda item: node_index[item])
 
     ordered: list[ObjectIdentity] = []
-    ready = [node for node in nodes if not dependencies[node]]
-    ready_seen = set(ready)
+    ready_heap: list[tuple[int, ObjectIdentity]] = [
+        (node_index[node], node) for node in nodes if not dependencies[node]
+    ]
+    heapq.heapify(ready_heap)
+    ready_seen: set[ObjectIdentity] = {node for _, node in ready_heap}
 
-    while ready:
-        node = ready.pop(0)
+    while ready_heap:
+        _, node = heapq.heappop(ready_heap)
         ordered.append(node)
-        for dependent in _ordered_nodes(dependents.get(node, ()), nodes):
+        for dependent in dependents.get(node, ()):
             dependencies[dependent].discard(node)
-            if not dependencies[dependent] and dependent not in ready_seen and dependent not in ordered:
-                ready.append(dependent)
+            if not dependencies[dependent] and dependent not in ready_seen:
+                heapq.heappush(ready_heap, (node_index[dependent], dependent))
                 ready_seen.add(dependent)
 
-    unresolved = tuple(node for node in nodes if node not in ordered)
+    ordered_set = set(ordered)
+    unresolved = tuple(node for node in nodes if node not in ordered_set)
     if not unresolved:
         return DependencySortResult(tuple(ordered))
 
+    cycles = _extract_dependency_cycles(unresolved, edge_tuple, dependents, node_index)
+    return DependencySortResult(tuple(ordered), cycles)
+
+
+def _extract_dependency_cycles(
+    unresolved: "tuple[ObjectIdentity, ...]",
+    edge_tuple: "tuple[DependencyEdge, ...]",
+    dependents: "dict[ObjectIdentity, list[ObjectIdentity]]",
+    node_index: "dict[ObjectIdentity, int]",
+) -> "tuple[DependencyCycle, ...]":
     unresolved_set = set(unresolved)
-    cycle_edges = tuple(
-        edge for edge in edge_tuple if edge.from_object in unresolved_set and edge.to_object in unresolved_set
-    )
-    return DependencySortResult(tuple(ordered), (DependencyCycle(unresolved, cycle_edges),))
+    index = 0
+    indices: dict[ObjectIdentity, int] = {}
+    lowlink: dict[ObjectIdentity, int] = {}
+    stack: list[ObjectIdentity] = []
+    on_stack: set[ObjectIdentity] = set()
+    sccs: list[tuple[ObjectIdentity, ...]] = []
+
+    def strongconnect(node: ObjectIdentity) -> None:
+        nonlocal index
+        indices[node] = index
+        lowlink[node] = index
+        index += 1
+        stack.append(node)
+        on_stack.add(node)
+
+        for neighbor in dependents.get(node, ()):
+            if neighbor not in unresolved_set:
+                continue
+            if neighbor not in indices:
+                strongconnect(neighbor)
+                lowlink[node] = min(lowlink[node], lowlink[neighbor])
+            elif neighbor in on_stack:
+                lowlink[node] = min(lowlink[node], indices[neighbor])
+
+        if lowlink[node] == indices[node]:
+            component: list[ObjectIdentity] = []
+            while True:
+                member = stack.pop()
+                on_stack.discard(member)
+                component.append(member)
+                if member == node:
+                    break
+            if len(component) > 1 or node in dependents.get(node, ()):
+                component.sort(key=lambda item: node_index[item])
+                sccs.append(tuple(component))
+
+    for node in unresolved:
+        if node not in indices:
+            strongconnect(node)
+
+    if not sccs:
+        cycle_edges = tuple(
+            edge for edge in edge_tuple if edge.from_object in unresolved_set and edge.to_object in unresolved_set
+        )
+        return (DependencyCycle(unresolved, cycle_edges),)
+
+    sccs.sort(key=lambda comp: node_index[comp[0]])
+    cycles: list[DependencyCycle] = []
+    for comp in sccs:
+        comp_set = set(comp)
+        comp_edges = tuple(edge for edge in edge_tuple if edge.from_object in comp_set and edge.to_object in comp_set)
+        cycles.append(DependencyCycle(comp, comp_edges))
+    return tuple(cycles)
 
 
 def _edge_order(edge: DependencyEdge, order: "Literal['create', 'drop']") -> "tuple[ObjectIdentity, ObjectIdentity]":

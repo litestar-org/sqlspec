@@ -127,52 +127,12 @@ def parse_column_expression(column_input: str | exp.Expr | Any, builder: Any | N
         return exp.maybe_parse(column_input) or exp.column(column_input)
 
     if has_expression_and_sql(column_input):
-        if column_input.expression is not None and isinstance(column_input.expression, exp.Expr):
-            _merge_sql_parameters(column_input, builder)
-            return column_input.expression
-
-        _merge_sql_parameters(column_input, builder)
-        sql_str = getattr(column_input, "raw_sql", None)
-        if sql_str is None:
-            sql_str = column_input.sql
-        return exp.maybe_parse(sql_str) or exp.column(sql_str)
+        return extract_sql_object_expression(column_input, builder)
 
     if has_expression_attr(column_input) and isinstance(column_input._expression, exp.Expr):  # pyright: ignore[reportPrivateUsage]
         return column_input._expression  # pyright: ignore[reportPrivateUsage]
 
     return exp.maybe_parse(column_input) or exp.column(str(column_input))  # pyright: ignore[reportArgumentType]
-
-
-def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
-    """Distinguish supplied table quotes from quoting added by optimization."""
-    if not any(quote in source for quote in ('"', "`", "[")):
-        return table
-    remaining = source.strip()
-    for identifier in table.parts:
-        if not isinstance(identifier, exp.Identifier) or not remaining:
-            break
-        name = identifier.name
-        opening = remaining[0]
-        if opening in ('"', "`", "["):
-            closing = "]" if opening == "[" else opening
-            spelling = opening + name.replace(closing, closing * 2) + closing
-            if not remaining.startswith(spelling):
-                # SQLGlot's permissive fallback can retain literal quote delimiters.
-                if not (name.startswith(opening) and name.endswith(closing) and remaining.startswith(name)):
-                    break
-                spelling = name
-                identifier.set("this", name[1:-1].replace(closing * 2, closing))
-            identifier.set("quoted", True)
-            identifier.meta["sqlspec_explicit_table_quote"] = True
-        else:
-            spelling = name
-            if not remaining.startswith(spelling):
-                break
-        remaining = remaining[len(spelling) :].lstrip()
-        if not remaining.startswith("."):
-            break
-        remaining = remaining[1:].lstrip()
-    return table
 
 
 def parse_table_expression(
@@ -272,11 +232,7 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
             param_name = builder.generate_unique_parameter_name(column_name)  # pyright: ignore[reportAttributeAccessIssue]
             _, param_name = builder.add_parameter(value, name=param_name)
             return exp.EQ(this=column_expr, expression=exp.Placeholder(this=param_name))
-        if isinstance(value, str):
-            return exp.EQ(this=column_expr, expression=exp.convert(value))
-        if isinstance(value, (int, float)):
-            return exp.EQ(this=column_expr, expression=exp.convert(str(value)))
-        return exp.EQ(this=column_expr, expression=exp.convert(str(value)))
+        return exp.EQ(this=column_expr, expression=exp.convert(value))
 
     if not isinstance(condition_input, str):
         condition_input = str(condition_input)
@@ -285,11 +241,12 @@ def parse_condition_expression(condition_input: str | exp.Expr | tuple[str, Any]
 
     if param_info:
         converted_condition = condition_input
-        for param in param_info[::-1]:  # Reverse to preserve positions
+        for param in param_info[::-1]:
             if param.style in {
                 ParameterStyle.NUMERIC,
                 ParameterStyle.POSITIONAL_PYFORMAT,
                 ParameterStyle.POSITIONAL_COLON,
+                ParameterStyle.QMARK,
             }:
                 placeholder = f":param_{param.ordinal}"
                 converted_condition = (
@@ -338,21 +295,25 @@ def extract_sql_object_expression(
         raise ValueError(msg)
 
     if value.expression is not None and isinstance(value.expression, exp.Expr):
-        _merge_sql_parameters(value, builder)
-        return value.expression
+        expr = value.expression.copy()
+        param_mapping = _merge_sql_parameters(value, builder)
+        if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
+            expr = builder._update_placeholders(expr, param_mapping)
+        return expr
 
     if not has_sql:
         msg = f"Value has no SQL text fallback: {type(value)}"
         raise ValueError(msg)
 
-    _merge_sql_parameters(value, builder)
+    param_mapping = _merge_sql_parameters(value, builder)
     sql_text = getattr(value, "raw_sql", None)
     if sql_text is None:
         sql_text = value.sql if not callable(value.sql) else str(value)
 
-    if parse_sql is not None:
-        return parse_sql(sql_text)
-    return exp.maybe_parse(sql_text) or exp.convert(str(sql_text))
+    expr = parse_sql(sql_text) if parse_sql is not None else (exp.maybe_parse(sql_text) or exp.convert(str(sql_text)))
+    if param_mapping and builder is not None and hasattr(builder, "_update_placeholders"):
+        expr = builder._update_placeholders(expr, param_mapping)
+    return expr
 
 
 def extract_expression(value: Any) -> exp.Expr:
@@ -364,16 +325,12 @@ def extract_expression(value: Any) -> exp.Expr:
     Returns:
         Raw SQLGlot expression.
     """
-    from sqlspec.builder._select import Case
-
     if isinstance(value, str):
         return exp.column(value)
     if isinstance(value, Column):
         return value.sqlglot_expression
     if isinstance(value, ExpressionWrapper):
         return value.expression
-    if isinstance(value, Case):
-        return exp.Case(ifs=value.conditions, default=value.default)
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
@@ -391,6 +348,37 @@ def to_expression(value: Any) -> exp.Expr:
     if isinstance(value, exp.Expr):
         return value
     return exp.convert(value)
+
+
+def _mark_explicit_table_quotes(table: exp.Table, source: str) -> exp.Table:
+    """Distinguish supplied table quotes from quoting added by optimization."""
+    if not any(quote in source for quote in ('"', "`", "[")):
+        return table
+    remaining = source.strip()
+    for identifier in table.parts:
+        if not isinstance(identifier, exp.Identifier) or not remaining:
+            break
+        name = identifier.name
+        opening = remaining[0]
+        if opening in ('"', "`", "["):
+            closing = "]" if opening == "[" else opening
+            spelling = opening + name.replace(closing, closing * 2) + closing
+            if not remaining.startswith(spelling):
+                if not (name.startswith(opening) and name.endswith(closing) and remaining.startswith(name)):
+                    break
+                spelling = name
+                identifier.set("this", name[1:-1].replace(closing * 2, closing))
+            identifier.set("quoted", True)
+            identifier.meta["sqlspec_explicit_table_quote"] = True
+        else:
+            spelling = name
+            if not remaining.startswith(spelling):
+                break
+        remaining = remaining[len(spelling) :].lstrip()
+        if not remaining.startswith("."):
+            break
+        remaining = remaining[1:].lstrip()
+    return table
 
 
 def _normalize_partition_by(partition_by: str | list[str] | exp.Expr | None) -> list[exp.Expr] | None:
@@ -449,21 +437,37 @@ def _normalize_dialect(dialect: "DialectType | None") -> str | None:
         name = dialect.__name__.lower()
     else:
         name = type(dialect).__name__.lower()
-    return {"mssql": "tsql", "mariadb": "mysql", "cockroachdb": "postgres"}.get(name, name)
+    return {"mssql": "tsql", "mariadb": "mysql", "cockroachdb": "postgres", "postgresql": "postgres"}.get(name, name)
 
 
-def _merge_sql_parameters(sql_obj: Any, builder: Any) -> None:
-    """Merge parameters from SQL object into builder.
+def _merge_sql_parameters(sql_obj: Any, builder: Any) -> dict[str, str]:
+    """Merge parameters from SQL object into builder and return renamed placeholder mapping.
 
     Args:
         sql_obj: SQL object with parameters attribute
         builder: Builder instance with add_parameter method
-    """
-    if not (builder and has_expression_and_parameters(sql_obj) and has_parameter_builder(builder)):
-        return
 
+    Returns:
+        Mapping of original parameter names to renamed parameter names.
+    """
+    param_mapping: dict[str, str] = {}
+    if not (builder and has_expression_and_parameters(sql_obj) and has_parameter_builder(builder)):
+        return param_mapping
+
+    existing_params = getattr(builder, "parameters", None)
+    if existing_params is None:
+        existing_params = getattr(builder, "_parameters", {})
     for param_name, param_value in sql_obj.parameters.items():
-        builder.add_parameter(param_value, name=param_name)
+        target_name = param_name
+        if param_name in existing_params:
+            if hasattr(builder, "generate_unique_parameter_name"):
+                target_name = builder.generate_unique_parameter_name(param_name)  # pyright: ignore[reportAttributeAccessIssue]
+            elif hasattr(builder, "_next_parameter_name"):
+                target_name = builder._next_parameter_name(param_name)  # pyright: ignore[reportAttributeAccessIssue,reportPrivateUsage]
+        _, actual_name = builder.add_parameter(param_value, name=target_name)
+        if actual_name != param_name:
+            param_mapping[param_name] = actual_name
+    return param_mapping
 
 
 def _is_simple_identifier(value: str) -> bool:

@@ -8,7 +8,7 @@ from sqlspec.utils.serializers import from_json
 if TYPE_CHECKING:
     from sqlspec.typing import ArrowTable
 
-__all__ = ("decode_arrow_payload", "encode_arrow_payload")
+__all__ = ("StorageFormat", "decode_arrow_payload", "encode_arrow_payload")
 
 
 StorageFormat = Literal["jsonl", "json", "parquet", "arrow-ipc", "csv"]
@@ -28,9 +28,9 @@ def encode_arrow_payload(
     pa = import_pyarrow()
     sink = pa.BufferOutputStream()
     if format_choice == "arrow-ipc":
-        writer = pa.ipc.new_file(sink, table.schema)
-        writer.write_table(table)
-        writer.close()
+        ipc_options = pa.ipc.IpcWriteOptions(compression=compression) if compression else None
+        with pa.ipc.new_file(sink, table.schema, options=ipc_options) as writer:
+            writer.write_table(table)
     elif format_choice == "csv":
         pa_csv = import_pyarrow_csv()
         csv_opts: Any = None
@@ -53,13 +53,15 @@ def decode_arrow_payload(payload: bytes, format_choice: StorageFormat) -> "Arrow
         pq = import_pyarrow_parquet()
         return cast("ArrowTable", pq.read_table(pa.BufferReader(payload)))
     if format_choice == "arrow-ipc":
-        reader = pa.ipc.open_file(pa.BufferReader(payload))
-        return cast("ArrowTable", reader.read_all())
+        with pa.ipc.open_file(pa.BufferReader(payload)) as reader:
+            return cast("ArrowTable", reader.read_all())
     if format_choice == "csv":
         pa_csv = import_pyarrow_csv()
         return cast("ArrowTable", pa_csv.read_csv(pa.BufferReader(payload)))
     if format_choice == "json":
-        data = from_json(payload.decode())
+        if not payload.strip():
+            return cast("ArrowTable", pa.table({}))
+        data = from_json(payload)
         rows = data if isinstance(data, list) else [data]
         return cast("ArrowTable", pa.Table.from_pylist(rows))
     if format_choice == "jsonl":

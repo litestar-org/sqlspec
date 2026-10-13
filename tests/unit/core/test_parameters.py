@@ -1417,6 +1417,7 @@ def test_processor_cache_key_uses_shared_tuple_helper() -> None:
         False,
         True,
         False,
+        hash(config),
     )
 
 
@@ -3087,3 +3088,65 @@ def test_static_missing_positional_does_not_consume_reserved_alias() -> None:
     with pytest.raises(SQLSpecError, match="Missing value for positional placeholder"):
         SQL("SELECT ?, :param_0", {"param_0": 42}).as_script().compile()
     assert SQL("SELECT ?, :param_0", {"spare": 1, "param_0": 42}).as_script().compile() == ("SELECT 1, 42", None)
+
+
+def test_validator_extract_parameters_respects_named_dollar_quote_tags() -> None:
+    validator = ParameterValidator()
+    sql = "SELECT $tag$ :not_a_param $1 ? $tag$, :actual_param FROM users"
+    params = validator.extract_parameters(sql)
+    assert len(params) == 1
+    assert params[0].name == "actual_param"
+    assert params[0].style == ParameterStyle.NAMED_COLON
+
+
+def test_processor_cache_key_differentiates_config_flags() -> None:
+    processor = ParameterProcessor()
+    strict_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        strict_named_parameters=True,
+    )
+    lenient_config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.NAMED_COLON,
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        strict_named_parameters=False,
+    )
+    sql = "SELECT :a, :b"
+    result = processor.process(sql, {"a": 1}, lenient_config)
+    assert tuple(result.parameters) == (1,)
+    with pytest.raises(SQLSpecError, match="Missing named parameter"):
+        processor.process(sql, {"a": 1}, strict_config)
+
+
+def test_processor_wraps_parameter_types_in_execute_many() -> None:
+    processor = ParameterProcessor()
+    seen_types: list[type] = []
+
+    def decimal_coercer(val: Decimal) -> str:
+        seen_types.append(type(val))
+        return str(val)
+
+    config = ParameterStyleConfig(
+        default_parameter_style=ParameterStyle.QMARK,
+        default_execution_parameter_style=ParameterStyle.QMARK,
+        type_coercion_map={Decimal: decimal_coercer},
+    )
+    rows = [(Decimal("1.25"),), (Decimal("2.50"),)]
+    result = processor.process("INSERT INTO items (price) VALUES (?)", rows, config, is_many=True, wrap_types=True)
+    assert result.applied_wrap_types is True
+    assert result.parameters == [("1.25",), ("2.50",)]
+    assert seen_types == [Decimal, Decimal]
+
+
+def test_fingerprint_execute_many_resolves_non_none_types_beyond_first_row() -> None:
+    batch_a = [(None, 1), (Decimal("1.5"), 2)]
+    batch_b = [(None, 1), ("string_val", 2)]
+    fp_a = _processor_module.structural_fingerprint(batch_a, is_many=True)
+    fp_b = _processor_module.structural_fingerprint(batch_b, is_many=True)
+    assert fp_a != fp_b
+
+    dict_batch_a = [{"x": None}, {"x": Decimal("1.5")}]
+    dict_batch_b = [{"x": None}, {"x": "string_val"}]
+    assert _processor_module.structural_fingerprint(
+        dict_batch_a, is_many=True
+    ) != _processor_module.structural_fingerprint(dict_batch_b, is_many=True)

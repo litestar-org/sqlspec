@@ -86,11 +86,6 @@ class CacheKey:
         self._key_data = key_data
         self._hash = hash(key_data)
 
-    @property
-    def key_data(self) -> "tuple[Any, ...]":
-        """Get the key data tuple."""
-        return self._key_data
-
     def __hash__(self) -> int:
         """Return cached hash value."""
         return self._hash
@@ -107,6 +102,11 @@ class CacheKey:
     def __repr__(self) -> str:
         """String representation of the cache key."""
         return f"CacheKey({self._key_data!r})"
+
+    @property
+    def key_data(self) -> "tuple[Any, ...]":
+        """Get the key data tuple."""
+        return self._key_data
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -125,6 +125,14 @@ class CacheStats:
         self.evictions = 0
         self.total_operations = 0
         self.memory_usage = 0
+
+    def __repr__(self) -> str:
+        """String representation of cache statistics."""
+        return (
+            f"CacheStats(hit_rate={self.hit_rate:.1f}%, "
+            f"hits={self.hits}, misses={self.misses}, "
+            f"evictions={self.evictions}, ops={self.total_operations})"
+        )
 
     @property
     def hit_rate(self) -> float:
@@ -158,14 +166,6 @@ class CacheStats:
         self.evictions = 0
         self.total_operations = 0
         self.memory_usage = 0
-
-    def __repr__(self) -> str:
-        """String representation of cache statistics."""
-        return (
-            f"CacheStats(hit_rate={self.hit_rate:.1f}%, "
-            f"hits={self.hits}, misses={self.misses}, "
-            f"evictions={self.evictions}, ops={self.total_operations})"
-        )
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -223,6 +223,20 @@ class LRUCache:
         self._tail = CacheNode(CacheKey(()), None)
         self._head.next = self._tail
         self._tail.prev = self._head
+
+    def __len__(self) -> int:
+        """Get current cache size."""
+        return len(self._cache)
+
+    def __contains__(self, key: CacheKey) -> bool:
+        """Check if key exists in cache."""
+        with self._lock:
+            node = self._cache.get(key)
+            if node is None:
+                return False
+
+            ttl = self._ttl
+            return not (ttl is not None and time.time() - node.timestamp > ttl)
 
     def get(self, key: CacheKey) -> Any | None:
         """Get value from cache.
@@ -372,20 +386,6 @@ class LRUCache:
         """Move node to head of list."""
         self._remove_node(node)
         self._add_to_head(node)
-
-    def __len__(self) -> int:
-        """Get current cache size."""
-        return len(self._cache)
-
-    def __contains__(self, key: CacheKey) -> bool:
-        """Check if key exists in cache."""
-        with self._lock:
-            node = self._cache.get(key)
-            if node is None:
-                return False
-
-            ttl = self._ttl
-            return not (ttl is not None and time.time() - node.timestamp > ttl)
 
 
 _default_cache: LRUCache | None = None
@@ -685,72 +685,6 @@ class NamespacedCache:
         self._config = config or get_cache_config()
         self._caches = self._build_caches(self._config, ttl_seconds)
 
-    @staticmethod
-    def _build_caches(config: "CacheConfig", ttl_seconds: int | None) -> "dict[str, LRUCache]":
-        caches: dict[str, LRUCache] = {}
-        for namespace, (_, size_getter) in NAMESPACED_CACHE_CONFIG.items():
-            size = size_getter(config)
-            caches[namespace] = LRUCache(size, ttl_seconds, namespace=namespace)
-        return caches
-
-    def _is_enabled(self, namespace: str) -> bool:
-        if not self._config.compiled_cache_enabled:
-            return False
-        enabled_getter = NAMESPACED_CACHE_CONFIG[namespace][0]
-        return bool(enabled_getter(self._config))
-
-    def _get(self, namespace: str, key: str, dialect: str | None = None) -> Any | None:
-        """Get cached value by namespace.
-
-        Args:
-            namespace: Cache namespace.
-            key: Cache key.
-            dialect: Optional SQL dialect.
-
-        Returns:
-            Cached value or None if not found.
-        """
-        if not self._is_enabled(namespace):
-            return None
-        cache = self._caches[namespace]
-        full_key = create_cache_key(namespace, key, dialect)
-        cache_key = CacheKey((full_key,))
-        return cache.get(cache_key)
-
-    def _put(self, namespace: str, key: str, value: Any, dialect: str | None = None) -> None:
-        """Put cached value by namespace.
-
-        Args:
-            namespace: Cache namespace.
-            key: Cache key.
-            value: Value to cache.
-            dialect: Optional SQL dialect.
-        """
-        if not self._is_enabled(namespace):
-            return
-        cache = self._caches[namespace]
-        full_key = create_cache_key(namespace, key, dialect)
-        cache_key = CacheKey((full_key,))
-        cache.put(cache_key, value)
-
-    def _delete(self, namespace: str, key: str, dialect: str | None = None) -> bool:
-        """Delete cached value by namespace.
-
-        Args:
-            namespace: Cache namespace.
-            key: Cache key.
-            dialect: Optional SQL dialect.
-
-        Returns:
-            True when the key was found and deleted.
-        """
-        if not self._is_enabled(namespace):
-            return False
-        cache = self._caches[namespace]
-        full_key = create_cache_key(namespace, key, dialect)
-        cache_key = CacheKey((full_key,))
-        return cache.delete(cache_key)
-
     def get_statement(self, key: str, dialect: str | None = None) -> Any | None:
         """Get cached statement data.
 
@@ -948,6 +882,72 @@ class NamespacedCache:
             aggregated.memory_usage += stats.memory_usage
         return aggregated
 
+    @staticmethod
+    def _build_caches(config: "CacheConfig", ttl_seconds: int | None) -> "dict[str, LRUCache]":
+        caches: dict[str, LRUCache] = {}
+        for namespace, (_, size_getter) in NAMESPACED_CACHE_CONFIG.items():
+            size = size_getter(config)
+            caches[namespace] = LRUCache(size, ttl_seconds, namespace=namespace)
+        return caches
+
+    def _is_enabled(self, namespace: str) -> bool:
+        if not self._config.compiled_cache_enabled:
+            return False
+        enabled_getter = NAMESPACED_CACHE_CONFIG[namespace][0]
+        return bool(enabled_getter(self._config))
+
+    def _get(self, namespace: str, key: str, dialect: str | None = None) -> Any | None:
+        """Get cached value by namespace.
+
+        Args:
+            namespace: Cache namespace.
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            Cached value or None if not found.
+        """
+        if not self._is_enabled(namespace):
+            return None
+        cache = self._caches[namespace]
+        full_key = create_cache_key(namespace, key, dialect)
+        cache_key = CacheKey((full_key,))
+        return cache.get(cache_key)
+
+    def _put(self, namespace: str, key: str, value: Any, dialect: str | None = None) -> None:
+        """Put cached value by namespace.
+
+        Args:
+            namespace: Cache namespace.
+            key: Cache key.
+            value: Value to cache.
+            dialect: Optional SQL dialect.
+        """
+        if not self._is_enabled(namespace):
+            return
+        cache = self._caches[namespace]
+        full_key = create_cache_key(namespace, key, dialect)
+        cache_key = CacheKey((full_key,))
+        cache.put(cache_key, value)
+
+    def _delete(self, namespace: str, key: str, dialect: str | None = None) -> bool:
+        """Delete cached value by namespace.
+
+        Args:
+            namespace: Cache namespace.
+            key: Cache key.
+            dialect: Optional SQL dialect.
+
+        Returns:
+            True when the key was found and deleted.
+        """
+        if not self._is_enabled(namespace):
+            return False
+        cache = self._caches[namespace]
+        full_key = create_cache_key(namespace, key, dialect)
+        cache_key = CacheKey((full_key,))
+        return cache.delete(cache_key)
+
 
 _namespaced_cache: NamespacedCache | None = None
 
@@ -1106,7 +1106,6 @@ def _canonicalize_cache_filters(filters: "list[Filter]") -> "tuple[Filter, ...]"
     if not filters:
         return ()
 
-    # Deduplicate and sort for canonical representation
     unique_filters = set(filters)
     return tuple(sorted(unique_filters, key=_filter_sort_key))
 

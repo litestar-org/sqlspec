@@ -23,7 +23,7 @@ from sqlspec.exceptions import (
 )
 from sqlspec.utils.config_tools import parse_odbc_connection_string
 from sqlspec.utils.serializers import from_json, to_json
-from sqlspec.utils.text import normalize_identifier, quote_identifier, split_qualified_identifier
+from sqlspec.utils.text import normalize_identifier, quote_identifier
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount
 
@@ -83,13 +83,17 @@ _SUPPORTED_CONNECTION_KEYS: Final[frozenset[str]] = frozenset({
     "health_check_interval",
     "pool_recycle_seconds",
 })
+_ASYNC_POOL_KEYS: Final[tuple[str, ...]] = ("max_size", "acquire_timeout")
 _INTEGER_KEYS: Final[tuple[str, ...]] = ("port", "connect_timeout")
 _TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES: Final[frozenset[str]] = frozenset({"0", "false", "no", "off"})
 _CLI_KEYWORD_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 _BRACED_MIN_LENGTH: Final[int] = 2
 _DEFAULT_PORT: Final[int] = 50000
+_MIN_PORT: Final[int] = 1
+_MAX_PORT: Final[int] = 65535
 _DEFAULT_PROTOCOL: Final[str] = "TCPIP"
+_COLUMN_CACHE_MAX_SIZE: Final[int] = 256
 IMPLICIT_UPPER_COLUMN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\d)(?:[A-Z0-9_]+)$")
 _SQLSTATE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:SQLSTATE[=:\s]+|state[:=\s]+)([0-9A-Z]{5})\b", re.IGNORECASE
@@ -125,6 +129,7 @@ _SQLSTATE_MAP: Final[dict[str, tuple[type[SQLSpecError], str]]] = {
 _SQLCODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     803: (UniqueViolationError, "unique constraint violation"),
     530: (ForeignKeyViolationError, "foreign key constraint violation"),
+    532: (ForeignKeyViolationError, "foreign key constraint violation"),
     407: (NotNullViolationError, "not-null constraint violation"),
     545: (CheckViolationError, "check constraint violation"),
     551: (PermissionDeniedError, "permission denied"),
@@ -133,6 +138,9 @@ _SQLCODE_MAP: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     1042: (DatabaseConnectionError, "unexpected system error occurred"),
     30081: (DatabaseConnectionError, "communication failure"),
     104: (SQLParsingError, "sql syntax error"),
+    302: (DataError, "numeric or string value out of range"),
+    433: (DataError, "value is too long"),
+    952: (QueryTimeoutError, "statement execution interrupted or timed out"),
 }
 
 
@@ -159,63 +167,6 @@ def extract_sqlstate(error: BaseException) -> str | None:
     if matches:
         return str(matches[-1]).upper()
     return None
-
-
-def _extract_sqlcode(error: BaseException) -> int | None:
-    """Extract the absolute SQLCODE number from an exception.
-
-    Integer ``sqlcode``/``error_code`` attributes are used directly; string attributes and the
-    message are searched for ``SQLnnnnN``/``C``/``W`` message identifiers or ``SQLCODE=-n``.
-
-    Args:
-        error: Driver error.
-
-    Returns:
-        int | None: The SQLCODE without sign, or None when the error carries none.
-    """
-    explicit_code = getattr(error, "sqlcode", None)
-    if explicit_code is None:
-        explicit_code = getattr(error, "error_code", None)
-    if isinstance(explicit_code, int) and not isinstance(explicit_code, bool):
-        return abs(explicit_code)
-    candidates: list[str] = []
-    if isinstance(explicit_code, str) and explicit_code.strip():
-        code_text = explicit_code.strip()
-        if _INTEGER_TEXT_PATTERN.fullmatch(code_text):
-            return abs(int(code_text))
-        candidates.append(code_text)
-    candidates.append(str(error))
-    for text in candidates:
-        match = _SQLCODE_PATTERN.search(text)
-        if match is not None:
-            return abs(int(match.group(1)))
-    return None
-
-
-def _extract_reason_code(message: str) -> int | None:
-    """Extract a Db2 reason code such as ``Reason code "68"`` from message text.
-
-    Args:
-        message: Error message.
-
-    Returns:
-        int | None: The reason code, or None when the message has none.
-    """
-    match = _REASON_CODE_PATTERN.search(message)
-    return int(match.group(1)) if match is not None else None
-
-
-def _build_mapped_exception(
-    error_cls: "type[SQLSpecError]", description: str, sqlstate: str | None, sqlcode: int | None, error: BaseException
-) -> SQLSpecError:
-    """Build a mapped exception whose message leads with the SQLSTATE when one is known.
-
-    Returns:
-        SQLSpecError: The mapped exception.
-    """
-    if sqlstate is not None:
-        return error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
-    return error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
 
 
 def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
@@ -289,8 +240,8 @@ def to_db_timestamp(value: "datetime | None") -> "datetime | None":
 def split_db2_table_name(name: str) -> "tuple[str | None, str]":
     """Split a possibly schema-qualified table name into catalog-folded parts.
 
-    Each part is folded with ``normalize_identifier(..., "db2")``: all-lowercase parts become
-    uppercase and any other part keeps its case.
+    Unquoted parts are upper-folded while double-quoted parts keep their case via
+    ``normalize_identifier(..., "db2")``.
 
     Args:
         name: Table name, optionally qualified as ``schema.table``.
@@ -298,7 +249,12 @@ def split_db2_table_name(name: str) -> "tuple[str | None, str]":
     Returns:
         The schema, or ``None`` when unqualified, and the table name.
     """
-    parts = [normalize_identifier(part, "db2") for part in split_qualified_identifier(name, quote_chars='"')]
+    parts = [
+        normalize_identifier(part, "db2")
+        if len(part) >= _BRACED_MIN_LENGTH and part[0] == part[-1] == '"'
+        else normalize_identifier(part.upper(), "db2")
+        for part in _split_db2_raw_parts(name)
+    ]
     if not parts:
         return None, name
     if len(parts) == 1:
@@ -346,24 +302,6 @@ def normalize_execute_many_parameters(parameters: Any) -> Any:
     return parameters
 
 
-def _normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":
-    """Lowercase column names that Db2 folded to uppercase.
-
-    Names made only of uppercase letters, digits and underscores (and not starting with a digit)
-    are lowercased; any other name, such as a quoted mixed-case identifier, is returned unchanged.
-
-    Args:
-        column_names: Column names as reported by the cursor description.
-        lowercase: Whether to lowercase implicit-uppercase names.
-
-    Returns:
-        Normalized column names in their original order.
-    """
-    if not lowercase:
-        return column_names
-    return [name.lower() if name and IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name) else name for name in column_names]
-
-
 def resolve_column_names(
     description: Sequence[Any] | None,
     column_name_cache: dict[int, tuple[Any, list[str]]] | None = None,
@@ -389,6 +327,8 @@ def resolve_column_names(
     if cached is not None and cached[0] is description:
         return cached[1]
     names = _normalize_column_names([str(desc[0]) for desc in description], lowercase)
+    if len(column_name_cache) >= _COLUMN_CACHE_MAX_SIZE:
+        column_name_cache.pop(next(iter(column_name_cache)))
     column_name_cache[cache_key] = (description, names)
     return names
 
@@ -442,11 +382,6 @@ def collect_rows(
     return list(fetched_data or []), column_names, "tuple"
 
 
-def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
-    """Return custom parameter type coercions for Db2."""
-    return dict(build_uuid_coercions())
-
-
 def build_profile() -> DriverParameterProfile:
     """Construct the Db2 driver parameter profile."""
     return DriverParameterProfile(
@@ -486,6 +421,8 @@ def apply_driver_features(
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
     features.setdefault("enable_lowercase_column_names", True)
+    features.setdefault("enable_events", True)
+    features.setdefault("events_backend", "poll_queue")
 
     if json_serializer is not None:
         parameter_config = statement_config.parameter_config.with_json_serializers(
@@ -494,6 +431,168 @@ def apply_driver_features(
         statement_config = statement_config.replace(parameter_config=parameter_config)
 
     return statement_config, features
+
+
+def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize a Db2 connection configuration.
+
+    A ``dsn`` is parsed and merged underneath the explicit keys (explicit keys and explicit
+    ``extra`` entries win). ``port`` defaults to ``50000`` and ``protocol`` to ``TCPIP`` only when
+    ``hostname`` is set; without a hostname the database name is treated as a cataloged alias.
+
+    Args:
+        connection_config: Connection parameters using the canonical keys of
+            ``Db2PoolParams``.
+
+    Returns:
+        dict[str, Any]: Normalized parameters without ``dsn``.
+
+    Raises:
+        ImproperConfigurationError: When an unsupported key is present, ``database`` is missing,
+            or a keyword or value cannot be rendered into a CLI connection string.
+    """
+    config = {key: value for key, value in connection_config.items() if value is not None}
+    for key in _ASYNC_POOL_KEYS:
+        config.pop(key, None)
+    unsupported = sorted(key for key in config if key not in _SUPPORTED_CONNECTION_KEYS)
+    if unsupported:
+        msg = f"Unsupported Db2 connection parameter(s): {', '.join(unsupported)}"
+        raise ImproperConfigurationError(msg)
+
+    explicit_extra = config.pop("extra", None) or {}
+    if not isinstance(explicit_extra, Mapping):
+        msg = "Db2 connection parameter 'extra' must be a mapping of CLI keywords to values"
+        raise ImproperConfigurationError(msg)
+    dsn_extra: dict[str, Any] = {}
+    dsn = config.pop("dsn", None)
+    if dsn is not None:
+        if not isinstance(dsn, str):
+            msg = "Db2 connection parameter 'dsn' must be a string"
+            raise ImproperConfigurationError(msg)
+        dsn_params = _parse_db2_dsn(dsn)
+        dsn_extra = dsn_params.pop("extra", {})
+        for key, value in dsn_params.items():
+            config.setdefault(key, value)
+
+    if not config.get("database"):
+        msg = "Db2 connection requires a 'database' name"
+        raise ImproperConfigurationError(msg)
+    if config.get("hostname"):
+        config.setdefault("port", _DEFAULT_PORT)
+        config.setdefault("protocol", _DEFAULT_PROTOCOL)
+    for key in _INTEGER_KEYS:
+        if key in config:
+            config[key] = _parse_int(key, config[key])
+
+    extra = _merge_extra(dsn_extra, explicit_extra)
+    if extra:
+        config["extra"] = extra
+    build_dsn_string(config)
+    return config
+
+
+def build_dsn_string(config: Mapping[str, Any]) -> str:
+    """Render a normalized Db2 configuration as an IBM CLI connection string.
+
+    Modeled parameters render first in a fixed keyword order, followed by ``extra`` keywords in
+    insertion order. ``autocommit`` and pool settings are never rendered.
+
+    Args:
+        config: Normalized connection configuration.
+
+    Returns:
+        str: Connection string such as ``DATABASE=sample;HOSTNAME=db;PORT=50000;PROTOCOL=TCPIP;``.
+    """
+    parts: list[str] = []
+    for key, keyword in _CLI_KEYWORDS:
+        value = config.get(key)
+        if value is not None:
+            parts.append(_format_cli_value(keyword, value))
+    extra = config.get("extra") or {}
+    for extra_keyword, extra_value in extra.items():
+        if extra_value is not None:
+            parts.append(_format_cli_value(str(extra_keyword), extra_value))
+    return "".join(f"{part};" for part in parts)
+
+
+def _extract_sqlcode(error: BaseException) -> int | None:
+    """Extract the absolute SQLCODE number from an exception.
+
+    Integer ``sqlcode``/``error_code`` attributes are used directly; string attributes and the
+    message are searched for ``SQLnnnnN``/``C``/``W`` message identifiers or ``SQLCODE=-n``.
+
+    Args:
+        error: Driver error.
+
+    Returns:
+        int | None: The SQLCODE without sign, or None when the error carries none.
+    """
+    explicit_code = getattr(error, "sqlcode", None)
+    if explicit_code is None:
+        explicit_code = getattr(error, "error_code", None)
+    if isinstance(explicit_code, int) and not isinstance(explicit_code, bool):
+        return abs(explicit_code)
+    candidates: list[str] = []
+    if isinstance(explicit_code, str) and explicit_code.strip():
+        code_text = explicit_code.strip()
+        if _INTEGER_TEXT_PATTERN.fullmatch(code_text):
+            return abs(int(code_text))
+        candidates.append(code_text)
+    candidates.append(str(error))
+    for text in candidates:
+        match = _SQLCODE_PATTERN.search(text)
+        if match is not None:
+            return abs(int(match.group(1)))
+    return None
+
+
+def _extract_reason_code(message: str) -> int | None:
+    """Extract a Db2 reason code such as ``Reason code "68"`` from message text.
+
+    Args:
+        message: Error message.
+
+    Returns:
+        int | None: The reason code, or None when the message has none.
+    """
+    match = _REASON_CODE_PATTERN.search(message)
+    return int(match.group(1)) if match is not None else None
+
+
+def _build_mapped_exception(
+    error_cls: "type[SQLSpecError]", description: str, sqlstate: str | None, sqlcode: int | None, error: BaseException
+) -> SQLSpecError:
+    """Build a mapped exception whose message leads with the SQLSTATE when one is known.
+
+    Returns:
+        SQLSpecError: The mapped exception.
+    """
+    if sqlstate is not None:
+        return error_cls(f"Db2 SQLSTATE {sqlstate}: {description}. Original error: {error}")
+    return error_cls(f"Db2 SQLCODE {sqlcode}: {description}. Original error: {error}")
+
+
+def _normalize_column_names(column_names: "list[str]", lowercase: bool) -> "list[str]":
+    """Lowercase column names that Db2 folded to uppercase.
+
+    Names made only of uppercase letters, digits and underscores (and not starting with a digit)
+    are lowercased; any other name, such as a quoted mixed-case identifier, is returned unchanged.
+
+    Args:
+        column_names: Column names as reported by the cursor description.
+        lowercase: Whether to lowercase implicit-uppercase names.
+
+    Returns:
+        Normalized column names in their original order.
+    """
+    if not lowercase:
+        return column_names
+    return [name.lower() if name and IMPLICIT_UPPER_COLUMN_PATTERN.fullmatch(name) else name for name in column_names]
+
+
+def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
+    """Return custom parameter type coercions for Db2."""
+    return {**build_uuid_coercions(), datetime: to_db_timestamp}
 
 
 def _parse_bool(key: str, value: str) -> bool:
@@ -529,18 +628,26 @@ def _parse_int(key: str, value: Any) -> int:
         int: The parsed integer.
 
     Raises:
-        ImproperConfigurationError: When the value is not an integer.
+        ImproperConfigurationError: When the value is not an integer or is out of bounds.
     """
     if isinstance(value, bool):
         msg = f"Db2 connection parameter {key!r} must be an integer"
         raise ImproperConfigurationError(msg)
     if isinstance(value, int):
-        return value
-    text = str(value).strip()
-    if not text.isdigit():
-        msg = f"Db2 connection parameter {key!r} must be an integer"
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not _INTEGER_TEXT_PATTERN.fullmatch(text):
+            msg = f"Db2 connection parameter {key!r} must be an integer"
+            raise ImproperConfigurationError(msg)
+        parsed = int(text)
+    if key == "port" and not (_MIN_PORT <= parsed <= _MAX_PORT):
+        msg = f"Db2 connection parameter 'port' must be between 1 and 65535, got {parsed}"
         raise ImproperConfigurationError(msg)
-    return int(text)
+    if key == "connect_timeout" and parsed < 0:
+        msg = f"Db2 connection parameter 'connect_timeout' must be non-negative, got {parsed}"
+        raise ImproperConfigurationError(msg)
+    return parsed
 
 
 def _assign_dsn_value(params: dict[str, Any], extra: dict[str, Any], keyword: str, value: str) -> None:
@@ -638,62 +745,6 @@ def _merge_extra(dsn_extra: Mapping[str, Any], explicit_extra: Mapping[str, Any]
     return dict(merged.values())
 
 
-def build_connection_config(connection_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate and normalize a Db2 connection configuration.
-
-    A ``dsn`` is parsed and merged underneath the explicit keys (explicit keys and explicit
-    ``extra`` entries win). ``port`` defaults to ``50000`` and ``protocol`` to ``TCPIP`` only when
-    ``hostname`` is set; without a hostname the database name is treated as a cataloged alias.
-
-    Args:
-        connection_config: Connection parameters using the canonical keys of
-            ``Db2PoolParams``.
-
-    Returns:
-        dict[str, Any]: Normalized parameters without ``dsn``.
-
-    Raises:
-        ImproperConfigurationError: When an unsupported key is present, ``database`` is missing,
-            or a keyword or value cannot be rendered into a CLI connection string.
-    """
-    config = {key: value for key, value in connection_config.items() if value is not None}
-    unsupported = sorted(key for key in config if key not in _SUPPORTED_CONNECTION_KEYS)
-    if unsupported:
-        msg = f"Unsupported Db2 connection parameter(s): {', '.join(unsupported)}"
-        raise ImproperConfigurationError(msg)
-
-    explicit_extra = config.pop("extra", None) or {}
-    if not isinstance(explicit_extra, Mapping):
-        msg = "Db2 connection parameter 'extra' must be a mapping of CLI keywords to values"
-        raise ImproperConfigurationError(msg)
-    dsn_extra: dict[str, Any] = {}
-    dsn = config.pop("dsn", None)
-    if dsn is not None:
-        if not isinstance(dsn, str):
-            msg = "Db2 connection parameter 'dsn' must be a string"
-            raise ImproperConfigurationError(msg)
-        dsn_params = _parse_db2_dsn(dsn)
-        dsn_extra = dsn_params.pop("extra", {})
-        for key, value in dsn_params.items():
-            config.setdefault(key, value)
-
-    if not config.get("database"):
-        msg = "Db2 connection requires a 'database' name"
-        raise ImproperConfigurationError(msg)
-    if config.get("hostname"):
-        config.setdefault("port", _DEFAULT_PORT)
-        config.setdefault("protocol", _DEFAULT_PROTOCOL)
-    for key in _INTEGER_KEYS:
-        if key in config:
-            config[key] = _parse_int(key, config[key])
-
-    extra = _merge_extra(dsn_extra, explicit_extra)
-    if extra:
-        config["extra"] = extra
-    build_dsn_string(config)
-    return config
-
-
 def _format_cli_value(keyword: str, value: Any) -> str:
     """Render one ``KEYWORD=value`` pair for a Db2 CLI connection string.
 
@@ -725,28 +776,46 @@ def _format_cli_value(keyword: str, value: Any) -> str:
     return f"{keyword}={text}"
 
 
-def build_dsn_string(config: Mapping[str, Any]) -> str:
-    """Render a normalized Db2 configuration as an IBM CLI connection string.
-
-    Modeled parameters render first in a fixed keyword order, followed by ``extra`` keywords in
-    insertion order. ``autocommit`` and pool settings are never rendered.
-
-    Args:
-        config: Normalized connection configuration.
-
-    Returns:
-        str: Connection string such as ``DATABASE=sample;HOSTNAME=db;PORT=50000;PROTOCOL=TCPIP;``.
-    """
+def _split_db2_raw_parts(name: str) -> list[str]:
+    """Split a qualified Db2 identifier on dots outside double-quoted segments."""
+    cleaned = name.strip()
+    if not cleaned:
+        return []
     parts: list[str] = []
-    for key, keyword in _CLI_KEYWORDS:
-        value = config.get(key)
-        if value is not None:
-            parts.append(_format_cli_value(keyword, value))
-    extra = config.get("extra") or {}
-    for extra_keyword, extra_value in extra.items():
-        if extra_value is not None:
-            parts.append(_format_cli_value(str(extra_keyword), extra_value))
-    return "".join(f"{part};" for part in parts)
+    chars: list[str] = []
+    in_quotes = False
+    index = 0
+    length = len(cleaned)
+    while index < length:
+        char = cleaned[index]
+        if in_quotes:
+            chars.append(char)
+            if char == '"':
+                if index + 1 < length and cleaned[index + 1] == '"':
+                    chars.append('"')
+                    index += 2
+                    continue
+                in_quotes = False
+            index += 1
+            continue
+        if char == '"':
+            in_quotes = True
+            chars.append(char)
+            index += 1
+            continue
+        if char == ".":
+            part = "".join(chars).strip()
+            if part:
+                parts.append(part)
+            chars.clear()
+            index += 1
+            continue
+        chars.append(char)
+        index += 1
+    part = "".join(chars).strip()
+    if part:
+        parts.append(part)
+    return parts
 
 
 driver_profile = build_profile()

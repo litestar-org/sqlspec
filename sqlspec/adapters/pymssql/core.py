@@ -1,7 +1,7 @@
 """pymssql adapter compiled helpers."""
 
 import re
-from collections.abc import Callable, Sized
+from collections.abc import Callable, Mapping, Sized
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from sqlspec.core import DriverParameterProfile, ParameterStyle, StatementConfig, build_statement_config_from_profile
@@ -16,6 +16,8 @@ from sqlspec.exceptions import (
     OperationalError,
     PermissionDeniedError,
     QueryTimeoutError,
+    SerializationConflictError,
+    SQLParsingError,
     SQLSpecError,
     UniqueViolationError,
 )
@@ -25,8 +27,10 @@ from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
     from logging import Logger
+
+    from sqlspec.core.parameters import ParameterValidator
 
 __all__ = (
     "apply_driver_features",
@@ -38,13 +42,17 @@ __all__ = (
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "escape_literal_percent",
+    "escape_sql_literal",
     "extract_error_number",
     "format_identifier",
     "normalize_execute_many_parameters",
     "normalize_execute_parameters",
+    "quote_bracket_identifier",
     "resolve_column_names",
     "resolve_many_rowcount",
     "resolve_rowcount",
+    "split_schema_and_table",
 )
 
 _ERROR_NUMBER_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:\(([-]?\d+)(?:,|\))|\bMsg\s+([-]?\d+)\b)")
@@ -55,21 +63,56 @@ _ERROR_CODE_MAPPING: Final[dict[int, tuple[type[SQLSpecError], str]]] = {
     2627: (UniqueViolationError, "unique constraint violation"),
     515: (NotNullViolationError, "not-null constraint violation"),
     18456: (PermissionDeniedError, "permission denied"),
+    229: (PermissionDeniedError, "permission denied"),
+    230: (PermissionDeniedError, "permission denied"),
+    262: (PermissionDeniedError, "permission denied"),
     4060: (DatabaseConnectionError, "database connection error"),
     53: (DatabaseConnectionError, "database connection error"),
     1205: (DeadlockError, "deadlock detected"),
+    3960: (SerializationConflictError, "snapshot isolation conflict"),
     -2: (QueryTimeoutError, "query timeout"),
+    1222: (QueryTimeoutError, "lock request time out period exceeded"),
+    102: (SQLParsingError, "SQL syntax error"),
+    105: (SQLParsingError, "unclosed quotation mark"),
+    156: (SQLParsingError, "incorrect syntax near keyword"),
+    207: (SQLParsingError, "invalid column name"),
+    208: (SQLParsingError, "invalid object name"),
+    241: (DataError, "data conversion error"),
+    242: (DataError, "datetime conversion out of range"),
+    245: (DataError, "data conversion error"),
+    2628: (DataError, "string or binary data would be truncated"),
     8114: (DataError, "data conversion error"),
+    8115: (DataError, "arithmetic overflow error"),
+    8152: (DataError, "string or binary data would be truncated"),
     1105: (OperationalError, "operational error"),
 }
 
 
-def _quote_bracket_identifier(identifier: str) -> str:
+def quote_bracket_identifier(identifier: str) -> str:
     """Quote a T-SQL identifier with square brackets."""
     cleaned = identifier.strip()
-    if cleaned.startswith("[") and cleaned.endswith("]"):
-        cleaned = cleaned[1:-1].replace("]]", "]")
+    if (cleaned.startswith("[") and cleaned.endswith("]")) or (cleaned.startswith('"') and cleaned.endswith('"')):
+        cleaned = cleaned[1:-1].replace("]]", "]").replace('""', '"')
     return f"[{cleaned.replace(']', ']]')}]"
+
+
+def escape_sql_literal(value: str) -> str:
+    """Escape single quotes inside a SQL string literal."""
+    return value.replace("'", "''")
+
+
+def split_schema_and_table(identifier: str, *, default_schema: str = "dbo") -> tuple[str, str]:
+    """Split a table reference into unquoted ``(schema, table)`` names."""
+    cleaned = identifier.strip()
+    if not cleaned:
+        msg = "Table name must not be empty"
+        raise SQLSpecError(msg)
+    parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
+    if not parts:
+        return default_schema, cleaned
+    if len(parts) == 1:
+        return default_schema, parts[0]
+    return parts[-2], parts[-1]
 
 
 def format_identifier(identifier: str) -> str:
@@ -79,14 +122,22 @@ def format_identifier(identifier: str) -> str:
         msg = "Table name must not be empty"
         raise SQLSpecError(msg)
     parts = split_qualified_identifier(cleaned, quote_chars='"', allow_bracket_quotes=True)
-    return ".".join(_quote_bracket_identifier(part) for part in parts)
+    return ".".join(quote_bracket_identifier(part) for part in parts)
 
 
 def build_insert_statement(table: str, columns: "list[str]") -> str:
     """Build a pymssql-compatible INSERT statement."""
-    column_clause = ", ".join(_quote_bracket_identifier(column) for column in columns)
+    column_clause = ", ".join(quote_bracket_identifier(column) for column in columns)
     placeholders = ", ".join("%s" for _ in columns)
     return f"INSERT INTO {format_identifier(table)} ({column_clause}) VALUES ({placeholders})"
+
+
+def escape_literal_percent(sql: str, parameters: Any, validator: "ParameterValidator") -> str:
+    """Escape literal percent characters before driver-side interpolation."""
+    if not parameters or "%" not in sql:
+        return sql
+    keep = {info.position for info in validator.extract_parameters(sql)}
+    return "".join("%%" if char == "%" and index not in keep else char for index, char in enumerate(sql))
 
 
 def normalize_execute_parameters(parameters: Any) -> Any:
@@ -142,7 +193,11 @@ def apply_driver_features(
     json_serializer = features.setdefault("json_serializer", to_json)
     json_deserializer = features.setdefault("json_deserializer", from_json)
 
-    if json_serializer is not None:
+    if json_serializer is not None and (
+        json_serializer is not to_json
+        or json_deserializer is not from_json
+        or statement_config.parameter_config.json_serializer is not to_json
+    ):
         parameter_config = statement_config.parameter_config.with_json_serializers(
             json_serializer, deserializer=json_deserializer
         )
@@ -151,9 +206,10 @@ def apply_driver_features(
     return statement_config, features
 
 
-def create_mapped_exception(error: Exception, *, logger: "Logger | None" = None) -> SQLSpecError:
-    """Map a pymssql exception to SQLSpec's exception hierarchy."""
+def create_mapped_exception(error: BaseException, *, logger: "Logger | None" = None) -> SQLSpecError:
+    """Map a SQL Server exception to SQLSpec's exception hierarchy."""
     error_number = extract_error_number(error)
+
     if error_number == _MSSQL_CONSTRAINT_547:
         message = str(error)
         if "check constraint" in message.lower():
@@ -239,11 +295,63 @@ def resolve_many_rowcount(cursor: Any, parameters: Any, *, fallback_count: "int 
     return 0
 
 
+def extract_error_number(exc: BaseException | None) -> int | None:
+    """Extract integer SQL Server error code from an exception if present.
+
+    Checks native integer attributes (number, error_code, errno) or args[0] before regex.
+    """
+    if exc is None:
+        return None
+    for attr in ("number", "error_code", "errno"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and not isinstance(val, bool) and val != 0:
+            return val
+    if exc.args:
+        first = exc.args[0]
+        if isinstance(first, int) and not isinstance(first, bool) and first != 0:
+            return first
+        if isinstance(first, tuple) and first:
+            nested = first[0]
+            if isinstance(nested, int) and not isinstance(nested, bool) and nested != 0:
+                return nested
+    matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
+    if not matches:
+        return None
+    last_match = matches[-1]
+    return int(last_match[0] or last_match[1])
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection parameters.
+    """
+    config = dict(connection_config)
+    extra = config.pop("extra", None)
+    if isinstance(extra, Mapping):
+        for extra_key, extra_value in extra.items():
+            if extra_value is not None:
+                config.setdefault(str(extra_key), extra_value)
+    config.setdefault("server", config.pop("host", "localhost"))
+    config.setdefault("port", 1433)
+    db_alias = config.pop("db", None)
+    if "database" not in config and db_alias is not None:
+        config["database"] = db_alias
+    user_alias = config.pop("username", None)
+    if "user" not in config and user_alias is not None:
+        config["user"] = user_alias
+    return config
+
+
 def _bool_to_int(value: bool) -> int:
     return int(value)
 
 
-def _constraint_exception_from_message(error: Exception) -> "SQLSpecError | None":
+def _constraint_exception_from_message(error: BaseException) -> "SQLSpecError | None":
     """Classify SQL Server constraint messages when a driver omits the native error number."""
     message = str(error)
     normalized = message.lower()
@@ -265,48 +373,5 @@ def _custom_type_coercions() -> dict[type, Callable[[Any], Any]]:
     return coercions
 
 
-def extract_error_number(exc: BaseException | None) -> int | None:
-    """Extract integer SQL Server error code from an exception if present.
-
-    Checks native integer attributes (number, error_code, errno) or args[0] before regex.
-    """
-    if exc is None:
-        return None
-    for attr in ("number", "error_code", "errno"):
-        val = getattr(exc, attr, None)
-        if isinstance(val, int) and not isinstance(val, bool) and val != 0:
-            return val
-    if exc.args:
-        first = exc.args[0]
-        if isinstance(first, int) and not isinstance(first, bool) and first != 0:
-            return first
-    matches = _ERROR_NUMBER_PATTERN.findall(str(exc))
-    if not matches:
-        return None
-    last_match = matches[-1]
-    return int(last_match[0] or last_match[1])
-
-
 driver_profile = build_profile()
 default_statement_config = build_statement_config()
-
-
-def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build a normalized connection configuration dictionary.
-
-    Args:
-        connection_config: Raw connection configuration mapping.
-
-    Returns:
-        Normalized connection parameters.
-    """
-    config = dict(connection_config)
-    config.setdefault("server", config.pop("host", "localhost"))
-    config.setdefault("port", 1433)
-    db_alias = config.pop("db", None)
-    if "database" not in config and db_alias is not None:
-        config["database"] = db_alias
-    user_alias = config.pop("username", None)
-    if "user" not in config and user_alias is not None:
-        config["user"] = user_alias
-    return config

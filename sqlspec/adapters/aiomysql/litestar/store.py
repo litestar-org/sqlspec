@@ -1,9 +1,11 @@
 """aiomysql session store for Litestar integration."""
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, NotRequired, cast
 
 from sqlspec.adapters.aiomysql._typing import AiomysqlCursor, AiomysqlProgrammingError, AiomysqlRawCursor
+from sqlspec.adapters.aiomysql.core import resolve_rowcount
 from sqlspec.config import LitestarConfig
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.litestar.store import BaseSQLSpecStore
@@ -100,7 +102,11 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 if row is None:
                     return None
 
-                data_value, expires_at = row
+                if isinstance(row, Mapping):
+                    data_value = row["data"]
+                    expires_at = row["expires_at"]
+                else:
+                    data_value, expires_at = row
 
                 if renew_for is not None and expires_at is not None:
                     new_expires_at = self._calculate_expires_at(renew_for)
@@ -115,8 +121,8 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                         await conn.commit()
 
                 return bytes(data_value)
-        except AiomysqlProgrammingError as e:
-            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+        except AiomysqlProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
                 return None
             raise
 
@@ -175,8 +181,8 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql)
                 await conn.commit()
             self._log_delete_all()
-        except AiomysqlProgrammingError as e:
-            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+        except AiomysqlProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
                 logger.debug("Table %s does not exist, skipping delete_all", self._table_name)
                 return
             raise
@@ -204,8 +210,8 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
                 await cursor.execute(sql, (key,))
                 result = await cursor.fetchone()
                 return result is not None
-        except AiomysqlProgrammingError as e:
-            if "doesn't exist" in str(e) or e.args[0] == MYSQL_TABLE_NOT_FOUND_ERROR:
+        except AiomysqlProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
                 return False
             raise
 
@@ -223,25 +229,32 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         WHERE session_id = %s
         """
 
-        async with (
-            self._config.provide_connection() as conn,
-            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-        ):
-            await cursor.execute(sql, (key,))
-            row = await cursor.fetchone()
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql, (key,))
+                row = await cursor.fetchone()
 
-            if row is None or row[0] is None:
+                if row is None:
+                    return None
+                expires_at_naive = row["expires_at"] if isinstance(row, Mapping) else row[0]
+                if expires_at_naive is None:
+                    return None
+
+                expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
+                now = datetime.now(UTC)
+
+                if expires_at_utc <= now:
+                    return 0
+
+                delta = expires_at_utc - now
+                return int(delta.total_seconds())
+        except AiomysqlProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
                 return None
-
-            expires_at_naive = row[0]
-            expires_at_utc = expires_at_naive.replace(tzinfo=UTC)
-            now = datetime.now(UTC)
-
-            if expires_at_utc <= now:
-                return 0
-
-            delta = expires_at_utc - now
-            return int(delta.total_seconds())
+            raise
 
     async def delete_expired(self) -> int:
         """Delete all expired sessions.
@@ -251,16 +264,21 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
         """
         sql = f"DELETE FROM {self._table_name} WHERE expires_at <= UTC_TIMESTAMP(6)"
 
-        async with (
-            self._config.provide_connection() as conn,
-            AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
-        ):
-            await cursor.execute(sql)
-            await conn.commit()
-            count: int = cursor.rowcount
-            if count > 0:
-                self._log_delete_expired(count)
-            return count
+        try:
+            async with (
+                self._config.provide_connection() as conn,
+                AiomysqlCursor(conn, cursor_class=AiomysqlRawCursor) as cursor,
+            ):
+                await cursor.execute(sql)
+                await conn.commit()
+                count = resolve_rowcount(cursor)
+                if count > 0:
+                    self._log_delete_expired(count)
+                return count
+        except AiomysqlProgrammingError as exc:
+            if _is_mysql_table_missing(exc):
+                return 0
+            raise
 
     def _table_ddl(self) -> str:
         """Get MySQL CREATE TABLE SQL with optimized schema.
@@ -289,6 +307,16 @@ class AiomysqlStore(BaseSQLSpecStore["AiomysqlConfig"]):
             f"DROP INDEX idx_{self._table_name}_expires_at ON {self._table_name}",
             f"DROP TABLE IF EXISTS {self._table_name}",
         ]
+
+
+def _is_mysql_table_missing(exc: BaseException) -> bool:
+    args = getattr(exc, "args", ())
+    errno = getattr(exc, "errno", None)
+    return (
+        errno == MYSQL_TABLE_NOT_FOUND_ERROR
+        or "doesn't exist" in str(exc)
+        or bool(args and args[0] == MYSQL_TABLE_NOT_FOUND_ERROR)
+    )
 
 
 def _mysql_table_options(litestar_config: "dict[str, Any]") -> str:

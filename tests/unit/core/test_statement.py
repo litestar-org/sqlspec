@@ -63,6 +63,7 @@ from sqlspec.core.splitter import (
 from sqlspec.core.stack import StackOperation, StatementStack
 from sqlspec.core.statement import _parse_order_item
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata, VersionInfo
+from sqlspec.exceptions import SQLSpecError
 from sqlspec.typing import Empty
 from tests.conftest import is_compiled, requires_interpreted
 
@@ -1731,3 +1732,56 @@ def test_statement_builder_owns_its_expression(dialect: str, compiled: bool) -> 
     assert fresh.build().sql == expected
     assert "FALSE" in builder.build().sql
     assert "LIMIT 2" in builder.build().sql
+
+
+def test_sql_mixed_positional_and_named_mismatch_raises_error() -> None:
+    stmt = SQL("SELECT * FROM users WHERE name = :name", 1, name="alice")
+    with pytest.raises(SQLSpecError, match="Cannot combine positional and named parameters"):
+        stmt.compile()
+
+
+def test_sql_post_compile_modifier_preserves_positional_placeholder_under_numeric_driver() -> None:
+    numeric_config = StatementConfig(
+        dialect="postgres",
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.QMARK,
+            supported_parameter_styles={ParameterStyle.QMARK, ParameterStyle.NAMED_COLON, ParameterStyle.NUMERIC},
+            default_execution_parameter_style=ParameterStyle.NUMERIC,
+            supported_execution_parameter_styles={ParameterStyle.NUMERIC},
+        ),
+    )
+    stmt = SQL("SELECT * FROM users WHERE a = ?", 1, statement_config=numeric_config)
+    compiled_sql, compiled_params = stmt.compile()
+    assert "$1" in compiled_sql
+    assert tuple(compiled_params) == (1,)
+
+    modified = stmt.where_eq("b", 2)
+    mod_sql, mod_params = modified.compile()
+    assert "$1" in mod_sql
+    assert "$2" in mod_sql
+    assert tuple(mod_params) == (1, 2)
+
+
+def test_sql_hash_and_eq_include_dialect_and_filters() -> None:
+    stmt_pg = SQL("SELECT * FROM users", dialect="postgres")
+    stmt_sqlite = SQL("SELECT * FROM users", dialect="sqlite")
+    assert stmt_pg != stmt_sqlite
+    assert hash(stmt_pg) != hash(stmt_sqlite)
+
+    stmt_filtered = SQL("SELECT * FROM users", LimitOffsetFilter(10, 0), dialect="postgres")
+    assert stmt_pg != stmt_filtered
+    assert hash(stmt_pg) != hash(stmt_filtered)
+
+
+def test_statement_config_equality_checks_all_parameter_config_fields() -> None:
+    cfg1 = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NAMED_COLON, strict_named_parameters=True
+        )
+    )
+    cfg2 = StatementConfig(
+        parameter_config=ParameterStyleConfig(
+            default_parameter_style=ParameterStyle.NAMED_COLON, strict_named_parameters=False
+        )
+    )
+    assert cfg1 != cfg2

@@ -1,3 +1,5 @@
+"""aiomysql database adapter for SQLSpec."""
+
 from sqlspec.adapters.aiomysql._typing import AiomysqlConnection, AiomysqlCursor
 from sqlspec.adapters.aiomysql.config import (
     AiomysqlConfig,

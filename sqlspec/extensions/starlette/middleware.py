@@ -56,6 +56,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
         """Yield a request-scoped connection for manual transaction mode."""
         config = self.config_state.config
         connection_key = self.config_state.connection_key
+        cache_key = f"sqlspec_session_cache_{self.config_state.session_key}"
 
         if config.supports_connection_pooling:
             pool = get_state_value(request.app.state, self.config_state.pool_key)
@@ -64,6 +65,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
                 try:
                     yield connection
                 finally:
+                    pop_state_value(request.state, cache_key)
                     pop_state_value(request.state, connection_key)
         else:
             connection = await ensure_async_(config.create_connection)()
@@ -71,6 +73,7 @@ class SQLSpecManualMiddleware(BaseHTTPMiddleware):
             try:
                 yield connection
             finally:
+                pop_state_value(request.state, cache_key)
                 pop_state_value(request.state, connection_key)
                 await ensure_async_(connection.close)()
 
@@ -101,16 +104,25 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         Returns:
             HTTP response.
         """
+        cache_key = f"sqlspec_session_cache_{self.config_state.session_key}"
         async with self._connection_cm(request) as connection:
             try:
                 response = await call_next(request)
+                session = get_state_value(request.state, cache_key, None)
 
                 if self._should_commit(response.status_code):
-                    await ensure_async_(connection.commit)()
+                    target = session if session is not None and hasattr(session, "commit") else connection
+                    if hasattr(target, "commit"):
+                        await ensure_async_(target.commit)()
                 else:
-                    await ensure_async_(connection.rollback)()
+                    target = session if session is not None and hasattr(session, "rollback") else connection
+                    if hasattr(target, "rollback"):
+                        await ensure_async_(target.rollback)()
             except Exception:
-                await ensure_async_(connection.rollback)()
+                session = get_state_value(request.state, cache_key, None)
+                target = session if session is not None and hasattr(session, "rollback") else connection
+                if hasattr(target, "rollback"):
+                    await ensure_async_(target.rollback)()
                 raise
             else:
                 return response
@@ -120,6 +132,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
         """Yield a request-scoped connection for autocommit transaction mode."""
         config = self.config_state.config
         connection_key = self.config_state.connection_key
+        cache_key = f"sqlspec_session_cache_{self.config_state.session_key}"
 
         if config.supports_connection_pooling:
             pool = get_state_value(request.app.state, self.config_state.pool_key)
@@ -128,6 +141,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
                 try:
                     yield connection
                 finally:
+                    pop_state_value(request.state, cache_key)
                     pop_state_value(request.state, connection_key)
         else:
             connection = await ensure_async_(config.create_connection)()
@@ -135,6 +149,7 @@ class SQLSpecAutocommitMiddleware(BaseHTTPMiddleware):
             try:
                 yield connection
             finally:
+                pop_state_value(request.state, cache_key)
                 pop_state_value(request.state, connection_key)
                 await ensure_async_(connection.close)()
 

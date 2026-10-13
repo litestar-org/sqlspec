@@ -1,14 +1,17 @@
 """Runtime helpers that bundle lifecycle, observer, and span orchestration."""
 
-import re
+from collections.abc import Mapping
+from time import time
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit, urlunsplit
 
-from sqlspec.observability._common import compute_sql_hash, get_trace_context, resolve_db_system
+from sqlspec.observability._common import compute_sql_hash, get_trace_context, redact_sql_literals, resolve_db_system
 from sqlspec.observability._config import LoggingConfig, ObservabilityConfig, StatementObserver
 from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
 from sqlspec.observability._observer import create_event, create_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
+from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_span_attribute
 
 if TYPE_CHECKING:
@@ -19,7 +22,9 @@ if TYPE_CHECKING:
 __all__ = ("ObservabilityRuntime", "compute_sql_hash")
 
 
-_LITERAL_PATTERN = re.compile(r"'(?:''|[^'])*'")
+logger = get_logger("sqlspec.observability.runtime")
+
+_MIN_WALL_CLOCK_EPOCH_S = 1_000_000_000.0
 
 
 class ObservabilityRuntime:
@@ -37,7 +42,6 @@ class ObservabilityRuntime:
         "span_manager",
     )
 
-    # Allow test injection with fake span managers (mypyc strict typing workaround)
     span_manager: "Any"
 
     def __init__(
@@ -56,12 +60,10 @@ class ObservabilityRuntime:
         if config.statement_observers:
             observers.extend(config.statement_observers)
         if config.print_sql:
-            observers.append(create_statement_observer(config.logging))
+            observers.append(create_statement_observer(config.logging, cloud_formatter=config.cloud_formatter))
         self._statement_observers = tuple(observers)
         self._redaction = config.redaction.copy() if config.redaction else None
         self._metrics: dict[str, float] = {}
-        # Pre-compute the non-span idle state (lifecycle and observers are immutable)
-        # span_manager can be replaced for testing so we check it separately
         self._is_idle_cached = not self.lifecycle.is_enabled and not self._statement_observers
 
     @property
@@ -72,8 +74,6 @@ class ObservabilityRuntime:
         and telemetry spans are disabled. Drivers can use this to skip
         expensive context construction.
         """
-        # Fast path: lifecycle and observers state is cached (immutable after init)
-        # span_manager is checked each time as it can be replaced for testing
         return self._is_idle_cached and not self.span_manager.is_enabled
 
     @property
@@ -99,11 +99,6 @@ class ObservabilityRuntime:
         correlation_id = CorrelationContext.get()
         if correlation_id:
             context["correlation_id"] = correlation_id
-        return context
-
-    def _build_context(self, **extras: Any) -> dict[str, Any]:
-        context = self.base_context()
-        context.update({key: value for key, value in extras.items() if value is not None})
         return context
 
     def lifecycle_snapshot(self) -> dict[str, int]:
@@ -182,15 +177,21 @@ class ObservabilityRuntime:
 
     def emit_pool_destroying_sync(self, pool: Any) -> None:
         """Fire pre-destruction lifecycle hooks synchronously."""
-        if not self.lifecycle.has_pool_destroying:
-            return
-        self.lifecycle.emit_pool_destroying_sync(self._build_context(pool=pool))
+        span = self._start_lifecycle_span("pool.destroying", subject=pool)
+        try:
+            if self.lifecycle.has_pool_destroying:
+                self.lifecycle.emit_pool_destroying_sync(self._build_context(pool=pool))
+        finally:
+            self.span_manager.end_span(span)
 
     async def emit_pool_destroying_async(self, pool: Any) -> None:
         """Fire pre-destruction lifecycle hooks, awaiting any awaitables."""
-        if not self.lifecycle.has_pool_destroying:
-            return
-        await self.lifecycle.emit_pool_destroying_async(self._build_context(pool=pool))
+        span = self._start_lifecycle_span("pool.destroying", subject=pool)
+        try:
+            if self.lifecycle.has_pool_destroying:
+                await self.lifecycle.emit_pool_destroying_async(self._build_context(pool=pool))
+        finally:
+            self.span_manager.end_span(span)
 
     def emit_pool_destroying(self, pool: Any) -> None:
         self.emit_pool_destroying_sync(pool)
@@ -232,6 +233,7 @@ class ObservabilityRuntime:
             callback: Callable receiving the lifecycle context.
         """
         self.lifecycle.register_hook(event, callback)  # type: ignore[arg-type]
+        self._is_idle_cached = not self.lifecycle.is_enabled and not self._statement_observers
 
     def emit_connection_create_sync(self, connection: Any) -> None:
         span = self._start_lifecycle_span("connection.create", subject=connection)
@@ -333,15 +335,13 @@ class ObservabilityRuntime:
 
     def emit_error_sync(self, exception: Exception, **extras: Any) -> None:
         if self.lifecycle.has_error:
-            payload = self._build_context(exception=exception)
-            payload.update({key: value for key, value in extras.items() if value is not None})
+            payload = self._build_context(exception=exception, **extras)
             self.lifecycle.emit_error_sync(payload)
         self.increment_metric("errors", 1.0)
 
     async def emit_error_async(self, exception: Exception, **extras: Any) -> None:
         if self.lifecycle.has_error:
-            payload = self._build_context(exception=exception)
-            payload.update({key: value for key, value in extras.items() if value is not None})
+            payload = self._build_context(exception=exception, **extras)
             await self.lifecycle.emit_error_async(payload)
         self.increment_metric("errors", 1.0)
 
@@ -363,6 +363,9 @@ class ObservabilityRuntime:
         storage_backend: str | None,
         started_at: float | None = None,
         precomputed_sql_hash: str | None = None,
+        transaction_state: str | None = None,
+        prepared_statement: bool | None = None,
+        is_error: bool = False,
     ) -> None:
         """Emit a statement event to all registered observers."""
 
@@ -371,16 +374,23 @@ class ObservabilityRuntime:
         correlation_id = CorrelationContext.get()
         sampled = True
         if self.config.sampling is not None:
-            sampled = self.config.sampling.should_sample(correlation_id=correlation_id, duration_ms=duration_s * 1000)
+            sampled = self.config.sampling.should_sample(
+                correlation_id=correlation_id, duration_ms=duration_s * 1000, is_error=is_error
+            )
             if not sampled:
                 return
         sanitized_sql = self._redact_sql(sql)
         sanitized_params = self._redact_parameters(parameters)
         logging_config = self.config.logging
         db_system = resolve_db_system(self.config_name)
+        if db_system == "other_sql" and driver:
+            db_system = resolve_db_system(driver)
         sql_hash = None
         if logging_config and logging_config.include_sql_hash:
-            sql_hash = precomputed_sql_hash if precomputed_sql_hash is not None else compute_sql_hash(sanitized_sql)
+            if precomputed_sql_hash is not None and (self._redaction is None or not self._redaction.mask_literals):
+                sql_hash = precomputed_sql_hash
+            else:
+                sql_hash = compute_sql_hash(sanitized_sql)
         sql_truncation_length = logging_config.sql_truncation_length if logging_config else 2000
         sql_original_length = len(sanitized_sql)
         sql_truncated = sql_original_length > sql_truncation_length
@@ -388,6 +398,9 @@ class ObservabilityRuntime:
         span_id = None
         if logging_config and logging_config.include_trace_context:
             trace_id, span_id = get_trace_context()
+        resolved_started_at = (
+            started_at if (started_at is not None and started_at >= _MIN_WALL_CLOCK_EPOCH_S) else (time() - duration_s)
+        )
         event = create_event(
             sql=sanitized_sql,
             parameters=sanitized_params,
@@ -403,16 +416,21 @@ class ObservabilityRuntime:
             duration_s=duration_s,
             correlation_id=correlation_id,
             storage_backend=storage_backend,
-            started_at=started_at,
+            started_at=resolved_started_at,
             sql_hash=sql_hash,
             sql_truncated=sql_truncated,
             sql_original_length=sql_original_length,
+            transaction_state=transaction_state,
+            prepared_statement=prepared_statement,
             trace_id=trace_id,
             span_id=span_id,
             sampled=sampled,
         )
         for observer in self._statement_observers:
-            observer(event)
+            try:
+                observer(event)
+            except Exception as exc:
+                logger.warning("Statement observer failed: %s", exc)
 
     def start_query_span(self, sql: str, operation: str, driver: str, *, sql_hash: str | None = None) -> Any:
         """Start a query span with runtime metadata."""
@@ -420,9 +438,14 @@ class ObservabilityRuntime:
         if not self.span_manager.is_enabled:
             return None
 
-        if sql_hash is None:
-            sql_hash = compute_sql_hash(sql)
-        connection_info = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}
+        correlation_id = CorrelationContext.get()
+        if self.config.sampling is not None and not self.config.sampling.should_sample(correlation_id=correlation_id):
+            return None
+
+        redacted_sql = self._redact_sql(sql) if (self._redaction is not None and self._redaction.mask_literals) else sql
+        if sql_hash is None or (self._redaction is not None and self._redaction.mask_literals):
+            sql_hash = compute_sql_hash(redacted_sql)
+        connection_info: dict[str, Any] = {"sqlspec.statement.hash": sql_hash, "sqlspec.statement.length": len(sql)}
         sql_payload = ""
         if self.config.print_sql:
             sql_payload = self._redact_sql(sql)
@@ -430,7 +453,6 @@ class ObservabilityRuntime:
             if truncated:
                 connection_info["sqlspec.statement.truncated"] = True
 
-        correlation_id = CorrelationContext.get()
         return self.span_manager.start_query_span(
             driver=driver,
             adapter=self.config_name,
@@ -455,7 +477,7 @@ class ObservabilityRuntime:
         if correlation_id:
             attributes["sqlspec.correlation_id"] = correlation_id
         if destination:
-            attributes["sqlspec.storage.destination"] = destination
+            attributes["sqlspec.storage.destination"] = _sanitize_storage_destination(destination)
         if format_label:
             attributes["sqlspec.storage.format"] = format_label
         return self.span_manager.start_span(f"sqlspec.storage.{operation}", attributes)
@@ -494,7 +516,7 @@ class ObservabilityRuntime:
     def annotate_storage_telemetry(self, telemetry: "StorageTelemetry") -> "StorageTelemetry":
         """Add bind key / config / correlation metadata to telemetry payloads."""
 
-        annotated = telemetry
+        annotated = cast("StorageTelemetry", dict(telemetry))
         base = self.base_context()
         correlation_id = base.get("correlation_id")
         if correlation_id and not annotated.get("correlation_id"):
@@ -503,6 +525,19 @@ class ObservabilityRuntime:
         if self.bind_key and not annotated.get("bind_key"):
             annotated["bind_key"] = self.bind_key
         return annotated
+
+    def _build_context(self, **extras: Any) -> dict[str, Any]:
+        context = self.base_context()
+        for key, value in extras.items():
+            if value is None:
+                continue
+            if key == "sql" and isinstance(value, str):
+                context[key] = self._redact_sql(value)
+            elif key == "parameters":
+                context[key] = self._redact_parameters(value)
+            else:
+                context[key] = value
+        return context
 
     def _start_lifecycle_span(self, event: str, subject: Any | None = None) -> Any:
         if not self.span_manager.is_enabled:
@@ -527,7 +562,7 @@ class ObservabilityRuntime:
         if "rows_processed" in telemetry and telemetry["rows_processed"] is not None:
             span.set_attribute("sqlspec.storage.rows_processed", telemetry["rows_processed"])
         if "destination" in telemetry and telemetry["destination"] is not None:
-            span.set_attribute("sqlspec.storage.destination", telemetry["destination"])
+            span.set_attribute("sqlspec.storage.destination", _sanitize_storage_destination(telemetry["destination"]))
         if "format" in telemetry and telemetry["format"] is not None:
             span.set_attribute("sqlspec.storage.format", telemetry["format"])
         if "duration_s" in telemetry and telemetry["duration_s"] is not None:
@@ -539,7 +574,7 @@ class ObservabilityRuntime:
         config = self._redaction
         if config is None or not config.mask_literals:
             return sql
-        return _LITERAL_PATTERN.sub("'***'", sql)
+        return redact_sql_literals(sql)
 
     def _redact_parameters(self, parameters: Any) -> Any:
         config = self._redaction
@@ -549,23 +584,29 @@ class ObservabilityRuntime:
         return _mask_parameters(parameters, allow_list)
 
 
-def _mask_parameters(value: Any, allow_list: set[str]) -> Any:
-    if isinstance(value, dict):
-        masked: dict[str, Any] = {}
-        for key, item in value.items():
-            if allow_list and key in allow_list:
-                masked[key] = _mask_parameters(item, allow_list)
-            else:
-                masked[key] = "***"
-        return masked
+def _mask_parameters(value: Any, allow_list: set[str], *, is_allowed: bool = False) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _mask_parameters(item, allow_list, is_allowed=bool(allow_list and key in allow_list))
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_mask_parameters(item, allow_list) for item in value]
+        return [_mask_parameters(item, allow_list, is_allowed=is_allowed) for item in value]
     if isinstance(value, tuple):
-        return tuple(_mask_parameters(item, allow_list) for item in value)
-    return "***"
+        return tuple(_mask_parameters(item, allow_list, is_allowed=is_allowed) for item in value)
+    return value if is_allowed else "***"
 
 
-# Keep in sync with sqlspec.observability._observer._truncate_text.
+def _sanitize_storage_destination(destination: str) -> str:
+    if "://" not in destination and "?" not in destination:
+        return destination
+    parsed = urlsplit(destination)
+    netloc = parsed.netloc
+    if "@" in netloc:
+        netloc = netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+
+
 def _truncate_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(value) <= max_chars:
         return value, False

@@ -1,3 +1,5 @@
+"""OracleDB database adapter for SQLSpec."""
+
 from sqlspec.adapters.oracledb.config import (
     OracleAsyncConfig,
     OracleConnectionParams,

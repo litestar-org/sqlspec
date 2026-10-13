@@ -5,8 +5,10 @@ from typing import Any, NotRequired, Self, cast, get_args, get_origin
 from unittest.mock import MagicMock
 
 import pytest
+from psqlpy.exceptions import ConnectionExecuteError, DatabaseError
 
-from sqlspec.adapters.psqlpy.adk import PsqlpyADKConfig, PsqlpyADKStore
+from sqlspec.adapters.psqlpy.adk import PsqlpyADKConfig, PsqlpyADKMemoryStore, PsqlpyADKStore
+from sqlspec.adapters.psqlpy.adk.store import _is_psqlpy_database_error, _is_table_missing_error
 from sqlspec.config import ADKConfig
 
 
@@ -23,9 +25,14 @@ def test_psqlpy_adk_config_types_adapter_local_optimizations() -> None:
     assert cast("Any", PsqlpyADKConfig).__optional_keys__ - cast("Any", ADKConfig).__optional_keys__ == {
         "autovacuum_analyze_scale_factor",
         "autovacuum_vacuum_scale_factor",
+        "enable_bm25",
         "enable_event_generated_columns",
         "enable_covering_indexes",
         "fillfactor",
+        "scann_num_leaves",
+        "scann_quantizer",
+        "vector_dimensions",
+        "vector_index_type",
     }
 
     for feature_name in ("enable_event_generated_columns", "enable_covering_indexes"):
@@ -152,15 +159,38 @@ async def test_psqlpy_list_sessions_rejects_invalid_options_before_connecting(op
     assert conn.calls == []
 
 
-@pytest.mark.parametrize("message, missing", [("relation sessions does not exist", True), ("syntax error", False)])
+@pytest.mark.parametrize(
+    "message, missing",
+    [("relation sessions does not exist", True), ('column "foo" does not exist', False), ("syntax error", False)],
+)
 def test_psqlpy_store_classifies_native_database_errors(message: str, missing: bool) -> None:
-    from psqlpy.exceptions import ConnectionExecuteError, DatabaseError
-
-    from sqlspec.adapters.psqlpy.adk.store import _is_psqlpy_database_error, _is_table_missing_error
-
     database_error = DatabaseError(message)
     assert _is_psqlpy_database_error(database_error) is True
     assert _is_table_missing_error(database_error) is missing
     assert _is_table_missing_error(ConnectionExecuteError(message)) is missing
     assert _is_psqlpy_database_error(ValueError(message)) is False
     assert _is_table_missing_error(ValueError(message)) is False
+
+
+async def test_psqlpy_memory_store_disabled_guards_raise_runtime_error() -> None:
+    """Disabled PsqlpyADKMemoryStore should raise RuntimeError from delete_entries_by_session and delete_entries_older_than."""
+    store = PsqlpyADKMemoryStore(_mock_config({"enable_memory": False}))
+
+    with pytest.raises(RuntimeError, match="Memory store is disabled"):
+        await store.delete_entries_by_session("s1")
+
+    with pytest.raises(RuntimeError, match="Memory store is disabled"):
+        await store.delete_entries_older_than(7)
+
+
+async def test_psqlpy_memory_store_vector_and_bm25_ddl_parity() -> None:
+    """PsqlpyADKMemoryStore should emit vector embedding column and BM25/vector index DDL when configured."""
+    store = PsqlpyADKMemoryStore(
+        _mock_config({"vector_dimensions": 768, "vector_index_type": "hnsw", "enable_bm25": True})
+    )
+
+    table_ddl = await store._memory_table_ddl()
+
+    assert "embedding VECTOR(768)" in table_ddl
+    assert "USING hnsw (embedding vector_cosine_ops)" in table_ddl
+    assert "USING bm25 (content_text)" in table_ddl

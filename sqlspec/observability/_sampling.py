@@ -7,6 +7,7 @@ visibility into errors and slow queries.
 """
 
 import random
+import zlib
 from typing import ClassVar
 
 __all__ = ("SamplingConfig",)
@@ -26,7 +27,13 @@ class SamplingConfig:
         deterministic: If True, use hash-based sampling for consistency across distributed systems.
     """
 
-    __slots__ = ("deterministic", "force_sample_on_error", "force_sample_slow_queries_ms", "sample_rate")
+    __slots__ = (
+        "_slow_query_explicit",
+        "deterministic",
+        "force_sample_on_error",
+        "force_sample_slow_queries_ms",
+        "sample_rate",
+    )
 
     DEFAULT_SAMPLE_RATE: ClassVar[float] = 1.0
     """Default sample rate (100% - sample everything)."""
@@ -42,7 +49,7 @@ class SamplingConfig:
         *,
         sample_rate: float = 1.0,
         force_sample_on_error: bool = True,
-        force_sample_slow_queries_ms: float | None = 100.0,
+        force_sample_slow_queries_ms: float | None = -1.0,
         deterministic: bool = True,
     ) -> None:
         """Initialize sampling configuration.
@@ -61,8 +68,35 @@ class SamplingConfig:
         """
         self.sample_rate = max(0.0, min(1.0, sample_rate))
         self.force_sample_on_error = force_sample_on_error
-        self.force_sample_slow_queries_ms = force_sample_slow_queries_ms
+        if force_sample_slow_queries_ms is not None and force_sample_slow_queries_ms < 0.0:
+            self.force_sample_slow_queries_ms: float | None = self.DEFAULT_SLOW_QUERY_THRESHOLD_MS
+            self._slow_query_explicit = False
+        else:
+            self.force_sample_slow_queries_ms = force_sample_slow_queries_ms
+            self._slow_query_explicit = True
         self.deterministic = deterministic
+
+    def __repr__(self) -> str:
+        return (
+            f"SamplingConfig(sample_rate={self.sample_rate!r}, "
+            f"force_sample_on_error={self.force_sample_on_error!r}, "
+            f"force_sample_slow_queries_ms={self.force_sample_slow_queries_ms!r}, "
+            f"deterministic={self.deterministic!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SamplingConfig):
+            return NotImplemented
+        return (
+            self.sample_rate == other.sample_rate
+            and self.force_sample_on_error == other.force_sample_on_error
+            and self.force_sample_slow_queries_ms == other.force_sample_slow_queries_ms
+            and self.deterministic == other.deterministic
+        )
+
+    def __hash__(self) -> int:
+        msg = "SamplingConfig objects are mutable and unhashable"
+        raise TypeError(msg)
 
     def should_sample(
         self,
@@ -87,7 +121,6 @@ class SamplingConfig:
         Returns:
             True if the request should be sampled, False otherwise.
         """
-        # Force sample conditions take precedence
         if force:
             return True
 
@@ -108,8 +141,7 @@ class SamplingConfig:
             return False
 
         if self.deterministic and correlation_id:
-            # Hash-based sampling for consistency across distributed systems
-            hash_value = hash(correlation_id) % self.HASH_MODULUS
+            hash_value = zlib.crc32(correlation_id.encode("utf-8")) % self.HASH_MODULUS
             threshold = int(self.sample_rate * self.HASH_MODULUS)
             return hash_value < threshold
 
@@ -121,32 +153,11 @@ class SamplingConfig:
         Returns:
             A new SamplingConfig instance with the same values.
         """
-        return SamplingConfig(
+        copied = SamplingConfig(
             sample_rate=self.sample_rate,
             force_sample_on_error=self.force_sample_on_error,
             force_sample_slow_queries_ms=self.force_sample_slow_queries_ms,
             deterministic=self.deterministic,
         )
-
-    def __repr__(self) -> str:
-        return (
-            f"SamplingConfig(sample_rate={self.sample_rate!r}, "
-            f"force_sample_on_error={self.force_sample_on_error!r}, "
-            f"force_sample_slow_queries_ms={self.force_sample_slow_queries_ms!r}, "
-            f"deterministic={self.deterministic!r})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SamplingConfig):
-            return NotImplemented
-        return (
-            self.sample_rate == other.sample_rate
-            and self.force_sample_on_error == other.force_sample_on_error
-            and self.force_sample_slow_queries_ms == other.force_sample_slow_queries_ms
-            and self.deterministic == other.deterministic
-        )
-
-    def __hash__(self) -> int:
-        # SamplingConfig is mutable, so it should not be hashable
-        msg = "SamplingConfig objects are mutable and unhashable"
-        raise TypeError(msg)
+        copied._slow_query_explicit = self._slow_query_explicit
+        return copied

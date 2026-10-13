@@ -1,5 +1,7 @@
 """BigQuery database configuration."""
 
+import contextlib
+import copy
 import threading
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
@@ -11,7 +13,7 @@ from sqlspec.adapters.bigquery._typing import (
 )
 from sqlspec.adapters.bigquery._typing import BigQueryLoadJobConfig as LoadJobConfig
 from sqlspec.adapters.bigquery._typing import BigQueryQueryJobConfig as QueryJobConfig
-from sqlspec.adapters.bigquery.core import apply_driver_features, default_statement_config
+from sqlspec.adapters.bigquery.core import apply_driver_features, copy_job_config, default_statement_config
 from sqlspec.adapters.bigquery.driver import BigQueryDriver, BigQueryExceptionHandler
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import TypeCoercionCapabilities
@@ -32,6 +34,18 @@ if TYPE_CHECKING:
     from sqlspec.observability import ObservabilityConfig
 
 __all__ = ("BigQueryConfig", "BigQueryConnectionParams", "BigQueryDriverFeatures", "build_connection_config")
+
+_JOB_CONFIG_OVERRIDE_KEYS: tuple[str, ...] = (
+    "dataset_id",
+    "use_query_cache",
+    "maximum_bytes_billed",
+    "query_timeout_ms",
+    "job_timeout_ms",
+    "labels",
+    "priority",
+    "reservation",
+    "max_slots",
+)
 
 
 class BigQueryConnectionParams(TypedDict):
@@ -83,7 +97,7 @@ class BigQueryDriverFeatures(TypedDict):
             Provides pub/sub capabilities via table-backed queue (BigQuery has no native pub/sub).
             Requires extension_config["events"] for migration setup.
         events_backend: Event channel backend selection.
-        Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
+            Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
             BigQuery does not have native pub/sub, so poll_queue is the only backend.
             Defaults to "poll_queue".
         job_retry_deadline: Total seconds to keep retrying transient job failures. Defaults to 60.0.
@@ -106,6 +120,8 @@ class BigQueryDriverFeatures(TypedDict):
         enable_storage_write_api: Route ``load_from_arrow`` (append, ``overwrite=False``) through the
             BigQuery Storage Write API using native Arrow instead of a Parquet load job. Falls back to
             the Parquet path on any ``bigquery_storage`` import/availability failure. Defaults to False.
+        storage_write_stream_type: Write stream mode ("COMMITTED" or "PENDING") when
+            ``enable_storage_write_api`` is True. Defaults to "PENDING".
         enable_native_storage: Export eligible remote destinations through EXPORT DATA.
             Defaults to True. False retains the client Arrow writer. Local emulator endpoints,
             custom storage pipelines, and unsupported destinations/formats use the client path.
@@ -242,8 +258,9 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self._storage_write_client: Any = None
         self._storage_write_lock = threading.Lock()
 
-        if "default_query_job_config" not in self.connection_config:
-            self._setup_default_job_config()
+        self._setup_default_job_config()
+        if resolved_connection_instance is not None:
+            self._qualify_default_dataset(resolved_connection_instance)
 
         self._user_connection_hook = user_connection_hook
 
@@ -262,32 +279,27 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         self.driver_features = driver_features
         self.driver_features["_storage_write_client_provider"] = self._provide_storage_write_client
 
-    def _provide_storage_write_client(self, connection: "BigQueryConnection") -> Any:
-        """Return the shared BigQuery Storage Write client, creating it on first use.
-
-        Args:
-            connection: The BigQuery client whose credentials the write client reuses.
-
-        Returns:
-            The cached ``BigQueryWriteClient``.
-
-        Raises:
-            ImproperConfigurationError: If google-cloud-bigquery-storage is absent.
-        """
-        if self._storage_write_client is not None:
-            return self._storage_write_client
-        if BigQueryStorageWriteModule is None:
-            msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion."
-            raise ImproperConfigurationError(msg)
-        with self._storage_write_lock:
-            if self._storage_write_client is not None:
-                return self._storage_write_client
-            client_kwargs: dict[str, Any] = {"credentials": getattr(connection, "_credentials", None)}
-            client_options = self.connection_config.get("client_options")
-            if client_options is not None and client_options is not Empty:
-                client_kwargs["client_options"] = client_options
-            self._storage_write_client = BigQueryStorageWriteModule.BigQueryWriteClient(**client_kwargs)
-        return self._storage_write_client
+    def __deepcopy__(self, memo: "dict[int, Any]") -> "BigQueryConfig":
+        """Create a deep copy without attempting to copy threading locks or circular method bindings."""
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for key, value in self.__dict__.items():
+            if key == "_storage_write_lock":
+                setattr(result, key, threading.Lock())
+            elif key == "_storage_write_client":
+                setattr(result, key, None)
+            elif key in {"_connection_instance", "connection_instance"} and not self._owns_connection_instance:
+                setattr(result, key, value)
+            elif key == "driver_features" and isinstance(value, dict):
+                features_copy = {
+                    k: copy.deepcopy(v, memo) for k, v in value.items() if k != "_storage_write_client_provider"
+                }
+                features_copy["_storage_write_client_provider"] = result._provide_storage_write_client
+                setattr(result, key, features_copy)
+            else:
+                setattr(result, key, copy.deepcopy(value, memo))
+        return result
 
     def close_pool(self) -> None:
         """Close the clients this configuration created.
@@ -306,93 +318,6 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
             self._connection_instance.close()
             self._connection_instance = None
 
-    def _resolve_default_dataset(self) -> "str | None":
-        """Resolve the fully qualified default dataset, if one can be determined.
-
-        BigQuery requires ``project.dataset``; an unqualified name raises when
-        assigned, so it is left unset rather than turned into a construction
-        error.
-
-        Returns:
-            The qualified dataset reference, or None when no project is known.
-        """
-        dataset_id = self.connection_config.get("dataset_id")
-        if not dataset_id:
-            return None
-        if "." in dataset_id:
-            return cast("str", dataset_id)
-        project = self.connection_config.get("project")
-        if not project:
-            return None
-        return f"{project}.{dataset_id}"
-
-    def _qualify_default_dataset(self, connection: "BigQueryConnection") -> None:
-        """Fill in the default dataset once the client's own project is known.
-
-        A dataset configured without a project cannot be qualified at
-        construction time without a credentials lookup, so it is resolved here
-        from the client instead.
-
-        Args:
-            connection: The freshly created BigQuery client.
-        """
-        dataset_id = self.connection_config.get("dataset_id")
-        if not dataset_id or "." in dataset_id:
-            return
-        if self.connection_config.get("project"):
-            return
-        job_config = self.connection_config.get("default_query_job_config")
-        if job_config is None or job_config.default_dataset is not None:
-            return
-        project = connection.project
-        if project:
-            job_config.default_dataset = f"{project}.{dataset_id}"
-
-    def _setup_default_job_config(self) -> None:
-        """Set up default job configuration."""
-
-        job_config = QueryJobConfig()
-
-        default_dataset = self._resolve_default_dataset()
-        if default_dataset is not None:
-            job_config.default_dataset = default_dataset
-
-        use_query_cache = self.connection_config.get("use_query_cache")
-        if use_query_cache is not None:
-            job_config.use_query_cache = use_query_cache
-        else:
-            job_config.use_query_cache = True
-
-        maximum_bytes_billed = self.connection_config.get("maximum_bytes_billed")
-        if maximum_bytes_billed is not None:
-            job_config.maximum_bytes_billed = maximum_bytes_billed
-
-        query_timeout_ms = self.connection_config.get("query_timeout_ms")
-        if query_timeout_ms is not None:
-            job_config.job_timeout_ms = query_timeout_ms
-
-        job_timeout_ms = self.connection_config.get("job_timeout_ms")
-        if job_timeout_ms is not None:
-            job_config.job_timeout_ms = job_timeout_ms
-
-        labels = self.connection_config.get("labels")
-        if labels is not None:
-            job_config.labels = labels
-
-        priority = self.connection_config.get("priority")
-        if priority is not None:
-            job_config.priority = priority.upper()
-
-        reservation = self.connection_config.get("reservation")
-        if reservation is not None:
-            job_config.reservation = reservation
-
-        max_slots = self.connection_config.get("max_slots")
-        if max_slots is not None:
-            job_config.max_slots = max_slots
-
-        self.connection_config["default_query_job_config"] = job_config
-
     def create_connection(self) -> BigQueryConnection:
         """Create and return a new BigQuery Client instance.
 
@@ -406,35 +331,39 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         if self._connection_instance is not None:
             return cast("BigQueryConnection", self._connection_instance)
 
-        try:
-            client_fields = {
-                "project",
-                "location",
-                "credentials",
-                "client_options",
-                "client_info",
-                "default_query_job_config",
-                "default_load_job_config",
-                "default_job_creation_mode",
-            }
-            config_dict: dict[str, Any] = {
-                field: value
-                for field, value in self.connection_config.items()
-                if field in client_fields and value is not None and value is not Empty
-            }
-            connection = self.connection_type(**config_dict)
+        with self._storage_write_lock:
+            if self._connection_instance is not None:
+                return cast("BigQueryConnection", self._connection_instance)
 
-            self._qualify_default_dataset(connection)
+            try:
+                client_fields = {
+                    "project",
+                    "location",
+                    "credentials",
+                    "client_options",
+                    "client_info",
+                    "default_query_job_config",
+                    "default_load_job_config",
+                    "default_job_creation_mode",
+                }
+                config_dict: dict[str, Any] = {
+                    field: value
+                    for field, value in self.connection_config.items()
+                    if field in client_fields and value is not None and value is not Empty
+                }
+                connection = self.connection_type(**config_dict)
 
-            if self._user_connection_hook is not None:
-                self._user_connection_hook(connection)
+                self._qualify_default_dataset(connection)
 
-            self._connection_instance = connection
-        except Exception as e:
-            project = self.connection_config.get("project", "Unknown")
-            msg = f"Could not configure BigQuery connection for project '{project}'. Error: {e}"
-            raise ImproperConfigurationError(msg) from e
-        return connection
+                if self._user_connection_hook is not None:
+                    self._user_connection_hook(connection)
+
+                self._connection_instance = connection
+            except Exception as e:
+                project = self.connection_config.get("project", "Unknown")
+                msg = f"Could not configure BigQuery connection for project '{project}'. Error: {e}"
+                raise ImproperConfigurationError(msg) from e
+            return connection
 
     def provide_connection(self, *_args: Any, **_kwargs: Any) -> "BigQueryConnectionContext":
         """Provide a BigQuery client within a context manager.
@@ -494,3 +423,132 @@ class BigQueryConfig(NoPoolSyncConfig[BigQueryConnection, BigQueryDriver]):
         """Return polling defaults tuned for BigQuery latency."""
 
         return EventRuntimeHints(poll_interval=2.0, lease_seconds=60, retention_seconds=172_800)
+
+    def _provide_storage_write_client(self, connection: "BigQueryConnection") -> Any:
+        """Return the shared BigQuery Storage Write client, creating it on first use.
+
+        Args:
+            connection: The BigQuery client whose credentials the write client reuses.
+
+        Returns:
+            The cached ``BigQueryWriteClient``.
+
+        Raises:
+            ImproperConfigurationError: If google-cloud-bigquery-storage is absent.
+        """
+        if self._storage_write_client is not None:
+            return self._storage_write_client
+        if BigQueryStorageWriteModule is None:
+            msg = "google-cloud-bigquery-storage is required for BigQuery Storage Write API ingestion."
+            raise ImproperConfigurationError(msg)
+        with self._storage_write_lock:
+            if self._storage_write_client is not None:
+                return self._storage_write_client
+            client_kwargs: dict[str, Any] = {"credentials": getattr(connection, "_credentials", None)}
+            client_options = self.connection_config.get("client_options")
+            if client_options is not None and client_options is not Empty:
+                client_kwargs["client_options"] = client_options
+            self._storage_write_client = BigQueryStorageWriteModule.BigQueryWriteClient(**client_kwargs)
+        return self._storage_write_client
+
+    def _resolve_default_dataset(self) -> "str | None":
+        """Resolve the fully qualified default dataset, if one can be determined.
+
+        BigQuery requires ``project.dataset``; an unqualified name raises when
+        assigned, so it is left unset rather than turned into a construction
+        error.
+
+        Returns:
+            The qualified dataset reference, or None when no project is known.
+        """
+        dataset_id = self.connection_config.get("dataset_id")
+        if not dataset_id:
+            return None
+        if "." in dataset_id:
+            return cast("str", dataset_id)
+        project = self.connection_config.get("project")
+        if not project:
+            return None
+        return f"{project}.{dataset_id}"
+
+    def _qualify_default_dataset(self, connection: "BigQueryConnection") -> None:
+        """Fill in the default dataset once the client's own project is known.
+
+        A dataset configured without a project cannot be qualified at
+        construction time without a credentials lookup, so it is resolved here
+        from the client instead.
+
+        Args:
+            connection: The freshly created BigQuery client.
+        """
+        job_config = self.connection_config.get("default_query_job_config")
+        if job_config is None:
+            return
+        dataset_id = self.connection_config.get("dataset_id")
+        if (
+            dataset_id
+            and "." not in dataset_id
+            and not self.connection_config.get("project")
+            and job_config.default_dataset is None
+        ):
+            project = getattr(connection, "project", None)
+            if project:
+                job_config.default_dataset = f"{project}.{dataset_id}"
+        if getattr(connection, "_default_query_job_config", None) is None or (
+            job_config.default_dataset is not None
+            and getattr(connection._default_query_job_config, "default_dataset", None) is None
+        ):
+            with contextlib.suppress(AttributeError, TypeError):
+                connection._default_query_job_config = job_config
+
+    def _setup_default_job_config(self) -> None:
+        """Set up default job configuration."""
+        existing_config = self.connection_config.get("default_query_job_config")
+        has_overrides = any(self.connection_config.get(key) is not None for key in _JOB_CONFIG_OVERRIDE_KEYS)
+        if existing_config is not None:
+            if not has_overrides:
+                return
+            job_config = QueryJobConfig()
+            copy_job_config(existing_config, job_config)
+        else:
+            job_config = QueryJobConfig()
+
+        default_dataset = self._resolve_default_dataset()
+        if default_dataset is not None:
+            job_config.default_dataset = default_dataset
+
+        use_query_cache = self.connection_config.get("use_query_cache")
+        if use_query_cache is not None:
+            job_config.use_query_cache = use_query_cache
+        elif existing_config is None:
+            job_config.use_query_cache = True
+
+        maximum_bytes_billed = self.connection_config.get("maximum_bytes_billed")
+        if maximum_bytes_billed is not None:
+            job_config.maximum_bytes_billed = maximum_bytes_billed
+
+        query_timeout_ms = self.connection_config.get("query_timeout_ms")
+        if query_timeout_ms is not None:
+            job_config.job_timeout_ms = query_timeout_ms
+
+        job_timeout_ms = self.connection_config.get("job_timeout_ms")
+        if job_timeout_ms is not None:
+            job_config.job_timeout_ms = job_timeout_ms
+
+        labels = self.connection_config.get("labels")
+        if labels is not None:
+            job_config.labels = labels
+
+        priority = self.connection_config.get("priority")
+        if priority is not None:
+            job_config.priority = priority.upper()
+
+        reservation = self.connection_config.get("reservation")
+        if reservation is not None:
+            job_config.reservation = reservation
+
+        max_slots = self.connection_config.get("max_slots")
+        if max_slots is not None:
+            job_config.max_slots = max_slots
+
+        self.connection_config["default_query_job_config"] = job_config

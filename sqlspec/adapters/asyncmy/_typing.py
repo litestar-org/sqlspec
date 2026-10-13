@@ -8,19 +8,19 @@ import contextlib
 import os
 from typing import TYPE_CHECKING, Any
 
-import asyncmy as _asyncmy  # pyright: ignore
-from asyncmy import Connection  # pyright: ignore
-from asyncmy import errors as _asyncmy_errors  # pyright: ignore
-from asyncmy.connection import LoadLocalFile  # pyright: ignore
-from asyncmy.connection import MySQLResult as _AsyncmyResult  # pyright: ignore
-from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE  # pyright: ignore
+import asyncmy as _asyncmy
+from asyncmy import Connection
+from asyncmy import errors as _asyncmy_errors
+from asyncmy.connection import LoadLocalFile
+from asyncmy.connection import MySQLResult as _AsyncmyResult
+from asyncmy.constants import FIELD_TYPE as _ASYNCMY_FIELD_TYPE
 from asyncmy.cursors import RE_INSERT_VALUES as ASYNCMY_INSERT_VALUES_PATTERN
-from asyncmy.cursors import Cursor as _AsyncmyCursor  # pyright: ignore
-from asyncmy.cursors import DictCursor as _AsyncmyDictCursor  # pyright: ignore
+from asyncmy.cursors import Cursor as _AsyncmyCursor
+from asyncmy.cursors import DictCursor as _AsyncmyDictCursor
 from asyncmy.cursors import SSCursor as AsyncmySSCursor
-from asyncmy.errors import ProgrammingError as AsyncmyProgrammingError
-from asyncmy.pool import Pool as _AsyncmyPool  # pyright: ignore
-from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper  # pyright: ignore
+from asyncmy.errors import ProgrammingError as _AsyncmyProgrammingError
+from asyncmy.pool import Pool as _AsyncmyPool
+from asyncmy.protocol import LoadLocalPacketWrapper as _LoadLocalPacketWrapper
 
 from sqlspec.exceptions import SQLSpecError
 
@@ -32,8 +32,21 @@ if TYPE_CHECKING:
     from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
     from sqlspec.core import StatementConfig
 
+    class AsyncmyMySQLError(Exception):
+        errno: int
+
+    class AsyncmyError(AsyncmyMySQLError):
+        pass
+
+    class AsyncmyProgrammingError(AsyncmyError):
+        pass
+
     class AsyncmyConnectionProtocol(Protocol):
-        def cursor(self) -> "AsyncmyRawCursor": ...
+        server_status: int
+
+        def cursor(self, cursor: "type[Any] | None" = None) -> "AsyncmyRawCursor": ...
+
+        async def begin(self) -> Any: ...
 
         async def commit(self) -> object: ...
 
@@ -51,9 +64,7 @@ if TYPE_CHECKING:
 
     AsyncmyConnection: TypeAlias = AsyncmyConnectionProtocol
     AsyncmyDictCursor: TypeAlias = _AsyncmyDictCursor
-    AsyncmyError: TypeAlias = _asyncmy_errors.Error
     AsyncmyFieldType: TypeAlias = AsyncmyFieldTypeProtocol
-    AsyncmyMySQLError: TypeAlias = _asyncmy_errors.MySQLError
     AsyncmyModule: TypeAlias = AsyncmyModuleProtocol
     AsyncmyPool: TypeAlias = _AsyncmyPool
     AsyncmyRawCursor: TypeAlias = _AsyncmyCursor
@@ -64,6 +75,7 @@ if not TYPE_CHECKING:
     AsyncmyError = _asyncmy_errors.Error
     AsyncmyFieldType = _ASYNCMY_FIELD_TYPE
     AsyncmyMySQLError = _asyncmy_errors.MySQLError
+    AsyncmyProgrammingError = _AsyncmyProgrammingError
     AsyncmyModule = _asyncmy
     AsyncmyPool = _AsyncmyPool
     AsyncmyRawCursor = _AsyncmyCursor
@@ -85,6 +97,8 @@ __all__ = (
     "asyncmy_local_infile",
 )
 
+_resolved_driver_type: "type[AsyncmyDriver] | None" = None
+
 
 class AsyncmyCursor:
     """Context manager for AsyncMy cursor operations.
@@ -92,20 +106,31 @@ class AsyncmyCursor:
     Provides automatic cursor acquisition and cleanup for database operations.
     """
 
-    __slots__ = ("connection", "cursor")
+    __slots__ = ("connection", "cursor", "cursor_class")
 
-    def __init__(self, connection: "AsyncmyConnection") -> None:
+    def __init__(self, connection: "AsyncmyConnection", cursor_class: "type[AsyncmyRawCursor] | None" = None) -> None:
         self.connection = connection
+        self.cursor_class = cursor_class
         self.cursor: AsyncmyRawCursor | None = None
 
     async def __aenter__(self) -> "AsyncmyRawCursor":
-        self.cursor = self.connection.cursor()
+        if self.cursor_class is None:
+            self.cursor = self.connection.cursor()
+        else:
+            try:
+                self.cursor = self.connection.cursor(self.cursor_class)
+            except TypeError:
+                self.cursor = self.connection.cursor()
         return self.cursor
 
     async def __aexit__(self, *_: object) -> None:
         if self.cursor is not None:
             with contextlib.suppress(Exception):
-                await self.cursor.close()
+                raw_cursor: Any = self.cursor
+                if hasattr(raw_cursor, "close"):
+                    await raw_cursor.close()
+                elif hasattr(raw_cursor, "__aexit__"):
+                    await raw_cursor.__aexit__(None, None, None)
 
 
 class AsyncmySessionContext:
@@ -146,10 +171,9 @@ class AsyncmySessionContext:
         self._driver: AsyncmyDriver | None = None
 
     async def __aenter__(self) -> "AsyncmyDriver":
-        from sqlspec.adapters.asyncmy.driver import AsyncmyDriver
-
+        driver_cls = _get_asyncmy_driver_type()
         self._connection = await self._acquire_connection()
-        self._driver = AsyncmyDriver(
+        self._driver = driver_cls(
             connection=self._connection, statement_config=self._statement_config, driver_features=self._driver_features
         )
         return self._prepare_driver(self._driver)
@@ -180,16 +204,16 @@ def asyncmy_local_infile(connection: "AsyncmyConnection", filename: str) -> "Ite
 
     async def read_result(unbuffered: bool = False) -> None:
         raw._result = None
-        result = _AsyncmyLocalInfileResult(raw, filename)
+        result: Any = _AsyncmyLocalInfileResult(raw, filename)
         if unbuffered:
             try:
-                await result.init_unbuffered_query()  # type: ignore[no-untyped-call]
+                await result.init_unbuffered_query()
             except BaseException:
                 result.unbuffered_active = False
                 result.connection = None
                 raise
         else:
-            await result.read()  # type: ignore[no-untyped-call]
+            await result.read()
         raw._result = result
         raw._affected_rows = result.affected_rows
         if result.server_status:
@@ -224,9 +248,20 @@ class _AsyncmyLocalInfileResult(_AsyncmyResult):
         if not self.connection._local_infile or os.fsdecode(request) != self._filename:
             msg = "MySQL requested an unexpected LOCAL INFILE payload."
             raise SQLSpecError(msg)
-        await LoadLocalFile(self._filename, self.connection).send_data()  # type: ignore[no-untyped-call]
+        sender: Any = LoadLocalFile(self._filename, self.connection)
+        await sender.send_data()
         packet = await self.connection.read_packet()
         if not packet.is_ok_packet():
             msg = "MySQL did not acknowledge the LOCAL INFILE payload."
             raise SQLSpecError(msg)
-        self._read_ok_packet(packet)  # type: ignore[attr-defined]
+        raw_self: Any = self
+        raw_self._read_ok_packet(packet)
+
+
+def _get_asyncmy_driver_type() -> "type[AsyncmyDriver]":
+    global _resolved_driver_type
+    if _resolved_driver_type is None:
+        from sqlspec.adapters.asyncmy.driver import AsyncmyDriver as _Driver
+
+        _resolved_driver_type = _Driver
+    return _resolved_driver_type

@@ -245,27 +245,7 @@ class SQL:
 
     __slots__ = SQL_SLOTS
 
-    # Type annotation for mypyc compatibility
     _sql_param_counters: "dict[str, int]"
-
-    @classmethod
-    def _create_cached_direct(cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState") -> "SQL":
-        """Create a minimal SQL object for direct (fast-path) execution.
-
-        Bypasses standard __init__ and parameter processing.
-        Only for use by direct execution paths.
-        """
-        stmt = get_sql_pool().acquire()
-        stmt._raw_sql = sql
-        stmt._statement_config = config
-        stmt._dialect = stmt._normalize_dialect(config.dialect)
-        stmt._processed_state = processed_state
-        stmt._pooled = True
-        stmt._is_cache_direct = True
-        stmt._is_many = False
-        stmt._is_script = False
-        stmt._rebind_processor = None
-        return stmt
 
     def __init__(
         self,
@@ -319,21 +299,6 @@ class SQL:
         self._original_parameters = parameters
         self._process_parameters(*parameters, **kwargs)
 
-    def _create_auto_config(
-        self, _statement: "str | exp.Expr | 'SQL'", _parameters: tuple, _kwargs: "dict[str, Any]"
-    ) -> "StatementConfig":
-        """Create default StatementConfig when none provided.
-
-        Args:
-            _statement: The SQL statement (unused)
-            _parameters: Statement parameters (unused)
-            _kwargs: Additional keyword arguments (unused)
-
-        Returns:
-            Default StatementConfig instance
-        """
-        return get_default_config()
-
     def __reduce__(self) -> "tuple[Any, ...]":
         """Reconstruct via the public ctor with stored raw SQL, parameters, and filters."""
         return (
@@ -358,7 +323,15 @@ class SQL:
             raw_sql = self._materialized_raw_sql()
             is_many = self._is_many
             is_script = self._is_script
-            self._hash = hash((raw_sql, positional_tuple, named_tuple, is_many, is_script))
+            self._hash = hash((
+                raw_sql,
+                positional_tuple,
+                named_tuple,
+                is_many,
+                is_script,
+                self._dialect,
+                hash_filters(self._filters),
+            ))
         return self._hash
 
     def __eq__(self, other: object) -> bool:
@@ -371,6 +344,8 @@ class SQL:
             and self._named_parameters == other._named_parameters
             and self._is_many == other._is_many
             and self._is_script == other._is_script
+            and self._dialect == other._dialect
+            and self._filters == other._filters
         )
 
     def __repr__(self) -> str:
@@ -390,158 +365,6 @@ class SQL:
         flags_str = f", {', '.join(flags)}" if flags else ""
 
         return f"SQL({self._materialized_raw_sql()!r}{params_str}{flags_str})"
-
-    def reset(self) -> None:
-        """Reset SQL object for reuse in pooling scenarios."""
-        if self._pooled and not self._compiled_from_cache and self._processed_state is not Empty:
-            get_processed_state_pool().release(self._processed_state)
-        self._compiled_from_cache = False
-        self._is_cache_direct = False
-        self._processed_state = Empty
-        self._hash = None
-        self._filters.clear()
-        self._named_parameters.clear()
-        self._positional_parameters.clear()
-        self._sql_param_counters.clear()
-        self._original_parameters = ()
-        self._is_many = False
-        self._is_script = False
-        self._raw_expression = None
-        self._raw_sql = ""
-        self._statement_config = get_default_config()
-        self._dialect = self._normalize_dialect(self._statement_config.dialect)
-        self._rebind_processor = None
-        self._declared_parameters = ()
-
-    @staticmethod
-    def _normalize_dialect(dialect: "DialectType") -> "str | None":
-        """Convert dialect to string representation.
-
-        Args:
-            dialect: Dialect type, string, or None
-
-        Returns:
-            String representation of the dialect or None
-        """
-        if dialect is None:
-            return None
-        if isinstance(dialect, str):
-            return dialect
-        if isinstance(dialect, type) and issubclass(dialect, Dialect):
-            return dialect.__name__.lower()
-        return type(dialect).__name__.lower()
-
-    def _materialized_raw_sql(self) -> str:
-        """Return raw SQL, materializing deferred expression SQL when needed."""
-        if self._raw_sql == "" and self._raw_expression is not None:
-            dialect = self._dialect
-            self._raw_sql = self._raw_expression.sql(dialect=str(dialect) if dialect else None)
-        return self._raw_sql
-
-    def _init_from_sql_object(self, sql_obj: "SQL") -> None:
-        """Initialize instance attributes from existing SQL object.
-
-        Args:
-            sql_obj: Existing SQL object to copy from
-        """
-        self._raw_sql = sql_obj.raw_sql
-        self._raw_expression = sql_obj.raw_expression
-        self._filters = sql_obj.filters.copy()
-        self._named_parameters = sql_obj.named_parameters.copy()
-        self._positional_parameters = sql_obj.positional_parameters.copy()
-        self._sql_param_counters = sql_obj._sql_param_counters.copy()
-        self._is_many = sql_obj.is_many
-        self._is_script = sql_obj.is_script
-        self._declared_parameters = sql_obj._declared_parameters
-        source_state = sql_obj.get_processed_state()
-        if source_state is not Empty:
-            self._processed_state = source_state
-
-    @staticmethod
-    def _should_auto_detect_many(parameters: tuple) -> bool:
-        """Detect execute_many mode from parameter structure.
-
-        Args:
-            parameters: Parameter tuple to analyze
-
-        Returns:
-            True if parameters indicate batch execution
-        """
-        if len(parameters) == 1 and isinstance(parameters[0], list):
-            param_list = parameters[0]
-            if not param_list:
-                return False
-            first_item = param_list[0]
-            if isinstance(first_item, (tuple, list, dict)):
-                return len(param_list) > 1
-        return False
-
-    def _process_parameters(self, *parameters: Any, dialect: str | None = None, **kwargs: Any) -> None:
-        """Process and organize parameters and filters.
-
-        Args:
-            *parameters: Variable parameters and filters
-            dialect: SQL dialect override
-            **kwargs: Additional named parameters
-        """
-        if dialect is not None:
-            self._dialect = self._normalize_dialect(dialect)
-
-        if "is_script" in kwargs:
-            self._is_script = bool(kwargs.pop("is_script"))
-
-        self._filters.extend(self._extract_filters(parameters))
-        self._normalize_parameters(parameters)
-        self._named_parameters.update(kwargs)
-
-    @staticmethod
-    def _extract_filters(parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
-        return [p for p in parameters if is_statement_filter(p)]
-
-    def _add_parameter(self, param: Any) -> None:
-        if isinstance(param, dict):
-            self._named_parameters.update(param)
-        elif isinstance(param, (list, tuple)):
-            if self._is_many:
-                self._positional_parameters = list(param)
-            else:
-                self._positional_parameters.extend(param)
-        else:
-            self._positional_parameters.append(param)
-
-    def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:
-        if not parameters:
-            return
-
-        # Optimization: Fast path for single parameter (most common case)
-        if len(parameters) == 1:
-            param = parameters[0]
-            # Fast check for simple types before filter check
-            if isinstance(param, (str, int, float, bool)) or param is None:
-                self._positional_parameters.append(param)
-                return
-
-            if is_statement_filter(param):
-                return
-
-            self._add_parameter(param)
-            return
-
-        # Multiple parameters: check for filters
-        # O(N) check only if we have more than 1 param
-        has_filter = any(is_statement_filter(p) for p in parameters)
-        if not has_filter:
-            self._positional_parameters.extend(parameters)
-            return
-
-        actual_params = [p for p in parameters if not is_statement_filter(p)]
-        if not actual_params:
-            return
-
-        if len(actual_params) == 1:
-            self._add_parameter(actual_params[0])
-        else:
-            self._positional_parameters.extend(actual_params)
 
     @property
     def sql(self) -> str:
@@ -621,23 +444,11 @@ class SQL:
         """Applied filters."""
         return self._filters.copy()
 
-    def get_filters_view(self) -> "FiltersView":
-        """Get zero-copy filters view (public API).
-
-        Returns:
-            Read-only view of filters without copying
-        """
-        return FiltersView(self._filters)
-
     @property
     def is_processed(self) -> bool:
         """Check if SQL has been processed (public API)."""
         state = self._processed_state
         return state is not Empty
-
-    def get_processed_state(self) -> Any:
-        """Get processed state (public API)."""
-        return self._processed_state
 
     @property
     def dialect(self) -> "str | None":
@@ -683,6 +494,40 @@ class SQL:
         if state is Empty:
             return False
         return bool(state.validation_errors)
+
+    def reset(self) -> None:
+        """Reset SQL object for reuse in pooling scenarios."""
+        if self._pooled and not self._compiled_from_cache and self._processed_state is not Empty:
+            get_processed_state_pool().release(self._processed_state)
+        self._compiled_from_cache = False
+        self._is_cache_direct = False
+        self._processed_state = Empty
+        self._hash = None
+        self._filters.clear()
+        self._named_parameters.clear()
+        self._positional_parameters.clear()
+        self._sql_param_counters.clear()
+        self._original_parameters = ()
+        self._is_many = False
+        self._is_script = False
+        self._raw_expression = None
+        self._raw_sql = ""
+        self._statement_config = get_default_config()
+        self._dialect = self._normalize_dialect(self._statement_config.dialect)
+        self._rebind_processor = None
+        self._declared_parameters = ()
+
+    def get_filters_view(self) -> "FiltersView":
+        """Get zero-copy filters view (public API).
+
+        Returns:
+            Read-only view of filters without copying
+        """
+        return FiltersView(self._filters)
+
+    def get_processed_state(self) -> Any:
+        """Get processed state (public API)."""
+        return self._processed_state
 
     def returns_rows(self) -> bool:
         """Check if statement returns rows.
@@ -753,7 +598,7 @@ class SQL:
 
         try:
             config = self._statement_config
-            mixed = self._mixed_parameter_inputs()
+            mixed = self._resolve_mixed_parameter_inputs()
             raw_sql = mixed[0] if mixed is not None else self._materialized_raw_sql()
             params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
             is_many = self._is_many
@@ -794,111 +639,6 @@ class SQL:
         self._compiled_from_cache = False
         return new_state.compiled_sql, new_state.execution_parameters
 
-    def _mixed_parameter_inputs(self) -> "tuple[str, dict[str, Any]] | None":
-        """Normalize coexisting positional and named values without losing either."""
-        positional, named = self._positional_parameters, self._named_parameters
-        if not positional or not named or self._is_many:
-            return None
-        raw = self._materialized_raw_sql()
-        infos = self._statement_config.parameter_validator.extract_parameters(raw)
-        ordinal_styles = {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
-        index_styles = {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}
-        positional_styles = ordinal_styles | index_styles
-        styles = {info.style for info in infos if info.style in positional_styles}
-        unbound = [info for info in infos if info.style not in positional_styles and info.name not in named]
-        if len(styles) > 1 or (styles & index_styles and unbound):
-            return None
-        selected = [info for info in infos if info.style in positional_styles or info.name not in named]
-        if not selected:
-            return None
-        slots: dict[str, int] = {}
-        indexes: list[int] = []
-        counter = 0
-        for info in selected:
-            if info.style in index_styles:
-                index = int(info.name or "0") - 1
-            elif info.style in ordinal_styles:
-                index = counter
-                counter += 1
-            elif info.name in slots:
-                index = slots[info.name]
-            else:
-                index = counter
-                slots[info.name or ""] = index
-                counter += 1
-            if index < 0 or index >= len(positional):
-                return None
-            indexes.append(index)
-        if not styles & index_styles and counter != len(positional):
-            return None
-        names = {index: name for name, index in slots.items()}
-        used = set(named) | set(slots)
-        for index in indexes:
-            if index not in names:
-                name = f"param_{index}"
-                while name in used:
-                    name += "_p"
-                names[index] = name
-                used.add(name)
-        for info, index in list(zip(selected, indexes, strict=True))[::-1]:
-            if info.style in positional_styles:
-                raw = raw[: info.position] + ":" + names[index] + raw[info.position + len(info.placeholder_text) :]
-        return raw, {**{name: positional[index] for index, name in names.items()}, **named}
-
-    def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
-        mixed = self._mixed_parameter_inputs()
-        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
-        if self._rebind_processor is None:
-            self._rebind_processor = ParameterProcessor(
-                converter=self._statement_config.parameter_converter,
-                validator=self._statement_config.parameter_validator,
-                cache_max_size=0,
-            )
-        processor = self._rebind_processor
-        rebound_params = processor.transform_cached_parameters(
-            params,
-            state.parameter_profile,
-            self._statement_config.parameter_config,
-            input_named_parameters=state.input_named_parameters,
-            is_many=self._is_many,
-            apply_wrap_types=state.applied_wrap_types,
-        )
-        compiled_sql = state.compiled_sql
-        output_transformer = self._statement_config.output_transformer
-        if output_transformer:
-            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
-        self._processed_state = self._build_processed_state(
-            compiled_sql=compiled_sql,
-            execution_parameters=rebound_params,
-            parsed_expression=state.parsed_expression,
-            operation_type=state.operation_type,
-            input_named_parameters=state.input_named_parameters,
-            applied_wrap_types=state.applied_wrap_types,
-            filter_hash=state.filter_hash,
-            parameter_fingerprint=state.parameter_fingerprint,
-            parameter_casts=state.parameter_casts,
-            parameter_profile=state.parameter_profile,
-            operation_profile=state.operation_profile,
-            validation_errors=state.validation_errors.copy(),
-            is_many=state.is_many,
-        )
-        self._compiled_from_cache = False
-        return compiled_sql, rebound_params
-
-    def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
-        if self._statement_config.parameter_config.ast_transformer is not None:
-            return False
-        cached_fingerprint = state.parameter_fingerprint
-        if cached_fingerprint is None:
-            return False
-        if state.is_many != self._is_many:
-            return False
-        if state.filter_hash != hash_filters(self._filters):
-            return False
-        mixed = self._mixed_parameter_inputs()
-        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
-        return bool(structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint)
-
     def as_script(self) -> "SQL":
         """Create copy marked for script execution.
 
@@ -929,7 +669,6 @@ class SQL:
         Returns:
             New SQL instance with modifications applied
         """
-        # FAST PATH: Only parameters are changing
         if statement is None and not kwargs and parameters is not None and not isinstance(parameters, (str, bytes)):
             new_sql = self._create_empty_copy()
             new_sql._process_parameters(*(parameters if isinstance(parameters, tuple) else (parameters,)))
@@ -950,208 +689,6 @@ class SQL:
             new_sql._positional_parameters = self._positional_parameters.copy()
         new_sql._filters = self._filters.copy()
         new_sql._declared_parameters = self._declared_parameters
-        return new_sql
-
-    def _create_empty_copy(self) -> "SQL":
-        """Create a shell copy with shared immutable state but empty mutable state."""
-        new_sql = get_sql_pool().acquire()
-        new_sql._raw_sql = self._raw_sql
-        new_sql._raw_expression = self._raw_expression
-        new_sql._statement_config = self._statement_config
-        new_sql._dialect = self._dialect
-        new_sql._is_many = self._is_many
-        new_sql._is_script = self._is_script
-        new_sql._original_parameters = ()
-        new_sql._pooled = True
-
-        # Reset mutable state
-        source_state = self._processed_state
-        is_processed = source_state is not Empty
-        new_sql._compiled_from_cache = is_processed
-        new_sql._processed_state = source_state if is_processed else Empty
-        new_sql._hash = None
-        new_sql._filters = self._filters.copy()
-        new_sql._named_parameters = {}
-        new_sql._positional_parameters = []
-        new_sql._sql_param_counters = self._sql_param_counters.copy()
-        new_sql._declared_parameters = self._declared_parameters
-
-        return new_sql
-
-    def _build_processed_state(
-        self,
-        *,
-        compiled_sql: str,
-        execution_parameters: Any,
-        parsed_expression: "exp.Expr | None",
-        operation_type: "OperationType",
-        input_named_parameters: "tuple[str, ...] | None",
-        applied_wrap_types: bool,
-        filter_hash: int,
-        parameter_fingerprint: Any | None,
-        parameter_casts: "dict[int, str] | None",
-        parameter_profile: "ParameterProfile | None",
-        operation_profile: "OperationProfile | None",
-        validation_errors: "list[str] | None",
-        is_many: bool,
-    ) -> "ProcessedState":
-        state = get_processed_state_pool().acquire()
-        ProcessedState.__init__(
-            state,
-            compiled_sql=compiled_sql,
-            execution_parameters=execution_parameters,
-            parsed_expression=parsed_expression,
-            operation_type=operation_type,
-            input_named_parameters=input_named_parameters,
-            applied_wrap_types=applied_wrap_types,
-            filter_hash=filter_hash,
-            parameter_fingerprint=parameter_fingerprint,
-            parameter_casts=parameter_casts,
-            validation_errors=validation_errors,
-            parameter_profile=parameter_profile,
-            operation_profile=operation_profile,
-            is_many=is_many,
-        )
-        return state
-
-    def _handle_compile_failure(self, error: Exception) -> ProcessedState:
-        logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
-        mixed = self._mixed_parameter_inputs()
-        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
-        return self._build_processed_state(
-            compiled_sql=mixed[0] if mixed is not None else self._materialized_raw_sql(),
-            execution_parameters=params,
-            parsed_expression=None,
-            operation_type="COMMAND",
-            input_named_parameters=(),
-            applied_wrap_types=False,
-            filter_hash=hash_filters(self._filters),
-            parameter_fingerprint=structural_fingerprint(params, is_many=self._is_many),
-            parameter_casts={},
-            parameter_profile=ParameterProfile.empty(),
-            operation_profile=OperationProfile.empty(),
-            validation_errors=[str(error)],
-            is_many=self._is_many,
-        )
-
-    def _next_parameter_name(self, base_name: str) -> str:
-        """Generate unique parameter name with param_ prefix.
-
-        Uses param_ prefix to avoid collision with user-provided parameters.
-        Auto-generated parameters are namespaced to prevent conflicts.
-
-        Args:
-            base_name: The base name for the parameter
-
-        Returns:
-            A unique parameter name that doesn't exist in current parameters
-        """
-        prefixed_base = f"param_{base_name}"
-        current_index = self._sql_param_counters.get(prefixed_base, 0)
-
-        if prefixed_base not in self._named_parameters:
-            self._sql_param_counters[prefixed_base] = current_index
-            return prefixed_base
-
-        next_index = current_index + 1
-        candidate = f"{prefixed_base}_{next_index}"
-
-        while candidate in self._named_parameters:
-            next_index += 1
-            if next_index > _MAX_PARAM_COLLISION_ATTEMPTS:
-                return f"{prefixed_base}_{uuid4().hex[:8]}"
-            candidate = f"{prefixed_base}_{next_index}"
-
-        self._sql_param_counters[prefixed_base] = next_index
-        return candidate
-
-    def _current_expression(self) -> exp.Expr:
-        """Get the current expression or parse the raw SQL.
-
-        Preserves authoring-time parameter names for dynamic query modifiers,
-        then falls back to cached parsed expressions.
-
-        Returns:
-            The SQLGlot expression for this statement
-        """
-        # Preserve authoring-time parameter names when applying dynamic query modifiers.
-        raw_sql = self._raw_sql
-        state = self._processed_state
-        if state is not Empty and state.input_named_parameters and self._raw_expression is None and raw_sql:
-            try:
-                parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
-                if isinstance(parsed, exp.Expr):
-                    return parsed
-            except ParseError:
-                pass
-        if state is not Empty and state.parsed_expression is not None:
-            return state.parsed_expression.copy()
-        # Then check statement_expression (from compilation)
-        if self.statement_expression is not None:
-            return self.statement_expression.copy()
-        # Then check raw_expression (from construction)
-        if self._raw_expression is not None:
-            return self._raw_expression.copy()
-        # Fall back to parsing if enabled
-        if not self._statement_config.enable_parsing:
-            return self._wrapped_raw_sql_expression(raw_sql)
-        try:
-            parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
-            if isinstance(parsed, exp.Expr):
-                return parsed
-            return self._wrapped_raw_sql_expression(raw_sql)
-        except ParseError:
-            return self._wrapped_raw_sql_expression(raw_sql)
-
-    def _wrapped_raw_sql_expression(self, raw_sql: str) -> exp.Expr:
-        if not raw_sql.strip():
-            msg = "Cannot build an expression from an empty SQL statement."
-            raise sqlspec.exceptions.SQLParsingError(msg)
-        try:
-            return exp.Select().select("*").from_("(" + unescape_qmark_operator(raw_sql)[0] + ") AS filtered")
-        except ParseError as exc:
-            msg = f"Failed to parse SQL statement: {exc}"
-            raise sqlspec.exceptions.SQLParsingError(msg) from exc
-
-    def _filter_expression(self) -> exp.Expr:
-        """Return a mutable expression copy for statement filters.
-
-        Filter implementations may modify the returned expression in place. The
-        expression is detached from cached processed state and raw expressions.
-        """
-        return self._current_expression()
-
-    def _copy_with_expression(self, new_expr: "exp.Expr") -> "SQL":
-        """Create a new SQL instance with a modified expression.
-
-        Args:
-            new_expr: The new SQLGlot expression
-
-        Returns:
-            New SQL instance with the expression and copied state
-        """
-        new_sql = self._copy_base(new_expr)
-        new_sql._sql_param_counters = self._sql_param_counters.copy()
-        return new_sql
-
-    def _take_pending_filters(self) -> "tuple[SQL, list[StatementFilter]]":
-        if not self._filters:
-            return self, []
-        copied = self._copy_base(self._raw_expression or self._raw_sql)
-        copied._filters = []
-        return copied, self._filters.copy()
-
-    def _copy_base(self, statement_seed: "str | exp.Expr") -> "SQL":
-        new_sql = SQL(
-            statement_seed,
-            *self._original_parameters,
-            statement_config=self._statement_config,
-            is_many=self._is_many,
-            declared_parameters=self._declared_parameters,
-        )
-        new_sql._named_parameters.update(self._named_parameters)
-        new_sql._positional_parameters = self._positional_parameters.copy()
-        new_sql._filters = self._filters.copy()
         return new_sql
 
     def add_named_parameter(self, name: str, value: Any) -> "SQL":
@@ -1365,52 +902,6 @@ class SQL:
         new_sql._named_parameters[high_param] = high
         return new_sql
 
-    def _where_condition(self, condition: exp.Expr) -> "SQL":
-        expression = self._current_expression()
-        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
-        return self._copy_with_expression(new_expr)
-
-    def _where_comparison(
-        self,
-        column: "str | exp.Column",
-        value: Any,
-        condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]",
-    ) -> "SQL":
-        col_name = extract_column_name(column)
-        param_name = self._next_parameter_name(col_name)
-        condition = create_condition(column, param_name, condition_factory)
-        new_sql = self._where_condition(condition)
-        new_sql._named_parameters[param_name] = value
-        return new_sql
-
-    def _where_sequence_membership(
-        self,
-        column: "str | exp.Column",
-        values: "Sequence[Any]",
-        parameter_suffix: str,
-        condition_factory: "Callable[[str | exp.Column, list[str]], exp.Expr]",
-        *,
-        empty_is_false: bool,
-    ) -> "SQL":
-        if not values:
-            if not empty_is_false:
-                return self
-            false_condition = exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0))
-            return self._where_condition(false_condition)
-
-        col_name = extract_column_name(column)
-        param_names: list[str] = []
-        param_values: dict[str, Any] = {}
-        for index, value in enumerate(values):
-            param_name = self._next_parameter_name(f"{col_name}_{parameter_suffix}_{index}")
-            param_names.append(param_name)
-            param_values[param_name] = value
-
-        condition = condition_factory(column, param_names)
-        new_sql = self._where_condition(condition)
-        new_sql._named_parameters.update(param_values)
-        return new_sql
-
     def order_by(self, *items: "str | exp.Expr", desc: bool = False) -> "SQL":
         """Add ORDER BY clause to the SQL statement.
 
@@ -1507,12 +998,10 @@ class SQL:
         expression = self._current_expression()
         new_expr = safe_modify_with_cte(expression, lambda e: apply_select_only(e, columns))
 
-        # Determine whether to apply column pruning
         should_prune = prune_columns if prune_columns is not None else self._statement_config.enable_column_pruning
 
         if should_prune:
             if self._statement_config.enable_caching:
-                # Use stable content-based key instead of object id (which can be reused after GC)
                 expr_sql = new_expr.sql(dialect=self._dialect)
                 cache_key = f"prune:{hashlib.blake2b(expr_sql.encode(), digest_size=8).hexdigest()}"
             else:
@@ -1649,6 +1138,532 @@ class SQL:
 
         return builder
 
+    @classmethod
+    def _create_cached_direct(cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState") -> "SQL":
+        """Create a minimal SQL object for direct (fast-path) execution.
+
+        Bypasses standard __init__ and parameter processing.
+        Only for use by direct execution paths.
+        """
+        stmt = get_sql_pool().acquire()
+        stmt._raw_sql = sql
+        stmt._statement_config = config
+        stmt._dialect = stmt._normalize_dialect(config.dialect)
+        stmt._processed_state = processed_state
+        stmt._pooled = True
+        stmt._is_cache_direct = True
+        stmt._is_many = False
+        stmt._is_script = False
+        stmt._rebind_processor = None
+        return stmt
+
+    def _create_auto_config(
+        self, _statement: "str | exp.Expr | 'SQL'", _parameters: tuple, _kwargs: "dict[str, Any]"
+    ) -> "StatementConfig":
+        """Create default StatementConfig when none provided.
+
+        Args:
+            _statement: The SQL statement (unused)
+            _parameters: Statement parameters (unused)
+            _kwargs: Additional keyword arguments (unused)
+
+        Returns:
+            Default StatementConfig instance
+        """
+        return get_default_config()
+
+    @staticmethod
+    def _normalize_dialect(dialect: "DialectType") -> "str | None":
+        """Convert dialect to string representation.
+
+        Args:
+            dialect: Dialect type, string, or None
+
+        Returns:
+            String representation of the dialect or None
+        """
+        if dialect is None:
+            return None
+        if isinstance(dialect, str):
+            return dialect
+        if isinstance(dialect, type) and issubclass(dialect, Dialect):
+            return dialect.__name__.lower()
+        return type(dialect).__name__.lower()
+
+    def _materialized_raw_sql(self) -> str:
+        """Return raw SQL, materializing deferred expression SQL when needed."""
+        if self._raw_sql == "" and self._raw_expression is not None:
+            dialect = self._dialect
+            self._raw_sql = self._raw_expression.sql(dialect=str(dialect) if dialect else None)
+        return self._raw_sql
+
+    def _init_from_sql_object(self, sql_obj: "SQL") -> None:
+        """Initialize instance attributes from existing SQL object.
+
+        Args:
+            sql_obj: Existing SQL object to copy from
+        """
+        self._raw_sql = sql_obj.raw_sql
+        self._raw_expression = sql_obj.raw_expression
+        self._filters = sql_obj.filters.copy()
+        self._named_parameters = sql_obj.named_parameters.copy()
+        self._positional_parameters = sql_obj.positional_parameters.copy()
+        self._sql_param_counters = sql_obj._sql_param_counters.copy()
+        self._is_many = sql_obj.is_many
+        self._is_script = sql_obj.is_script
+        self._declared_parameters = sql_obj._declared_parameters
+        source_state = sql_obj.get_processed_state()
+        if source_state is not Empty:
+            self._processed_state = source_state
+
+    @staticmethod
+    def _should_auto_detect_many(parameters: tuple) -> bool:
+        """Detect execute_many mode from parameter structure.
+
+        Args:
+            parameters: Parameter tuple to analyze
+
+        Returns:
+            True if parameters indicate batch execution
+        """
+        if len(parameters) == 1 and isinstance(parameters[0], list):
+            param_list = parameters[0]
+            if not param_list:
+                return False
+            first_item = param_list[0]
+            if isinstance(first_item, (tuple, list, dict)):
+                return len(param_list) > 1
+        return False
+
+    def _process_parameters(self, *parameters: Any, dialect: str | None = None, **kwargs: Any) -> None:
+        """Process and organize parameters and filters.
+
+        Args:
+            *parameters: Variable parameters and filters
+            dialect: SQL dialect override
+            **kwargs: Additional named parameters
+        """
+        if dialect is not None:
+            self._dialect = self._normalize_dialect(dialect)
+
+        if "is_script" in kwargs:
+            self._is_script = bool(kwargs.pop("is_script"))
+
+        self._filters.extend(self._extract_filters(parameters))
+        self._normalize_parameters(parameters)
+        self._named_parameters.update(kwargs)
+
+    @staticmethod
+    def _extract_filters(parameters: "tuple[Any, ...]") -> "list[StatementFilter]":
+        return [p for p in parameters if is_statement_filter(p)]
+
+    def _add_parameter(self, param: Any) -> None:
+        if isinstance(param, dict):
+            self._named_parameters.update(param)
+        elif isinstance(param, (list, tuple)):
+            if self._is_many:
+                self._positional_parameters = list(param)
+            else:
+                self._positional_parameters.extend(param)
+        else:
+            self._positional_parameters.append(param)
+
+    def _normalize_parameters(self, parameters: "tuple[Any, ...]") -> None:
+        if not parameters:
+            return
+
+        if len(parameters) == 1:
+            param = parameters[0]
+            if isinstance(param, (str, int, float, bool)) or param is None:
+                self._positional_parameters.append(param)
+                return
+
+            if is_statement_filter(param):
+                return
+
+            self._add_parameter(param)
+            return
+
+        has_filter = any(is_statement_filter(p) for p in parameters)
+        if not has_filter:
+            self._positional_parameters.extend(parameters)
+            return
+
+        actual_params = [p for p in parameters if not is_statement_filter(p)]
+        if not actual_params:
+            return
+
+        if len(actual_params) == 1:
+            self._add_parameter(actual_params[0])
+        else:
+            self._positional_parameters.extend(actual_params)
+
+    def _mixed_parameter_inputs(self) -> "tuple[str, dict[str, Any]] | None":
+        """Normalize coexisting positional and named values without losing either."""
+        positional, named = self._positional_parameters, self._named_parameters
+        if not positional or not named or self._is_many:
+            return None
+        raw = self._materialized_raw_sql()
+        infos = self._statement_config.parameter_validator.extract_parameters(raw)
+        ordinal_styles = {ParameterStyle.QMARK, ParameterStyle.POSITIONAL_PYFORMAT}
+        index_styles = {ParameterStyle.NUMERIC, ParameterStyle.POSITIONAL_COLON}
+        positional_styles = ordinal_styles | index_styles
+        styles = {info.style for info in infos if info.style in positional_styles}
+        unbound = [info for info in infos if info.style not in positional_styles and info.name not in named]
+        if len(styles) > 1 or (styles & index_styles and unbound):
+            return None
+        selected = [info for info in infos if info.style in positional_styles or info.name not in named]
+        if not selected:
+            return None
+        slots: dict[str, int] = {}
+        indexes: list[int] = []
+        counter = 0
+        for info in selected:
+            if info.style in index_styles:
+                index = int(info.name or "0") - 1
+            elif info.style in ordinal_styles:
+                index = counter
+                counter += 1
+            elif info.name in slots:
+                index = slots[info.name]
+            else:
+                index = counter
+                slots[info.name or ""] = index
+                counter += 1
+            if index < 0 or index >= len(positional):
+                return None
+            indexes.append(index)
+        if not styles & index_styles and counter != len(positional):
+            return None
+        names = {index: name for name, index in slots.items()}
+        used = set(named) | set(slots)
+        for index in indexes:
+            if index not in names:
+                name = f"param_{index}"
+                while name in used:
+                    name += "_p"
+                names[index] = name
+                used.add(name)
+        for info, index in list(zip(selected, indexes, strict=True))[::-1]:
+            if info.style in positional_styles:
+                raw = raw[: info.position] + ":" + names[index] + raw[info.position + len(info.placeholder_text) :]
+        return raw, {**{name: positional[index] for index, name in names.items()}, **named}
+
+    def _resolve_mixed_parameter_inputs(self) -> "tuple[str, dict[str, Any]] | None":
+        mixed = self._mixed_parameter_inputs()
+        if mixed is None and self._positional_parameters and self._named_parameters and not self._is_many:
+            msg = "Cannot combine positional and named parameters when placeholder styles or counts do not match."
+            raise sqlspec.exceptions.SQLSpecError(msg)
+        return mixed
+
+    def _rebind_cached_parameters(self, state: "ProcessedState") -> "tuple[str, Any]":
+        mixed = self._resolve_mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
+        if self._rebind_processor is None:
+            self._rebind_processor = ParameterProcessor(
+                converter=self._statement_config.parameter_converter,
+                validator=self._statement_config.parameter_validator,
+                cache_max_size=0,
+            )
+        processor = self._rebind_processor
+        rebound_params = processor.transform_cached_parameters(
+            params,
+            state.parameter_profile,
+            self._statement_config.parameter_config,
+            input_named_parameters=state.input_named_parameters,
+            is_many=self._is_many,
+            apply_wrap_types=state.applied_wrap_types,
+        )
+        compiled_sql = state.compiled_sql
+        output_transformer = self._statement_config.output_transformer
+        if output_transformer:
+            compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        self._processed_state = self._build_processed_state(
+            compiled_sql=compiled_sql,
+            execution_parameters=rebound_params,
+            parsed_expression=state.parsed_expression.copy() if state.parsed_expression is not None else None,
+            operation_type=state.operation_type,
+            input_named_parameters=state.input_named_parameters,
+            applied_wrap_types=state.applied_wrap_types,
+            filter_hash=state.filter_hash,
+            parameter_fingerprint=state.parameter_fingerprint,
+            parameter_casts=state.parameter_casts,
+            parameter_profile=state.parameter_profile,
+            operation_profile=state.operation_profile,
+            validation_errors=state.validation_errors.copy(),
+            is_many=state.is_many,
+        )
+        self._compiled_from_cache = False
+        return compiled_sql, rebound_params
+
+    def _can_reuse_cached_state(self, state: "ProcessedState") -> bool:
+        if self._statement_config.parameter_config.ast_transformer is not None:
+            return False
+        cached_fingerprint = state.parameter_fingerprint
+        if cached_fingerprint is None:
+            return False
+        if state.is_many != self._is_many:
+            return False
+        if state.filter_hash != hash_filters(self._filters):
+            return False
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
+        return bool(structural_fingerprint(params, is_many=self._is_many) == cached_fingerprint)
+
+    def _create_empty_copy(self) -> "SQL":
+        """Create a shell copy with shared immutable state but empty mutable state."""
+        new_sql = get_sql_pool().acquire()
+        new_sql._raw_sql = self._raw_sql
+        new_sql._raw_expression = self._raw_expression
+        new_sql._statement_config = self._statement_config
+        new_sql._dialect = self._dialect
+        new_sql._is_many = self._is_many
+        new_sql._is_script = self._is_script
+        new_sql._original_parameters = ()
+        new_sql._pooled = True
+
+        source_state = self._processed_state
+        is_processed = source_state is not Empty
+        new_sql._compiled_from_cache = is_processed
+        new_sql._processed_state = source_state if is_processed else Empty
+        new_sql._hash = None
+        new_sql._filters = self._filters.copy()
+        new_sql._named_parameters = {}
+        new_sql._positional_parameters = []
+        new_sql._sql_param_counters = self._sql_param_counters.copy()
+        new_sql._declared_parameters = self._declared_parameters
+
+        return new_sql
+
+    def _build_processed_state(
+        self,
+        *,
+        compiled_sql: str,
+        execution_parameters: Any,
+        parsed_expression: "exp.Expr | None",
+        operation_type: "OperationType",
+        input_named_parameters: "tuple[str, ...] | None",
+        applied_wrap_types: bool,
+        filter_hash: int,
+        parameter_fingerprint: Any | None,
+        parameter_casts: "dict[int, str] | None",
+        parameter_profile: "ParameterProfile | None",
+        operation_profile: "OperationProfile | None",
+        validation_errors: "list[str] | None",
+        is_many: bool,
+    ) -> "ProcessedState":
+        state = get_processed_state_pool().acquire()
+        ProcessedState.__init__(
+            state,
+            compiled_sql=compiled_sql,
+            execution_parameters=execution_parameters,
+            parsed_expression=parsed_expression,
+            operation_type=operation_type,
+            input_named_parameters=input_named_parameters,
+            applied_wrap_types=applied_wrap_types,
+            filter_hash=filter_hash,
+            parameter_fingerprint=parameter_fingerprint,
+            parameter_casts=parameter_casts,
+            validation_errors=validation_errors,
+            parameter_profile=parameter_profile,
+            operation_profile=operation_profile,
+            is_many=is_many,
+        )
+        return state
+
+    def _handle_compile_failure(self, error: Exception) -> ProcessedState:
+        logger.debug("Processing failed, using fallback: %s", error, exc_info=(type(error), error, error.__traceback__))
+        mixed = self._mixed_parameter_inputs()
+        params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
+        return self._build_processed_state(
+            compiled_sql=mixed[0] if mixed is not None else self._materialized_raw_sql(),
+            execution_parameters=params,
+            parsed_expression=None,
+            operation_type="COMMAND",
+            input_named_parameters=(),
+            applied_wrap_types=False,
+            filter_hash=hash_filters(self._filters),
+            parameter_fingerprint=structural_fingerprint(params, is_many=self._is_many),
+            parameter_casts={},
+            parameter_profile=ParameterProfile.empty(),
+            operation_profile=OperationProfile.empty(),
+            validation_errors=[str(error)],
+            is_many=self._is_many,
+        )
+
+    def _next_parameter_name(self, base_name: str) -> str:
+        """Generate unique parameter name with param_ prefix.
+
+        Uses param_ prefix to avoid collision with user-provided parameters.
+        Auto-generated parameters are namespaced to prevent conflicts.
+
+        Args:
+            base_name: The base name for the parameter
+
+        Returns:
+            A unique parameter name that doesn't exist in current parameters
+        """
+        prefixed_base = f"param_{base_name}"
+        current_index = self._sql_param_counters.get(prefixed_base, 0)
+
+        if prefixed_base not in self._named_parameters:
+            self._sql_param_counters[prefixed_base] = current_index
+            return prefixed_base
+
+        next_index = current_index + 1
+        candidate = f"{prefixed_base}_{next_index}"
+
+        while candidate in self._named_parameters:
+            next_index += 1
+            if next_index > _MAX_PARAM_COLLISION_ATTEMPTS:
+                return f"{prefixed_base}_{uuid4().hex[:8]}"
+            candidate = f"{prefixed_base}_{next_index}"
+
+        self._sql_param_counters[prefixed_base] = next_index
+        return candidate
+
+    def _current_expression(self) -> exp.Expr:
+        """Get the current expression or parse the raw SQL.
+
+        Preserves authoring-time parameter names for dynamic query modifiers,
+        then falls back to cached parsed expressions.
+
+        Returns:
+            The SQLGlot expression for this statement
+        """
+        raw_sql = self._raw_sql
+        state = self._processed_state
+        if (
+            state is not Empty
+            and (
+                state.input_named_parameters
+                or self._positional_parameters
+                or self._named_parameters
+                or not state.parameter_profile.is_empty()
+            )
+            and self._raw_expression is None
+            and raw_sql
+            and self._statement_config.enable_parsing
+        ):
+            try:
+                parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
+                if isinstance(parsed, exp.Expr):
+                    return parsed
+            except ParseError:
+                pass
+        if state is not Empty and state.parsed_expression is not None:
+            return state.parsed_expression.copy()
+        if self.statement_expression is not None:
+            return self.statement_expression.copy()
+        if self._raw_expression is not None:
+            return self._raw_expression.copy()
+        if not self._statement_config.enable_parsing:
+            return self._wrapped_raw_sql_expression(raw_sql)
+        try:
+            parsed = sqlglot.parse_one(unescape_qmark_operator(raw_sql)[0], dialect=self._dialect)
+            if isinstance(parsed, exp.Expr):
+                return parsed
+            return self._wrapped_raw_sql_expression(raw_sql)
+        except ParseError:
+            return self._wrapped_raw_sql_expression(raw_sql)
+
+    def _wrapped_raw_sql_expression(self, raw_sql: str) -> exp.Expr:
+        if not raw_sql.strip():
+            msg = "Cannot build an expression from an empty SQL statement."
+            raise sqlspec.exceptions.SQLParsingError(msg)
+        try:
+            return exp.Select().select("*").from_("(" + unescape_qmark_operator(raw_sql)[0] + ") AS filtered")
+        except ParseError as exc:
+            msg = f"Failed to parse SQL statement: {exc}"
+            raise sqlspec.exceptions.SQLParsingError(msg) from exc
+
+    def _filter_expression(self) -> exp.Expr:
+        """Return a mutable expression copy for statement filters.
+
+        Filter implementations may modify the returned expression in place. The
+        expression is detached from cached processed state and raw expressions.
+        """
+        return self._current_expression()
+
+    def _copy_with_expression(self, new_expr: "exp.Expr") -> "SQL":
+        """Create a new SQL instance with a modified expression.
+
+        Args:
+            new_expr: The new SQLGlot expression
+
+        Returns:
+            New SQL instance with the expression and copied state
+        """
+        new_sql = self._copy_base(new_expr)
+        new_sql._sql_param_counters = self._sql_param_counters.copy()
+        return new_sql
+
+    def _take_pending_filters(self) -> "tuple[SQL, list[StatementFilter]]":
+        if not self._filters:
+            return self, []
+        copied = self._copy_base(self._raw_expression or self._raw_sql)
+        copied._filters = []
+        return copied, self._filters.copy()
+
+    def _copy_base(self, statement_seed: "str | exp.Expr") -> "SQL":
+        new_sql = SQL(
+            statement_seed,
+            *self._original_parameters,
+            statement_config=self._statement_config,
+            is_many=self._is_many,
+            declared_parameters=self._declared_parameters,
+        )
+        new_sql._named_parameters.update(self._named_parameters)
+        new_sql._positional_parameters = self._positional_parameters.copy()
+        new_sql._filters = self._filters.copy()
+        return new_sql
+
+    def _where_condition(self, condition: exp.Expr) -> "SQL":
+        expression = self._current_expression()
+        new_expr = safe_modify_with_cte(expression, lambda e: apply_where(e, condition))
+        return self._copy_with_expression(new_expr)
+
+    def _where_comparison(
+        self,
+        column: "str | exp.Column",
+        value: Any,
+        condition_factory: "Callable[[exp.Expr, exp.Placeholder], exp.Expr]",
+    ) -> "SQL":
+        col_name = extract_column_name(column)
+        param_name = self._next_parameter_name(col_name)
+        condition = create_condition(column, param_name, condition_factory)
+        new_sql = self._where_condition(condition)
+        new_sql._named_parameters[param_name] = value
+        return new_sql
+
+    def _where_sequence_membership(
+        self,
+        column: "str | exp.Column",
+        values: "Sequence[Any]",
+        parameter_suffix: str,
+        condition_factory: "Callable[[str | exp.Column, list[str]], exp.Expr]",
+        *,
+        empty_is_false: bool,
+    ) -> "SQL":
+        if not values:
+            if not empty_is_false:
+                return self
+            false_condition = exp.EQ(this=exp.Literal.number(1), expression=exp.Literal.number(0))
+            return self._where_condition(false_condition)
+
+        col_name = extract_column_name(column)
+        param_names: list[str] = []
+        param_values: dict[str, Any] = {}
+        for index, value in enumerate(values):
+            param_name = self._next_parameter_name(f"{col_name}_{parameter_suffix}_{index}")
+            param_names.append(param_name)
+            param_values[param_name] = value
+
+        condition = condition_factory(column, param_names)
+        new_sql = self._where_condition(condition)
+        new_sql._named_parameters.update(param_values)
+        return new_sql
+
 
 @mypyc_attr(allow_interpreted_subclasses=False)
 class StatementConfig:
@@ -1762,49 +1777,6 @@ class StatementConfig:
         self._has_transformers = bool(self.statement_transformers)
         self._has_output_transformer = self.output_transformer is not None
 
-    def freeze(self) -> None:
-        """Mark the configuration as immutable to enable caching."""
-        self._is_frozen = True
-
-    def replace(self, **kwargs: Any) -> "StatementConfig":
-        """Immutable update pattern.
-
-        Args:
-            **kwargs: Attributes to update
-
-        Returns:
-            New StatementConfig instance with updated attributes
-        """
-        for key in kwargs:
-            if key not in _PUBLIC_CONFIG_FIELDS:
-                msg = f"{key!r} is not a field in {type(self).__name__}"
-                raise TypeError(msg)
-
-        current_kwargs: dict[str, Any] = {
-            "parameter_config": self.parameter_config,
-            "enable_parsing": self.enable_parsing,
-            "enable_validation": self.enable_validation,
-            "enable_transformations": self.enable_transformations,
-            "enable_analysis": self.enable_analysis,
-            "enable_expression_simplification": self.enable_expression_simplification,
-            "enable_column_pruning": self.enable_column_pruning,
-            "enable_parameter_type_wrapping": self.enable_parameter_type_wrapping,
-            "enable_caching": self.enable_caching,
-            "parameter_converter": self.parameter_converter,
-            "parameter_validator": self.parameter_validator,
-            "dialect": self.dialect,
-            "execution_mode": self.execution_mode,
-            "execution_args": self.execution_args,
-            "output_transformer": self.output_transformer,
-            "statement_transformers": self._user_statement_transformers,
-            "enable_sqlcommenter": self.enable_sqlcommenter,
-            "sqlcommenter_attributes": self.sqlcommenter_attributes,
-            "sqlcommenter_enable_traceparent": self.sqlcommenter_enable_traceparent,
-            "sqlcommenter_enable_context": self.sqlcommenter_enable_context,
-        }
-        current_kwargs.update(kwargs)
-        return type(self)(**current_kwargs)
-
     def __hash__(self) -> int:
         """Hash based on configuration settings."""
         if self._hash_cache is None:
@@ -1899,12 +1871,67 @@ class StatementConfig:
             and self.statement_transformers == other.statement_transformers
         )
 
+    def freeze(self) -> None:
+        """Mark the configuration as immutable to enable caching."""
+        self._is_frozen = True
+
+    def replace(self, **kwargs: Any) -> "StatementConfig":
+        """Immutable update pattern.
+
+        Args:
+            **kwargs: Attributes to update
+
+        Returns:
+            New StatementConfig instance with updated attributes
+        """
+        for key in kwargs:
+            if key not in _PUBLIC_CONFIG_FIELDS:
+                msg = f"{key!r} is not a field in {type(self).__name__}"
+                raise TypeError(msg)
+
+        current_kwargs: dict[str, Any] = {
+            "parameter_config": self.parameter_config,
+            "enable_parsing": self.enable_parsing,
+            "enable_validation": self.enable_validation,
+            "enable_transformations": self.enable_transformations,
+            "enable_analysis": self.enable_analysis,
+            "enable_expression_simplification": self.enable_expression_simplification,
+            "enable_column_pruning": self.enable_column_pruning,
+            "enable_parameter_type_wrapping": self.enable_parameter_type_wrapping,
+            "enable_caching": self.enable_caching,
+            "parameter_converter": self.parameter_converter,
+            "parameter_validator": self.parameter_validator,
+            "dialect": self.dialect,
+            "execution_mode": self.execution_mode,
+            "execution_args": self.execution_args,
+            "output_transformer": self.output_transformer,
+            "statement_transformers": self._user_statement_transformers,
+            "enable_sqlcommenter": self.enable_sqlcommenter,
+            "sqlcommenter_attributes": self.sqlcommenter_attributes,
+            "sqlcommenter_enable_traceparent": self.sqlcommenter_enable_traceparent,
+            "sqlcommenter_enable_context": self.sqlcommenter_enable_context,
+        }
+        current_kwargs.update(kwargs)
+        return type(self)(**current_kwargs)
+
     def _compare_parameter_configs(self, config1: Any, config2: Any) -> bool:
         """Compare parameter configs."""
         return bool(
             config1.default_parameter_style == config2.default_parameter_style
             and config1.supported_parameter_styles == config2.supported_parameter_styles
             and config1.supported_execution_parameter_styles == config2.supported_execution_parameter_styles
+            and config1.default_execution_parameter_style == config2.default_execution_parameter_style
+            and config1.type_coercion_map == config2.type_coercion_map
+            and config1.has_native_list_expansion == config2.has_native_list_expansion
+            and config1.needs_static_script_compilation == config2.needs_static_script_compilation
+            and config1.allow_mixed_parameter_styles == config2.allow_mixed_parameter_styles
+            and config1.preserve_parameter_format == config2.preserve_parameter_format
+            and config1.preserve_original_params_for_many == config2.preserve_original_params_for_many
+            and config1.output_transformer == config2.output_transformer
+            and config1.ast_transformer == config2.ast_transformer
+            and config1.json_serializer == config2.json_serializer
+            and config1.json_deserializer == config2.json_deserializer
+            and config1.strict_named_parameters == config2.strict_named_parameters
         )
 
 

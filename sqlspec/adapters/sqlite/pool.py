@@ -29,25 +29,6 @@ SQLITE_WAL_SWITCH_ATTEMPTS: Final = 50
 SQLITE_WAL_SWITCH_DELAY: Final = 0.01
 
 
-def _attempt_wal_switch(connection: "SqliteConnection", attempt: int) -> bool:
-    """Attempt a single WAL mode switch, returning True on success."""
-    try:
-        connection.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.OperationalError as exc:
-        if "locked" not in str(exc) or attempt == SQLITE_WAL_SWITCH_ATTEMPTS - 1:
-            raise
-        time.sleep(SQLITE_WAL_SWITCH_DELAY)
-        return False
-    return True
-
-
-def _enable_wal(connection: "SqliteConnection") -> None:
-    """Retry database and table locks briefly while switching to WAL mode."""
-    for attempt in range(SQLITE_WAL_SWITCH_ATTEMPTS):
-        if _attempt_wal_switch(connection, attempt):
-            return
-
-
 class SqliteConnectionPool:
     """Thread-local connection manager for SQLite.
 
@@ -57,6 +38,7 @@ class SqliteConnectionPool:
     """
 
     __slots__ = (
+        "_anchor_connection",
         "_connection_parameters",
         "_connection_registry",
         "_enable_foreign_keys",
@@ -64,6 +46,7 @@ class SqliteConnectionPool:
         "_generation",
         "_health_check_interval",
         "_is_memory_db",
+        "_is_shared_memory",
         "_on_connection_create",
         "_pool_id",
         "_recycle_seconds",
@@ -97,7 +80,10 @@ class SqliteConnectionPool:
             connection_parameters = {**connection_parameters, "check_same_thread": False}
         self._connection_parameters = connection_parameters
         database = self._connection_parameters.get("database", ":memory:")
-        self._is_memory_db = database == ":memory:" or "mode=memory" in str(database)
+        database_str = str(database)
+        self._is_memory_db = database == ":memory:" or "mode=memory" in database_str
+        self._is_shared_memory = self._is_memory_db and "cache=shared" in database_str
+        self._anchor_connection: SqliteConnection | None = None
         self._thread_local = threading.local()
         self._connection_registry: set[SqliteConnection] = set()
         self._generation = 0
@@ -118,13 +104,6 @@ class SqliteConnectionPool:
             return ":memory:"
         return str(db)
 
-    def _create_connection(self) -> SqliteConnection:
-        """Create a pool-owned connection and record it for shutdown."""
-        connection = self.new_connection()
-        with self._registry_lock:
-            self._connection_registry.add(connection)
-        return connection
-
     def new_connection(self) -> SqliteConnection:
         """Create a standalone connection configured like a pooled one.
 
@@ -139,18 +118,20 @@ class SqliteConnectionPool:
         try:
             if self._enable_optimizations:
                 if self._is_memory_db:
-                    connection.execute("PRAGMA journal_mode = MEMORY")
-                    connection.execute("PRAGMA synchronous = OFF")
-                    connection.execute("PRAGMA temp_store = MEMORY")
-                    connection.execute(f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
+                    _execute_and_close(connection, "PRAGMA journal_mode = MEMORY")
+                    _execute_and_close(connection, "PRAGMA synchronous = OFF")
+                    _execute_and_close(connection, "PRAGMA temp_store = MEMORY")
+                    _execute_and_close(connection, f"PRAGMA cache_size = {SQLITE_MEMORY_CACHE_SIZE}")
+                    if self._is_shared_memory:
+                        _execute_and_close(connection, "PRAGMA read_uncommitted = ON")
                 else:
                     _enable_wal(connection)
-                    connection.execute("PRAGMA synchronous = NORMAL")
+                    _execute_and_close(connection, "PRAGMA synchronous = NORMAL")
 
-                connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
+                _execute_and_close(connection, f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT}")
 
             if self._enable_foreign_keys:
-                connection.execute("PRAGMA foreign_keys = ON")
+                _execute_and_close(connection, "PRAGMA foreign_keys = ON")
 
             if self._runtime_setup is not None:
                 _apply_runtime_setup(connection, self._runtime_setup)
@@ -164,6 +145,84 @@ class SqliteConnectionPool:
 
         return cast("SqliteConnection", connection)
 
+    @contextmanager
+    def get_connection(self) -> "Generator[SqliteConnection, None, None]":
+        """Get a thread-local connection.
+
+        Yields:
+            SqliteConnection: A thread-local connection.
+        """
+        connection = self._get_thread_connection()
+        try:
+            yield connection
+        except BaseException:
+            with contextlib.suppress(Exception):
+                end_transaction(connection, commit=False)
+            raise
+        else:
+            try:
+                end_transaction(connection, commit=True)
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    end_transaction(connection, commit=False)
+                raise
+
+    def close(self) -> None:
+        """Close every connection this pool opened, on any thread."""
+        self._close_thread_connection()
+        with self._registry_lock:
+            orphaned = list(self._connection_registry)
+            self._connection_registry.clear()
+            anchor = self._anchor_connection
+            self._anchor_connection = None
+            self._generation += 1
+        for connection in orphaned:
+            with contextlib.suppress(Exception):
+                connection.close()
+        if anchor is not None:
+            with contextlib.suppress(Exception):
+                anchor.close()
+
+    def acquire(self) -> SqliteConnection:
+        """Acquire a thread-local connection.
+
+        Returns:
+            SqliteConnection: A thread-local connection
+        """
+        return self._get_thread_connection()
+
+    def release(self, connection: SqliteConnection) -> None:
+        """Release a connection and roll back any uncommitted transaction.
+
+        Args:
+            connection: The connection to release
+        """
+        with contextlib.suppress(Exception):
+            end_transaction(connection, commit=False)
+
+    def size(self) -> int:
+        """Get total number of active thread-local connections in pool."""
+        with self._registry_lock:
+            return len(self._connection_registry)
+
+    def checked_out(self) -> int:
+        """Get number of checked out connections (always 0)."""
+        return 0
+
+    def _create_connection(self) -> SqliteConnection:
+        """Create a pool-owned connection and record it for shutdown."""
+        connection = self.new_connection()
+        with self._registry_lock:
+            if (
+                self._is_shared_memory
+                and self._anchor_connection is None
+                and isinstance(connection, sqlite3.Connection)
+            ):
+                with contextlib.suppress(Exception):
+                    self._anchor_connection = sqlite3.connect(**self._connection_parameters)
+            self._connection_registry.add(connection)
+        return connection
+
     def _is_connection_alive(self, connection: SqliteConnection) -> bool:
         """Check if a connection is still alive and usable.
 
@@ -174,7 +233,7 @@ class SqliteConnectionPool:
             True if connection is alive, False otherwise
         """
         try:
-            connection.execute("SELECT 1")
+            _execute_and_close(connection, "SELECT 1")
         except Exception:
             return False
         return True
@@ -258,59 +317,31 @@ class SqliteConnectionPool:
             self._thread_local.created_at = 0.0
             self._thread_local.last_used = 0.0
 
-    @contextmanager
-    def get_connection(self) -> "Generator[SqliteConnection, None, None]":
-        """Get a thread-local connection.
 
-        Yields:
-            SqliteConnection: A thread-local connection.
-        """
-        connection = self._get_thread_connection()
-        try:
-            yield connection
-        except Exception:
-            with contextlib.suppress(Exception):
-                end_transaction(connection, commit=False)
+def _execute_and_close(connection: "SqliteConnection", statement: str) -> None:
+    cursor = connection.execute(statement)
+    if cursor is not None:
+        with contextlib.suppress(Exception):
+            cursor.close()
+
+
+def _attempt_wal_switch(connection: "SqliteConnection", attempt: int) -> bool:
+    """Attempt a single WAL mode switch, returning True on success."""
+    try:
+        _execute_and_close(connection, "PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc) or attempt == SQLITE_WAL_SWITCH_ATTEMPTS - 1:
             raise
-        else:
-            with contextlib.suppress(Exception):
-                end_transaction(connection, commit=True)
+        time.sleep(SQLITE_WAL_SWITCH_DELAY)
+        return False
+    return True
 
-    def close(self) -> None:
-        """Close every connection this pool opened, on any thread."""
-        self._close_thread_connection()
-        with self._registry_lock:
-            orphaned = list(self._connection_registry)
-            self._connection_registry.clear()
-            self._generation += 1
-        for connection in orphaned:
-            with contextlib.suppress(Exception):
-                connection.close()
 
-    def acquire(self) -> SqliteConnection:
-        """Acquire a thread-local connection.
-
-        Returns:
-            SqliteConnection: A thread-local connection
-        """
-        return self._get_thread_connection()
-
-    def release(self, connection: SqliteConnection) -> None:
-        """Release a connection (no-op for thread-local connections).
-
-        Args:
-            connection: The connection to release (ignored)
-        """
-
-    def size(self) -> int:
-        """Get pool size (always 1 for thread-local)."""
-        if getattr(self._thread_local, "connection", None) is not None:
-            return 1
-        return 0
-
-    def checked_out(self) -> int:
-        """Get number of checked out connections (always 0)."""
-        return 0
+def _enable_wal(connection: "SqliteConnection") -> None:
+    """Retry database and table locks briefly while switching to WAL mode."""
+    for attempt in range(SQLITE_WAL_SWITCH_ATTEMPTS):
+        if _attempt_wal_switch(connection, attempt):
+            return
 
 
 def _dict_row_factory(cursor: Any, row: "tuple[Any, ...]") -> "dict[str, Any]":

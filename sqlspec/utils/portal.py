@@ -10,12 +10,13 @@ import functools
 import os
 import queue
 import threading
-from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Self, TypeVar, cast
 
 from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    import concurrent.futures
     from collections.abc import Callable, Coroutine
 
 __all__ = ("Portal", "PortalManager", "PortalProvider", "get_global_portal")
@@ -23,6 +24,7 @@ __all__ = ("Portal", "PortalManager", "PortalProvider", "get_global_portal")
 logger = get_logger("sqlspec.utils.portal")
 
 _R = TypeVar("_R")
+_REQUEST_WITH_FUTURE_HOLDER_LEN: Final[int] = 5
 
 
 class PortalProvider:
@@ -34,14 +36,7 @@ class PortalProvider:
 
     def __init__(self) -> None:
         """Initialize the PortalProvider."""
-        self._request_queue: queue.Queue[
-            tuple[
-                Callable[..., Coroutine[Any, Any, Any]],
-                tuple[Any, ...],
-                dict[str, Any],
-                queue.Queue[tuple[Any | None, Exception | None]],
-            ]
-        ] = queue.Queue()
+        self._request_queue: queue.Queue[tuple[Any, ...]] = queue.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self._ready_event: threading.Event = threading.Event()
@@ -120,7 +115,7 @@ class PortalProvider:
 
         if self._loop_thread.is_alive():
             logger.warning("Portal thread did not stop within 5 seconds, skipping loop.close()")
-        else:
+        elif not self._loop.is_closed():
             self._loop.close()
 
         self._loop = None
@@ -128,21 +123,6 @@ class PortalProvider:
         self._ready_event.clear()
         self._pid = None
         logger.debug("Portal provider stopped")
-
-    def _run_event_loop(self) -> None:
-        if self._loop is None:
-            self._loop = asyncio.new_event_loop()
-
-        asyncio.set_event_loop(self._loop)
-        self._ready_event.set()
-        self._loop.run_forever()
-
-    @staticmethod
-    async def _async_caller(
-        func: "Callable[..., Coroutine[Any, Any, _R]]", args: "tuple[Any, ...]", kwargs: "dict[str, Any]"
-    ) -> _R:
-        result: _R = await func(*args, **kwargs)
-        return result
 
     def call(self, func: "Callable[..., Coroutine[Any, Any, _R]]", *args: Any, **kwargs: Any) -> _R:
         """Call an async function from synchronous context.
@@ -159,28 +139,67 @@ class PortalProvider:
             Result of the async function.
 
         Raises:
-            ImproperConfigurationError: If portal provider not started or timeout reached.
+            ImproperConfigurationError: If portal provider not started, called from
+                within the portal event loop thread, or timeout reached.
         """
         timeout: float = float(kwargs.pop("timeout", 300.0))
         if self._loop is None or not self.is_running:
             msg = "Portal provider not running. Call start() first."
             raise ImproperConfigurationError(msg)
+        if threading.current_thread() is self._loop_thread:
+            msg = "Cannot call PortalProvider.call() from within the portal event loop thread"
+            raise ImproperConfigurationError(msg)
 
-        local_result_queue: queue.Queue[tuple[_R | None, Exception | None]] = queue.Queue()
+        local_result_queue: queue.Queue[tuple[_R | None, BaseException | None]] = queue.Queue()
+        future_holder: list[concurrent.futures.Future[Any]] = []
 
-        self._request_queue.put((func, args, kwargs, local_result_queue))
+        self._request_queue.put((func, args, kwargs, local_result_queue, future_holder))
 
         self._loop.call_soon_threadsafe(self._process_request)
 
         try:
             result, exception = local_result_queue.get(timeout=timeout)
         except queue.Empty:
+            if future_holder:
+                future_holder[0].cancel()
             msg = f"Portal call timed out after {timeout} seconds"
             raise ImproperConfigurationError(msg) from None
 
-        if exception:
+        if exception is not None:
             raise exception
         return result  # type: ignore[return-value]
+
+    def _run_event_loop(self) -> None:
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+
+        loop = self._loop
+        asyncio.set_event_loop(loop)
+        self._ready_event.set()
+        try:
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            while True:
+                try:
+                    request = self._request_queue.get_nowait()
+                except queue.Empty:
+                    break
+                result_queue = request[3]
+                result_queue.put((None, ImproperConfigurationError("Portal provider stopped")))
+            loop.close()
+
+    @staticmethod
+    async def _async_caller(
+        func: "Callable[..., Coroutine[Any, Any, _R]]", args: "tuple[Any, ...]", kwargs: "dict[str, Any]"
+    ) -> _R:
+        result: _R = await func(*args, **kwargs)
+        return result
 
     def _process_request(self) -> None:
         """Process a request from the request queue in the event loop."""
@@ -188,11 +207,19 @@ class PortalProvider:
             return
 
         try:
-            func, args, kwargs, local_result_queue = self._request_queue.get_nowait()
+            request = self._request_queue.get_nowait()
         except queue.Empty:
             return
 
+        if len(request) == _REQUEST_WITH_FUTURE_HOLDER_LEN:
+            func, args, kwargs, local_result_queue, future_holder = request
+        else:
+            func, args, kwargs, local_result_queue = request
+            future_holder = None
+
         future = asyncio.run_coroutine_threadsafe(self._async_caller(func, args, kwargs), self._loop)
+        if future_holder is not None:
+            future_holder.append(future)
 
         future.add_done_callback(
             functools.partial(self._handle_future_result, local_result_queue=local_result_queue)  # pyright: ignore[reportArgumentType]
@@ -200,7 +227,7 @@ class PortalProvider:
 
     @staticmethod
     def _handle_future_result(
-        future: "asyncio.Future[Any]", local_result_queue: "queue.Queue[tuple[Any | None, Exception | None]]"
+        future: "asyncio.Future[Any]", local_result_queue: "queue.Queue[tuple[Any | None, BaseException | None]]"
     ) -> None:
         """Handle result or exception from completed future.
 
@@ -208,10 +235,13 @@ class PortalProvider:
             future: The completed future.
             local_result_queue: Queue to put result in.
         """
+        if future.cancelled():
+            local_result_queue.put((None, asyncio.CancelledError()))
+            return
         try:
             result = future.result()
             local_result_queue.put((result, None))
-        except Exception as exc:
+        except BaseException as exc:
             local_result_queue.put((None, exc))
 
 
@@ -272,6 +302,15 @@ class PortalManager:
         self._atexit_registered: bool = False
         self._initialized = True
 
+    @property
+    def is_running(self) -> bool:
+        """Check if global portal is running.
+
+        Returns:
+            True if portal provider exists and is running, False otherwise.
+        """
+        return self._provider is not None and self._provider.is_running
+
     def get_or_create_portal(self) -> Portal:
         """Get or create the global portal instance.
 
@@ -296,6 +335,23 @@ class PortalManager:
 
         return cast("Portal", self._portal)
 
+    def stop(self) -> None:
+        """Stop the global portal provider.
+
+        Should typically only be called during application shutdown.
+        """
+        if self._provider is not None:
+            self._provider.stop()
+            self._provider = None
+            self._portal = None
+            self._pid = None
+            logger.debug("Global portal provider stopped")
+
+    @classmethod
+    def get_instance(cls) -> "PortalManager":
+        """Get the singleton instance."""
+        return cls()
+
     def _register_atexit(self) -> None:
         """Register atexit handler for graceful shutdown.
 
@@ -316,37 +372,11 @@ class PortalManager:
             logger.debug("Portal atexit cleanup: stopping provider")
             self.stop()
 
-    @property
-    def is_running(self) -> bool:
-        """Check if global portal is running.
-
-        Returns:
-            True if portal provider exists and is running, False otherwise.
-        """
-        return self._provider is not None and self._provider.is_running
-
-    def stop(self) -> None:
-        """Stop the global portal provider.
-
-        Should typically only be called during application shutdown.
-        """
-        if self._provider is not None:
-            self._provider.stop()
-            self._provider = None
-            self._portal = None
-            self._pid = None
-            logger.debug("Global portal provider stopped")
-
     def _needs_restart(self, current_pid: int) -> bool:
         provider_missing = self._provider is None or not self._provider.is_running
         portal_missing = self._portal is None
         pid_changed = self._pid is not None and self._pid != current_pid
         return portal_missing or provider_missing or pid_changed
-
-    @classmethod
-    def get_instance(cls) -> "PortalManager":
-        """Get the singleton instance."""
-        return cls()
 
 
 def get_global_portal() -> Portal:

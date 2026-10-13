@@ -51,10 +51,6 @@ class Values(QueryBuilder):
         if rows is not None:
             self.add_rows(rows)
 
-    def _create_base_expression(self) -> exp.Values:
-        """Create initial empty VALUES expression."""
-        return exp.Values()
-
     @property
     def alias_name(self) -> str | None:
         """Get the table alias name if defined.
@@ -170,6 +166,10 @@ class Values(QueryBuilder):
         self._rows.extend(normalized_rows)
         self._rebuild_expression()
         return self
+
+    def _create_base_expression(self) -> exp.Values:
+        """Create initial empty VALUES expression."""
+        return exp.Values()
 
     def _rebuild_expression(self) -> None:
         """Rebuild the underlying sqlglot expression and parameter bindings."""

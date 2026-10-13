@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeVar, cast
 
 from sqlspec.extensions.adk._config_utils import _adk_memory_store_config, _ADKMemoryStoreConfig
-from sqlspec.extensions.adk._table_utils import owner_id_column_name, unique_statements
+from sqlspec.extensions.adk._table_utils import ensure_table_name, owner_id_column_name, unique_statements
 from sqlspec.extensions.adk.store import _reconcile_adk_schema_sync
 from sqlspec.migrations.schema import SchemaTarget, ensure_schema_async
 from sqlspec.observability import resolve_db_system
@@ -59,6 +59,7 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         store_config = self._store_config_from_extension()
         self._enabled: bool = store_config.get("enable_memory", True)
         self._memory_table: str = str(store_config["memory_table"])
+        ensure_table_name(self._memory_table)
         self._use_fts: bool = bool(store_config.get("use_fts", False))
         self._max_results: int = store_config.get("max_results", 20)
         self._vector_index_type: str = store_config.get("vector_index_type", "hnsw")
@@ -70,9 +71,6 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         self._owner_id_column_name: str | None = (
             owner_id_column_name(self._owner_id_column_ddl) if self._owner_id_column_ddl else None
         )
-
-    def _store_config_from_extension(self) -> _ADKMemoryStoreConfig:
-        return _adk_memory_store_config(self._config)
 
     @property
     def config(self) -> ConfigT:
@@ -134,18 +132,21 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         """Return the extracted owner column name, if configured."""
         return self._owner_id_column_name
 
+    @property
+    def create_schema_enabled(self) -> bool:
+        """Return whether adapter-level table creation should run."""
+        manage_schema, create_schema = self._schema_management_flags()
+        return manage_schema and create_schema
+
+    def _store_config_from_extension(self) -> _ADKMemoryStoreConfig:
+        return _adk_memory_store_config(self._config)
+
     def _schema_management_flags(self) -> tuple[bool, bool]:
         extension_config = getattr(self._config, "extension_config", {})
         adk_config = extension_config.get("adk", {}) if isinstance(extension_config, dict) else {}
         manage_schema = adk_config.get("manage_schema", True) if isinstance(adk_config, dict) else True
         create_schema = adk_config.get("create_schema", True) if isinstance(adk_config, dict) else True
         return bool(manage_schema), bool(create_schema)
-
-    @property
-    def create_schema_enabled(self) -> bool:
-        """Return whether adapter-level table creation should run."""
-        manage_schema, create_schema = self._schema_management_flags()
-        return manage_schema and create_schema
 
     def _drop_sql_for_table(self, table_name: str) -> list[str]:
         current_table = self._memory_table
@@ -189,9 +190,26 @@ class BaseAsyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         """
         statements = self._drop_memory_table_sql()
         session_context = self._config.provide_session()
-        async with cast("Any", session_context) as driver:
-            for statement in statements:
-                await driver.execute(statement)
+        if hasattr(session_context, "__aenter__"):
+            async with cast("Any", session_context) as driver:
+                for statement in statements:
+                    await driver.execute(statement)
+                commit = getattr(driver, "commit", None)
+                if callable(commit):
+                    maybe_awaitable = commit()
+                    if hasattr(maybe_awaitable, "__await__"):
+                        await cast("Any", maybe_awaitable)
+            return
+
+        def _execute_drop_sync() -> None:
+            with cast("Any", self._config.provide_session()) as driver:
+                for statement in statements:
+                    driver.execute(statement)
+                commit = getattr(driver, "commit", None)
+                if callable(commit):
+                    commit()
+
+        await async_(_execute_drop_sync)()
 
     async def ensure_tables(self) -> None:
         """Create tables and emit a standardized log entry."""
@@ -337,6 +355,9 @@ class BaseSyncADKMemoryStore(_ADKMemoryStoreCommon[ConfigT], ABC):
         with cast("Any", self._config.provide_session()) as driver:
             for statement in statements:
                 driver.execute(statement)
+            commit = getattr(driver, "commit", None)
+            if callable(commit):
+                commit()
 
     def ensure_tables(self) -> None:
         """Create tables and emit a standardized log entry."""

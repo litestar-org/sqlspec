@@ -99,12 +99,12 @@ def test_get_uses_snapshot_session() -> None:
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_session.return_value = cm
+    config.provide_read_session.return_value = cm
 
     store = SpannerSyncStore(config)
     result = store._get("s1")  # pyright: ignore
 
-    config.provide_session.assert_called_once_with()
+    config.provide_read_session.assert_called_once_with()
     assert result is None
 
 
@@ -116,12 +116,12 @@ def test_exists_uses_snapshot_session() -> None:
 
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess"}}
-    config.provide_session.return_value = cm
+    config.provide_read_session.return_value = cm
 
     store = SpannerSyncStore(config)
     result = store._exists("s1")  # pyright: ignore
 
-    config.provide_session.assert_called_once_with()
+    config.provide_read_session.assert_called_once_with()
     assert result is True
 
 
@@ -189,7 +189,7 @@ async def test_async_store_set_delete_delete_all_delete_expired() -> None:
 
 
 async def test_async_store_get_exists_expires_in() -> None:
-    """Verify SpannerAsyncStore read operations use async provide_session and optional renewal."""
+    """Verify SpannerAsyncStore read operations use async provide_read_session and optional renewal."""
     db = _mock_async_database()
     future_time = datetime.now(UTC) + timedelta(seconds=120)
     driver = MagicMock()
@@ -198,7 +198,7 @@ async def test_async_store_get_exists_expires_in() -> None:
     config = MagicMock()
     config.extension_config = {"litestar": {"session_table": "sess", "shard_count": 4}}
     config.get_database = AsyncMock(return_value=db)
-    config.provide_session.side_effect = lambda: _async_context_manager_yielding(driver)
+    config.provide_read_session.side_effect = lambda: _async_context_manager_yielding(driver)
 
     store = SpannerAsyncStore(config)
     val = await store.get("s1", renew_for=60)
