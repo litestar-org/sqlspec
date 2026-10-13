@@ -1159,6 +1159,8 @@ class CommonDriverAttributesMixin:
             return
 
         processed = cast("ProcessedState", statement.get_processed_state())
+        if processed.parsed_expression is None or processed.operation_type in {"COMMAND", "UNKNOWN"}:
+            return
         param_profile = processed.parameter_profile
         cached_state = _clone_processed_state(processed)
         cached = CachedQuery(

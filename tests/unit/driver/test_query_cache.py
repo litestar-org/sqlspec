@@ -960,3 +960,20 @@ def test_refresh_statement_cache_state_allows_none_observability(sqlite_sync_dri
     finally:
         sqlite_sync_driver._observability = original_obs
         sqlite_sync_driver._refresh_statement_cache_state()
+
+
+def test_cache_statement_command_not_cached(sqlite_sync_driver: Any) -> None:
+    """_cache_statement must refuse statements with undetermined COMMAND operation or missing AST."""
+    sqlite_sync_driver._stmt_cache_enabled = True
+
+    unparsed = SQL("SELECT ?::INTEGER AS i", 1, statement_config=sqlite_sync_driver.statement_config)
+    unparsed._processed_state = ProcessedState(
+        compiled_sql="SELECT ?::INTEGER AS i", execution_parameters=[1], parsed_expression=None, operation_type="SELECT"
+    )
+    sqlite_sync_driver._cache_statement(unparsed)
+    assert sqlite_sync_driver._stmt_cache.get("SELECT ?::INTEGER AS i") is None
+
+    command_stmt = SQL("VACUUM", statement_config=sqlite_sync_driver.statement_config)
+    command_stmt.compile()
+    sqlite_sync_driver._cache_statement(command_stmt)
+    assert sqlite_sync_driver._stmt_cache.get("VACUUM") is None
