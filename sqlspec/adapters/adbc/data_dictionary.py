@@ -40,6 +40,7 @@ from sqlspec.data_dictionary.dialects.bigquery import (
 )
 from sqlspec.data_dictionary.dialects.cockroachdb import resolve_cockroachdb_json_type
 from sqlspec.data_dictionary.dialects.mysql import resolve_mysql_json_type
+from sqlspec.data_dictionary.dialects.oracle import parse_oracle_version_components, resolve_oracle_json_type
 from sqlspec.data_dictionary.dialects.postgres import resolve_postgres_json_type
 from sqlspec.data_dictionary.dialects.sqlite import resolve_sqlite_json_type
 from sqlspec.driver import SyncDataDictionaryBase
@@ -144,7 +145,11 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
             self.cache_version(driver_id, None)
             return None
 
-        version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
+        if dialect == "oracle":
+            components = parse_oracle_version_components(str(version_value))
+            version_info = VersionInfo(*components) if components is not None else None
+        else:
+            version_info = self.parse_version_with_pattern(config.version_pattern, str(version_value))
         if version_info is None:
             self._log_version_unavailable(dialect, "parse_failed")
             self.cache_version(driver_id, None)
@@ -178,6 +183,12 @@ class AdbcDataDictionary(SyncDataDictionaryBase):
                 return resolve_mysql_json_type(version_info)
             if dialect == "cockroachdb":
                 return resolve_cockroachdb_json_type(version_info)
+            if dialect == "oracle":
+                return resolve_oracle_json_type(
+                    version_info,
+                    compatible_major=version_info.major if version_info is not None else None,
+                    is_autonomous=False,
+                )
 
             json_version = config.get_feature_version("supports_json")
             if json_version and (version_info is None or version_info < json_version):

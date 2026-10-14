@@ -11,8 +11,10 @@ Supported Drivers (High Level)
 - **CockroachDB**: cockroach-asyncpg, cockroach-psycopg
 - **SQLite**: sqlite3, aiosqlite, ADBC
 - **MySQL & MariaDB**: aiomysql, asyncmy, mysql-connector, pymysql
+- **Oracle**: oracledb (sync/async), ADBC
+- **IBM Db2**: ibm_db (sync/async), ADBC
 - **SQL Server**: mssql-python, pymssql, arrow-odbc
-- **Analytics & Cloud**: DuckDB, BigQuery, Spanner, Oracle, ADBC, arrow-odbc
+- **Analytics & Cloud**: DuckDB, BigQuery, Spanner, Snowflake (ADBC), GizmoSQL (ADBC), arrow-odbc
 
 Core Execution Pattern
 ----------------------
@@ -156,9 +158,10 @@ Adapter capability is discoverable via ``Config.supports_native_row_streaming``.
 Native paths: psycopg and CockroachDB-psycopg (server-side named cursors),
 asyncpg and CockroachDB-asyncpg (cursors inside a stream-owned transaction),
 pymysql/aiomysql/asyncmy (``SSCursor``), mysql-connector (unbuffered cursors),
-sqlite/aiosqlite and oracledb (chunked ``fetchmany``), psqlpy (server-side
-cursor with ``array_size``), and BigQuery (page-wise result iteration).
-ADBC, DuckDB, mssql-python, and Spanner are eager-fallback only for row
+sqlite/aiosqlite, ibm_db (Db2), and oracledb (chunked ``fetchmany``), psqlpy
+(server-side cursor with ``array_size``), ADBC (Arrow ``RecordBatchReader``
+chunks via ``fetch_record_batch``), and BigQuery (page-wise result iteration).
+DuckDB, mssql-python, pymssql, and Spanner are eager-fallback only for row
 streaming. ``arrow-odbc`` row streaming also materializes dict rows eagerly, but
 ``select_to_arrow(..., return_format="reader" | "batches")`` uses the native
 ``arrow_odbc`` ``RecordBatchReader`` path.

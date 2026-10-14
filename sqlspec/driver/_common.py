@@ -3,7 +3,6 @@
 import hashlib
 import logging
 import re
-from collections import OrderedDict
 from collections.abc import Mapping
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Protocol, Self, cast, overload
@@ -16,6 +15,7 @@ from sqlspec.builder import QueryBuilder
 from sqlspec.core import (
     SQL,
     CachedStatement,
+    OperationProfile,
     ParameterDeclaration,
     ParameterStyle,
     SQLResult,
@@ -50,7 +50,7 @@ from sqlspec.data_dictionary import (
     sort_dependencies,
 )
 from sqlspec.data_dictionary._registry import get_dialect_config
-from sqlspec.driver._query_cache import STMT_CACHE_MAX_SIZE, CachedQuery, QueryCache
+from sqlspec.driver._query_cache import CachedQuery, QueryCache, StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.driver._storage_helpers import (
     CAPABILITY_HINTS,
     arrow_table_needs_parameter_preparation,
@@ -84,11 +84,11 @@ from sqlspec.utils.type_guards import (
 )
 
 if TYPE_CHECKING:
-    from collections import abc
+    from collections import OrderedDict, abc
     from collections.abc import Awaitable
     from types import TracebackType
 
-    from sqlspec.core import ArrowResult, FilterTypeT, StatementFilter
+    from sqlspec.core import ArrowResult, FilterTypeT, OperationType, StatementFilter
     from sqlspec.core.parameters._types import ConvertedParameters
     from sqlspec.core.stack import StatementStack
     from sqlspec.data_dictionary._types import DialectConfig
@@ -543,6 +543,7 @@ class CommonDriverAttributesMixin:
     """Common attributes and methods for driver adapters."""
 
     __slots__ = (
+        "_cache_holder",
         "_observability",
         "_processed_state_pool",
         "_statement_cache",
@@ -583,15 +584,19 @@ class CommonDriverAttributesMixin:
         self.driver_features = driver_features or {}
         self._observability = observability
         self._transaction_depth = 0
-        self._statement_cache: OrderedDict[str, SQL] = OrderedDict()
         self._stmt_cache_max_size = self._statement_cache_size()
-        self._stmt_cache = QueryCache(self._stmt_cache_max_size)
-        self._stmt_cache_rebind_processor = ParameterProcessor(
-            converter=self.statement_config.parameter_converter,
-            validator=self.statement_config.parameter_validator,
-            cache_max_size=0,
-            validator_cache_max_size=0,
-        )
+        shared_holder = self.driver_features.get("_statement_cache_holder")
+        if (
+            isinstance(shared_holder, StatementCacheHolder)
+            and shared_holder.statement_config is self.statement_config
+            and shared_holder.max_size == self._stmt_cache_max_size
+        ):
+            self._cache_holder = shared_holder
+        else:
+            self._cache_holder = StatementCacheHolder(self.statement_config, self._stmt_cache_max_size)
+        self._statement_cache: OrderedDict[str, SQL] = self._cache_holder._statement_cache
+        self._stmt_cache: QueryCache = self._cache_holder.query_cache
+        self._stmt_cache_rebind_processor: ParameterProcessor = self._cache_holder.rebind_processor
         self._stmt_cache_enabled = False
         self._statement_pool = get_sql_pool()
         self._processed_state_pool = get_processed_state_pool()
@@ -643,12 +648,11 @@ class CommonDriverAttributesMixin:
     ) -> "ConvertedParameters":
         """Rebind parameters for a cached query."""
         config = self.statement_config.parameter_config
-        needs_style_remap = bool(_CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles))
         if (
             not cached.input_named_parameters
             and not cached.applied_wrap_types
             and not config.type_coercion_map
-            and not needs_style_remap
+            and not cached.needs_style_remap
         ):
             return params
         return self._stmt_cache_rebind_processor.transform_cached_parameters(
@@ -826,9 +830,8 @@ class CommonDriverAttributesMixin:
             statement_config = self.statement_config
 
         if isinstance(statement, str):
-            cached_sql = self._statement_cache.get(statement)
+            cached_sql = self._cache_holder.get_statement(statement)
             if cached_sql is not None and not kwargs:
-                self._statement_cache.move_to_end(statement)
                 has_filters = any(is_statement_filter(p) for p in parameters)
                 if not has_filters:
                     return cached_sql.copy(parameters=parameters)
@@ -846,9 +849,7 @@ class CommonDriverAttributesMixin:
         else:
             sql_statement = self._prepare_from_string(statement, data_parameters, statement_config, kwargs)
             if not filters and not kwargs and isinstance(statement, str) and self._stmt_cache_max_size > 0:
-                if len(self._statement_cache) >= self._stmt_cache_max_size:
-                    self._statement_cache.popitem(last=False)
-                self._statement_cache[statement] = sql_statement
+                self._cache_holder.set_statement(statement, sql_statement, max_size=self._stmt_cache_max_size)
 
         _check_declared_parameters(sql_statement)
         return self._apply_filters(sql_statement, filters)
@@ -958,20 +959,38 @@ class CommonDriverAttributesMixin:
         """
         return _find_filter_impl(filter_type, filters)
 
+    def build_cached_select_result(
+        self,
+        sql: str,
+        params: "tuple[Any, ...] | list[Any] | dict[str, Any]",
+        cached: "CachedQuery",
+        *,
+        selected_data: "list[Any]",
+        column_names: "list[str]",
+        data_row_count: int,
+        row_format: "RowFormat" = "dict",
+        last_inserted_id: int | str | None = None,
+    ) -> "SQLResult":
+        """Build a fast-path SELECT result with deferred statement materialization."""
+        return SQLResult.create_cached_select(
+            sql=sql,
+            config=self.statement_config,
+            cached_state=cached.processed_state,
+            compiled_sql=cached.compiled_sql,
+            params=params,
+            data=selected_data,
+            column_names=column_names,
+            rows_affected=data_row_count,
+            row_format=row_format,
+            last_inserted_id=last_inserted_id,
+        )
+
     def _statement_cache_size(self) -> int:
         """Return the configured statement-cache capacity."""
-        cache_size = self.driver_features.get("sqlspec_statement_cache_size", STMT_CACHE_MAX_SIZE)
-        try:
-            resolved_size = int(cache_size)
-        except (TypeError, ValueError):
-            return STMT_CACHE_MAX_SIZE
-        return max(0, resolved_size)
+        return resolve_statement_cache_size(self.driver_features)
 
     def _refresh_statement_cache_state(self) -> None:
-        is_observability_idle = self._observability is None or self._observability.is_idle
-        self._stmt_cache_enabled = bool(
-            self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers and is_observability_idle
-        )
+        self._stmt_cache_enabled = bool(self._stmt_cache_max_size > 0 and not self.statement_config._has_transformers)
 
     def _require_capability(self, capability_flag: str) -> None:
         """Check that a storage capability is enabled.
@@ -1025,9 +1044,7 @@ class CommonDriverAttributesMixin:
             )
         effective_compiled_sql = cached.compiled_sql if compiled_sql is None else compiled_sql
         cached_state = cached.processed_state
-        direct_state = self._processed_state_pool.acquire()
-        ProcessedState.__init__(
-            direct_state,
+        direct_state = ProcessedState(
             compiled_sql=effective_compiled_sql,
             execution_parameters=prepared_parameters,
             parsed_expression=cached_state.parsed_expression,
@@ -1036,13 +1053,14 @@ class CommonDriverAttributesMixin:
             applied_wrap_types=cached_state.applied_wrap_types,
             filter_hash=cached_state.filter_hash,
             parameter_fingerprint=cached_state.parameter_fingerprint,
-            parameter_casts=dict(cached_state.parameter_casts),
-            validation_errors=cached_state.validation_errors.copy(),
+            parameter_casts=cached_state.parameter_casts,
+            validation_errors=cached_state.validation_errors,
             parameter_profile=cached_state.parameter_profile,
             operation_profile=cached_state.operation_profile,
             is_many=False,
+            expression_is_shared=True,
         )
-        return SQL._create_cached_direct(sql, self.statement_config, direct_state)
+        return SQL._create_cached_direct(sql, self.statement_config, direct_state, pooled=False)
 
     def _sub_statement(self, sql: str, execution_parameters: "ConvertedParameters") -> "SQL":
         direct_state = self._processed_state_pool.acquire()
@@ -1068,21 +1086,25 @@ class CommonDriverAttributesMixin:
         if cached is None or cached.param_count != len(params):
             return None
 
-        param_values = _cache_param_values(params)
-
         config = self.statement_config
         param_config = config.parameter_config
-        if param_config.ast_transformer is not None and any(p is None for p in param_values):
-            return None
+        if param_config.ast_transformer is not None:
+            param_values = _cache_param_values(params)
+            if any(p is None for p in param_values):
+                return None
+        else:
+            param_values = None
 
-        needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types)
-        if not needs_rebind:
+        needs_rebind = bool(cached.input_named_parameters or cached.applied_wrap_types or cached.needs_style_remap)
+        if not needs_rebind and params:
+            if param_values is None:
+                param_values = _cache_param_values(params)
             needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
 
-        if not needs_rebind and _CACHED_NAMED_STYLES.intersection(cached.parameter_profile.styles):
-            needs_rebind = True
-
         if not needs_rebind and not config._has_output_transformer:
+            runtime = self._observability
+            if runtime is not None and not runtime.is_idle:
+                return self._execute_cache_hit_observed(statement, params, cached)
             return self._execute_cache_hit(statement, params, cached)
 
         if needs_rebind:
@@ -1101,10 +1123,20 @@ class CommonDriverAttributesMixin:
         prepared = self._cached_statement(
             statement, params, cached, rebound_params, params_are_simple=params_are_simple, compiled_sql=compiled_sql
         )
+        runtime = self._observability
+        if runtime is not None and not runtime.is_idle:
+            return self._execute_cached_statement_observed(
+                prepared, compiled_sql, rebound_params, cached.operation_type
+            )
         return self._execute_cached_statement(prepared)
 
     def _execute_cached_statement(self, statement: "SQL") -> "SQLResult | Awaitable[SQLResult]":
         raise NotImplementedError
+
+    def _execute_cached_statement_observed(
+        self, statement: "SQL", compiled_sql: str, execution_parameters: Any, operation: "OperationType"
+    ) -> "SQLResult | Awaitable[SQLResult]":
+        return self._execute_cached_statement(statement)
 
     def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
@@ -1119,6 +1151,11 @@ class CommonDriverAttributesMixin:
             sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
         )
         return self._execute_cached_statement(prepared)
+
+    def _execute_cache_hit_observed(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
+    ) -> "SQLResult | Awaitable[SQLResult]":
+        return self._execute_cache_hit(sql, params, cached)
 
     def _cache_statement(self, statement: "SQL") -> None:
         """Store statement in cache if eligible.
@@ -1159,8 +1196,13 @@ class CommonDriverAttributesMixin:
             return
 
         processed = cast("ProcessedState", statement.get_processed_state())
+        if processed.parsed_expression is None or processed.operation_type in {"COMMAND", "UNKNOWN"}:
+            return
         param_profile = processed.parameter_profile
-        cached_state = _clone_processed_state(processed)
+        operation_profile = processed.operation_profile
+        if not operation_profile.returns_rows and statement.returns_rows():
+            operation_profile = OperationProfile(returns_rows=True, modifies_rows=operation_profile.modifies_rows)
+        cached_state = _clone_processed_state(processed, operation_profile)
         cached = CachedQuery(
             compiled_sql=processed.compiled_sql,
             parameter_profile=param_profile,
@@ -1168,9 +1210,10 @@ class CommonDriverAttributesMixin:
             applied_wrap_types=processed.applied_wrap_types,
             parameter_casts=cached_state.parameter_casts,
             operation_type=processed.operation_type,
-            operation_profile=processed.operation_profile,
+            operation_profile=operation_profile,
             param_count=param_profile.total_count,
             processed_state=cached_state,
+            needs_style_remap=bool(_CACHED_NAMED_STYLES.intersection(param_profile.styles)),
         )
         self._stmt_cache.set(statement.raw_sql, cached)
 
@@ -1465,14 +1508,24 @@ class CommonDriverAttributesMixin:
         if statement.is_processed:
             if statement._compiled_from_cache:
                 compiled_sql, execution_parameters = statement.compile()
-                prepared_parameters = self.prepare_driver_parameters(
-                    execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
-                )
                 processed = statement.get_processed_state()
+                if (
+                    statement.is_many
+                    and isinstance(execution_parameters, list)
+                    and type(self).prepare_driver_parameters is CommonDriverAttributesMixin.prepare_driver_parameters
+                    and _many_parameters_already_prepared(
+                        execution_parameters, statement_config, processed.applied_wrap_types
+                    )
+                ):
+                    prepared_parameters: Any = execution_parameters
+                else:
+                    prepared_parameters = self.prepare_driver_parameters(
+                        execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+                    )
                 cached_statement = CachedStatement(
                     compiled_sql=compiled_sql,
                     parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
-                    expression=statement.expression,
+                    expression=statement._peek_expression(),
                     input_named_parameters=processed.input_named_parameters,
                     parameter_profile=processed.parameter_profile,
                     applied_wrap_types=processed.applied_wrap_types,
@@ -1493,12 +1546,22 @@ class CommonDriverAttributesMixin:
                 )
                 return cached_statement, prepared_parameters
 
-            prepared_parameters = self.prepare_driver_parameters(
-                processed.execution_parameters,
-                statement_config,
-                is_many=statement.is_many,
-                prepared_statement=statement,
-            )
+            if (
+                statement.is_many
+                and isinstance(processed.execution_parameters, list)
+                and type(self).prepare_driver_parameters is CommonDriverAttributesMixin.prepare_driver_parameters
+                and _many_parameters_already_prepared(
+                    processed.execution_parameters, statement_config, processed.applied_wrap_types
+                )
+            ):
+                prepared_parameters = processed.execution_parameters
+            else:
+                prepared_parameters = self.prepare_driver_parameters(
+                    processed.execution_parameters,
+                    statement_config,
+                    is_many=statement.is_many,
+                    prepared_statement=statement,
+                )
             cached_statement = CachedStatement(
                 compiled_sql=processed.compiled_sql,
                 parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
@@ -1561,15 +1624,23 @@ class CommonDriverAttributesMixin:
         compiled_sql, execution_parameters = statement.compile()
         processed = statement.get_processed_state()
 
-        prepared_parameters = self.prepare_driver_parameters(
-            execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
-        )
+        if (
+            statement.is_many
+            and isinstance(execution_parameters, list)
+            and type(self).prepare_driver_parameters is CommonDriverAttributesMixin.prepare_driver_parameters
+            and _many_parameters_already_prepared(execution_parameters, statement_config, processed.applied_wrap_types)
+        ):
+            prepared_parameters = execution_parameters
+        else:
+            prepared_parameters = self.prepare_driver_parameters(
+                execution_parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
+            )
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
         cached_statement = CachedStatement(
             compiled_sql=compiled_sql,
             parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", cached_parameters),
-            expression=statement.expression,
+            expression=statement._peek_expression(),
             input_named_parameters=processed.input_named_parameters,
             parameter_profile=processed.parameter_profile,
             applied_wrap_types=processed.applied_wrap_types,
@@ -1865,11 +1936,22 @@ def parameter_values_need_processing(
     type_coercion_map: "dict[type, Any] | None",
     fallback_items: "tuple[tuple[type, Any], ...] | None" = None,
 ) -> bool:
+    if not values:
+        return False
+    if not type_coercion_map:
+        if len(values) == 1:
+            return type(values[0]) is TypedParameter
+        return any(type(value) is TypedParameter for value in values)
     if fallback_items is None:
         fallback_items = type_coercion_fallbacks(type_coercion_map)
-    if len(values) == 1:
-        return parameter_value_needs_processing(values[0], type_coercion_map, fallback_items)
-    return any(parameter_value_needs_processing(value, type_coercion_map, fallback_items) for value in values)
+    dispatcher = type_coercion_dispatcher(fallback_items)
+    for value in values:
+        value_type = type(value)
+        if value_type is TypedParameter or value_type in type_coercion_map:
+            return True
+        if dispatcher.resolve_type(value_type) is not None:
+            return True
+    return False
 
 
 def parameter_value_needs_processing(
@@ -1887,7 +1969,31 @@ def parameter_value_needs_processing(
         return True
     if fallback_items is None:
         fallback_items = type_coercion_fallbacks(type_coercion_map)
-    return type_coercion_dispatcher(fallback_items).get(value) is not None
+    return type_coercion_dispatcher(fallback_items).resolve_type(value_type) is not None
+
+
+def _resolve_fast_params(
+    parameters: "tuple[Any, ...]", kwargs: "dict[str, Any]"
+) -> "tuple[Any, ...] | list[Any] | dict[str, Any] | None":
+    """Normalize execute(*parameters, **kwargs) arguments for fast-path cache lookup."""
+    if kwargs:
+        if not parameters:
+            return kwargs
+        return None
+    param_len = len(parameters)
+    if param_len == 0:
+        return ()
+    if param_len == 1:
+        first = parameters[0]
+        if isinstance(first, (tuple, list, dict)):
+            return first
+        if is_statement_filter(first):
+            return None
+        return parameters
+    for item in parameters:
+        if is_statement_filter(item) or isinstance(item, (tuple, list, dict)):
+            return None
+    return parameters
 
 
 def _raise_database_exception(
@@ -1941,7 +2047,9 @@ def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") 
     return params
 
 
-def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
+def _clone_processed_state(
+    processed: "ProcessedState", operation_profile: "OperationProfile | None" = None
+) -> "ProcessedState":
     return ProcessedState(
         compiled_sql=processed.compiled_sql,
         execution_parameters=processed.execution_parameters,
@@ -1954,7 +2062,7 @@ def _clone_processed_state(processed: "ProcessedState") -> "ProcessedState":
         parameter_casts=dict(processed.parameter_casts),
         validation_errors=processed.validation_errors.copy(),
         parameter_profile=processed.parameter_profile,
-        operation_profile=processed.operation_profile,
+        operation_profile=operation_profile if operation_profile is not None else processed.operation_profile,
         is_many=False,
     )
 
@@ -2148,6 +2256,29 @@ def _check_declared_named_row(declared: "tuple[ParameterDeclaration, ...]", supp
             raise SQLSpecError(msg)
 
 
+def _many_parameters_already_prepared(
+    parameters: "list[Any]", statement_config: "StatementConfig", applied_wrap_types: bool
+) -> bool:
+    """Return True when execute_many parameters were already coerced during compile()."""
+    if statement_config.parameter_config.type_coercion_map:
+        return True
+    if applied_wrap_types:
+        return False
+    if not parameters:
+        return True
+    first = parameters[0]
+    if isinstance(first, (tuple, list)):
+        return not any(type(v) is TypedParameter for v in first)
+    if isinstance(first, dict):
+        return not any(type(v) is TypedParameter for v in first.values())
+    return type(first) is not TypedParameter
+
+
+def _row_needs_declared_default(declared: "tuple[ParameterDeclaration, ...]", supplied: "dict[str, Any]") -> bool:
+    """Return True when any optional declared parameter is missing from supplied."""
+    return any(not declaration.required and declaration.name not in supplied for declaration in declared)
+
+
 def _check_declared_parameters(sql_statement: "SQL") -> None:
     """Enforce declared-parameter contracts on a copy of the user params.
 
@@ -2162,18 +2293,28 @@ def _check_declared_parameters(sql_statement: "SQL") -> None:
     if sql_statement.is_many:
         rows = sql_statement.positional_parameters
         if rows and isinstance(rows[0], dict):
-            copied_rows: list[Any] = []
-            for row in rows:
+            copied_rows: list[Any] | None = None
+            for idx, row in enumerate(rows):
                 if isinstance(row, dict):
-                    row_copy = dict(row)
-                    _check_declared_named_row(declared, row_copy)
-                    copied_rows.append(row_copy)
-                else:
+                    if _row_needs_declared_default(declared, row):
+                        row_copy = dict(row)
+                        _check_declared_named_row(declared, row_copy)
+                        if copied_rows is None:
+                            copied_rows = list(rows[:idx])
+                        copied_rows.append(row_copy)
+                        continue
+                    _check_declared_named_row(declared, row)
+                if copied_rows is not None:
                     copied_rows.append(row)
-            sql_statement._positional_parameters = copied_rows
+            if copied_rows is not None:
+                sql_statement._positional_parameters = copied_rows
         return
     if sql_statement.positional_parameters:
         return
-    named_copy = dict(sql_statement.named_parameters)
-    _check_declared_named_row(declared, named_copy)
-    sql_statement._named_parameters = named_copy
+    named_params = sql_statement.named_parameters
+    if _row_needs_declared_default(declared, named_params):
+        named_copy = dict(named_params)
+        _check_declared_named_row(declared, named_copy)
+        sql_statement._named_parameters = named_copy
+    else:
+        _check_declared_named_row(declared, named_params)

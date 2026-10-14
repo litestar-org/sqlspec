@@ -8,9 +8,10 @@ import pytest
 
 from sqlspec.adapters.adbc import AdbcConfig
 from sqlspec.adapters.adbc.adk import AdbcADKMemoryStore, AdbcADKStore
-from sqlspec.adapters.adbc.adk.store import _postgresql_store_sql
+from sqlspec.adapters.adbc.adk.store import _oracle_store_sql, _postgresql_store_sql
 from sqlspec.adapters.adbc.events.store import AdbcEventQueueStore
 from sqlspec.adapters.adbc.litestar.store import ADBCStore
+from sqlspec.core import StatementConfig
 
 pytestmark = [pytest.mark.xdist_group("sqlite"), pytest.mark.adbc, pytest.mark.integration]
 
@@ -116,7 +117,7 @@ def test_sqlite_events_ddl_uses_text() -> None:
     assert "TEXT" in ddl
     assert "event_data" in ddl
     assert "session_id" in ddl
-    assert "REAL" in ddl  # SQLite uses REAL for timestamps
+    assert "REAL" in ddl
 
 
 def test_duckdb_events_ddl_uses_json() -> None:
@@ -207,14 +208,6 @@ def test_owner_id_column_snowflake() -> None:
 
     ddl = store._sessions_ddl_snowflake()  # pyright: ignore[reportPrivateUsage]
     assert "account_id VARCHAR NOT NULL" in ddl
-
-
-def _store_for(driver_name: str) -> AdbcADKStore:
-    return AdbcADKStore(AdbcConfig(connection_config={"driver_name": driver_name, "uri": ":memory:"}))
-
-
-def _normalized(sql: str) -> str:
-    return " ".join(sql.split())
 
 
 @pytest.mark.parametrize("driver_name", ["postgresql", "sqlite", "duckdb", "snowflake"])
@@ -380,3 +373,179 @@ def test_adbc_events_store_delegates_dialect_resolution() -> None:
         connection_config={"driver_name": "flightsql", "uri": "grpc://localhost:8815"}, extension_config={"events": {}}
     )
     assert AdbcEventQueueStore(flight_config).dialect == "flightsql"
+
+
+@pytest.mark.parametrize(
+    ("driver_name", "expected_dialect"),
+    [
+        ("oracle", "oracle"),
+        ("oracledb", "oracle"),
+        ("db2", "db2"),
+        ("ibmdb2", "db2"),
+        ("mssql", "mssql"),
+        ("sqlserver", "mssql"),
+        ("tsql", "mssql"),
+    ],
+)
+def test_detect_enterprise_dialects_in_adk_stores(driver_name: str, expected_dialect: str) -> None:
+    """AdbcADKStore and AdbcADKMemoryStore detect oracle, db2, and mssql dialects."""
+    config = AdbcConfig(connection_config={"driver_name": driver_name})
+    store = AdbcADKStore(config)
+    mem_store = AdbcADKMemoryStore(config)
+    assert store.dialect() == expected_dialect
+    assert mem_store.dialect == expected_dialect
+
+
+def test_detect_dialect_fallback_to_statement_config() -> None:
+    """AdbcADKStore and AdbcADKMemoryStore fall back to statement_config.dialect when connection_config has no driver."""
+    config = AdbcConfig(connection_config={}, statement_config=StatementConfig(dialect="oracle"))
+    store = AdbcADKStore(config)
+    mem_store = AdbcADKMemoryStore(config)
+    assert store.dialect() == "oracle"
+    assert mem_store.dialect == "oracle"
+
+
+def test_oracle_store_sql_rewrites_qmark_and_preserves_literals_and_comments() -> None:
+    """_oracle_store_sql rewrites unquoted ? to :1, :2 while preserving literals and comments."""
+    _oracle_store_sql.cache_clear()
+    sql = "SELECT '?', \"col?\" FROM adk_session /* ? */ WHERE app_name = ? -- ?\nAND user_id = ?"
+    rewritten = _oracle_store_sql(sql)
+    assert rewritten == "SELECT '?', \"col?\" FROM adk_session /* ? */ WHERE app_name = :1 -- ?\nAND user_id = :2"
+    assert _oracle_store_sql(sql) == rewritten
+    assert _oracle_store_sql.cache_info().hits == 1
+
+    config = AdbcConfig(connection_config={"driver_name": "oracle"})
+    store = AdbcADKStore(config)
+    mem_store = AdbcADKMemoryStore(config)
+    assert getattr(store, "_format_sql")("SELECT * FROM t WHERE a = ? AND b = ?") == (
+        "SELECT * FROM t WHERE a = :1 AND b = :2"
+    )
+    assert getattr(mem_store, "_format_sql")("SELECT * FROM t WHERE a = ? AND b = ?") == (
+        "SELECT * FROM t WHERE a = :1 AND b = :2"
+    )
+
+
+def test_enterprise_adk_ddl_generation() -> None:
+    """AdbcADKStore and AdbcADKMemoryStore emit dialect-specific DDL for oracle, db2, and mssql."""
+    oracle_store = AdbcADKStore(AdbcConfig(connection_config={"driver_name": "oracle"}))
+    oracle_mem = AdbcADKMemoryStore(AdbcConfig(connection_config={"driver_name": "oracle"}))
+    assert "EXECUTE IMMEDIATE" in getattr(oracle_store, "_sessions_table_ddl")()
+    assert "VARCHAR2(128)" in getattr(oracle_store, "_sessions_table_ddl")()
+    assert "CLOB" in getattr(oracle_store, "_events_table_ddl")()
+    assert "TIMESTAMP WITH TIME ZONE" in getattr(oracle_store, "_app_states_table_ddl")()
+    assert "EXECUTE IMMEDIATE" in getattr(oracle_mem, "_memory_table_ddl")()
+    assert "SQLCODE != -942" in getattr(oracle_store, "_drop_tables_sql")()[0]
+
+    db2_store = AdbcADKStore(AdbcConfig(connection_config={"driver_name": "db2"}))
+    db2_mem = AdbcADKMemoryStore(AdbcConfig(connection_config={"driver_name": "db2"}))
+    assert "CLOB(1M)" in getattr(db2_store, "_sessions_table_ddl")()
+    assert "WITH DEFAULT CURRENT TIMESTAMP" in getattr(db2_store, "_sessions_table_ddl")()
+    assert "CLOB(1M)" in getattr(db2_store, "_events_table_ddl")()
+    assert '"KEY"' in getattr(db2_store, "_metadata_table_ddl")()
+    assert "CLOB(1M)" in getattr(db2_mem, "_memory_table_ddl")()
+
+    mssql_store = AdbcADKStore(AdbcConfig(connection_config={"driver_name": "mssql"}))
+    mssql_mem = AdbcADKMemoryStore(AdbcConfig(connection_config={"driver_name": "mssql"}))
+    assert "IF OBJECT_ID" in getattr(mssql_store, "_sessions_table_ddl")()
+    assert "NVARCHAR(MAX)" in getattr(mssql_store, "_sessions_table_ddl")()
+    assert "SYSUTCDATETIME()" in getattr(mssql_store, "_sessions_table_ddl")()
+    assert "[key]" in getattr(mssql_store, "_metadata_table_ddl")()
+    assert "IF OBJECT_ID" in getattr(mssql_mem, "_memory_table_ddl")()
+
+
+@pytest.mark.parametrize("driver_name", ["oracle", "db2", "mssql"])
+def test_enterprise_dialects_page_sessions_with_offset_fetch(driver_name: str) -> None:
+    """Oracle, Db2, and MSSQL use OFFSET ? ROWS FETCH NEXT ? ROWS ONLY with offset bound first."""
+    store = _store_for(driver_name)
+    sql, params = getattr(store, "_session_list_query")("app", "u1", "update_time", "DESC", 15, 5)
+    assert _normalized(sql) == (
+        "SELECT id, app_name, user_id, state, create_time, update_time "
+        "FROM adk_session WHERE app_name = ? AND user_id = ? "
+        "ORDER BY update_time DESC, id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    )
+    assert params == ("app", "u1", 5, 15)
+
+
+@pytest.mark.parametrize("driver_name", ["oracle", "db2", "mssql"])
+def test_enterprise_dialects_create_tables_uses_safe_index_creation(driver_name: str, monkeypatch: Any) -> None:
+    """_create_tables never emits CREATE INDEX IF NOT EXISTS for oracle, db2, or mssql."""
+    executed_sql: list[str] = []
+    mock_cursor = MagicMock()
+
+    def _capture_execute(sql: str, params: Any = None) -> None:
+        executed_sql.append(_normalized(sql))
+
+    mock_cursor.execute.side_effect = _capture_execute
+    mock_cursor.fetchone.return_value = None
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__.return_value = mock_conn
+    mock_ctx.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: mock_ctx)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": driver_name}, extension_config={"adk": {"enable_memory": True}}
+    )
+    store = AdbcADKStore(config)
+    mem_store = AdbcADKMemoryStore(config)
+    store.create_tables()
+    mem_store.create_tables()
+
+    assert executed_sql
+    assert all("CREATE INDEX IF NOT EXISTS" not in stmt for stmt in executed_sql)
+    if driver_name == "oracle":
+        assert any("SQLCODE NOT IN (-955, -1408)" in stmt for stmt in executed_sql)
+    elif driver_name == "db2":
+        assert any("SYSCAT.INDEXES" in stmt for stmt in executed_sql)
+    elif driver_name == "mssql":
+        assert any("sys.indexes" in stmt for stmt in executed_sql)
+
+
+@pytest.mark.parametrize("driver_name", ["oracle", "db2", "mssql"])
+def test_enterprise_memory_search_entries_uses_dialect_grammar(driver_name: str, monkeypatch: Any) -> None:
+    """AdbcADKMemoryStore._search_entries uses POSSTR for Db2 and OFFSET/FETCH for enterprise dialects."""
+    captured: list[tuple[str, Any]] = []
+    mock_cursor = MagicMock()
+
+    def _capture_execute(sql: str, params: Any = None) -> None:
+        captured.append((_normalized(sql), params))
+
+    mock_cursor.execute.side_effect = _capture_execute
+    mock_cursor.fetchall.return_value = []
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__.return_value = mock_conn
+    mock_ctx.__exit__.return_value = None
+    monkeypatch.setattr(AdbcConfig, "provide_connection", lambda *_a, **_k: mock_ctx)
+
+    config = AdbcConfig(
+        connection_config={"driver_name": driver_name}, extension_config={"adk": {"enable_memory": True}}
+    )
+    mem_store = AdbcADKMemoryStore(config)
+    mem_store.search_entries("needle", "app1", "user1", limit=5)
+
+    assert len(captured) == 1
+    sql, params = captured[0]
+    assert "LIMIT" not in sql
+    if driver_name == "db2":
+        assert "POSSTR(LOWER(content_text), LOWER(?)) > 0" in sql
+        assert "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY" in sql
+        assert params == ("app1", "user1", "needle", 5)
+    elif driver_name == "oracle":
+        assert "content_text LIKE :3" in sql
+        assert "OFFSET 0 ROWS FETCH NEXT :4 ROWS ONLY" in sql
+        assert params == ("app1", "user1", "%needle%", 5)
+    elif driver_name == "mssql":
+        assert "content_text LIKE ?" in sql
+        assert "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY" in sql
+        assert params == ("app1", "user1", "%needle%", 5)
+
+
+def _store_for(driver_name: str) -> AdbcADKStore:
+    return AdbcADKStore(AdbcConfig(connection_config={"driver_name": driver_name, "uri": ":memory:"}))
+
+
+def _normalized(sql: str) -> str:
+    return " ".join(sql.split())

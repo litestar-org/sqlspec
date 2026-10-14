@@ -13,7 +13,7 @@ from sqlspec.utils.logging import get_logger, log_with_context
 from sqlspec.utils.sync_tools import async_
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     from sqlspec.config import DatabaseConfigProtocol
     from sqlspec.extensions.adk.memory._types import StoredMemory
@@ -30,9 +30,6 @@ ADK_RESET_MEMORY_TABLES: Final = ("adk_memory", "adk_memory_entries")
 
 class _ADKMemoryStoreCommon(Generic[ConfigT]):
     """Shared non-async ADK store state and helpers."""
-
-    if TYPE_CHECKING:
-        _drop_memory_table_sql: "Callable[[], list[str]]"
 
     __slots__ = (
         "_config",
@@ -147,6 +144,10 @@ class _ADKMemoryStoreCommon(Generic[ConfigT]):
         manage_schema = adk_config.get("manage_schema", True) if isinstance(adk_config, dict) else True
         create_schema = adk_config.get("create_schema", True) if isinstance(adk_config, dict) else True
         return bool(manage_schema), bool(create_schema)
+
+    def _drop_memory_table_sql(self) -> "list[str]":
+        """Get the DROP TABLE SQL statements for this database dialect."""
+        raise NotImplementedError
 
     def _drop_sql_for_table(self, table_name: str) -> list[str]:
         current_table = self._memory_table

@@ -40,7 +40,8 @@ from :class:`~sqlspec.extensions.litestar.store.BaseSQLSpecStore`:
 - **BigQuery**: ``sqlspec.adapters.bigquery.litestar.BigQueryStore``
 - **Spanner**: ``sqlspec.adapters.spanner.litestar.SpannerAsyncStore`` and ``sqlspec.adapters.spanner.litestar.SpannerSyncStore``
 - **Oracle**: ``sqlspec.adapters.oracledb.litestar.OracleAsyncStore`` and ``sqlspec.adapters.oracledb.litestar.OracleSyncStore``
-- **Arrow / ADBC**: ``sqlspec.adapters.adbc.litestar.ADBCStore``
+- **IBM Db2**: ``sqlspec.adapters.db2.litestar.Db2AsyncStore`` and ``sqlspec.adapters.db2.litestar.Db2SyncStore``
+- **Arrow / ADBC**: ``sqlspec.adapters.adbc.litestar.ADBCStore`` (supports PostgreSQL, SQLite, DuckDB, MySQL/MariaDB, BigQuery, Snowflake, Oracle, and IBM Db2)
 
 Each store can create its session table. It can also add new columns from its
 own DDL. Set this behavior under ``extension_config["litestar"]``:
@@ -79,27 +80,23 @@ For Oracle, use ``OracleLitestarCompressionConfig`` and
 
 The available options are:
 
-* PostgreSQL (``asyncpg``, ``psycopg``, and ``psqlpy``): ``fillfactor``,
+* PostgreSQL (``asyncpg``, ``psycopg``, and ``psqlpy``): ``fillfactor`` (default ``80``),
   ``autovacuum_vacuum_scale_factor``, and
-  ``autovacuum_analyze_scale_factor``. The established session-table
-  ``fillfactor=80`` default is retained.
+  ``autovacuum_analyze_scale_factor``.
 * CockroachDB: ``enable_hash_sharded_indexes``,
   ``hash_shard_bucket_count``, and
   ``ttl_expiration_expression="expires_at"``.
 * BigQuery: ``partitioning``, ``partition_expiration_days``, and
   ``require_partition_filter``. The partition column is ``expires_at``.
-* SQLite and AioSQLite: opt-in ``pragma_profile`` and ``pragma_overrides``.
+* SQLite and AioSQLite: ``pragma_profile`` and ``pragma_overrides``.
   PRAGMAs are applied during schema preparation, not for each session-store
   operation.
-* MySQL and MariaDB: ``table_options`` and ``index_options`` for reviewed
+* MySQL and MariaDB: ``table_options`` and ``index_options`` for
   backend-specific DDL clauses.
 * Spanner: ``shard_count``, ``table_options``, and ``index_options``.
 * Oracle Database: ``compression``, ``partitioning``, ``in_memory``, and
   ``table_options``. See :ref:`oracledb-extension-storage-options` for the
   capability and licensing behavior.
-
-All newly supported options are opt-in except PostgreSQL's existing
-``fillfactor`` default, so upgrading does not otherwise change session DDL.
 
 For example, enable the SQLite profile and override only the values needed by
 the application:

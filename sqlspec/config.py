@@ -28,6 +28,7 @@ from sqlspec.core.config_runtime import (
     create_sync_pool,
     seed_runtime_driver_features,
 )
+from sqlspec.driver._query_cache import StatementCacheHolder, resolve_statement_cache_size
 from sqlspec.exceptions import ImproperConfigurationError, MissingDependencyError
 from sqlspec.extensions.events import EventRuntimeHints
 from sqlspec.loader import SQLFileLoader
@@ -1351,6 +1352,11 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         """Attach observability runtime to driver instances before returning them."""
 
         driver.attach_observability(self.get_observability_runtime())
+        if (
+            driver.statement_config is self.statement_config
+            and self.driver_features.get("_statement_cache_holder") is not driver._cache_holder
+        ):
+            self.driver_features["_statement_cache_holder"] = driver._cache_holder
         return driver
 
     @staticmethod
@@ -1438,6 +1444,9 @@ class DatabaseConfigProtocol(ABC, Generic[ConnectionT, PoolT, DriverT]):
         self.statement_config = statement_config or build_default_statement_config(default_dialect)
         self._storage_capabilities = None
         self.driver_features = seed_runtime_driver_features(driver_features, self.storage_capabilities())
+        self.driver_features["_statement_cache_holder"] = StatementCacheHolder(
+            self.statement_config, resolve_statement_cache_size(self.driver_features)
+        )
         self._attach_lifecycle_hooks()
         self._configure_observability_extensions()
 

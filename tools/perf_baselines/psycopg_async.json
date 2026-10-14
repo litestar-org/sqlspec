@@ -3,8 +3,20 @@
     "rows": 1000,
     "pool_size": 1,
     "iterations": 3,
+    "warmup": 1,
     "mypyc_compiled": false,
-    "timestamp": "2026-07-09T20:52:38+0000"
+    "environment": {
+      "python_version": "3.11.9",
+      "platform": "Linux-7.1.6-1rodete1-amd64-x86_64-with-glibc2.43",
+      "packages": {
+        "duckdb": "1.5.6",
+        "sqlglot": "30.22.0",
+        "aiosqlite": "0.22.1",
+        "pyarrow": "26.0.0",
+        "sqlspec": "0.66.0"
+      }
+    },
+    "timestamp": "2026-10-13T21:40:20+0000"
   },
   "results": [
     {
@@ -12,15 +24,15 @@
       "library": "raw",
       "library_key": "raw",
       "scenario": "rows",
-      "time": 0.2959300350630656,
+      "time": 0.10732070899393875,
       "times": [
-        0.28633909800555557,
-        0.29886266810353845,
-        0.2959300350630656
+        0.10732070899393875,
+        0.10796528100036085,
+        0.10532009199960157
       ],
-      "stddev": 0.006550142723512253,
-      "iqr": 0.006261785048991442,
-      "noise_ratio": 0.02213409234421357,
+      "stddev": 0.0013793093851170338,
+      "iqr": 0.0013225945003796369,
+      "noise_ratio": 0.01285222021031313,
       "noisy": false
     },
     {
@@ -28,16 +40,176 @@
       "library": "sqlspec",
       "library_key": "sqlspec",
       "scenario": "rows",
-      "time": 0.34546393796335906,
+      "time": 0.114254736006842,
       "times": [
-        0.30046050203964114,
-        0.3557198899798095,
-        0.34546393796335906
+        0.11448235799616668,
+        0.114254736006842,
+        0.11244962899945676
       ],
-      "stddev": 0.029394142705154558,
-      "iqr": 0.02762969397008419,
-      "noise_ratio": 0.08508599444111063,
+      "stddev": 0.0011137182657058229,
+      "iqr": 0.0010163644983549602,
+      "noise_ratio": 0.009747677029678046,
       "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "scalar_param_select",
+      "time": 0.06272070900013205,
+      "times": [
+        0.054481760002090596,
+        0.0634723289986141,
+        0.06272070900013205
+      ],
+      "stddev": 0.004987911120828305,
+      "iqr": 0.0044952844982617535,
+      "noise_ratio": 0.07952574517003314,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "scalar_param_select",
+      "time": 0.08722766900609713,
+      "times": [
+        0.08722766900609713,
+        0.11313651800446678,
+        0.08694001298863441
+      ],
+      "stddev": 0.015042207713903086,
+      "iqr": 0.013098252507916186,
+      "noise_ratio": 0.17244766351433338,
+      "noisy": true
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "no_param_select",
+      "time": 0.05285361300047953,
+      "times": [
+        0.05285361300047953,
+        0.051201517999288626,
+        0.05827487500209827
+      ],
+      "stddev": 0.0037002675324979647,
+      "iqr": 0.003536678501404822,
+      "noise_ratio": 0.07000973675090846,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "no_param_select",
+      "time": 0.08752505099982955,
+      "times": [
+        0.08850791800068691,
+        0.08752505099982955,
+        0.07754960999591276
+      ],
+      "stddev": 0.0060630020766874225,
+      "iqr": 0.005479154002387077,
+      "noise_ratio": 0.06927162003823603,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "complex_query",
+      "time": 0.07898365501023363,
+      "times": [
+        0.07922200000029989,
+        0.07639972800097894,
+        0.07898365501023363
+      ],
+      "stddev": 0.0015651787097962458,
+      "iqr": 0.0014111359996604733,
+      "noise_ratio": 0.019816488735466233,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "complex_query",
+      "time": 0.12235170499479864,
+      "times": [
+        0.10542201099451631,
+        0.12449819299217779,
+        0.12235170499479864
+      ],
+      "stddev": 0.010449263684378212,
+      "iqr": 0.00953809099883074,
+      "noise_ratio": 0.08540349874832089,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "session_per_request",
+      "time": 0.08765066500927787,
+      "times": [
+        0.09017416898859665,
+        0.08765066500927787,
+        0.08010931899480056
+      ],
+      "stddev": 0.005236747995994709,
+      "iqr": 0.005032424996898044,
+      "noise_ratio": 0.05974567329797665,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "session_per_request",
+      "time": 0.23639956300030462,
+      "times": [
+        0.25069692500983365,
+        0.23639956300030462,
+        0.2202673319989117
+      ],
+      "stddev": 0.015224013751987231,
+      "iqr": 0.015214796505460981,
+      "noise_ratio": 0.06439950039995469,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "observability_select",
+      "time": 0.0797479739994742,
+      "times": [
+        0.07919690600829199,
+        0.0797479739994742,
+        0.08318662300007418
+      ],
+      "stddev": 0.0021620138973785664,
+      "iqr": 0.001994858495891094,
+      "noise_ratio": 0.027110580858051906,
+      "noisy": false
+    },
+    {
+      "driver": "psycopg_async",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "observability_select",
+      "time": 0.12852915600524284,
+      "times": [
+        0.12852915600524284,
+        0.12195321000763215,
+        0.15071062499191612
+      ],
+      "stddev": 0.015067899371116515,
+      "iqr": 0.014378707492141984,
+      "noise_ratio": 0.11723331763340825,
+      "noisy": true
     }
   ]
 }

@@ -1,0 +1,215 @@
+{
+  "metadata": {
+    "rows": 1000,
+    "pool_size": 1,
+    "iterations": 3,
+    "warmup": 1,
+    "mypyc_compiled": false,
+    "environment": {
+      "python_version": "3.11.9",
+      "platform": "Linux-7.1.6-1rodete1-amd64-x86_64-with-glibc2.43",
+      "packages": {
+        "duckdb": "1.5.6",
+        "sqlglot": "30.22.0",
+        "aiosqlite": "0.22.1",
+        "pyarrow": "26.0.0",
+        "sqlspec": "0.66.0"
+      }
+    },
+    "timestamp": "2026-10-13T21:42:28+0000"
+  },
+  "results": [
+    {
+      "driver": "psqlpy",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "rows",
+      "time": 0.038870181000675075,
+      "times": [
+        0.03749169000366237,
+        0.03915389100438915,
+        0.038870181000675075
+      ],
+      "stddev": 0.0008891607430483382,
+      "iqr": 0.0008311005003633909,
+      "noise_ratio": 0.02287513770601932,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "rows",
+      "time": 0.04553226499410812,
+      "times": [
+        0.04509593699185643,
+        0.04553226499410812,
+        0.057247064003604464
+      ],
+      "stddev": 0.006892952749174069,
+      "iqr": 0.006075563505874015,
+      "noise_ratio": 0.15138611597876842,
+      "noisy": true
+    },
+    {
+      "driver": "psqlpy",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "scalar_param_select",
+      "time": 0.13926593400537968,
+      "times": [
+        0.1660893600055715,
+        0.13099403699743561,
+        0.13926593400537968
+      ],
+      "stddev": 0.01834667163067638,
+      "iqr": 0.017547661504067946,
+      "noise_ratio": 0.13173840222812616,
+      "noisy": true
+    },
+    {
+      "driver": "psqlpy",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "scalar_param_select",
+      "time": 0.1755439479893539,
+      "times": [
+        0.1893631630082382,
+        0.17003162500623148,
+        0.1755439479893539
+      ],
+      "stddev": 0.009958788161982412,
+      "iqr": 0.009665769001003355,
+      "noise_ratio": 0.0567310253417929,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "no_param_select",
+      "time": 0.16983815999992657,
+      "times": [
+        0.1830866660020547,
+        0.16983815999992657,
+        0.15680248399439733
+      ],
+      "stddev": 0.013142234614790685,
+      "iqr": 0.013142091003828682,
+      "noise_ratio": 0.07738092908446703,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "no_param_select",
+      "time": 0.16322541900444776,
+      "times": [
+        0.14927623599942308,
+        0.16717540299578104,
+        0.16322541900444776
+      ],
+      "stddev": 0.009403565451492044,
+      "iqr": 0.008949583498178981,
+      "noise_ratio": 0.05761091323181596,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "complex_query",
+      "time": 0.15418924599362072,
+      "times": [
+        0.1493776040006196,
+        0.16773134699906223,
+        0.15418924599362072
+      ],
+      "stddev": 0.009516654527399783,
+      "iqr": 0.009176871499221306,
+      "noise_ratio": 0.061720611356991244,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "complex_query",
+      "time": 0.21580600099696312,
+      "times": [
+        0.22752288200717885,
+        0.21562466000614222,
+        0.21580600099696312
+      ],
+      "stddev": 0.006817695993374619,
+      "iqr": 0.0059491110005183145,
+      "noise_ratio": 0.031591781330819246,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "session_per_request",
+      "time": 0.14990542401210405,
+      "times": [
+        0.15869152099185158,
+        0.14990542401210405,
+        0.1469935929926578
+      ],
+      "stddev": 0.006089824566406652,
+      "iqr": 0.00584896399959689,
+      "noise_ratio": 0.04062444442247088,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "session_per_request",
+      "time": 0.2788829950004583,
+      "times": [
+        0.29392264400667045,
+        0.2788829950004583,
+        0.26725216799241025
+      ],
+      "stddev": 0.013371496238569232,
+      "iqr": 0.013335238007130101,
+      "noise_ratio": 0.047946617320813185,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "raw",
+      "library_key": "raw",
+      "scenario": "observability_select",
+      "time": 0.15503014900605194,
+      "times": [
+        0.15503014900605194,
+        0.15803829400101677,
+        0.14209970699448604
+      ],
+      "stddev": 0.008468410148801548,
+      "iqr": 0.007969293503265362,
+      "noise_ratio": 0.05462427923275082,
+      "noisy": false
+    },
+    {
+      "driver": "psqlpy",
+      "library": "sqlspec",
+      "library_key": "sqlspec",
+      "scenario": "observability_select",
+      "time": 0.21762880399182905,
+      "times": [
+        0.21762880399182905,
+        0.23060299998905975,
+        0.21332993000396527
+      ],
+      "stddev": 0.00899230250499523,
+      "iqr": 0.00863653499254724,
+      "noise_ratio": 0.041319450091417353,
+      "noisy": false
+    }
+  ]
+}

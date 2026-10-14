@@ -334,16 +334,23 @@ Listeners
 Event Queue
 ===========
 
-The durable table queue is available for SQL Server through ``mssql_python``,
-``pymssql``, and ``arrow_odbc`` (the last configured with Microsoft ODBC Driver 18).
-All three use SQL Server ``DATETIME2(6)`` timestamps and ``NVARCHAR`` payload
-columns, and every SQL Server backend is ``poll_queue``.
+The durable ``poll_queue`` table transport is supported across all SQLSpec
+relational and analytical adapters, including:
+
+* **ADBC** (:class:`~sqlspec.adapters.adbc.events.AdbcEventQueueStore`) with
+  dialect-aware DDL and index guards for PostgreSQL, SQLite, DuckDB, BigQuery,
+  Snowflake, Oracle, and IBM Db2.
+* **SQL Server** through ``mssql_python``, ``pymssql``, and ``arrow_odbc``
+  (using ``DATETIME2(6)`` timestamps and ``NVARCHAR(MAX)`` JSON payload
+  columns).
+* **IBM Db2** through ``db2``, ``arrow_odbc``, and ``adbc`` (using ``CLOB(1M)``
+  payloads and ``SYSCAT`` catalog guards).
 
 Durable queue migrations reconcile missing tables and additive columns from the
 adapter store's canonical DDL. Set ``events.manage_schema=False`` when an
 external migration system owns the queue schema. Set
 ``events.create_schema=False`` to avoid creating an absent queue table. Column
-renames, drops, and type changes still require an explicit migration.
+renames, drops, and type changes require an explicit versioned migration.
 
 Queue table storage options
 ---------------------------
@@ -354,10 +361,10 @@ that the backend cannot honor raises ``ImproperConfigurationError``.
 
 * PostgreSQL (``asyncpg``, ``psycopg``, and ``psqlpy``) accepts
   ``fillfactor``, ``autovacuum_vacuum_scale_factor``, and
-  ``autovacuum_analyze_scale_factor``. These queue-table settings are opt-in.
+  ``autovacuum_analyze_scale_factor``.
 * BigQuery accepts ``partitioning``, ``partition_expiration_days``, and
-  ``require_partition_filter`` for ``available_at`` partitioning. Existing
-  channel and status clustering is preserved.
+  ``require_partition_filter`` for ``available_at`` partitioning alongside
+  channel and status clustering.
 * SQLite and AioSQLite accept ``pragma_profile`` and ``pragma_overrides``.
   PRAGMAs run once during schema preparation rather than on every queue
   operation.
@@ -373,11 +380,10 @@ that the backend cannot honor raises ``ImproperConfigurationError``.
   lock-free read-only snapshots (``transaction=False``) and execute DML writes
   inside ``run_in_transaction`` for automatic ``Aborted`` conflict retries.
 
-CockroachDB deliberately does not expose its session-table row TTL for durable
-queues. Queue acknowledgement and retention have different semantics, so
-session-only TTL keys are rejected rather than translated to destructive queue
-DDL. Other adapters use their existing queue-table defaults and reject these
-backend-specific storage keys.
+CockroachDB does not expose its session-table row TTL for durable queues
+because queue acknowledgement and retention have distinct semantics. Other
+adapters use their standard queue-table DDL and reject backend-specific storage
+keys from unrelated database families.
 
 For example, configure a PostgreSQL queue for a write-heavy workload:
 

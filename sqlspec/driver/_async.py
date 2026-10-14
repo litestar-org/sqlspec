@@ -1,6 +1,7 @@
 """Asynchronous driver protocol implementation."""
 
 import logging
+import sys
 from abc import abstractmethod
 from inspect import isawaitable
 from time import perf_counter
@@ -30,6 +31,7 @@ from sqlspec.driver._common import (
     ExecutionResult,
     StackExecutionObserver,
     _raise_database_exception,
+    _resolve_fast_params,
     describe_stack_statement,
     handle_single_row_error,
     validate_savepoint_name,
@@ -55,7 +57,7 @@ if TYPE_CHECKING:
     from sqlglot.dialects.dialect import DialectType
 
     from sqlspec.builder import QueryBuilder
-    from sqlspec.core import ArrowResult, SQLResult, Statement, StatementConfig, StatementFilter
+    from sqlspec.core import ArrowResult, OperationType, SQLResult, Statement, StatementConfig, StatementFilter
     from sqlspec.data_dictionary import (
         ColumnMetadata,
         ForeignKeyMetadata,
@@ -247,82 +249,34 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
 
             if runtime is None or runtime.is_idle:
                 exc_handler = self.handle_database_exceptions()
-                result = await self._run_with_exception_handler(
-                    exc_handler,
-                    self._dispatch_statement_with_cursor,
-                    connection,
-                    statement,
-                    has_execution_parameters=bool(execution_parameters),
-                )
+                if sys.exc_info()[1] is None:
+                    async with exc_handler:
+                        result = await self._dispatch_statement_with_cursor(
+                            connection, statement, has_execution_parameters=bool(execution_parameters)
+                        )
+                else:
+                    result = await self._run_with_exception_handler(
+                        exc_handler,
+                        self._dispatch_statement_with_cursor,
+                        connection,
+                        statement,
+                        has_execution_parameters=bool(execution_parameters),
+                    )
                 self._check_pending_exception(exc_handler)
                 assert result is not None
                 return result
 
-            operation = statement.operation_type
-            query_context = {
-                "sql": compiled_sql,
-                "parameters": execution_parameters,
-                "driver": type(self).__name__,
-                "operation": operation,
-                "is_many": statement.is_many,
-                "is_script": statement.is_script,
-            }
-            await runtime.emit_query_start_async(**query_context)
-            sql_hash = None
-            if runtime.span_manager.is_enabled or (
-                runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
-            ):
-                sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
-            span = runtime.start_query_span(compiled_sql, operation, type(self).__name__, sql_hash=sql_hash)
-            started = perf_counter()
-
-            exc_handler = self.handle_database_exceptions()
-            try:
-                result = await self._run_with_exception_handler(
-                    exc_handler,
-                    self._dispatch_statement_with_cursor,
-                    connection,
-                    statement,
-                    has_execution_parameters=bool(execution_parameters),
-                )
-            except Exception as exc:  # pragma: no cover
-                pending_exception = exc_handler.pending_exception
-                if pending_exception is not None:
-                    mapped_exc = pending_exception
-                    runtime.span_manager.end_span(span, error=mapped_exc)
-                    await runtime.emit_error_async(mapped_exc, **query_context)
-                    _raise_database_exception(exc_handler, exc)
-                runtime.span_manager.end_span(span, error=exc)
-                await runtime.emit_error_async(exc, **query_context)
-                _raise_database_exception(exc_handler, exc)
-
-            pending_exception = exc_handler.pending_exception
-            if pending_exception is not None:
-                mapped_exc = pending_exception
-                runtime.span_manager.end_span(span, error=mapped_exc)
-                await runtime.emit_error_async(mapped_exc, **query_context)
-                _raise_database_exception(exc_handler, None)
-
-            assert result is not None
-
-            runtime.span_manager.end_span(span)
-            duration = perf_counter() - started
-            await runtime.emit_query_complete_async(**{**query_context, "rows_affected": result.rows_affected})
-            runtime.emit_statement_event(
-                sql=compiled_sql,
-                parameters=execution_parameters,
-                driver=type(self).__name__,
-                operation=operation,
-                execution_mode=self.statement_config.execution_mode,
+            return await self._execute_with_observability_async(
+                compiled_sql=compiled_sql,
+                execution_parameters=execution_parameters,
+                operation=statement.operation_type,
                 is_many=statement.is_many,
                 is_script=statement.is_script,
-                rows_affected=result.rows_affected,
-                duration_s=duration,
-                storage_backend=(result.metadata or {}).get("storage_backend"),
-                started_at=started,
-                precomputed_sql_hash=sql_hash,
+                runner=self._dispatch_statement_observed_async,
+                connection=connection,
+                statement=statement,
+                has_execution_parameters=bool(execution_parameters),
             )
-            return result
         finally:
             self._release_pooled_statement(statement)
 
@@ -1524,6 +1478,90 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """Run an async operation without inheriting the caller's active exception state."""
         return await _run_with_async_exception_handler(exc_handler, operation, *args, **kwargs)
 
+    async def _execute_with_observability_async(
+        self,
+        *,
+        compiled_sql: str,
+        execution_parameters: Any,
+        operation: "OperationType",
+        is_many: bool,
+        is_script: bool,
+        runner: "Callable[..., Awaitable[SQLResult]]",
+        **runner_kwargs: Any,
+    ) -> "SQLResult":
+        """Execute an async runner while emitting spans, lifecycle hooks, and statement events."""
+        runtime = self._observability
+        if runtime is None or runtime.is_idle:
+            return await runner(**runner_kwargs)
+        driver_name = type(self).__name__
+        query_context = {
+            "sql": compiled_sql,
+            "parameters": execution_parameters,
+            "driver": driver_name,
+            "operation": operation,
+            "is_many": is_many,
+            "is_script": is_script,
+        }
+        await runtime.emit_query_start_async(**query_context)
+        sql_hash = None
+        if runtime.span_manager.is_enabled or (
+            runtime.has_statement_observers and runtime.config.logging and runtime.config.logging.include_sql_hash
+        ):
+            sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
+        span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash)
+        started = perf_counter()
+        try:
+            result = await runner(**runner_kwargs)
+        except Exception as exc:
+            runtime.span_manager.end_span(span, error=exc)
+            await runtime.emit_error_async(exc, **query_context)
+            raise
+        runtime.span_manager.end_span(span)
+        duration = perf_counter() - started
+        await runtime.emit_query_complete_async(**{**query_context, "rows_affected": result.rows_affected})
+        runtime.emit_statement_event(
+            sql=compiled_sql,
+            parameters=execution_parameters,
+            driver=driver_name,
+            operation=operation,
+            execution_mode=self.statement_config.execution_mode,
+            is_many=is_many,
+            is_script=is_script,
+            rows_affected=result.rows_affected,
+            duration_s=duration,
+            storage_backend=(result.metadata or {}).get("storage_backend"),
+            started_at=started,
+            precomputed_sql_hash=sql_hash,
+        )
+        return result
+
+    async def _dispatch_statement_observed_async(
+        self, connection: Any, statement: "SQL", *, has_execution_parameters: bool
+    ) -> "SQLResult":
+        """Execute an async statement inside an exception handler and raise any mapped error."""
+        exc_handler = self.handle_database_exceptions()
+        result: SQLResult | None = None
+        try:
+            if sys.exc_info()[1] is None:
+                async with exc_handler:
+                    result = await self._dispatch_statement_with_cursor(
+                        connection, statement, has_execution_parameters=has_execution_parameters
+                    )
+            else:
+                result = await self._run_with_exception_handler(
+                    exc_handler,
+                    self._dispatch_statement_with_cursor,
+                    connection,
+                    statement,
+                    has_execution_parameters=has_execution_parameters,
+                )
+        except Exception as exc:  # pragma: no cover
+            _raise_database_exception(exc_handler, exc)
+        if exc_handler.pending_exception is not None:
+            _raise_database_exception(exc_handler, None)
+        assert result is not None
+        return result
+
     async def _execute_cache_hit(
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
     ) -> "SQLResult":
@@ -1544,12 +1582,33 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         """
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
-        result = await self._run_with_exception_handler(
-            exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
-        )
+        if sys.exc_info()[1] is None:
+            async with exc_handler:
+                result = await self._execute_cache_hit_with_cursor(sql, params, cached)
+        else:
+            result = await self._run_with_exception_handler(
+                exc_handler, self._execute_cache_hit_with_cursor, sql, params, cached
+            )
         self._check_pending_exception(exc_handler)
         assert result is not None
         return result
+
+    async def _execute_cache_hit_observed(
+        self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: CachedQuery
+    ) -> "SQLResult":
+        """Execute an async fast-path cache hit wrapped in observability instrumentation."""
+        obs_params = list(params) if isinstance(params, tuple) else params
+        return await self._execute_with_observability_async(
+            compiled_sql=cached.compiled_sql,
+            execution_parameters=obs_params,
+            operation=cached.operation_type,
+            is_many=False,
+            is_script=False,
+            runner=self._execute_cache_hit,
+            sql=sql,
+            params=params,
+            cached=cached,
+        )
 
     async def _cached_execution(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
@@ -1577,15 +1636,34 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         exc_handler = self.handle_database_exceptions()
         result: SQLResult | None = None
         try:
-            result = await self._run_with_exception_handler(
-                exc_handler, self._execute_cached_statement_with_cursor, statement
-            )
+            if sys.exc_info()[1] is None:
+                async with exc_handler:
+                    result = await self._execute_cached_statement_with_cursor(statement)
+            else:
+                result = await self._run_with_exception_handler(
+                    exc_handler, self._execute_cached_statement_with_cursor, statement
+                )
 
             self._check_pending_exception(exc_handler)
             assert result is not None
             return result
         finally:
             self._release_pooled_statement(statement)
+
+    async def _execute_cached_statement_observed(
+        self, statement: "SQL", compiled_sql: str, execution_parameters: Any, operation: "OperationType"
+    ) -> "SQLResult":
+        """Execute a rebound cached async statement wrapped in observability instrumentation."""
+        obs_params = list(execution_parameters) if isinstance(execution_parameters, tuple) else execution_parameters
+        return await self._execute_with_observability_async(
+            compiled_sql=compiled_sql,
+            execution_parameters=obs_params,
+            operation=operation,
+            is_many=False,
+            is_script=False,
+            runner=self._execute_cached_statement,
+            statement=statement,
+        )
 
     async def _execute(
         self,
@@ -1594,11 +1672,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         statement_config: "StatementConfig | None",
         kwargs: "dict[str, Any]",
     ) -> "SQLResult":
-        fast_params: tuple[Any, ...] | list[Any] | dict[str, Any] | None = None
-        if not kwargs and len(parameters) == 1 and isinstance(parameters[0], (tuple, list, dict)):
-            fast_params = cast("tuple[Any, ...] | list[Any] | dict[str, Any]", parameters[0])
-        elif not parameters and kwargs:
-            fast_params = kwargs
+        fast_params = _resolve_fast_params(parameters, kwargs)
         if (
             self._stmt_cache_enabled
             and (statement_config is None or statement_config is self.statement_config)
@@ -1705,35 +1779,32 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
         result: SQLResult | None = None
         try:
             async with self.with_cursor(self.connection) as cursor:
-                execute = getattr(cursor, "execute", None)
-                fetchall = getattr(cursor, "fetchall", None)
+                returns_rows = cached.operation_profile.returns_rows
+                execute = getattr(cursor, "execute", None) if cursor is not self.connection else None
+                fetchall = getattr(cursor, "fetchall", None) if execute is not None and returns_rows else None
                 can_use_cursor_fast_path = execute is not None and (
-                    (cached.operation_profile.returns_rows and fetchall is not None)
-                    or (not cached.operation_profile.returns_rows and hasattr(cursor, "rowcount"))
+                    (returns_rows and fetchall is not None) or (not returns_rows and hasattr(cursor, "rowcount"))
                 )
                 if can_use_cursor_fast_path:
                     assert execute is not None
-                    execute_result = execute(cached.compiled_sql, params)
+                    execute_result = execute(cached.compiled_sql, params) if params else execute(cached.compiled_sql)
                     if isawaitable(execute_result):
                         await execute_result
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         assert fetchall is not None
                         fetched_data = fetchall()
                         if isawaitable(fetched_data):
                             fetched_data = await fetched_data
                         data, column_names, row_count = self.collect_rows(cursor, fetched_data)
-                        execution_result = self.create_execution_result(
-                            cursor,
+                        result = self.build_cached_select_result(
+                            sql,
+                            params,
+                            cached,
                             selected_data=data,
                             column_names=column_names,
                             data_row_count=row_count,
-                            is_select_result=True,
                             row_format=resolve_row_format(data),
                         )
-                        direct_statement = self._cached_statement(
-                            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
-                        )
-                        result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = self.resolve_rowcount(cursor)
                         result = DMLResult(cached.operation_type, affected_rows)
@@ -1742,7 +1813,7 @@ class AsyncDriverAdapterBase(CommonDriverAttributesMixin):
                         sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
                     )
                     execution_result = await self.dispatch_execute(cursor, direct_statement)
-                    if cached.operation_profile.returns_rows:
+                    if returns_rows:
                         result = self.build_statement_result(direct_statement, execution_result)
                     else:
                         affected_rows = (

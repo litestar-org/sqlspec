@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 __all__ = ("PsqlpyDataDictionary",)
 
 
-_POSTGRES_METADATA_DOMAINS = (
+_POSTGRES_METADATA_DOMAINS: tuple[str, ...] = (
     "schemas",
     "objects",
     "tables",

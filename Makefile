@@ -346,10 +346,22 @@ bench-gate:                                         ## Run performance regressio
 DRIVERS ?= duckdb aiosqlite
 bench-gate-adapters:                                ## Compare selected adapter benchmarks with committed baselines
 	@mkdir -p /tmp/sqlspec-bench
-	@for driver in ${DRIVERS}; do \
-		uv run python tools/scripts/bench.py --driver "$${driver}" --extended --json-output "/tmp/sqlspec-bench/$${driver}.json"; \
-		uv run python tools/scripts/bench_compare.py "tools/perf_baselines/$${driver}.json" "/tmp/sqlspec-bench/$${driver}.json" --threshold "$${BENCHMARK_THRESHOLD:-30}"; \
-	done
+	@failed_drivers=""; \
+	for driver in ${DRIVERS}; do \
+		baseline="tools/perf_baselines/$${driver}.json"; \
+		run_args=$$(uv run --no-sync python tools/scripts/bench_compare.py "$${baseline}" --print-run-args); \
+		if ! uv run --no-sync python tools/scripts/bench.py --driver "$${driver}" --extended $${run_args} --json-output "/tmp/sqlspec-bench/$${driver}.json"; then \
+			failed_drivers="$${failed_drivers} $${driver}"; \
+			continue; \
+		fi; \
+		if ! uv run --no-sync python tools/scripts/bench_compare.py "$${baseline}" "/tmp/sqlspec-bench/$${driver}.json" --mode "$${BENCHMARK_MODE:-ratio}" --threshold "$${BENCHMARK_THRESHOLD:-30}"; then \
+			failed_drivers="$${failed_drivers} $${driver}"; \
+		fi; \
+	done; \
+	if [ -n "$${failed_drivers}" ]; then \
+		echo "Adapter benchmark gate failed for:$${failed_drivers}"; \
+		exit 1; \
+	fi
 
 .PHONY: bench-subsystems
 bench-subsystems:                                   ## Run subsystem micro-benchmarks

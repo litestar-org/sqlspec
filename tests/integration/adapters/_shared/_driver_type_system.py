@@ -103,6 +103,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_pgvector",
         "enable_paradedb",
         "enable_pg_textsearch",
+        "enable_lowercase_column_names",
         "enable_events",
         "on_connection_create",
         "events_backend",

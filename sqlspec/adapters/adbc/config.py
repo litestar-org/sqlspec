@@ -48,11 +48,13 @@ class AdbcConnectionParams(TypedDict):
     connection_string: NotRequired[str]
     db: NotRequired[str]
     path: NotRequired[str]
+    driver: NotRequired[str]
     driver_name: NotRequired[str]
     db_kwargs: NotRequired[dict[str, Any]]
     conn_kwargs: NotRequired[dict[str, Any]]
     entrypoint: NotRequired[str]
     profile: NotRequired[str]
+    auth_type: NotRequired[str]
     adbc_driver_manager_entrypoint: NotRequired[str]
     autocommit: NotRequired[bool]
     isolation_level: NotRequired[str]
@@ -144,6 +146,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     enable_paradedb: NotRequired[bool]
     enable_pg_textsearch: NotRequired[bool]
+    enable_lowercase_column_names: NotRequired[bool]
     enable_events: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
     events_backend: NotRequired[Literal["poll_queue"]]
@@ -264,8 +267,11 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
         if statement_config is None:
             statement_config = get_statement_config(self._resolved_dialect)
 
+        explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
         features_dict = dict(driver_features) if driver_features else {}
+        if not explicit_lowercase and self._resolved_dialect in {"oracle", "db2"}:
+            features_dict["enable_lowercase_column_names"] = True
         self._user_connection_hook = cast(
             "Callable[[AdbcConnection], None] | None", features_dict.pop("on_connection_create", None)
         )
@@ -306,8 +312,12 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             return self.connection_instance
 
         try:
-            driver_name = cast("str | None", self.connection_config.get("driver_name"))
-            uri = cast("str | None", self.connection_config.get("uri"))
+            driver_name = cast(
+                "str | None", self.connection_config.get("driver_name") or self.connection_config.get("driver")
+            )
+            db_kwargs = self.connection_config.get("db_kwargs")
+            nested_uri = db_kwargs.get("uri") if isinstance(db_kwargs, dict) else None
+            uri = cast("str | None", self.connection_config.get("uri") or nested_uri)
             connection = resolve_driver_connect_func(driver_name, uri)(
                 **build_connection_config(self.connection_config)
             )
@@ -315,7 +325,9 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
                 self._user_connection_hook(cast("AdbcConnection", connection))
             return cast("AdbcConnection", connection)
         except Exception as e:
-            err_driver_name = self.connection_config.get("driver_name", "Unknown")
+            err_driver_name = (
+                self.connection_config.get("driver_name") or self.connection_config.get("driver") or "Unknown"
+            )
             msg = f"Could not configure connection using driver '{err_driver_name}'. Error: {e}"
             raise ImproperConfigurationError(msg) from e
 

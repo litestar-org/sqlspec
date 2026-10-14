@@ -529,3 +529,16 @@ def test_get_statistics_uses_native_statistic_names_when_available() -> None:
     assert statistics[0]["statistic_name"] == "vendor.custom_count"
     assert statistics[0]["is_approximate"] is False
     driver.connection.adbc_get_statistic_names.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("version_str", "expected_type"),
+    [("23.4.0.24.05", "JSON"), ("21.3.0.0.0", "JSON"), ("19.3.0.0.0", "BLOB"), ("11.2.0.4.0", "CLOB")],
+)
+def test_oracle_optimal_json_type_resolution(version_str: str, expected_type: str) -> None:
+    driver = Mock()
+    driver.dialect = "oracle"
+    driver.select_value_or_none.return_value = f"Oracle Database {version_str}"
+
+    dictionary = AdbcDataDictionary()
+    assert dictionary.get_optimal_type(driver, "json") == expected_type

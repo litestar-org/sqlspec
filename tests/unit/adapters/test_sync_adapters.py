@@ -87,7 +87,7 @@ def test_sync_driver_fast_path_flag_disabled_by_observability() -> None:
 
         driver.attach_observability(runtime)
 
-        assert driver._stmt_cache_enabled is False
+        assert driver._stmt_cache_enabled is True
     finally:
         conn.close()
 

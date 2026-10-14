@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
+import pyarrow as pa
+import pytest
 from adbc_driver_manager import AdbcStatusCode, DatabaseError
 
 from sqlspec.adapters.adbc import AdbcDriver
@@ -27,11 +29,21 @@ from sqlspec.adapters.adbc.core import (
 from sqlspec.core import SQL, ParameterStyle
 from sqlspec.dialects import PGTextSearch
 from sqlspec.exceptions import (
+    CheckViolationError,
+    DatabaseConnectionError,
+    DataError,
     DeadlockError,
+    ForeignKeyViolationError,
+    IntegrityError,
+    NotNullViolationError,
     OperationalError,
     OperationCancelledError,
+    PermissionDeniedError,
     QueryTimeoutError,
     SerializationConflictError,
+    SQLParsingError,
+    SQLSpecError,
+    UniqueViolationError,
 )
 
 
@@ -411,3 +423,191 @@ def test_case_insensitive_uri_and_grpc_tls_resolution() -> None:
 
     built = build_connection_config({"uri": "grpc+tls://localhost:31337", "tls_skip_verify": True})
     assert built["db_kwargs"]["adbc.flight.sql.client_option.tls_skip_verify"] == "true"
+
+
+def test_detect_dialect_recognizes_oracle_db2_mssql_and_quack() -> None:
+    """detect_dialect maps Oracle, Db2, SQL Server, and Quack ADBC driver info."""
+    oracle_conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "Oracle", "driver_name": "ADBC Oracle Driver"})
+    db2_conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "IBM Db2", "driver_name": "ADBC Db2 Driver"})
+    mssql_conn = SimpleNamespace(
+        adbc_get_info=lambda: {"vendor_name": "Microsoft SQL Server", "driver_name": "ADBC MSSQL Driver"}
+    )
+    quack_conn = SimpleNamespace(adbc_get_info=lambda: {"vendor_name": "DuckDB", "driver_name": "ADBC Quack Driver"})
+
+    assert adbc_core.detect_dialect(oracle_conn) == "oracle"
+    assert adbc_core.detect_dialect(db2_conn) == "db2"
+    assert adbc_core.detect_dialect(mssql_conn) == "mssql"
+    assert adbc_core.detect_dialect(quack_conn) == "duckdb"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_cls"),
+    [
+        ("ORA-00001: unique constraint (APP.PK_USERS) violated", UniqueViolationError),
+        ("ORA-02291: integrity constraint (APP.FK_DEPT) violated - parent key not found", ForeignKeyViolationError),
+        ("ORA-02292: integrity constraint (APP.FK_DEPT) violated - child record found", ForeignKeyViolationError),
+        ('ORA-01400: cannot insert NULL into ("APP"."USERS"."EMAIL")', NotNullViolationError),
+        ('ORA-01407: cannot update ("APP"."USERS"."EMAIL") to NULL', NotNullViolationError),
+        ("ORA-02290: check constraint (APP.CHK_AGE) violated", CheckViolationError),
+        ("ORA-00060: deadlock detected while waiting for resource", DeadlockError),
+        ("ORA-08177: can't serialize access for this transaction", SerializationConflictError),
+        ("ORA-01013: user requested cancel of current operation", QueryTimeoutError),
+        ("ORA-12170: TNS:Connect timeout occurred", QueryTimeoutError),
+        ("ORA-01017: invalid username/password; logon denied", PermissionDeniedError),
+        ("ORA-01031: insufficient privileges", PermissionDeniedError),
+        ("ORA-12154: TNS:could not resolve the connect identifier specified", DatabaseConnectionError),
+        ("ORA-12541: TNS:no listener", DatabaseConnectionError),
+        ("ORA-03113: end-of-file on communication channel", DatabaseConnectionError),
+        ("ORA-00942: table or view does not exist", SQLParsingError),
+        ('ORA-00904: "BAD_COL": invalid identifier', SQLParsingError),
+        ("ORA-01722: invalid number", DataError),
+        ("ORA-12899: value too large for column", DataError),
+        ("ORA-02299: cannot validate (APP.UQ_TEST) - duplicate keys found", IntegrityError),
+    ],
+)
+def test_create_mapped_exception_oracle_ora_codes(message: str, expected_cls: type[SQLSpecError]) -> None:
+    mapped = adbc_core.create_mapped_exception(Exception(message))
+    assert isinstance(mapped, expected_cls)
+
+
+@pytest.mark.parametrize(
+    ("message", "sqlstate", "vendor_code", "expected_cls"),
+    [
+        (
+            'SQL0911N The current transaction has been rolled back because of a deadlock or timeout. Reason code "68". SQLSTATE=40001',
+            "40001",
+            -911,
+            QueryTimeoutError,
+        ),
+        (
+            'SQL0911N The current transaction has been rolled back because of a deadlock or timeout. Reason code "2". SQLSTATE=40001',
+            "40001",
+            -911,
+            DeadlockError,
+        ),
+        (
+            'SQL0913N Unsuccessful execution caused by deadlock or timeout. Reason code "2". SQLSTATE=57033',
+            "57033",
+            -913,
+            DeadlockError,
+        ),
+        (
+            "SQL0803N One or more values in the INSERT statement are not valid. SQLSTATE=23505",
+            None,
+            -803,
+            UniqueViolationError,
+        ),
+        (
+            "SQL0530N The insert or update value of the FOREIGN KEY is not equal. SQLSTATE=23503",
+            None,
+            -530,
+            ForeignKeyViolationError,
+        ),
+        ("SQL0407N Assignment of a NULL value to a NOT NULL column is not allowed.", None, -407, NotNullViolationError),
+        (
+            "SQL0545N The requested operation is not allowed because a row does not satisfy the check constraint.",
+            None,
+            -545,
+            CheckViolationError,
+        ),
+        ('SQL0204N "DB2INST1.MISSING" is an undefined name. SQLSTATE=42704', "42704", -204, SQLParsingError),
+        ("SQL0104N An unexpected token was found.", None, -104, SQLParsingError),
+        ("SQL0551N Does not have the required authorization or privilege.", None, -551, PermissionDeniedError),
+        (
+            "SQL0302N The value of a host variable in the EXECUTE or OPEN statement is out of range.",
+            None,
+            -302,
+            DataError,
+        ),
+        ("SQL0952N Processing was cancelled due to an interrupt.", None, -952, QueryTimeoutError),
+        ("SQL30081N A communication error has been detected.", None, -30081, DatabaseConnectionError),
+    ],
+)
+def test_create_mapped_exception_db2_diagnostics(
+    message: str, sqlstate: str | None, vendor_code: int | None, expected_cls: type[SQLSpecError]
+) -> None:
+    err = Exception(message)
+    if sqlstate is not None:
+        setattr(err, "sqlstate", sqlstate)
+    if vendor_code is not None:
+        setattr(err, "vendor_code", vendor_code)
+    mapped = adbc_core.create_mapped_exception(err)
+    assert isinstance(mapped, expected_cls)
+
+
+@pytest.mark.parametrize(
+    ("message", "vendor_code", "expected_cls"),
+    [
+        ("mssql: Msg 2627, Level 14, Violation of PRIMARY KEY constraint", 2627, UniqueViolationError),
+        ("mssql: Msg 2601, Cannot insert duplicate key row in object", 2601, UniqueViolationError),
+        (
+            "mssql: Msg 547, The INSERT statement conflicted with the FOREIGN KEY constraint",
+            547,
+            ForeignKeyViolationError,
+        ),
+        ("mssql: Msg 547, The INSERT statement conflicted with the CHECK constraint", 547, CheckViolationError),
+        ("mssql: Msg 515, Cannot insert the value NULL into column", 515, NotNullViolationError),
+        ("mssql: Msg 1205, Transaction (Process ID 52) was deadlocked on lock resources", 1205, DeadlockError),
+        (
+            "mssql: Msg 3960, Snapshot isolation transaction aborted due to update conflict",
+            3960,
+            SerializationConflictError,
+        ),
+        ("mssql: Msg 1222, Lock request time out period exceeded", 1222, QueryTimeoutError),
+        ("mssql: Msg 18456, Login failed for user 'sa'", 18456, PermissionDeniedError),
+        ("mssql: Msg 4060, Cannot open database requested by the login", 4060, DatabaseConnectionError),
+        ("mssql: Msg 208, Invalid object name 'dbo.missing'", 208, SQLParsingError),
+        ("mssql: Msg 8152, String or binary data would be truncated", 8152, DataError),
+    ],
+)
+def test_create_mapped_exception_mssql_diagnostics(
+    message: str, vendor_code: int | None, expected_cls: type[SQLSpecError]
+) -> None:
+    err = Exception(message)
+    if vendor_code is not None:
+        setattr(err, "vendor_code", vendor_code)
+    mapped = adbc_core.create_mapped_exception(err)
+    assert isinstance(mapped, expected_cls)
+
+
+def test_apply_driver_features_defaults_lowercase_columns_for_oracle_and_db2() -> None:
+    oracle_cfg, oracle_features = adbc_core.apply_driver_features(get_statement_config("oracle"), None)
+    db2_cfg, db2_features = adbc_core.apply_driver_features(get_statement_config("db2"), None)
+    _pg_cfg, pg_features = adbc_core.apply_driver_features(get_statement_config("postgres"), None)
+    _mssql_cfg, mssql_features = adbc_core.apply_driver_features(get_statement_config("mssql"), None)
+
+    assert oracle_cfg.dialect == "oracle"
+    assert oracle_features["enable_lowercase_column_names"] is True
+    assert db2_cfg.dialect == "db2"
+    assert db2_features["enable_lowercase_column_names"] is True
+    assert pg_features["enable_lowercase_column_names"] is False
+    assert mssql_features["enable_lowercase_column_names"] is False
+
+
+def test_normalize_column_names_lowercases_implicit_upper_names() -> None:
+    names = ["USER_ID", "EMAIL_ADDR", "MixedCase", "123_INVALID"]
+    assert adbc_core.normalize_column_names(names, {"enable_lowercase_column_names": True}) == [
+        "user_id",
+        "email_addr",
+        "MixedCase",
+        "123_INVALID",
+    ]
+    assert adbc_core.normalize_column_names(names, {"enable_lowercase_column_names": False}) == names
+
+
+def test_adbc_driver_dispatch_execute_lowercases_oracle_columns() -> None:
+    table = pa.table({"USER_ID": [1], "MixedCase": ["a"]})
+    cursor = SimpleNamespace(
+        execute=lambda _sql, parameters=None: None,
+        fetch_arrow_table=lambda: table,
+        description=[("USER_ID",), ("MixedCase",)],
+        rowcount=1,
+    )
+    conn = SimpleNamespace(
+        adbc_get_info=lambda: {"vendor_name": "Oracle", "driver_name": "ADBC Oracle Driver"}, cursor=lambda: cursor
+    )
+    driver = AdbcDriver(cast("Any", conn), dialect="oracle")
+    result = driver.dispatch_execute(cast("Any", cursor), SQL('SELECT USER_ID, "MixedCase" FROM dual'))
+
+    assert result.column_names == ["user_id", "MixedCase"]
+    assert result.selected_data == [{"user_id": 1, "MixedCase": "a"}]

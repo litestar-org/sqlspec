@@ -18,6 +18,7 @@ from sqlspec.adapters.adbc.core import (
     get_statement_config,
     handle_postgres_rollback,
     is_postgres_dialect,
+    normalize_column_names,
     normalize_postgres_empty_parameters,
     normalize_script_rowcount,
     prepare_batch_with_casts,
@@ -38,7 +39,7 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream
+from sqlspec.driver import BaseSyncExceptionHandler, SyncDriverAdapterBase, SyncRowStream, validate_savepoint_name
 from sqlspec.exceptions import DatabaseConnectionError, SQLSpecError
 from sqlspec.utils.arrow_helpers import arrow_reader_with_deferred_close, arrow_table_to_pylist
 from sqlspec.utils.logging import get_logger
@@ -133,6 +134,13 @@ class AdbcSelectStreamSource:
                 batch = next(reader)
             except StopIteration:
                 return []
+            if bool(self._driver.driver_features.get("enable_lowercase_column_names", False)) and hasattr(
+                batch, "schema"
+            ):
+                batch_names = list(batch.schema.names)
+                normalized_names = normalize_column_names(batch_names, self._driver.driver_features)
+                if normalized_names != batch_names and hasattr(batch, "rename_columns"):
+                    batch = batch.rename_columns(normalized_names)
             rows = arrow_table_to_pylist(
                 batch,
                 decode_arrow_extension_types=bool(
@@ -196,7 +204,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             base_config = get_statement_config(self._detected_dialect)
             statement_config = base_config.replace(enable_caching=statement_config.enable_caching)
 
+        explicit_lowercase = bool(driver_features and "enable_lowercase_column_names" in driver_features)
         statement_config, normalized_features = apply_driver_features(statement_config, driver_features)
+        if not explicit_lowercase and (dialect or self._detected_dialect) in {"oracle", "db2"}:
+            normalized_features["enable_lowercase_column_names"] = True
         super().__init__(connection=connection, statement_config=statement_config, driver_features=normalized_features)
         self.dialect = statement_config.dialect
         self._dialect_name = dialect or resolve_dialect_name(self.dialect)
@@ -241,11 +252,14 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if is_select_like:
             arrow_table = cursor.fetch_arrow_table()
+            raw_column_names = list(arrow_table.column_names)
+            column_names = normalize_column_names(raw_column_names, self.driver_features)
+            if column_names != raw_column_names and hasattr(arrow_table, "rename_columns"):
+                arrow_table = arrow_table.rename_columns(column_names)
             data = arrow_table_to_pylist(
                 arrow_table,
                 decode_arrow_extension_types=bool(self.driver_features.get("enable_arrow_extension_types", True)),
             )
-            column_names = list(arrow_table.column_names)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
@@ -392,7 +406,15 @@ class AdbcDriver(SyncDriverAdapterBase):
             NotImplementedError: If the connected database does not support savepoints.
         """
         self._require_savepoints()
-        super().create_savepoint(name)
+        safe_name = validate_savepoint_name(name)
+        dialect_name = resolve_dialect_name(self.dialect)
+        if dialect_name == "db2":
+            self.execute_script(f"SAVEPOINT {safe_name} ON ROLLBACK RETAIN CURSORS")
+            return
+        if dialect_name in {"mssql", "tsql"}:
+            self.execute_script(f"SAVE TRANSACTION {safe_name}")
+            return
+        super().create_savepoint(safe_name)
 
     def release_savepoint(self, name: str) -> None:
         """Release a previously created savepoint.
@@ -401,7 +423,10 @@ class AdbcDriver(SyncDriverAdapterBase):
             NotImplementedError: If the connected database does not support savepoints.
         """
         self._require_savepoints()
-        super().release_savepoint(name)
+        safe_name = validate_savepoint_name(name)
+        if resolve_dialect_name(self.dialect) in {"oracle", "mssql", "tsql"}:
+            return
+        super().release_savepoint(safe_name)
 
     def rollback_to_savepoint(self, name: str) -> None:
         """Roll back the current transaction to a previously created savepoint.
@@ -410,7 +435,11 @@ class AdbcDriver(SyncDriverAdapterBase):
             NotImplementedError: If the connected database does not support savepoints.
         """
         self._require_savepoints()
-        super().rollback_to_savepoint(name)
+        safe_name = validate_savepoint_name(name)
+        if resolve_dialect_name(self.dialect) in {"mssql", "tsql"}:
+            self.execute_script(f"ROLLBACK TRANSACTION {safe_name}")
+            return
+        super().rollback_to_savepoint(safe_name)
 
     def set_migration_session_schema(self, schema: str) -> None:
         """Set the PostgreSQL search path for migration SQL when using ADBC PostgreSQL."""
@@ -573,6 +602,14 @@ class AdbcDriver(SyncDriverAdapterBase):
                 handle_postgres_rollback(self._dialect_name, cursor, logger)
                 raise
 
+            if bool(self.driver_features.get("enable_lowercase_column_names", False)) and hasattr(
+                arrow_table, "column_names"
+            ):
+                raw_column_names = list(arrow_table.column_names)
+                normalized_column_names = normalize_column_names(raw_column_names, self.driver_features)
+                if normalized_column_names != raw_column_names and hasattr(arrow_table, "rename_columns"):
+                    arrow_table = arrow_table.rename_columns(normalized_column_names)
+
             arrow_result = build_arrow_result_from_table(
                 prepared_statement,
                 arrow_table,
@@ -689,7 +726,10 @@ class AdbcDriver(SyncDriverAdapterBase):
         """Collect ADBC rows for the direct execution path."""
         column_names = self._resolve_column_names(cursor.description)
         data, column_names = collect_rows(
-            cast("list[Any] | None", fetched), cursor.description, column_names=column_names
+            cast("list[Any] | None", fetched),
+            cursor.description,
+            column_names=column_names,
+            driver_features=self.driver_features,
         )
         return data, column_names, len(data)
 
@@ -784,7 +824,7 @@ class AdbcDriver(SyncDriverAdapterBase):
         return "flight sql" in driver_name or "flightsql" in driver_name
 
     def _resolve_column_names(self, description: Any) -> list[str]:
-        return resolve_column_names(description, self._column_name_cache)
+        return resolve_column_names(description, self._column_name_cache, self.driver_features)
 
     @staticmethod
     def _resolve_count_result_rowcount(cursor: "AdbcRawCursor", *, fallback: int) -> int:

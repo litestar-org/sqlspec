@@ -16,6 +16,7 @@ from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession,
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
 from sqlspec.utils.serializers import from_json, to_json
+from sqlspec.utils.text import normalize_identifier, split_qualified_identifier
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -33,6 +34,9 @@ DIALECT_SQLITE: Final = "sqlite"
 DIALECT_DUCKDB: Final = "duckdb"
 DIALECT_BIGQUERY: Final = "bigquery"
 DIALECT_SNOWFLAKE: Final = "snowflake"
+DIALECT_ORACLE: Final = "oracle"
+DIALECT_DB2: Final = "db2"
+DIALECT_MSSQL: Final = "mssql"
 DIALECT_GENERIC: Final = "generic"
 
 ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
@@ -41,6 +45,10 @@ ADBC_TABLE_NOT_FOUND_PATTERNS: Final = (
     "relation does not exist",
     "does not exist",
     "table with name",
+    "invalid object name",
+    "undefined name",
+    "ora-00942",
+    "sql0204n",
 )
 
 
@@ -215,6 +223,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return DIALECT_GENERIC
 
         resolved = resolve_dialect_from_config(self._config.connection_config)
+        stmt_dialect = self._config.statement_config.dialect
+        if (isinstance(stmt_dialect, str) and stmt_dialect.lower() in {"oracle", "db2", "mssql", "tsql"}) or (
+            resolved is None
+            and isinstance(stmt_dialect, str)
+            and stmt_dialect.lower() in {"sqlite", "duckdb", "bigquery", "snowflake"}
+        ):
+            resolved = stmt_dialect.lower()
         if is_postgres_dialect(resolved):
             return DIALECT_POSTGRESQL
         if resolved == "sqlite":
@@ -225,6 +240,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return DIALECT_BIGQUERY
         if resolved == "snowflake":
             return DIALECT_SNOWFLAKE
+        if resolved == "oracle":
+            return DIALECT_ORACLE
+        if resolved == "db2":
+            return DIALECT_DB2
+        if resolved in {"mssql", "tsql"}:
+            return DIALECT_MSSQL
 
         logger.warning(
             "Unknown ADBC driver: %s. Using generic SQL dialect. "
@@ -293,6 +314,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return "JSON"
         if self._dialect == DIALECT_SNOWFLAKE:
             return "VARIANT"
+        if self._dialect == DIALECT_ORACLE:
+            return "CLOB"
+        if self._dialect == DIALECT_DB2:
+            return "CLOB(1M)"
+        if self._dialect == DIALECT_MSSQL:
+            return "NVARCHAR(MAX)"
         return "TEXT"
 
     def _timestamp_storage_type(self) -> str:
@@ -302,6 +329,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return "TIMESTAMP_TZ"
         if self._dialect == DIALECT_SQLITE:
             return "REAL"
+        if self._dialect == DIALECT_ORACLE:
+            return "TIMESTAMP WITH TIME ZONE"
+        if self._dialect == DIALECT_DB2:
+            return "TIMESTAMP"
+        if self._dialect == DIALECT_MSSQL:
+            return "DATETIME2"
         return "TIMESTAMP"
 
     def _deserialize_json_field(self, data: Any) -> "dict[str, Any] | None":
@@ -333,6 +366,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return self._sessions_ddl_bigquery()
         if self._dialect == DIALECT_SNOWFLAKE:
             return self._sessions_ddl_snowflake()
+        if self._dialect == DIALECT_ORACLE:
+            return self._sessions_ddl_oracle()
+        if self._dialect == DIALECT_DB2:
+            return self._sessions_ddl_db2()
+        if self._dialect == DIALECT_MSSQL:
+            return self._sessions_ddl_mssql()
         return self._sessions_ddl_generic()
 
     def _sessions_ddl_postgresql(self) -> str:
@@ -425,6 +464,56 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
+    def _sessions_ddl_oracle(self) -> str:
+        """Oracle DDL with CLOB and TIMESTAMP WITH TIME ZONE."""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._session_table} (
+                id VARCHAR2(128) PRIMARY KEY,
+                app_name VARCHAR2(128) NOT NULL,
+                user_id VARCHAR2(128) NOT NULL{owner_id_ddl},
+                state CLOB NOT NULL,
+                create_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _sessions_ddl_db2(self) -> str:
+        """Db2 DDL with CLOB(1M) and TIMESTAMP."""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        CREATE TABLE {self._session_table} (
+            id VARCHAR(128) NOT NULL PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL{owner_id_ddl},
+            state CLOB(1M) NOT NULL,
+            create_time TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP,
+            update_time TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP
+        )
+        """
+
+    def _sessions_ddl_mssql(self) -> str:
+        """SQL Server DDL with NVARCHAR(MAX) and DATETIME2."""
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        IF OBJECT_ID(N'{self._session_table}', N'U') IS NULL
+        CREATE TABLE {self._session_table} (
+            id NVARCHAR(128) NOT NULL PRIMARY KEY,
+            app_name NVARCHAR(128) NOT NULL,
+            user_id NVARCHAR(128) NOT NULL{owner_id_ddl},
+            state NVARCHAR(MAX) NOT NULL,
+            create_time DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+            update_time DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+        )
+        """
+
     def _sessions_ddl_generic(self) -> str:
         """Generic SQL-92 compatible DDL fallback.
 
@@ -459,6 +548,12 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             return self._events_ddl_bigquery()
         if self._dialect == DIALECT_SNOWFLAKE:
             return self._events_ddl_snowflake()
+        if self._dialect == DIALECT_ORACLE:
+            return self._events_ddl_oracle()
+        if self._dialect == DIALECT_DB2:
+            return self._events_ddl_db2()
+        if self._dialect == DIALECT_MSSQL:
+            return self._events_ddl_mssql()
         return self._events_ddl_generic()
 
     def _events_ddl_postgresql(self) -> str:
@@ -555,6 +650,59 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         )
         """
 
+    def _events_ddl_oracle(self) -> str:
+        """Oracle DDL for events table."""
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._events_table} (
+                id VARCHAR2(128) PRIMARY KEY,
+                app_name VARCHAR2(128) NOT NULL,
+                user_id VARCHAR2(128) NOT NULL,
+                session_id VARCHAR2(128) NOT NULL,
+                invocation_id VARCHAR2(256),
+                timestamp TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                event_data CLOB NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _events_ddl_db2(self) -> str:
+        """Db2 DDL for events table."""
+        return f"""
+        CREATE TABLE {self._events_table} (
+            id VARCHAR(128) NOT NULL PRIMARY KEY,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            session_id VARCHAR(128) NOT NULL,
+            invocation_id VARCHAR(256),
+            timestamp TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP,
+            event_data CLOB(1M) NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        )
+        """
+
+    def _events_ddl_mssql(self) -> str:
+        """SQL Server DDL for events table."""
+        return f"""
+        IF OBJECT_ID(N'{self._events_table}', N'U') IS NULL
+        CREATE TABLE {self._events_table} (
+            id NVARCHAR(128) NOT NULL PRIMARY KEY,
+            app_name NVARCHAR(128) NOT NULL,
+            user_id NVARCHAR(128) NOT NULL,
+            session_id NVARCHAR(128) NOT NULL,
+            invocation_id NVARCHAR(256),
+            timestamp DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+            event_data NVARCHAR(MAX) NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES {self._session_table}(id) ON DELETE CASCADE
+        )
+        """
+
     def _events_ddl_generic(self) -> str:
         """Generic SQL-92 compatible DDL for events table.
 
@@ -583,6 +731,38 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
             )
             """
+        if self._dialect == DIALECT_ORACLE:
+            return f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE TABLE {self._app_state_table} (
+                    app_name VARCHAR2(128) PRIMARY KEY,
+                    state CLOB NOT NULL,
+                    update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+                )';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -955 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """
+        if self._dialect == DIALECT_DB2:
+            return f"""
+            CREATE TABLE {self._app_state_table} (
+                app_name VARCHAR(128) NOT NULL PRIMARY KEY,
+                state CLOB(1M) NOT NULL,
+                update_time TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP
+            )
+            """
+        if self._dialect == DIALECT_MSSQL:
+            return f"""
+            IF OBJECT_ID(N'{self._app_state_table}', N'U') IS NULL
+            CREATE TABLE {self._app_state_table} (
+                app_name NVARCHAR(128) NOT NULL PRIMARY KEY,
+                state NVARCHAR(MAX) NOT NULL,
+                update_time DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+            )
+            """
         json_type = self._json_storage_type()
         timestamp_type = self._timestamp_storage_type()
         if self._dialect == DIALECT_SQLITE:
@@ -607,6 +787,44 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 user_id STRING NOT NULL,
                 state JSON NOT NULL,
                 update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP()
+            )
+            """
+        if self._dialect == DIALECT_ORACLE:
+            return f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE TABLE {self._user_state_table} (
+                    app_name VARCHAR2(128) NOT NULL,
+                    user_id VARCHAR2(128) NOT NULL,
+                    state CLOB NOT NULL,
+                    update_time TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                    PRIMARY KEY (app_name, user_id)
+                )';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -955 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """
+        if self._dialect == DIALECT_DB2:
+            return f"""
+            CREATE TABLE {self._user_state_table} (
+                app_name VARCHAR(128) NOT NULL,
+                user_id VARCHAR(128) NOT NULL,
+                state CLOB(1M) NOT NULL,
+                update_time TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP,
+                PRIMARY KEY (app_name, user_id)
+            )
+            """
+        if self._dialect == DIALECT_MSSQL:
+            return f"""
+            IF OBJECT_ID(N'{self._user_state_table}', N'U') IS NULL
+            CREATE TABLE {self._user_state_table} (
+                app_name NVARCHAR(128) NOT NULL,
+                user_id NVARCHAR(128) NOT NULL,
+                state NVARCHAR(MAX) NOT NULL,
+                update_time DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                PRIMARY KEY (app_name, user_id)
             )
             """
         json_type = self._json_storage_type()
@@ -635,6 +853,35 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 value STRING NOT NULL
             )
             """
+        if self._dialect == DIALECT_ORACLE:
+            return f"""
+            BEGIN
+                EXECUTE IMMEDIATE 'CREATE TABLE {self._metadata_table} (
+                    key VARCHAR2(128) PRIMARY KEY,
+                    value VARCHAR2(512) NOT NULL
+                )';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    IF SQLCODE != -955 THEN
+                        RAISE;
+                    END IF;
+            END;
+            """
+        if self._dialect == DIALECT_DB2:
+            return f"""
+            CREATE TABLE {self._metadata_table} (
+                "KEY" VARCHAR(128) NOT NULL PRIMARY KEY,
+                value VARCHAR(512) NOT NULL
+            )
+            """
+        if self._dialect == DIALECT_MSSQL:
+            return f"""
+            IF OBJECT_ID(N'{self._metadata_table}', N'U') IS NULL
+            CREATE TABLE {self._metadata_table} (
+                [key] NVARCHAR(128) NOT NULL PRIMARY KEY,
+                value NVARCHAR(512) NOT NULL
+            )
+            """
         return f"""
         CREATE TABLE IF NOT EXISTS {self._metadata_table} (
             key VARCHAR(128) PRIMARY KEY,
@@ -643,13 +890,13 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
 
     def _drop_app_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._app_state_table}"
+        return _drop_table_sql_for_dialect(self._dialect, self._app_state_table)
 
     def _drop_user_states_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._user_state_table}"
+        return _drop_table_sql_for_dialect(self._dialect, self._user_state_table)
 
     def _drop_metadata_table_sql(self) -> str:
-        return f"DROP TABLE IF EXISTS {self._metadata_table}"
+        return _drop_table_sql_for_dialect(self._dialect, self._metadata_table)
 
     def _drop_tables_sql(self) -> "list[str]":
         """Get DROP TABLE SQL statements.
@@ -661,8 +908,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             self._drop_metadata_table_sql(),
             self._drop_user_states_table_sql(),
             self._drop_app_states_table_sql(),
-            f"DROP TABLE IF EXISTS {self._events_table}",
-            f"DROP TABLE IF EXISTS {self._session_table}",
+            _drop_table_sql_for_dialect(self._dialect, self._events_table),
+            _drop_table_sql_for_dialect(self._dialect, self._session_table),
         ]
 
     def _create_tables(self) -> None:
@@ -673,33 +920,48 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             try:
                 self._enable_foreign_keys(cursor, conn)
 
-                cursor.execute(self._sessions_table_ddl())
+                _execute_table_ddl(cursor, self._dialect, self._session_table, self._sessions_table_ddl())
                 conn.commit()
 
                 if not skip_indexes:
-                    sessions_idx_app_user = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_app_user ON {self._session_table}(app_name, user_id)"
-                    cursor.execute(sessions_idx_app_user)
+                    _execute_index_ddl(
+                        cursor,
+                        self._dialect,
+                        f"idx_{self._session_table}_app_user",
+                        self._session_table,
+                        "app_name, user_id",
+                    )
                     conn.commit()
 
-                    sessions_idx_update = f"CREATE INDEX IF NOT EXISTS idx_{self._session_table}_update_time ON {self._session_table}(update_time DESC)"
-                    cursor.execute(sessions_idx_update)
+                    _execute_index_ddl(
+                        cursor,
+                        self._dialect,
+                        f"idx_{self._session_table}_update_time",
+                        self._session_table,
+                        "update_time DESC",
+                    )
                     conn.commit()
 
-                cursor.execute(self._events_table_ddl())
+                _execute_table_ddl(cursor, self._dialect, self._events_table, self._events_table_ddl())
                 conn.commit()
 
                 if not skip_indexes:
-                    events_idx = f"CREATE INDEX IF NOT EXISTS idx_{self._events_table}_session ON {self._events_table}(session_id, timestamp ASC)"
-                    cursor.execute(events_idx)
+                    _execute_index_ddl(
+                        cursor,
+                        self._dialect,
+                        f"idx_{self._events_table}_session",
+                        self._events_table,
+                        "session_id, timestamp ASC",
+                    )
                     conn.commit()
 
-                cursor.execute(self._app_states_table_ddl())
+                _execute_table_ddl(cursor, self._dialect, self._app_state_table, self._app_states_table_ddl())
                 conn.commit()
 
-                cursor.execute(self._user_states_table_ddl())
+                _execute_table_ddl(cursor, self._dialect, self._user_state_table, self._user_states_table_ddl())
                 conn.commit()
 
-                cursor.execute(self._metadata_table_ddl())
+                _execute_table_ddl(cursor, self._dialect, self._metadata_table, self._metadata_table_ddl())
                 conn.commit()
             finally:
                 cursor.close()
@@ -721,9 +983,11 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
     def _format_sql(self, sql: str) -> str:
         """Return SQL with dialect-appropriate positional placeholders."""
-        if self._dialect != DIALECT_POSTGRESQL:
-            return sql
-        return _postgresql_store_sql(sql)
+        if self._dialect == DIALECT_POSTGRESQL:
+            return _postgresql_store_sql(sql)
+        if self._dialect == DIALECT_ORACLE:
+            return _oracle_store_sql(sql)
+        return sql
 
     def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
         """Execute parameterized SQL using the current ADBC dialect's placeholder style."""
@@ -741,7 +1005,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
 
         page_clause = ""
         if limit is not None:
-            if self._dialect == DIALECT_GENERIC:
+            if self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
                 params.extend((offset, limit))
                 page_clause = "\n            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
             else:
@@ -1162,7 +1426,10 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         where_clause = " AND ".join(where_clauses)
         limit_clause = ""
         if limit is not None:
-            limit_clause = " LIMIT ?"
+            if self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
+                limit_clause = " OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
+            else:
+                limit_clause = " LIMIT ?"
             params.append(limit)
         sql = f"""
         SELECT e.id, e.session_id, e.invocation_id, e.timestamp, e.event_data, s.app_name, s.user_id
@@ -1352,7 +1619,8 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
                 cursor.close()
 
     def _get_metadata(self, key: str) -> "str | None":
-        sql = f"SELECT value FROM {self._metadata_table} WHERE key = ?"
+        key_col = _metadata_key_column(self._dialect)
+        sql = f"SELECT value FROM {self._metadata_table} WHERE {key_col} = ?"
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
@@ -1369,8 +1637,9 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
             raise
 
     def _set_metadata(self, key: str, value: str) -> None:
-        delete_sql = f"DELETE FROM {self._metadata_table} WHERE key = ?"
-        insert_sql = f"INSERT INTO {self._metadata_table} (key, value) VALUES (?, ?)"
+        key_col = _metadata_key_column(self._dialect)
+        delete_sql = f"DELETE FROM {self._metadata_table} WHERE {key_col} = ?"
+        insert_sql = f"INSERT INTO {self._metadata_table} ({key_col}, value) VALUES (?, ?)"
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -1445,6 +1714,13 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return DIALECT_GENERIC
 
         resolved = resolve_dialect_from_config(self._config.connection_config)
+        stmt_dialect = self._config.statement_config.dialect
+        if (isinstance(stmt_dialect, str) and stmt_dialect.lower() in {"oracle", "db2", "mssql", "tsql"}) or (
+            resolved is None
+            and isinstance(stmt_dialect, str)
+            and stmt_dialect.lower() in {"sqlite", "duckdb", "bigquery", "snowflake"}
+        ):
+            resolved = stmt_dialect.lower()
         if is_postgres_dialect(resolved):
             return DIALECT_POSTGRESQL
         if resolved == "sqlite":
@@ -1455,14 +1731,22 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return DIALECT_BIGQUERY
         if resolved == "snowflake":
             return DIALECT_SNOWFLAKE
+        if resolved == "oracle":
+            return DIALECT_ORACLE
+        if resolved == "db2":
+            return DIALECT_DB2
+        if resolved in {"mssql", "tsql"}:
+            return DIALECT_MSSQL
         logger.warning("Unknown ADBC driver: %s. Using generic SQL dialect.", driver_name)
         return DIALECT_GENERIC
 
     def _format_sql(self, sql: str) -> str:
         """Return SQL with dialect-appropriate positional placeholders."""
-        if self._dialect != DIALECT_POSTGRESQL:
-            return sql
-        return _postgresql_store_sql(sql)
+        if self._dialect == DIALECT_POSTGRESQL:
+            return _postgresql_store_sql(sql)
+        if self._dialect == DIALECT_ORACLE:
+            return _oracle_store_sql(sql)
+        return sql
 
     def _execute(self, cursor: Any, sql: str, params: "tuple[Any, ...] | list[Any]") -> Any:
         """Execute parameterized SQL using the current ADBC dialect's placeholder style."""
@@ -1505,6 +1789,12 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             return self._memory_ddl_bigquery()
         if self._dialect == DIALECT_SNOWFLAKE:
             return self._memory_ddl_snowflake()
+        if self._dialect == DIALECT_ORACLE:
+            return self._memory_ddl_oracle()
+        if self._dialect == DIALECT_DB2:
+            return self._memory_ddl_db2()
+        if self._dialect == DIALECT_MSSQL:
+            return self._memory_ddl_mssql()
         return self._memory_ddl_generic()
 
     def _memory_ddl_postgresql(self) -> str:
@@ -1602,6 +1892,71 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         )
         """
 
+    def _memory_ddl_oracle(self) -> str:
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLE {self._memory_table} (
+                id VARCHAR2(128) PRIMARY KEY,
+                session_id VARCHAR2(128) NOT NULL,
+                app_name VARCHAR2(128) NOT NULL,
+                user_id VARCHAR2(128) NOT NULL,
+                scope VARCHAR2(16) DEFAULT ''user'' NOT NULL,
+                event_id VARCHAR2(128) NOT NULL UNIQUE,
+                author VARCHAR2(256){owner_id_ddl},
+                timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+                content_json CLOB NOT NULL,
+                content_text CLOB NOT NULL,
+                metadata_json CLOB,
+                inserted_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+            )';
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLCODE != -955 THEN
+                    RAISE;
+                END IF;
+        END;
+        """
+
+    def _memory_ddl_db2(self) -> str:
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        CREATE TABLE {self._memory_table} (
+            id VARCHAR(128) NOT NULL PRIMARY KEY,
+            session_id VARCHAR(128) NOT NULL,
+            app_name VARCHAR(128) NOT NULL,
+            user_id VARCHAR(128) NOT NULL,
+            scope VARCHAR(16) NOT NULL WITH DEFAULT 'user',
+            event_id VARCHAR(128) NOT NULL UNIQUE,
+            author VARCHAR(256){owner_id_ddl},
+            timestamp TIMESTAMP NOT NULL,
+            content_json CLOB(1M) NOT NULL,
+            content_text CLOB(1M) NOT NULL,
+            metadata_json CLOB(1M),
+            inserted_at TIMESTAMP NOT NULL WITH DEFAULT CURRENT TIMESTAMP
+        )
+        """
+
+    def _memory_ddl_mssql(self) -> str:
+        owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        return f"""
+        IF OBJECT_ID(N'{self._memory_table}', N'U') IS NULL
+        CREATE TABLE {self._memory_table} (
+            id NVARCHAR(128) NOT NULL PRIMARY KEY,
+            session_id NVARCHAR(128) NOT NULL,
+            app_name NVARCHAR(128) NOT NULL,
+            user_id NVARCHAR(128) NOT NULL,
+            scope NVARCHAR(16) NOT NULL DEFAULT 'user',
+            event_id NVARCHAR(128) NOT NULL UNIQUE,
+            author NVARCHAR(256){owner_id_ddl},
+            timestamp DATETIME2 NOT NULL,
+            content_json NVARCHAR(MAX) NOT NULL,
+            content_text NVARCHAR(MAX) NOT NULL,
+            metadata_json NVARCHAR(MAX),
+            inserted_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+        )
+        """
+
     def _memory_ddl_generic(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
         return f"""
@@ -1622,7 +1977,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         """
 
     def _drop_memory_table_sql(self) -> "list[str]":
-        return [f"DROP TABLE IF EXISTS {self._memory_table}"]
+        return [_drop_table_sql_for_dialect(self._dialect, self._memory_table)]
 
     def _create_tables(self) -> None:
         if not self._enabled:
@@ -1632,20 +1987,27 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
             try:
-                cursor.execute(self._memory_table_ddl())
+                _execute_table_ddl(cursor, self._dialect, self._memory_table, self._memory_table_ddl())
                 conn.commit()
 
                 if not skip_indexes:
-                    idx_app_scope_user = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_app_scope_user_time ON {self._memory_table}(app_name, scope, user_id, timestamp DESC)"
-                    cursor.execute(idx_app_scope_user)
+                    _execute_index_ddl(
+                        cursor,
+                        self._dialect,
+                        f"idx_{self._memory_table}_app_scope_user_time",
+                        self._memory_table,
+                        "app_name, scope, user_id, timestamp DESC",
+                    )
                     conn.commit()
 
-                    idx_scope = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scope ON {self._memory_table}(app_name, scope)"
-                    cursor.execute(idx_scope)
+                    _execute_index_ddl(
+                        cursor, self._dialect, f"idx_{self._memory_table}_scope", self._memory_table, "app_name, scope"
+                    )
                     conn.commit()
 
-                    idx_session = f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_session ON {self._memory_table}(session_id)"
-                    cursor.execute(idx_session)
+                    _execute_index_ddl(
+                        cursor, self._dialect, f"idx_{self._memory_table}_session", self._memory_table, "session_id"
+                    )
                     conn.commit()
             finally:
                 cursor.close()
@@ -1750,7 +2112,14 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                             inserted_count += 1
                         except Exception as exc:
                             exc_str = str(exc).lower()
-                            if "unique" in exc_str or "constraint" in exc_str or "duplicate" in exc_str:
+                            if (
+                                "unique" in exc_str
+                                or "constraint" in exc_str
+                                or "duplicate" in exc_str
+                                or "ora-00001" in exc_str
+                                or "sql0803n" in exc_str
+                                or "23505" in exc_str
+                            ):
                                 continue
                             raise
                 conn.commit()
@@ -1782,24 +2151,34 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             logger.warning("ADBC memory store does not support FTS, falling back to simple search")
 
         effective_limit = limit if limit is not None else self._max_results
-        pattern = f"%{query}%"
         where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
+        if self._dialect == DIALECT_DB2:
+            match_clause = "POSSTR(LOWER(content_text), LOWER(?)) > 0"
+            search_param = query
+        else:
+            match_clause = "content_text LIKE ?"
+            search_param = f"%{query}%"
+
+        if self._dialect in {DIALECT_GENERIC, DIALECT_ORACLE, DIALECT_DB2, DIALECT_MSSQL}:
+            limit_clause = "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
+        else:
+            limit_clause = "LIMIT ?"
 
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
                timestamp, content_json, content_text, metadata_json, inserted_at
         FROM {self._memory_table}
         WHERE {where_scope}
-          AND content_text LIKE ?
+          AND {match_clause}
         ORDER BY timestamp DESC
-        LIMIT ?
+        {limit_clause}
         """
 
         try:
             with self._config.provide_connection() as conn:
                 cursor = conn.cursor()
                 try:
-                    self._execute(cursor, sql, (*scope_params, pattern, effective_limit))
+                    self._execute(cursor, sql, (*scope_params, search_param, effective_limit))
                     rows = cursor.fetchall()
                 finally:
                     cursor.close()
@@ -1904,6 +2283,15 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         return records
 
 
+_DB2_TABLE_EXISTS_SQL: Final = (
+    "SELECT 1 FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND TABNAME = ?"
+)
+_DB2_INDEX_EXISTS_SQL: Final = (
+    "SELECT 1 FROM SYSCAT.INDEXES WHERE INDSCHEMA = COALESCE(CAST(? AS VARCHAR(128)), CURRENT SCHEMA) AND INDNAME = ?"
+)
+_MIN_QUALIFIED_PARTS: Final = 2
+
+
 @lru_cache(maxsize=256)
 def _postgresql_store_sql(sql: str) -> str:
     """Cache positional SQL conversion without changing quoted or commented text."""
@@ -1917,6 +2305,97 @@ def _postgresql_store_sql(sql: str) -> str:
             last_end = match.end()
     segments.append(sql[last_end:])
     return "".join(segments)
+
+
+@lru_cache(maxsize=256)
+def _oracle_store_sql(sql: str) -> str:
+    """Rewrite positional ``?`` placeholders in store SQL to ``:1, :2, ...``."""
+    segments: list[str] = []
+    last_end = 0
+    index = 0
+    for match in PARAMETER_REGEX.finditer(sql):
+        if match.lastgroup == "qmark":
+            index += 1
+            segments.extend((sql[last_end : match.start()], f":{index}"))
+            last_end = match.end()
+    segments.append(sql[last_end:])
+    return "".join(segments)
+
+
+def _metadata_key_column(dialect: str) -> str:
+    if dialect == DIALECT_MSSQL:
+        return "[key]"
+    if dialect == DIALECT_DB2:
+        return '"KEY"'
+    return "key"
+
+
+def _split_db2_table_name(table_name: str) -> "tuple[str | None, str]":
+    parts = [part.strip() for part in split_qualified_identifier(table_name, quote_chars='"') if part.strip()]
+    if len(parts) >= _MIN_QUALIFIED_PARTS:
+        return normalize_identifier(parts[-2], "db2"), normalize_identifier(parts[-1], "db2")
+    return None, normalize_identifier(parts[0] if parts else table_name, "db2")
+
+
+def _db2_table_exists(cursor: Any, table_name: str) -> bool:
+    schema_name, catalog_table = _split_db2_table_name(table_name)
+    cursor.execute(_DB2_TABLE_EXISTS_SQL, (schema_name, catalog_table))
+    return cursor.fetchone() is not None
+
+
+def _db2_index_exists(cursor: Any, index_name: str) -> bool:
+    schema_name, catalog_index = _split_db2_table_name(index_name)
+    cursor.execute(_DB2_INDEX_EXISTS_SQL, (schema_name, catalog_index))
+    return cursor.fetchone() is not None
+
+
+def _execute_table_ddl(cursor: Any, dialect: str, table_name: str, ddl: str) -> None:
+    if dialect == DIALECT_DB2:
+        if not _db2_table_exists(cursor, table_name):
+            cursor.execute(ddl)
+        return
+    cursor.execute(ddl)
+
+
+def _execute_index_ddl(cursor: Any, dialect: str, index_name: str, table_name: str, columns: str) -> None:
+    if dialect == DIALECT_ORACLE:
+        stmt = (
+            f"BEGIN EXECUTE IMMEDIATE 'CREATE INDEX {index_name} ON {table_name}({columns})'; "
+            "EXCEPTION WHEN OTHERS THEN IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF; END;"
+        )
+        cursor.execute(stmt)
+        return
+    if dialect == DIALECT_DB2:
+        if not _db2_index_exists(cursor, index_name):
+            cursor.execute(f"CREATE INDEX {index_name} ON {table_name}({columns})")
+        return
+    if dialect == DIALECT_MSSQL:
+        stmt = (
+            f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{index_name}' "
+            f"AND object_id = OBJECT_ID(N'{table_name}')) "
+            f"CREATE INDEX {index_name} ON {table_name}({columns})"
+        )
+        cursor.execute(stmt)
+        return
+    cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({columns})")
+
+
+def _drop_table_sql_for_dialect(dialect: str, table_name: str) -> str:
+    if dialect == DIALECT_ORACLE:
+        return (
+            f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {table_name}'; "
+            "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;"
+        )
+    if dialect == DIALECT_DB2:
+        schema_name, catalog_table = _split_db2_table_name(table_name)
+        schema_filter = f"TABSCHEMA = '{schema_name}'" if schema_name is not None else "TABSCHEMA = CURRENT SCHEMA"
+        return (
+            f"BEGIN IF EXISTS (SELECT 1 FROM SYSCAT.TABLES WHERE {schema_filter} AND TABNAME = '{catalog_table}') "
+            f"THEN EXECUTE IMMEDIATE 'DROP TABLE {table_name}'; END IF; END"
+        )
+    if dialect == DIALECT_MSSQL:
+        return f"IF OBJECT_ID(N'{table_name}', N'U') IS NOT NULL DROP TABLE {table_name}"
+    return f"DROP TABLE IF EXISTS {table_name}"
 
 
 def _build_adbc_scope_where(

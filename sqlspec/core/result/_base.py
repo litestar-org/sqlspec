@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 from mypy_extensions import mypyc_attr
 from typing_extensions import TypeVar
 
-from sqlspec.core.statement import SQL
+from sqlspec.core.statement import SQL, ProcessedState
 from sqlspec.exceptions import MultipleResultsFoundError
 from sqlspec.storage import (
     AsyncStoragePipeline,
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 
     from sqlspec.core.compiler import OperationType
+    from sqlspec.core.statement import StatementConfig
     from sqlspec.typing import ArrowReturnFormat, ArrowTable, PandasDataFrame, PolarsDataFrame, SchemaT
 
 
@@ -66,7 +67,6 @@ class StatementResult:
     DELETE, and script operations.
 
     Attributes:
-        statement: The original SQL statement that was executed.
         data: The result data from the operation.
         rows_affected: Number of rows affected by the operation.
         last_inserted_id: Last inserted ID from INSERT operations.
@@ -75,20 +75,25 @@ class StatementResult:
     """
 
     __slots__ = (
+        "_lazy_cached_state",
+        "_lazy_compiled_sql",
+        "_lazy_config",
+        "_lazy_params",
+        "_lazy_sql",
         "_operation_type",
+        "_statement",
         "data",
         "execution_time",
         "last_inserted_id",
         "metadata",
         "rows_affected",
-        "statement",
     )
 
     _operation_type: "OperationType"
 
     def __init__(
         self,
-        statement: "SQL",
+        statement: "SQL | None" = None,
         data: Any = None,
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
@@ -105,13 +110,53 @@ class StatementResult:
             execution_time: Time taken to execute the statement in seconds.
             metadata: Additional metadata about the operation.
         """
-        self.statement = statement
-        self._operation_type = statement.operation_type
+        self._statement: SQL | None = statement
+        self._lazy_sql: str | None = None
+        self._lazy_config: StatementConfig | None = None
+        self._lazy_cached_state: ProcessedState | None = None
+        self._lazy_compiled_sql: str | None = None
+        self._lazy_params: Any = None
+        self._operation_type = statement.operation_type if statement is not None else "SELECT"
         self.data = data
         self.rows_affected = rows_affected
         self.last_inserted_id = last_inserted_id
         self.execution_time = execution_time
         self.metadata = metadata if metadata is not None else {}
+
+    @property
+    def statement(self) -> "SQL":
+        """Return the executed SQL statement, materializing it on demand for fast-path results."""
+        stmt = self._statement
+        if stmt is not None:
+            return stmt
+        raw_sql = self._lazy_sql
+        config = self._lazy_config
+        cached_state = self._lazy_cached_state
+        if raw_sql is not None and config is not None and cached_state is not None:
+            direct_state = ProcessedState(
+                compiled_sql=self._lazy_compiled_sql or cached_state.compiled_sql,
+                execution_parameters=self._lazy_params,
+                parsed_expression=cached_state.parsed_expression,
+                operation_type=cached_state.operation_type,
+                input_named_parameters=cached_state.input_named_parameters,
+                applied_wrap_types=cached_state.applied_wrap_types,
+                filter_hash=cached_state.filter_hash,
+                parameter_fingerprint=cached_state.parameter_fingerprint,
+                parameter_casts=cached_state.parameter_casts,
+                validation_errors=cached_state.validation_errors,
+                parameter_profile=cached_state.parameter_profile,
+                operation_profile=cached_state.operation_profile,
+                is_many=False,
+                expression_is_shared=True,
+            )
+            stmt = SQL._create_cached_direct(raw_sql, config, direct_state, pooled=False)
+            self._statement = stmt
+            return stmt
+        return _EMPTY_RESULT_STATEMENT
+
+    @statement.setter
+    def statement(self, value: "SQL") -> None:
+        self._statement = value
 
     @abstractmethod
     def __iter__(self) -> "Iterator[Any]":
@@ -161,6 +206,9 @@ class StatementResult:
             key: The metadata key to set.
             value: The value to set.
         """
+        if self.metadata is _DEFAULT_DML_METADATA:
+            self.metadata = {key: value}
+            return
         self.metadata[key] = value
 
 
@@ -197,7 +245,7 @@ class SQLResult(StatementResult):
 
     def __init__(
         self,
-        statement: "SQL",
+        statement: "SQL | None" = None,
         data: "Sequence[Any] | None" = None,
         rows_affected: int = 0,
         last_inserted_id: int | str | None = None,
@@ -330,6 +378,39 @@ class SQLResult(StatementResult):
             Number of columns.
         """
         return len(self.column_names) if self.column_names else 0
+
+    @classmethod
+    def create_cached_select(
+        cls,
+        sql: str,
+        config: "StatementConfig",
+        cached_state: "ProcessedState",
+        compiled_sql: str,
+        params: Any,
+        data: "list[Any]",
+        column_names: "list[str]",
+        rows_affected: int,
+        row_format: RowFormat = "dict",
+        last_inserted_id: int | str | None = None,
+    ) -> "SQLResult":
+        """Construct a fast-path SELECT result with deferred SQL statement materialization."""
+        result = cls(
+            statement=None,
+            data=data,
+            rows_affected=rows_affected,
+            last_inserted_id=last_inserted_id,
+            metadata=_DEFAULT_DML_METADATA,
+            operation_type="SELECT",
+            column_names=column_names,
+            total_count=rows_affected,
+            row_format=row_format,
+        )
+        result._lazy_sql = sql
+        result._lazy_config = config
+        result._lazy_cached_state = cached_state
+        result._lazy_compiled_sql = compiled_sql
+        result._lazy_params = params
+        return result
 
     def is_success(self) -> bool:
         """Check if the operation was successful.
@@ -965,7 +1046,12 @@ class DMLResult(SQLResult):
     def __init__(
         self, op_type: "OperationType", rows_affected: int = 0, last_inserted_id: int | str | None = None
     ) -> None:
-        self.statement = _EMPTY_RESULT_STATEMENT
+        self._statement = _EMPTY_RESULT_STATEMENT
+        self._lazy_sql = None
+        self._lazy_config = None
+        self._lazy_cached_state = None
+        self._lazy_compiled_sql = None
+        self._lazy_params = None
         self.data = _EMPTY_RESULT_DATA
         self.rows_affected = rows_affected
         self.last_inserted_id = last_inserted_id

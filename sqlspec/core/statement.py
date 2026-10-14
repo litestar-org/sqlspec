@@ -117,6 +117,7 @@ _PUBLIC_CONFIG_FIELDS: Final = frozenset(slot for slot in SQL_CONFIG_SLOTS if no
 PROCESSED_STATE_SLOTS: Final = (
     "compiled_sql",
     "execution_parameters",
+    "expression_is_shared",
     "parsed_expression",
     "operation_type",
     "input_named_parameters",
@@ -178,6 +179,7 @@ class ProcessedState:
         parameter_profile: "ParameterProfile | None" = None,
         operation_profile: "OperationProfile | None" = None,
         is_many: bool = False,
+        expression_is_shared: bool = False,
     ) -> None:
         self.compiled_sql = compiled_sql
         self.execution_parameters = execution_parameters
@@ -192,6 +194,7 @@ class ProcessedState:
         self.parameter_profile = parameter_profile or ParameterProfile.empty()
         self.operation_profile = operation_profile or OperationProfile.empty()
         self.is_many = is_many
+        self.expression_is_shared = expression_is_shared
 
     def __hash__(self) -> int:
         return hash((self.compiled_sql, str(self.execution_parameters), self.operation_type))
@@ -214,8 +217,18 @@ class ProcessedState:
                 self.parameter_profile,
                 self.operation_profile,
                 self.is_many,
+                self.expression_is_shared,
             ),
         )
+
+    def ensure_owned_expression(self) -> "exp.Expr | None":
+        """Return an owned SQLGlot expression, copying once if currently shared with a cache."""
+        expr = self.parsed_expression
+        if expr is not None and self.expression_is_shared:
+            expr = expr.copy()
+            self.parsed_expression = expr
+            self.expression_is_shared = False
+        return expr
 
     def reset(self) -> None:
         """Reset processing state for reuse."""
@@ -232,6 +245,7 @@ class ProcessedState:
         self.parameter_profile = ParameterProfile.empty()
         self.operation_profile = OperationProfile.empty()
         self.is_many = False
+        self.expression_is_shared = False
 
 
 @mypyc_attr(allow_interpreted_subclasses=False)
@@ -388,7 +402,17 @@ class SQL:
             return mixed[1]
         if self._named_parameters:
             return self._named_parameters
-        return self._positional_parameters or []
+        if self._positional_parameters:
+            return self._positional_parameters
+        if self._is_cache_direct and self._processed_state is not Empty:
+            exec_params = self._processed_state.execution_parameters
+            if isinstance(exec_params, dict):
+                return exec_params
+            if isinstance(exec_params, tuple):
+                return list(exec_params)
+            if isinstance(exec_params, list):
+                return exec_params
+        return []
 
     @property
     def positional_parameters(self) -> "list[Any]":
@@ -431,7 +455,7 @@ class SQL:
         """
         state = self._processed_state
         if state is not Empty:
-            return state.parsed_expression
+            return state.ensure_owned_expression()
         return self._raw_expression
 
     @property
@@ -466,7 +490,7 @@ class SQL:
         """
         state = self._processed_state
         if state is not Empty:
-            return state.parsed_expression
+            return state.ensure_owned_expression()
         return self._raw_expression
 
     @property
@@ -629,6 +653,7 @@ class SQL:
                 operation_profile=compiled_result.operation_profile,
                 validation_errors=[],
                 is_many=self._is_many,
+                expression_is_shared=compiled_result.expression is not None,
             )
         except sqlspec.exceptions.SQLSpecError:
             raise
@@ -1139,7 +1164,9 @@ class SQL:
         return builder
 
     @classmethod
-    def _create_cached_direct(cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState") -> "SQL":
+    def _create_cached_direct(
+        cls, sql: str, config: "StatementConfig", processed_state: "ProcessedState", *, pooled: bool = True
+    ) -> "SQL":
         """Create a minimal SQL object for direct (fast-path) execution.
 
         Bypasses standard __init__ and parameter processing.
@@ -1150,7 +1177,7 @@ class SQL:
         stmt._statement_config = config
         stmt._dialect = stmt._normalize_dialect(config.dialect)
         stmt._processed_state = processed_state
-        stmt._pooled = True
+        stmt._pooled = pooled
         stmt._is_cache_direct = True
         stmt._is_many = False
         stmt._is_script = False
@@ -1360,11 +1387,7 @@ class SQL:
         mixed = self._resolve_mixed_parameter_inputs()
         params = mixed[1] if mixed is not None else self._named_parameters or self._positional_parameters
         if self._rebind_processor is None:
-            self._rebind_processor = ParameterProcessor(
-                converter=self._statement_config.parameter_converter,
-                validator=self._statement_config.parameter_validator,
-                cache_max_size=0,
-            )
+            self._rebind_processor = _get_rebind_processor(self._statement_config)
         processor = self._rebind_processor
         rebound_params = processor.transform_cached_parameters(
             params,
@@ -1378,10 +1401,12 @@ class SQL:
         output_transformer = self._statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
+        if state.parsed_expression is not None:
+            state.expression_is_shared = True
         self._processed_state = self._build_processed_state(
             compiled_sql=compiled_sql,
             execution_parameters=rebound_params,
-            parsed_expression=state.parsed_expression.copy() if state.parsed_expression is not None else None,
+            parsed_expression=state.parsed_expression,
             operation_type=state.operation_type,
             input_named_parameters=state.input_named_parameters,
             applied_wrap_types=state.applied_wrap_types,
@@ -1392,6 +1417,7 @@ class SQL:
             operation_profile=state.operation_profile,
             validation_errors=state.validation_errors.copy(),
             is_many=state.is_many,
+            expression_is_shared=state.parsed_expression is not None,
         )
         self._compiled_from_cache = False
         return compiled_sql, rebound_params
@@ -1423,15 +1449,21 @@ class SQL:
         new_sql._pooled = True
 
         source_state = self._processed_state
-        is_processed = source_state is not Empty
-        new_sql._compiled_from_cache = is_processed
-        new_sql._processed_state = source_state if is_processed else Empty
+        if source_state is not Empty:
+            if source_state.parsed_expression is not None:
+                source_state.expression_is_shared = True
+            new_sql._compiled_from_cache = True
+            new_sql._processed_state = source_state
+        else:
+            new_sql._compiled_from_cache = False
+            new_sql._processed_state = Empty
         new_sql._hash = None
         new_sql._filters = self._filters.copy()
         new_sql._named_parameters = {}
         new_sql._positional_parameters = []
         new_sql._sql_param_counters = self._sql_param_counters.copy()
         new_sql._declared_parameters = self._declared_parameters
+        new_sql._rebind_processor = self._rebind_processor
 
         return new_sql
 
@@ -1451,6 +1483,7 @@ class SQL:
         operation_profile: "OperationProfile | None",
         validation_errors: "list[str] | None",
         is_many: bool,
+        expression_is_shared: bool = False,
     ) -> "ProcessedState":
         state = get_processed_state_pool().acquire()
         ProcessedState.__init__(
@@ -1468,6 +1501,7 @@ class SQL:
             parameter_profile=parameter_profile,
             operation_profile=operation_profile,
             is_many=is_many,
+            expression_is_shared=expression_is_shared,
         )
         return state
 
@@ -1521,6 +1555,13 @@ class SQL:
 
         self._sql_param_counters[prefixed_base] = next_index
         return candidate
+
+    def _peek_expression(self) -> "exp.Expr | None":
+        """Return the parsed or raw SQLGlot expression for read-only inspection without copying."""
+        state = self._processed_state
+        if state is not Empty:
+            return state.parsed_expression
+        return self._raw_expression
 
     def _current_expression(self) -> exp.Expr:
         """Get the current expression or parse the raw SQL.
@@ -1936,6 +1977,8 @@ class StatementConfig:
 
 
 _DEFAULT_CONFIG: "StatementConfig | None" = None
+_REBIND_PROCESSORS: "dict[tuple[int, int], tuple[Any, Any, ParameterProcessor]]" = {}
+_REBIND_PROCESSOR_CACHE_MAX_SIZE: Final[int] = 256
 
 
 def get_default_config() -> StatementConfig:
@@ -1960,6 +2003,9 @@ def get_default_parameter_config() -> ParameterStyleConfig:
     return ParameterStyleConfig(
         default_parameter_style=ParameterStyle.QMARK, supported_parameter_styles={ParameterStyle.QMARK}
     )
+
+
+Statement: TypeAlias = str | exp.Expr | SQL
 
 
 def _rebuild_sql(
@@ -1989,7 +2035,19 @@ def _rebuild_sql(
     return new_sql
 
 
-Statement: TypeAlias = str | exp.Expr | SQL
+def _get_rebind_processor(config: "StatementConfig") -> ParameterProcessor:
+    """Return a shared stateless ParameterProcessor for cached-statement rebinding."""
+    converter = config.parameter_converter
+    validator = config.parameter_validator
+    key = (id(converter), id(validator))
+    cached = _REBIND_PROCESSORS.get(key)
+    if cached is not None and cached[0] is converter and cached[1] is validator:
+        return cached[2]
+    if len(_REBIND_PROCESSORS) >= _REBIND_PROCESSOR_CACHE_MAX_SIZE:
+        _REBIND_PROCESSORS.clear()
+    processor = ParameterProcessor(converter=converter, validator=validator, cache_max_size=0)
+    _REBIND_PROCESSORS[key] = (converter, validator, processor)
+    return processor
 
 
 def _parse_order_item(order_item: str, dialect: "str | None", enable_parsing: bool) -> exp.Expr:

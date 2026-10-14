@@ -1265,3 +1265,35 @@ def test_compiler_cache_isolates_expression_mutations(basic_statement_config: "S
     res2 = processor.compile(sql, None)
     assert res2.expression is not None
     assert res2.expression.args.get("where") is None
+
+
+@requires_interpreted
+def test_shared_expression_skips_ast_copy_on_compiler_and_parse_cache_hits(
+    basic_statement_config: "StatementConfig",
+) -> None:
+    """Warm SQLProcessor compiled-cache and parse-cache hits must not call exp.Expr.copy()."""
+    sql = "WITH cte AS (SELECT id, name FROM users WHERE active = ?) SELECT id, name FROM cte WHERE id = ?"
+    processor = SQLProcessor(basic_statement_config)
+    processor.compile(sql, [1, 2])
+
+    parse_only_processor = SQLProcessor(basic_statement_config, cache_enabled=False, parse_cache_size=16)
+    parse_only_processor.compile(sql, [1, 2])
+
+    copy_calls = 0
+    original_copy = exp.Expression.copy
+
+    def counting_copy(self: "exp.Expression") -> "exp.Expression":
+        nonlocal copy_calls
+        copy_calls += 1
+        return original_copy(self)
+
+    with patch.object(exp.Expression, "copy", counting_copy):
+        for i in range(5):
+            res = processor.compile(sql, [1, i])
+            assert res.expression is not None
+        assert copy_calls == 0
+
+        for i in range(5):
+            res = parse_only_processor.compile(sql, [1, i])
+            assert res.expression is not None
+        assert copy_calls == 0
