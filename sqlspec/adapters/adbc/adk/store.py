@@ -1,9 +1,11 @@
 """ADBC ADK store for Google Agent Development Kit session/event storage."""
 
 import contextlib
+import struct
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, cast
 
 from sqlspec.adapters.adbc.core import (
     driver_kind_from_driver_name,
@@ -11,7 +13,9 @@ from sqlspec.adapters.adbc.core import (
     is_shared_object_driver,
     resolve_dialect_from_config,
 )
+from sqlspec.config import ADKConfig
 from sqlspec.core.parameters._validator import PARAMETER_REGEX
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.adk import BaseSyncADKStore, StoredEvent, StoredSession, normalize_session_list_options
 from sqlspec.extensions.adk.memory.store import BaseSyncADKMemoryStore
 from sqlspec.utils.logging import get_logger
@@ -24,9 +28,31 @@ if TYPE_CHECKING:
     from sqlspec.adapters.adbc.config import AdbcConfig
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
-__all__ = ("AdbcADKMemoryStore", "AdbcADKStore")
+__all__ = ("AdbcADKConfig", "AdbcADKMemoryStore", "AdbcADKStore", "decode_adbc_pgvector", "format_pgvector_literal")
 
 logger = get_logger("sqlspec.adapters.adbc.adk.store")
+
+
+class AdbcADKConfig(ADKConfig):
+    """ADBC-specific ADK extension settings.
+
+    Use these keys inside ``extension_config["adk"]`` with the ADBC ADK stores.
+    """
+
+    enable_bm25: NotRequired[bool]
+    """Enable pg_textsearch BM25 indexing for hybrid vector search on PostgreSQL. Defaults to False."""
+
+    vector_dimensions: NotRequired[int]
+    """Dimensions for the vector embedding column on PostgreSQL. Defaults to 768."""
+
+    vector_index_type: NotRequired[Literal["hnsw", "ivfflat", "scann", "none"]]
+    """Vector index type for PostgreSQL. Defaults to 'hnsw'."""
+
+    scann_num_leaves: NotRequired[int]
+    """Number of leaves for ScaNN index on PostgreSQL. Defaults to 50."""
+
+    scann_quantizer: NotRequired[Literal["SQ8", "FP32"]]
+    """Quantizer for ScaNN index on PostgreSQL. Defaults to 'SQ8'."""
 
 
 DIALECT_POSTGRESQL: Final = "postgresql"
@@ -292,7 +318,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         if data is None:
             return {}
-        return from_json(str(data))  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", from_json(str(data)))
 
     def _serialize_json_field(self, value: Any) -> "str | None":
         """Serialize optional JSON field for event storage.
@@ -348,7 +374,7 @@ class AdbcADKStore(BaseSyncADKStore["AdbcConfig"]):
         """
         if data is None:
             return None
-        return from_json(str(data))  # type: ignore[no-any-return]
+        return cast("dict[str, Any]", from_json(str(data)))
 
     def _sessions_table_ddl(self) -> str:
         """Get CREATE TABLE SQL for sessions with dialect dispatch.
@@ -1662,6 +1688,9 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def __init__(self, config: "AdbcConfig") -> None:
         super().__init__(config)
         self._dialect = self._detect_dialect()
+        if self._vector_dimensions <= 0:
+            msg = "vector_dimensions must be a positive integer"
+            raise ImproperConfigurationError(msg)
 
     @property
     def dialect(self) -> str:
@@ -1691,8 +1720,8 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         scope_filter: Literal["all", "user", "app"] = "all",
         embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
-        """Search memory entries by text query."""
-        return self._search_entries(query, app_name, user_id, limit, scope_filter)
+        """Search memory entries by text query or vector embedding."""
+        return self._search_entries(query, app_name, user_id, limit, scope_filter, embedding=embedding)
 
     def delete_entries_by_session(self, session_id: str) -> int:
         """Delete all memory entries for a specific session."""
@@ -1701,6 +1730,23 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def delete_entries_older_than(self, days: int, app_name: "str | None" = None, scope: "str | None" = None) -> int:
         """Delete memory entries older than specified days."""
         return self._delete_entries_older_than(days, app_name, scope)
+
+    def _pgvector_enabled(self) -> bool:
+        if self._dialect != DIALECT_POSTGRESQL:
+            return False
+        pgvector_available = getattr(self._config, "_pgvector_available", None)
+        return pgvector_available is not False
+
+    def _ensure_postgres_vector_supported(self) -> None:
+        if self._dialect != DIALECT_POSTGRESQL:
+            msg = f"Vector embeddings in AdbcADKMemoryStore are only supported on PostgreSQL (current dialect: {self._dialect})."
+            raise ImproperConfigurationError(msg)
+        if getattr(self._config, "_pgvector_available", None) is False:
+            msg = "PostgreSQL extension 'vector' (pgvector) is required for vector embeddings in AdbcADKMemoryStore."
+            raise ImproperConfigurationError(msg)
+        if self._vector_dimensions <= 0:
+            msg = "vector_dimensions must be a positive integer."
+            raise ImproperConfigurationError(msg)
 
     def _detect_dialect(self) -> str:
         driver_name = self._config.connection_config.get("driver_name", "")
@@ -1799,6 +1845,9 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
 
     def _memory_ddl_postgresql(self) -> str:
         owner_id_ddl = f", {self._owner_id_column_ddl}" if self._owner_id_column_ddl else ""
+        embedding_line = (
+            f"\n            embedding VECTOR({self._vector_dimensions})," if self._pgvector_enabled() else ""
+        )
         return f"""
         CREATE TABLE IF NOT EXISTS {self._memory_table} (
             id VARCHAR(128) PRIMARY KEY,
@@ -1808,7 +1857,7 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
             scope VARCHAR(16) NOT NULL DEFAULT 'user',
             event_id VARCHAR(128) NOT NULL UNIQUE,
             author VARCHAR(256){owner_id_ddl},
-            timestamp TIMESTAMPTZ NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL,{embedding_line}
             content_json JSONB NOT NULL,
             content_text TEXT NOT NULL,
             metadata_json JSONB,
@@ -1983,6 +2032,17 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         if not self._enabled:
             return
 
+        if self._dialect == DIALECT_POSTGRESQL:
+            if getattr(self._config, "_pgvector_available", None) is None:
+                detect_fn = getattr(self._config, "_detect_extensions_if_needed", None)
+                if callable(detect_fn):
+                    with contextlib.suppress(Exception):
+                        detect_fn()
+            if self._enable_bm25 and getattr(self._config, "_pg_textsearch_available", None) is False:
+                ensure_bm25 = getattr(self._config, "_ensure_pg_textsearch_available", None)
+                if callable(ensure_bm25):
+                    ensure_bm25()
+
         skip_indexes = self._dialect in {DIALECT_BIGQUERY, DIALECT_SNOWFLAKE}
         with self._config.provide_connection() as conn:
             cursor = conn.cursor()
@@ -2009,8 +2069,50 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                         cursor, self._dialect, f"idx_{self._memory_table}_session", self._memory_table, "session_id"
                     )
                     conn.commit()
+
+                    if self._dialect == DIALECT_POSTGRESQL:
+                        for index_sql in self._postgres_memory_extra_index_sql():
+                            cursor.execute(index_sql)
+                            conn.commit()
             finally:
                 cursor.close()
+
+    def _postgres_memory_extra_index_sql(self) -> "list[str]":
+        indexes: list[str] = []
+        if self._use_fts:
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_fts ON {self._memory_table} USING GIN (to_tsvector('english', content_text))"
+            )
+        if self._enable_bm25:
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_bm25 ON {self._memory_table} USING bm25 (content_text) WITH (text_config='english')"
+            )
+        if not self._pgvector_enabled():
+            return indexes
+
+        if self._vector_index_type == "scann":
+            if (
+                not isinstance(self._scann_num_leaves, int)
+                or isinstance(self._scann_num_leaves, bool)
+                or self._scann_num_leaves <= 0
+            ):
+                msg = "extension_config['adk']['scann_num_leaves'] must be a positive integer"
+                raise ValueError(msg)
+            if self._scann_quantizer not in {"SQ8", "FP32"}:
+                msg = "extension_config['adk']['scann_quantizer'] must be 'SQ8' or 'FP32'"
+                raise ValueError(msg)
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_scann ON {self._memory_table} USING scann (embedding) WITH (num_leaves = {self._scann_num_leaves}, quantizer = '{self._scann_quantizer}')"
+            )
+        elif self._vector_index_type == "ivfflat":
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_ivfflat ON {self._memory_table} USING ivfflat (embedding vector_cosine_ops)"
+            )
+        elif self._vector_index_type == "hnsw":
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_{self._memory_table}_hnsw ON {self._memory_table} USING hnsw (embedding vector_cosine_ops)"
+            )
+        return indexes
 
     def _insert_memory_entries(self, entries: "list[StoredMemory]", owner_id: "object | None" = None) -> int:
         if not self._enabled:
@@ -2020,11 +2122,36 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         if not entries:
             return 0
 
+        has_non_null_embedding = any(entry.get("embedding") is not None for entry in entries)
+        if has_non_null_embedding:
+            self._ensure_postgres_vector_supported()
+
+        include_vector = self._pgvector_enabled()
         inserted_count = 0
         use_returning = self._dialect in {DIALECT_SQLITE, DIALECT_POSTGRESQL, DIALECT_DUCKDB}
         json_placeholder = self._json_placeholder()
 
-        if self._owner_id_column_name:
+        if include_vector:
+            if self._owner_id_column_name:
+                sql = f"""
+                INSERT INTO {self._memory_table} (
+                    id, session_id, app_name, user_id, scope, event_id, author,
+                    {self._owner_id_column_name}, timestamp, embedding, content_json, content_text,
+                    metadata_json, inserted_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::text::vector, {json_placeholder}, ?, {json_placeholder}, ?
+                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                """
+            else:
+                sql = f"""
+                INSERT INTO {self._memory_table} (
+                    id, session_id, app_name, user_id, scope, event_id, author,
+                    timestamp, embedding, content_json, content_text, metadata_json, inserted_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?::text::vector, {json_placeholder}, ?, {json_placeholder}, ?
+                ) ON CONFLICT(event_id) DO NOTHING RETURNING 1
+                """
+        elif self._owner_id_column_name:
             if use_returning:
                 sql = f"""
                 INSERT INTO {self._memory_table} (
@@ -2070,8 +2197,44 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 for entry in entries:
                     content_json = self._serialize_json_field(entry["content_json"])
                     metadata_json = self._serialize_json_field(entry.get("metadata_json"))
+                    raw_emb = entry.get("embedding")
+                    embedding_literal = format_pgvector_literal(raw_emb) if raw_emb is not None else None
                     params: tuple[Any, ...]
-                    if self._owner_id_column_name:
+                    if include_vector:
+                        if self._owner_id_column_name:
+                            params = (
+                                entry["id"],
+                                entry["session_id"],
+                                entry["app_name"],
+                                entry["user_id"],
+                                entry.get("scope", "user"),
+                                entry["event_id"],
+                                entry.get("author"),
+                                owner_id,
+                                self._encode_timestamp(entry["timestamp"]),
+                                embedding_literal,
+                                content_json,
+                                entry["content_text"],
+                                metadata_json,
+                                self._encode_timestamp(entry["inserted_at"]),
+                            )
+                        else:
+                            params = (
+                                entry["id"],
+                                entry["session_id"],
+                                entry["app_name"],
+                                entry["user_id"],
+                                entry.get("scope", "user"),
+                                entry["event_id"],
+                                entry.get("author"),
+                                self._encode_timestamp(entry["timestamp"]),
+                                embedding_literal,
+                                content_json,
+                                entry["content_text"],
+                                metadata_json,
+                                self._encode_timestamp(entry["inserted_at"]),
+                            )
+                    elif self._owner_id_column_name:
                         params = (
                             entry["id"],
                             entry["session_id"],
@@ -2139,20 +2302,44 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         user_id: str,
         limit: "int | None" = None,
         scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        embedding: "Sequence[float] | None" = None,
     ) -> "list[StoredMemory]":
         if not self._enabled:
             msg = "Memory store is disabled"
             raise RuntimeError(msg)
 
-        if not query or not query.strip():
+        has_query = bool(query and query.strip())
+        if not has_query and embedding is None:
             return []
 
-        if self._use_fts:
+        effective_limit = limit if limit is not None else self._max_results
+
+        if embedding is not None:
+            self._ensure_postgres_vector_supported()
+            try:
+                if self._enable_bm25 and has_query:
+                    ensure_bm25 = getattr(self._config, "_ensure_pg_textsearch_available", None)
+                    if callable(ensure_bm25) and getattr(self._config, "_pg_textsearch_available", None) is False:
+                        ensure_bm25()
+                    return self._search_entries_hybrid(
+                        query, app_name, user_id, effective_limit, scope_filter, embedding
+                    )
+                return self._search_entries_vector(app_name, user_id, effective_limit, scope_filter, embedding)
+            except Exception as exc:
+                error_msg = str(exc).lower()
+                if any(pattern in error_msg for pattern in ADBC_TABLE_NOT_FOUND_PATTERNS):
+                    return []
+                raise
+
+        if self._use_fts and self._dialect != DIALECT_POSTGRESQL:
             logger.warning("ADBC memory store does not support FTS, falling back to simple search")
 
-        effective_limit = limit if limit is not None else self._max_results
         where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
-        if self._dialect == DIALECT_DB2:
+        if self._dialect == DIALECT_POSTGRESQL and self._use_fts:
+            match_clause = "to_tsvector('english', content_text) @@ plainto_tsquery('english', ?)"
+            search_param = query
+        elif self._dialect == DIALECT_DB2:
             match_clause = "POSSTR(LOWER(content_text), LOWER(?)) > 0"
             search_param = query
         else:
@@ -2164,9 +2351,10 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
         else:
             limit_clause = "LIMIT ?"
 
+        embedding_projection = ", embedding::text AS embedding" if self._pgvector_enabled() else ""
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at{embedding_projection}
         FROM {self._memory_table}
         WHERE {where_scope}
           AND {match_clause}
@@ -2188,6 +2376,81 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 return []
             raise
 
+        return self._rows_to_records(rows)
+
+    def _search_entries_vector(
+        self,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
+        vector_literal = format_pgvector_literal(embedding)
+        sql = f"""
+        SELECT id, session_id, app_name, user_id, scope, event_id, author,
+               timestamp, content_json, content_text, metadata_json, inserted_at,
+               embedding::text AS embedding
+        FROM {self._memory_table}
+        WHERE {where_scope} AND embedding IS NOT NULL
+        ORDER BY embedding <=> ?::text::vector ASC, timestamp DESC
+        LIMIT ?
+        """
+        params = (*scope_params, vector_literal, limit)
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                self._execute(cursor, sql, params)
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
+        return self._rows_to_records(rows)
+
+    def _search_entries_hybrid(
+        self,
+        query: str,
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"],
+        embedding: "Sequence[float]",
+    ) -> "list[StoredMemory]":
+        where_scope, scope_params = _build_adbc_scope_where(app_name, user_id, scope_filter)
+        vector_literal = format_pgvector_literal(embedding)
+        candidate_limit = max(limit * 2, 50)
+        sql = f"""
+        WITH vector_matches AS (
+            SELECT id, RANK() OVER (ORDER BY embedding <=> ?::text::vector) AS rank_vec
+            FROM {self._memory_table}
+            WHERE {where_scope} AND embedding IS NOT NULL
+            LIMIT ?
+        ),
+        text_matches AS (
+            SELECT id, RANK() OVER (ORDER BY content_text <@> ?) AS rank_txt
+            FROM {self._memory_table}
+            WHERE {where_scope}
+            LIMIT ?
+        )
+        SELECT m.id, m.session_id, m.app_name, m.user_id, m.scope, m.event_id, m.author,
+               m.timestamp, m.content_json, m.content_text, m.metadata_json, m.inserted_at,
+               m.embedding::text AS embedding,
+               (COALESCE(1.0 / (60 + v.rank_vec), 0.0) + COALESCE(1.0 / (60 + t.rank_txt), 0.0)) AS rrf_score
+        FROM {self._memory_table} m
+        LEFT JOIN vector_matches v ON m.id = v.id
+        LEFT JOIN text_matches t ON m.id = t.id
+        WHERE v.id IS NOT NULL OR t.id IS NOT NULL
+        ORDER BY rrf_score DESC, m.timestamp DESC
+        LIMIT ?
+        """
+        params = (vector_literal, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
+        with self._config.provide_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                self._execute(cursor, sql, params)
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
         return self._rows_to_records(rows)
 
     def _delete_entries_by_session(self, session_id: str) -> int:
@@ -2249,13 +2512,40 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
     def _rows_to_records(self, rows: "list[Any]") -> "list[StoredMemory]":
         records: list[StoredMemory] = []
         for row in rows:
-            content_json = row[8]
+            if isinstance(row, Mapping):
+                content_json = row["content_json"]
+                metadata_json = row.get("metadata_json")
+                raw_embedding = row.get("embedding")
+                row_id = row["id"]
+                session_id = row["session_id"]
+                app_name = row["app_name"]
+                user_id = row["user_id"]
+                scope = row.get("scope", "user")
+                event_id = row["event_id"]
+                author = row.get("author")
+                timestamp_raw = row["timestamp"]
+                content_text = row["content_text"]
+                inserted_at_raw = row["inserted_at"]
+            else:
+                content_json = row[8]
+                metadata_json = row[10]
+                raw_embedding = row[_ADBC_EMBEDDING_COLUMN_INDEX] if len(row) > _ADBC_EMBEDDING_COLUMN_INDEX else None
+                row_id = row[0]
+                session_id = row[1]
+                app_name = row[2]
+                user_id = row[3]
+                scope = row[4]
+                event_id = row[5]
+                author = row[6]
+                timestamp_raw = row[7]
+                content_text = row[9]
+                inserted_at_raw = row[11]
+
             if isinstance(content_json, dict):
                 content_value = content_json
             else:
                 content_value = from_json(content_json if isinstance(content_json, (str, bytes)) else str(content_json))
 
-            metadata_json = row[10]
             if metadata_json is None:
                 metadata_value = None
             elif isinstance(metadata_json, dict):
@@ -2266,21 +2556,70 @@ class AdbcADKMemoryStore(BaseSyncADKMemoryStore["AdbcConfig"]):
                 )
 
             records.append({
-                "id": row[0],
-                "session_id": row[1],
-                "app_name": row[2],
-                "user_id": row[3],
-                "scope": row[4],
-                "event_id": row[5],
-                "author": row[6],
-                "timestamp": self._decode_timestamp(row[7]),
+                "id": row_id,
+                "session_id": session_id,
+                "app_name": app_name,
+                "user_id": user_id,
+                "scope": scope,
+                "event_id": event_id,
+                "author": author,
+                "timestamp": self._decode_timestamp(timestamp_raw),
                 "content_json": content_value,
-                "content_text": row[9],
+                "content_text": content_text,
                 "metadata_json": metadata_value,
-                "inserted_at": self._decode_timestamp(row[11]),
-                "embedding": None,
+                "inserted_at": self._decode_timestamp(inserted_at_raw),
+                "embedding": decode_adbc_pgvector(raw_embedding),
             })
         return records
+
+
+def format_pgvector_literal(embedding: "Sequence[float]") -> str:
+    """Serialize a sequence of floats into a canonical pgvector literal ``'[v1,v2,...]'``.
+
+    Args:
+        embedding: Sequence of numeric values representing a vector embedding.
+
+    Returns:
+        Canonical pgvector text literal string.
+    """
+    return "[" + ",".join(str(float(v)) for v in embedding) + "]"
+
+
+_ADBC_EMBEDDING_COLUMN_INDEX: Final = 12
+_PGVECTOR_BINARY_HEADER_BYTES: Final = 4
+_PGVECTOR_FLOAT32_BYTES: Final = 4
+
+
+def decode_adbc_pgvector(raw_embedding: Any) -> "list[float] | None":
+    """Decode a PostgreSQL ``vector`` value returned over ADBC into ``list[float]``.
+
+    Supports text literals (``'[0.1,0.2,...]'``), UTF-8 byte strings, pgvector
+    binary wire frames (``>hh{dim}f``), ``PgVector`` objects, and Python sequences.
+
+    Args:
+        raw_embedding: Raw column value returned by the ADBC PostgreSQL cursor.
+
+    Returns:
+        Decoded list of floats, or ``None`` if input is ``None``.
+    """
+    if raw_embedding is None:
+        return None
+    if isinstance(raw_embedding, (bytes, bytearray, memoryview)):
+        buf = bytes(raw_embedding)
+        if len(buf) >= _PGVECTOR_BINARY_HEADER_BYTES:
+            dim, unused = struct.unpack_from(">hh", buf, 0)
+            if unused == 0 and dim >= 0 and len(buf) == _PGVECTOR_BINARY_HEADER_BYTES + _PGVECTOR_FLOAT32_BYTES * dim:
+                return list(struct.unpack_from(f">{dim}f", buf, _PGVECTOR_BINARY_HEADER_BYTES))
+        raw_embedding = buf.decode("utf-8")
+    if isinstance(raw_embedding, str):
+        stripped = raw_embedding.strip().strip("[]").strip()
+        if not stripped:
+            return []
+        return [float(part) for part in stripped.split(",") if part.strip()]
+    to_list_fn = getattr(raw_embedding, "to_list", None)
+    if callable(to_list_fn):
+        return [float(v) for v in cast("Sequence[Any]", to_list_fn())]
+    return [float(v) for v in raw_embedding]
 
 
 _DB2_TABLE_EXISTS_SQL: Final = (

@@ -1,6 +1,7 @@
 """Psqlpy ADK store for Google Agent Development Kit session/event storage."""
 
 import re
+import struct
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.psqlpy._typing import PsqlpyConnectionExecuteError, PsqlpyDatabaseError
@@ -11,14 +12,14 @@ from sqlspec.utils.logging import get_logger
 from sqlspec.utils.type_guards import has_query_result_metadata
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psqlpy.config import PsqlpyConfig
     from sqlspec.extensions.adk import SessionOrderBy, StoredMemory
 
 
-__all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore")
+__all__ = ("PsqlpyADKConfig", "PsqlpyADKMemoryStore", "PsqlpyADKStore", "decode_postgres_vector")
 
 logger = get_logger("sqlspec.adapters.psqlpy.adk.store")
 
@@ -709,6 +710,8 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
         async with self._config.provide_connection() as conn:
             for entry in entries:
+                raw_embedding = entry.get("embedding")
+                embedding_val = [float(v) for v in raw_embedding] if raw_embedding is not None else None
                 if self._owner_id_column_name:
                     params = [
                         entry["id"],
@@ -720,7 +723,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                         entry.get("author"),
                         owner_id,
                         entry["timestamp"],
-                        entry.get("embedding"),
+                        embedding_val,
                         entry["content_json"],
                         entry["content_text"],
                         entry.get("metadata_json"),
@@ -736,7 +739,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
                         entry["event_id"],
                         entry.get("author"),
                         entry["timestamp"],
-                        entry.get("embedding"),
+                        embedding_val,
                         entry["content_json"],
                         entry["content_text"],
                         entry.get("metadata_json"),
@@ -897,19 +900,20 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
     ) -> "list[StoredMemory]":
+        embedding_param = [float(v) for v in embedding]
         if scope_filter == "all":
             where_scope = "app_name = $3 AND ((scope = 'user' AND user_id = $4) OR scope = 'app')"
-            scope_params: list[Any] = [list(embedding), query, app_name, user_id]
+            scope_params: list[Any] = [embedding_param, query, app_name, user_id]
             p_cand = "$5"
             p_lim = "$6"
         elif scope_filter == "user":
             where_scope = "app_name = $3 AND scope = 'user' AND user_id = $4"
-            scope_params = [list(embedding), query, app_name, user_id]
+            scope_params = [embedding_param, query, app_name, user_id]
             p_cand = "$5"
             p_lim = "$6"
         else:
             where_scope = "app_name = $3 AND scope = 'app'"
-            scope_params = [list(embedding), query, app_name]
+            scope_params = [embedding_param, query, app_name]
             p_cand = "$4"
             p_lim = "$5"
 
@@ -949,17 +953,18 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         scope_filter: Literal["all", "user", "app"],
         embedding: "Sequence[float]",
     ) -> "list[StoredMemory]":
+        embedding_param = [float(v) for v in embedding]
         if scope_filter == "all":
             where_scope = "app_name = $2 AND ((scope = 'user' AND user_id = $3) OR scope = 'app')"
-            scope_params: list[Any] = [list(embedding), app_name, user_id]
+            scope_params: list[Any] = [embedding_param, app_name, user_id]
             p_lim = "$4"
         elif scope_filter == "user":
             where_scope = "app_name = $2 AND scope = 'user' AND user_id = $3"
-            scope_params = [list(embedding), app_name, user_id]
+            scope_params = [embedding_param, app_name, user_id]
             p_lim = "$4"
         else:
             where_scope = "app_name = $2 AND scope = 'app'"
-            scope_params = [list(embedding), app_name]
+            scope_params = [embedding_param, app_name]
             p_lim = "$3"
 
         sql = f"""
@@ -991,7 +996,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at,
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding,
                ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', $1)) as rank
         FROM {self._memory_table}
         WHERE {where_scope}
@@ -1026,7 +1031,7 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
 
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
-               timestamp, content_json, content_text, metadata_json, inserted_at
+               timestamp, content_json, content_text, metadata_json, inserted_at, embedding
         FROM {self._memory_table}
         WHERE {where_scope}
           AND content_text ILIKE {p_pat}
@@ -1037,6 +1042,11 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
             result = await conn.fetch(sql, [*scope_params, limit])
             rows: list[dict[str, Any]] = result.result() if result else []
         return _rows_to_records(rows)
+
+    @staticmethod
+    def _decode_row(row: "Mapping[str, Any]") -> "StoredMemory":
+        """Decode a single psqlpy row dictionary into a ``StoredMemory`` record."""
+        return _decode_row(row)
 
     def _extract_rows_affected(self, result: Any) -> int:
         """Extract rows affected from psqlpy result."""
@@ -1067,25 +1077,60 @@ class PsqlpyADKMemoryStore(BaseAsyncADKMemoryStore["PsqlpyConfig"]):
         return -1
 
 
-def _rows_to_records(rows: "list[dict[str, Any]]") -> "list[StoredMemory]":
-    return [
-        {
-            "id": row["id"],
-            "session_id": row["session_id"],
-            "app_name": row["app_name"],
-            "user_id": row["user_id"],
-            "scope": row.get("scope", "user"),
-            "event_id": row["event_id"],
-            "author": row["author"],
-            "timestamp": row["timestamp"],
-            "content_json": row["content_json"],
-            "content_text": row["content_text"],
-            "metadata_json": row["metadata_json"],
-            "inserted_at": row["inserted_at"],
-            "embedding": row.get("embedding"),
-        }
-        for row in rows
-    ]
+_PGVECTOR_BINARY_HEADER_BYTES = 4
+_PGVECTOR_FLOAT32_BYTES = 4
+
+
+def decode_postgres_vector(raw_embedding: Any) -> "list[float] | None":
+    """Normalize a PostgreSQL ``vector`` column value into ``list[float]``.
+
+    Args:
+        raw_embedding: Raw embedding value returned by ``psqlpy`` or ``psycopg``
+            (``None``, ``str``, ``bytes``, ``PgVector``, or ``Sequence[float]``).
+
+    Returns:
+        Decoded list of floats, or ``None`` if input is ``None``.
+    """
+    if raw_embedding is None:
+        return None
+    if isinstance(raw_embedding, (bytes, bytearray, memoryview)):
+        buf = bytes(raw_embedding)
+        if len(buf) >= _PGVECTOR_BINARY_HEADER_BYTES:
+            dim, unused = struct.unpack_from(">hh", buf, 0)
+            if unused == 0 and dim >= 0 and len(buf) == _PGVECTOR_BINARY_HEADER_BYTES + _PGVECTOR_FLOAT32_BYTES * dim:
+                return list(struct.unpack_from(f">{dim}f", buf, _PGVECTOR_BINARY_HEADER_BYTES))
+        raw_embedding = buf.decode("utf-8")
+    if isinstance(raw_embedding, str):
+        stripped = raw_embedding.strip().strip("[]").strip()
+        if not stripped:
+            return []
+        return [float(part) for part in stripped.split(",") if part.strip()]
+    to_list_fn = getattr(raw_embedding, "to_list", None)
+    if callable(to_list_fn):
+        return [float(v) for v in cast("Sequence[Any]", to_list_fn())]
+    return [float(v) for v in raw_embedding]
+
+
+def _decode_row(row: "Mapping[str, Any]") -> "StoredMemory":
+    return {
+        "id": row["id"],
+        "session_id": row["session_id"],
+        "app_name": row["app_name"],
+        "user_id": row["user_id"],
+        "scope": row.get("scope", "user"),
+        "event_id": row["event_id"],
+        "author": row["author"],
+        "timestamp": row["timestamp"],
+        "content_json": row["content_json"],
+        "content_text": row["content_text"],
+        "metadata_json": row["metadata_json"],
+        "inserted_at": row["inserted_at"],
+        "embedding": decode_postgres_vector(row.get("embedding")),
+    }
+
+
+def _rows_to_records(rows: "Sequence[Mapping[str, Any]]") -> "list[StoredMemory]":
+    return [_decode_row(row) for row in rows]
 
 
 def _is_psqlpy_database_error(exc: Exception) -> bool:

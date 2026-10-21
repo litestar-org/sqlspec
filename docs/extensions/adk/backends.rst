@@ -37,7 +37,7 @@ The table below classifies every backend by its ADK support level.
      - Supported
      - Full
      - Full
-     - Rust-backed PostgreSQL driver.
+     - Rust-backed PostgreSQL driver with ``pgvector`` and hybrid RRF recall.
    * - cockroach_asyncpg
      - Supported
      - Full
@@ -96,8 +96,8 @@ The table below classifies every backend by its ADK support level.
    * - adbc
      - Reduced-scope
      - Full
-     - Basic
-     - Arrow Database Connectivity across PostgreSQL, SQLite, DuckDB, BigQuery, Snowflake, Oracle, and IBM Db2.
+     - Full (PostgreSQL) / Basic
+     - Arrow Database Connectivity across PostgreSQL (with ``pgvector`` and hybrid RRF recall), SQLite, DuckDB, BigQuery, Snowflake, Oracle, and IBM Db2.
    * - mssql_python
      - Supported
      - Full
@@ -302,10 +302,13 @@ ADBC (Arrow Database Connectivity) provides a portable Arrow-native store
   DuckDB, BigQuery, Snowflake, Oracle (``:1, :2`` placeholders and PL/SQL
   idempotent DDL), and IBM Db2 (``SYSCAT`` catalog guards and ``POSSTR`` memory
   search).
+- Full PostgreSQL ``pgvector`` semantic recall (``VECTOR(N)`` DDL, ``hnsw``,
+  ``ivfflat``, and ``scann`` indexes, and ``<=>`` cosine distance ranking) and
+  hybrid Reciprocal Rank Fusion (RRF, ``k=60``) with ``pg_textsearch`` BM25 and
+  ``to_tsvector`` full-text search via :class:`~sqlspec.adapters.adbc.adk.AdbcADKConfig`.
 - Arrow-native data transfer for high-throughput event ingestion.
-- Portable substring memory search across all supported ADBC dialects; choose a
-  dedicated native adapter when you need backend-specific full-text search
-  indexes or retention policies.
+- Portable substring memory search across non-PostgreSQL ADBC dialects; vector
+  memory operations on non-PostgreSQL dialects raise ``ImproperConfigurationError``.
 
 SQL Server (mssql-python and pymssql)
 -------------------------------------

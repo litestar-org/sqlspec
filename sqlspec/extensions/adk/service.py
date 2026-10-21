@@ -1,14 +1,19 @@
 """SQLSpec-backed session service for Google ADK."""
 
+import asyncio
 import inspect
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from google.adk.errors import StaleSessionError
+from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.errors.session_not_found_error import SessionNotFoundError
 from google.adk.sessions.base_session_service import BaseSessionService, GetSessionConfig, ListSessionsResponse
 
+from sqlspec.exceptions import IntegrityError, UniqueViolationError
 from sqlspec.extensions.adk.converters import (
     compute_update_marker,
     event_to_record,
@@ -24,6 +29,7 @@ from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
     from google.adk.events.event import Event
     from google.adk.sessions import Session
@@ -36,6 +42,10 @@ if TYPE_CHECKING:
 __all__ = ("SQLSpecSessionService",)
 
 logger = get_logger("sqlspec.extensions.adk.service")
+_STALE_SESSION_MESSAGE = (
+    "The session has been modified in storage since it was loaded. "
+    "Please reload the session before appending more events."
+)
 
 
 class SQLSpecSessionService(BaseSessionService):
@@ -55,11 +65,29 @@ class SQLSpecSessionService(BaseSessionService):
             store: Database store implementation.
         """
         self._store = store
+        self._session_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._session_lock_ref_count: dict[tuple[str, str, str], int] = {}
 
     @property
     def store(self) -> "ADKStore":
         """Return the database store."""
         return self._store
+
+    async def close(self) -> None:
+        """Close the underlying store if it exposes a close method."""
+        close_method = getattr(self._store, "close", None)
+        if callable(close_method):
+            await self._call_store("close")
+
+    async def __aenter__(self) -> Self:
+        """Enter the async runtime context for the session service."""
+        return self
+
+    async def __aexit__(
+        self, exc_type: "type[BaseException] | None", exc_val: "BaseException | None", exc_tb: "TracebackType | None"
+    ) -> None:
+        """Exit the async runtime context and close the service."""
+        await self.close()
 
     async def create_session(
         self, *, app_name: str, user_id: str, state: "dict[str, Any] | None" = None, session_id: "str | None" = None
@@ -70,39 +98,66 @@ class SQLSpecSessionService(BaseSessionService):
             app_name: Name of the application.
             user_id: ID of the user.
             state: Initial state of the session.
-            session_id: Client-provided session ID. If None, generates a UUID.
+            session_id: Client-provided session ID. If None or whitespace-only, generates a UUID.
 
         Returns:
             The newly created session.
+
+        Raises:
+            AlreadyExistsError: If a caller-supplied ``session_id`` already exists.
         """
-        if session_id is None:
-            session_id = str(uuid4())
+        normalized_id = session_id.strip() if session_id is not None else None
+        user_provided_id = bool(normalized_id)
+        resolved_session_id = normalized_id or str(uuid4())
 
         if state is None:
             state = {}
 
         persisted_state = filter_temp_state(state)
         app_state_delta, user_state_delta, session_state = split_scoped_state(persisted_state)
-        current_app_state = await self._call_store("get_app_state", app_name)
-        current_user_state = await self._call_store("get_user_state", app_name, user_id)
 
-        app_state = dict(current_app_state or {})
-        if app_state_delta:
-            app_state.update(app_state_delta)
-        user_state = dict(current_user_state or {})
-        if user_state_delta:
-            user_state.update(user_state_delta)
+        async with self._with_session_lock(app_name=app_name, user_id=user_id, session_id=resolved_session_id):
+            if user_provided_id:
+                existing = await self._call_store("get_session", app_name, user_id, resolved_session_id)
+                if existing is not None:
+                    msg = f"Session with id {resolved_session_id} already exists."
+                    raise AlreadyExistsError(msg)
 
-        record = await self._call_store(
-            "create_session", session_id=session_id, app_name=app_name, user_id=user_id, state=session_state
-        )
-        if app_state_delta:
-            await self._call_store("upsert_app_state", app_name, app_state)
-        if user_state_delta:
-            await self._call_store("upsert_user_state", app_name, user_id, user_state)
+            current_app_state = await self._call_store("get_app_state", app_name)
+            current_user_state = await self._call_store("get_user_state", app_name, user_id)
+
+            app_state = dict(current_app_state or {})
+            if app_state_delta:
+                app_state.update(app_state_delta)
+            user_state = dict(current_user_state or {})
+            if user_state_delta:
+                user_state.update(user_state_delta)
+
+            try:
+                record = await self._call_store(
+                    "create_session",
+                    session_id=resolved_session_id,
+                    app_name=app_name,
+                    user_id=user_id,
+                    state=session_state,
+                )
+            except (UniqueViolationError, IntegrityError) as exc:
+                msg = f"Session with id {resolved_session_id} already exists."
+                raise AlreadyExistsError(msg) from exc
+
+            if app_state_delta:
+                await self._call_store("upsert_app_state", app_name, app_state)
+            if user_state_delta:
+                await self._call_store("upsert_user_state", app_name, user_id, user_state)
+
         record["state"] = merge_scoped_state(record["state"], app_state, user_state)
         log_with_context(
-            logger, logging.DEBUG, "adk.session.create", app_name=app_name, session_id=session_id, has_state=bool(state)
+            logger,
+            logging.DEBUG,
+            "adk.session.create",
+            app_name=app_name,
+            session_id=resolved_session_id,
+            has_state=bool(state),
         )
 
         return record_to_session(record, events=[])
@@ -308,73 +363,111 @@ class SQLSpecSessionService(BaseSessionService):
         if event.partial:
             return event
 
-        current_record = await self._call_store("get_session", session.app_name, session.user_id, session.id)
-        if current_record is None:
-            msg = f"Session {session.id} not found."
-            raise SessionNotFoundError(msg)
+        if any(existing == event for existing in session.events if existing.id == event.id):
+            return event
 
-        if session._storage_update_marker is not None:  # pyright: ignore[reportPrivateUsage]
+        async with self._with_session_lock(app_name=session.app_name, user_id=session.user_id, session_id=session.id):
+            if any(existing == event for existing in session.events if existing.id == event.id):
+                return event
+
+            current_record = await self._call_store("get_session", session.app_name, session.user_id, session.id)
+            if current_record is None:
+                msg = f"Session {session.id} not found."
+                raise SessionNotFoundError(msg)
+
+            storage_marker = getattr(session, "_storage_update_marker", None)
             current_marker = compute_update_marker(current_record["update_time"])
-            if session._storage_update_marker != current_marker:  # pyright: ignore[reportPrivateUsage]
-                msg = (
-                    "The session has been modified in storage since it was loaded. "
-                    "Please reload the session before appending more events."
-                )
-                raise StaleSessionError(msg)
-        elif current_record["update_time"].timestamp() > session.last_update_time:
-            msg = (
-                "The session has been modified in storage since it was loaded. "
-                "Please reload the session before appending more events."
+            storage_update_time = current_record["update_time"].timestamp()
+            if storage_marker is not None:
+                if storage_marker != current_marker:
+                    raise StaleSessionError(_STALE_SESSION_MESSAGE)
+                session.last_update_time = storage_update_time
+            elif storage_update_time > session.last_update_time:
+                if not await self._session_matches_storage_revision(session):
+                    raise StaleSessionError(_STALE_SESSION_MESSAGE)
+                session.last_update_time = storage_update_time
+            setattr(session, "_storage_update_marker", current_marker)
+
+            original_event = event
+            trimmed_event = self._trim_temp_delta_state(event)
+
+            event_record = event_to_record(
+                event=trimmed_event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
             )
-            raise StaleSessionError(msg)
 
-        original_event = event
-        trimmed_event = self._trim_temp_delta_state(event)
+            state_delta = (trimmed_event.actions.state_delta if trimmed_event.actions else None) or {}
+            app_state_delta, user_state_delta, session_state_delta = split_scoped_state(filter_temp_state(state_delta))
 
-        event_record = event_to_record(
-            event=trimmed_event, app_name=session.app_name, user_id=session.user_id, session_id=session.id
-        )
+            _, _, session_state = split_scoped_state(filter_temp_state(session.state))
+            session_state.update(session_state_delta)
 
-        state_delta = (trimmed_event.actions.state_delta if trimmed_event.actions else None) or {}
-        app_state_delta, user_state_delta, session_state_delta = split_scoped_state(filter_temp_state(state_delta))
+            app_state = None
+            if app_state_delta:
+                app_state = dict(await self._call_store("get_app_state", session.app_name) or {})
+                app_state.update(app_state_delta)
 
-        _, _, session_state = split_scoped_state(filter_temp_state(session.state))
-        session_state.update(session_state_delta)
+            user_state = None
+            if user_state_delta:
+                user_state = dict(await self._call_store("get_user_state", session.app_name, session.user_id) or {})
+                user_state.update(user_state_delta)
 
-        app_state = None
-        if app_state_delta:
-            app_state = dict(await self._call_store("get_app_state", session.app_name) or {})
-            app_state.update(app_state_delta)
+            updated_record = await self._call_store(
+                "append_event_and_update_state",
+                event_record,
+                session.app_name,
+                session.user_id,
+                session.id,
+                session_state,
+                app_state=app_state,
+                user_state=user_state,
+            )
+            updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
 
-        user_state = None
-        if user_state_delta:
-            user_state = dict(await self._call_store("get_user_state", session.app_name, session.user_id) or {})
-            user_state.update(user_state_delta)
+            self._apply_temp_state(session, original_event)
+            session.last_update_time = updated_record["update_time"].timestamp()
+            setattr(session, "_storage_update_marker", compute_update_marker(updated_record["update_time"]))
 
-        updated_record = await self._call_store(
-            "append_event_and_update_state",
-            event_record,
-            session.app_name,
-            session.user_id,
-            session.id,
-            session_state,
-            app_state=app_state,
-            user_state=user_state,
-        )
-        updated_record["state"] = merge_scoped_state(updated_record["state"], app_state, user_state)
-
-        self._apply_temp_state(session, original_event)
-        session.last_update_time = updated_record["update_time"].timestamp()
-        session._storage_update_marker = compute_update_marker(updated_record["update_time"])  # pyright: ignore[reportPrivateUsage]
-
-        self._update_session_state(session, trimmed_event)
-        session.events.append(trimmed_event)
+            self._update_session_state(session, trimmed_event)
+            session.events.append(trimmed_event)
 
         log_with_context(
             logger, logging.DEBUG, "adk.session.event.append", app_name=session.app_name, session_id=session.id
         )
 
         return trimmed_event
+
+    @asynccontextmanager
+    async def _with_session_lock(self, *, app_name: str, user_id: str, session_id: str) -> AsyncIterator[None]:
+        """Serialize in-process concurrent mutations for the same session."""
+        lock_key = (app_name, user_id, session_id)
+        lock = self._session_locks.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._session_locks[lock_key] = lock
+        self._session_lock_ref_count[lock_key] = self._session_lock_ref_count.get(lock_key, 0) + 1
+        try:
+            async with lock:
+                yield
+        finally:
+            remaining = self._session_lock_ref_count.get(lock_key, 1) - 1
+            if remaining <= 0:
+                self._session_lock_ref_count.pop(lock_key, None)
+                self._session_locks.pop(lock_key, None)
+            else:
+                self._session_lock_ref_count[lock_key] = remaining
+
+    async def _session_matches_storage_revision(self, session: "Session") -> bool:
+        """Return whether a marker-less session still matches stored events."""
+        stored_events = await self._call_store("get_events", session.app_name, session.user_id, session.id)
+        if not session.events:
+            return len(stored_events) == 0
+        if not stored_events:
+            return False
+        latest_stored = stored_events[-1]
+        latest_stored_id = (
+            latest_stored["id"] if isinstance(latest_stored, dict) else getattr(latest_stored, "id", None)
+        )
+        return latest_stored_id == session.events[-1].id
 
     async def _call_store(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Call an async store method or offload a sync store method."""

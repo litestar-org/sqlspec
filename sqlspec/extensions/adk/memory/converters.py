@@ -184,7 +184,10 @@ def memory_entry_to_record(
 
 
 def session_to_memory_records(
-    session: "Session", scope: str = "user", embeddings: "Mapping[str, Sequence[float]] | None" = None
+    session: "Session",
+    scope: str = "user",
+    embeddings: "Mapping[str, Sequence[float]] | None" = None,
+    custom_metadata: "Mapping[str, object] | None" = None,
 ) -> list["StoredMemory"]:
     """Convert a completed ADK Session to a list of stored memory records.
 
@@ -195,6 +198,8 @@ def session_to_memory_records(
         session: ADK Session object with events.
         scope: Visibility scope ('user' or 'app').
         embeddings: Optional map of event id to vector embedding.
+        custom_metadata: Optional portable metadata merged into each record's
+            ``metadata_json``.
 
     Returns:
         List of StoredMemory objects for database storage.
@@ -203,6 +208,8 @@ def session_to_memory_records(
 
     if not session.events:
         return records
+
+    metadata_dict = dict(custom_metadata) if custom_metadata else None
 
     for event in session.events:
         record = event_to_memory_record(
@@ -214,6 +221,11 @@ def session_to_memory_records(
             embedding=embeddings.get(event.id) if embeddings else None,
         )
         if record is not None:
+            if metadata_dict:
+                merged = dict(metadata_dict)
+                if record.get("metadata_json"):
+                    merged.update(record["metadata_json"] or {})
+                record["metadata_json"] = merged
             records.append(record)
 
     return records

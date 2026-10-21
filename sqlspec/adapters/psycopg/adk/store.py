@@ -1,5 +1,6 @@
 """Psycopg ADK store for Google Agent Development Kit session/event storage."""
 
+import struct
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, NotRequired, cast
 
 from sqlspec.adapters.psycopg._typing import PsycopgJsonb as Jsonb
@@ -18,7 +19,7 @@ from sqlspec.extensions.adk.memory.store import BaseAsyncADKMemoryStore, BaseSyn
 from sqlspec.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from datetime import datetime, timedelta
 
     from sqlspec.adapters.psycopg.config import PsycopgAsyncConfig, PsycopgSyncConfig
@@ -31,6 +32,7 @@ __all__ = (
     "PsycopgAsyncADKStore",
     "PsycopgSyncADKMemoryStore",
     "PsycopgSyncADKStore",
+    "decode_postgres_vector",
 )
 
 logger = get_logger("sqlspec.adapters.psycopg.adk.store")
@@ -1435,7 +1437,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
                     return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
                 except errors.UndefinedTable:
                     raise
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except errors.UndefinedTable:
@@ -1544,7 +1546,8 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             LIMIT %s
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
-        params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
+        embedding_param = [float(v) for v in embedding]
+        params = (embedding_param, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             self._config._ensure_pg_textsearch_available()
             await cur.execute(sql, params)
@@ -1568,7 +1571,8 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             LIMIT %s
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
-        params = (*scope_params, list(embedding), limit)
+        embedding_param = [float(v) for v in embedding]
+        params = (*scope_params, embedding_param, limit)
         async with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -1581,7 +1585,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         sql = pg_sql.SQL(
             """
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-             timestamp, content_json, content_text, metadata_json, inserted_at,
+             timestamp, content_json, content_text, metadata_json, inserted_at, embedding,
              ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
             FROM {table}
             WHERE {where_scope}
@@ -1603,7 +1607,7 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
         sql = pg_sql.SQL(
             """
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-             timestamp, content_json, content_text, metadata_json, inserted_at
+             timestamp, content_json, content_text, metadata_json, inserted_at, embedding
             FROM {table}
             WHERE {where_scope}
              AND content_text ILIKE %s
@@ -1617,6 +1621,11 @@ class PsycopgAsyncADKMemoryStore(BaseAsyncADKMemoryStore["PsycopgAsyncConfig"]):
             await cur.execute(sql, params)
             rows = await cur.fetchall()
         return _rows_to_records(rows)
+
+    @staticmethod
+    def _decode_row(row: "Mapping[str, Any]") -> "StoredMemory":
+        """Decode a single psycopg row dictionary into a ``StoredMemory`` record."""
+        return _decode_row(row)
 
 
 class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
@@ -1715,7 +1724,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
                     return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
                 except errors.UndefinedTable:
                     raise
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     logger.warning("FTS search failed; falling back to simple search: %s", exc)
             return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
         except errors.UndefinedTable:
@@ -1822,7 +1831,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             LIMIT %s
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
-        params = (list(embedding), *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
+        embedding_param = [float(v) for v in embedding]
+        params = (embedding_param, *scope_params, candidate_limit, query, *scope_params, candidate_limit, limit)
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             self._config._ensure_pg_textsearch_available()
             cur.execute(sql, params)
@@ -1846,7 +1856,8 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             LIMIT %s
             """
         ).format(table=pg_sql.Identifier(self._memory_table), where_scope=where_scope)
-        params = (*scope_params, list(embedding), limit)
+        embedding_param = [float(v) for v in embedding]
+        params = (*scope_params, embedding_param, limit)
         with self._config.provide_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -1859,7 +1870,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         sql = pg_sql.SQL(
             """
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-             timestamp, content_json, content_text, metadata_json, inserted_at,
+             timestamp, content_json, content_text, metadata_json, inserted_at, embedding,
              ts_rank(to_tsvector('english', content_text), plainto_tsquery('english', %s)) as rank
             FROM {table}
             WHERE {where_scope}
@@ -1881,7 +1892,7 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
         sql = pg_sql.SQL(
             """
             SELECT id, session_id, app_name, user_id, scope, event_id, author,
-             timestamp, content_json, content_text, metadata_json, inserted_at
+             timestamp, content_json, content_text, metadata_json, inserted_at, embedding
             FROM {table}
             WHERE {where_scope}
              AND content_text ILIKE %s
@@ -1896,8 +1907,49 @@ class PsycopgSyncADKMemoryStore(BaseSyncADKMemoryStore["PsycopgSyncConfig"]):
             rows = cur.fetchall()
         return _rows_to_records(rows)
 
+    @staticmethod
+    def _decode_row(row: "Mapping[str, Any]") -> "StoredMemory":
+        """Decode a single psycopg row dictionary into a ``StoredMemory`` record."""
+        return _decode_row(row)
+
+
+_PGVECTOR_BINARY_HEADER_BYTES = 4
+_PGVECTOR_FLOAT32_BYTES = 4
+
+
+def decode_postgres_vector(raw_embedding: Any) -> "list[float] | None":
+    """Normalize a PostgreSQL ``vector`` column value into ``list[float]``.
+
+    Args:
+        raw_embedding: Raw embedding value returned by ``psycopg``
+            (``None``, ``str``, ``bytes``, ``PgVector``, or ``Sequence[float]``).
+
+    Returns:
+        Decoded list of floats, or ``None`` if input is ``None``.
+    """
+    if raw_embedding is None:
+        return None
+    if isinstance(raw_embedding, (bytes, bytearray, memoryview)):
+        buf = bytes(raw_embedding)
+        if len(buf) >= _PGVECTOR_BINARY_HEADER_BYTES:
+            dim, unused = struct.unpack_from(">hh", buf, 0)
+            if unused == 0 and dim >= 0 and len(buf) == _PGVECTOR_BINARY_HEADER_BYTES + _PGVECTOR_FLOAT32_BYTES * dim:
+                return list(struct.unpack_from(f">{dim}f", buf, _PGVECTOR_BINARY_HEADER_BYTES))
+        raw_embedding = buf.decode("utf-8")
+    if isinstance(raw_embedding, str):
+        stripped = raw_embedding.strip().strip("[]").strip()
+        if not stripped:
+            return []
+        return [float(part) for part in stripped.split(",") if part.strip()]
+    to_list_fn = getattr(raw_embedding, "to_list", None)
+    if callable(to_list_fn):
+        return [float(v) for v in cast("Sequence[Any]", to_list_fn())]
+    return [float(v) for v in raw_embedding]
+
 
 def _build_insert_params(entry: "StoredMemory") -> "tuple[object, ...]":
+    raw_embedding = entry.get("embedding")
+    embedding_val = [float(v) for v in raw_embedding] if raw_embedding is not None else None
     return (
         entry["id"],
         entry["session_id"],
@@ -1907,7 +1959,7 @@ def _build_insert_params(entry: "StoredMemory") -> "tuple[object, ...]":
         entry["event_id"],
         entry.get("author"),
         entry["timestamp"],
-        entry.get("embedding"),
+        embedding_val,
         Jsonb(entry["content_json"]),
         entry["content_text"],
         Jsonb(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
@@ -1916,6 +1968,8 @@ def _build_insert_params(entry: "StoredMemory") -> "tuple[object, ...]":
 
 
 def _build_insert_params_with_owner(entry: "StoredMemory", owner_id: "object | None") -> "tuple[object, ...]":
+    raw_embedding = entry.get("embedding")
+    embedding_val = [float(v) for v in raw_embedding] if raw_embedding is not None else None
     return (
         entry["id"],
         entry["session_id"],
@@ -1926,7 +1980,7 @@ def _build_insert_params_with_owner(entry: "StoredMemory", owner_id: "object | N
         entry.get("author"),
         owner_id,
         entry["timestamp"],
-        entry.get("embedding"),
+        embedding_val,
         Jsonb(entry["content_json"]),
         entry["content_text"],
         Jsonb(entry["metadata_json"]) if entry.get("metadata_json") is not None else None,
@@ -1934,25 +1988,26 @@ def _build_insert_params_with_owner(entry: "StoredMemory", owner_id: "object | N
     )
 
 
-def _rows_to_records(rows: "list[Any]") -> "list[StoredMemory]":
-    return [
-        {
-            "id": row["id"],
-            "session_id": row["session_id"],
-            "app_name": row["app_name"],
-            "user_id": row["user_id"],
-            "scope": row.get("scope", "user"),
-            "event_id": row["event_id"],
-            "author": row["author"],
-            "timestamp": row["timestamp"],
-            "content_json": row["content_json"],
-            "content_text": row["content_text"],
-            "metadata_json": row["metadata_json"],
-            "inserted_at": row["inserted_at"],
-            "embedding": row.get("embedding"),
-        }
-        for row in rows
-    ]
+def _decode_row(row: "Mapping[str, Any]") -> "StoredMemory":
+    return {
+        "id": row["id"],
+        "session_id": row["session_id"],
+        "app_name": row["app_name"],
+        "user_id": row["user_id"],
+        "scope": row.get("scope", "user"),
+        "event_id": row["event_id"],
+        "author": row["author"],
+        "timestamp": row["timestamp"],
+        "content_json": row["content_json"],
+        "content_text": row["content_text"],
+        "metadata_json": row["metadata_json"],
+        "inserted_at": row["inserted_at"],
+        "embedding": decode_postgres_vector(row.get("embedding")),
+    }
+
+
+def _rows_to_records(rows: "Sequence[Mapping[str, Any]]") -> "list[StoredMemory]":
+    return [_decode_row(row) for row in rows]
 
 
 def _adk_config(config: Any) -> PsycopgADKConfig:

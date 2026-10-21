@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from google.adk.errors.input_validation_error import InputValidationError
+from google.genai import types
 
 from sqlspec.extensions.adk.artifact._types import StoredArtifact
-from sqlspec.extensions.adk.artifact.service import SQLSpecArtifactService
+from sqlspec.extensions.adk.artifact.service import _REWIND_TOMBSTONE, SQLSpecArtifactService
 
 STORAGE_URI = "file:///artifacts"
 
@@ -27,11 +29,18 @@ def _record(version: int, filename: str = "report.txt") -> StoredArtifact:
 
 
 class _RecordingBackend:
-    """Storage backend double recording delete attempts."""
+    """Storage backend double recording read, write, and delete attempts."""
 
     def __init__(self, failing_paths: "set[str] | None" = None) -> None:
         self.deleted: list[str] = []
+        self.blobs: dict[str, bytes] = {}
         self.failing_paths = failing_paths or set()
+
+    async def write_bytes_async(self, path: str, data: bytes) -> None:
+        self.blobs[path] = data
+
+    async def read_bytes_async(self, path: str) -> bytes:
+        return self.blobs[path]
 
     async def delete_async(self, path: str) -> None:
         self.deleted.append(path)
@@ -59,7 +68,38 @@ class _RecordingStore:
         self.artifact_table = "adk_artifact"
         self.retention_calls: list[tuple[datetime, str | None]] = []
         self.delete_calls: list[tuple[str, str, str, str | None]] = []
+        self.saved_records: dict[tuple[str, str, str | None, str], list[StoredArtifact]] = {}
         self.batches = batches if batches is not None else [[]]
+
+    async def get_next_version(
+        self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None
+    ) -> int:
+        key = (app_name, user_id, session_id, filename)
+        return len(self.saved_records.get(key, []))
+
+    async def insert_artifact(self, record: StoredArtifact) -> None:
+        key = (record["app_name"], record["user_id"], record["session_id"], record["filename"])
+        self.saved_records.setdefault(key, []).append(record)
+
+    async def get_artifact(
+        self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None, version: "int | None" = None
+    ) -> "StoredArtifact | None":
+        key = (app_name, user_id, session_id, filename)
+        versions = self.saved_records.get(key, [])
+        if not versions:
+            return None
+        if version is None:
+            return versions[-1]
+        for rec in versions:
+            if rec["version"] == version:
+                return rec
+        return None
+
+    async def list_artifact_versions(
+        self, app_name: str, user_id: str, filename: str, session_id: "str | None" = None
+    ) -> "list[StoredArtifact]":
+        key = (app_name, user_id, session_id, filename)
+        return list(self.saved_records.get(key, []))
 
     async def delete_artifacts_older_than(
         self, before: datetime, app_name: "str | None" = None
@@ -86,8 +126,8 @@ class _FailingStore(_RecordingStore):
 
 
 def _service(store: Any, backend: _RecordingBackend) -> "tuple[SQLSpecArtifactService, _RecordingRegistry]":
-    registry = _RecordingRegistry(backend)
-    service = SQLSpecArtifactService(store, STORAGE_URI, registry=registry)  # type: ignore[arg-type]
+    registry: Any = _RecordingRegistry(backend)
+    service = SQLSpecArtifactService(store, STORAGE_URI, registry=registry)
     return service, registry
 
 
@@ -186,3 +226,135 @@ async def test_delete_artifact_cleans_up_content_for_every_version() -> None:
         "apps/agent_app/users/user-1/artifacts/report.txt/v0",
         "apps/agent_app/users/user-1/artifacts/report.txt/v1",
     ]
+
+
+async def test_user_namespace_filename_auto_scopes_session_id_to_none() -> None:
+    """Filenames prefixed with user: automatically store, load, list, and delete under session_id=None."""
+    store = _RecordingStore()
+    backend = _RecordingBackend()
+    service, _registry = _service(store, backend)
+
+    part = types.Part.from_text(text="user profile note")
+    ver = await service.save_artifact(
+        app_name="agent_app", user_id="user-1", filename="user:profile.txt", artifact=part, session_id="sess-1"
+    )
+    assert ver == 0
+    assert ("agent_app", "user-1", None, "user:profile.txt") in store.saved_records
+
+    loaded = await service.load_artifact(
+        app_name="agent_app", user_id="user-1", filename="user:profile.txt", session_id="sess-2"
+    )
+    assert loaded is not None
+    assert loaded.text == "user profile note"
+
+    versions = await service.list_versions(
+        app_name="agent_app", user_id="user-1", filename="user:profile.txt", session_id="sess-2"
+    )
+    assert versions == [0]
+
+    meta = await service.get_artifact_version(
+        app_name="agent_app", user_id="user-1", filename="user:profile.txt", session_id="sess-2"
+    )
+    assert meta is not None
+    assert meta.version == 0
+
+    await service.delete_artifact(
+        app_name="agent_app", user_id="user-1", filename="user:profile.txt", session_id="sess-2"
+    )
+    assert store.delete_calls[-1] == ("agent_app", "user-1", "user:profile.txt", None)
+
+
+async def test_session_id_validation_raises_input_validation_error() -> None:
+    """Missing session_id on session-scoped save or reserved user* session_id raises InputValidationError."""
+    store = _RecordingStore()
+    backend = _RecordingBackend()
+    service, _registry = _service(store, backend)
+
+    with pytest.raises(InputValidationError, match="Session ID must be provided"):
+        await service.save_artifact(
+            app_name="agent_app",
+            user_id="user-1",
+            filename="report.txt",
+            artifact=types.Part.from_text(text="hello"),
+            session_id=None,
+        )
+
+    with pytest.raises(InputValidationError, match="reserved value 'user'"):
+        await service.save_artifact(
+            app_name="agent_app",
+            user_id="user-1",
+            filename="report.txt",
+            artifact=types.Part.from_text(text="hello"),
+            session_id="user",
+        )
+
+    with pytest.raises(InputValidationError, match="traversal segments"):
+        await service.load_artifact(
+            app_name="agent_app", user_id="user-1", filename="report.txt", session_id="../escape"
+        )
+
+
+async def test_artifact_reference_validation_and_recursive_resolution() -> None:
+    """artifact:// references are scope-validated on save and recursively resolved on load."""
+    store = _RecordingStore()
+    backend = _RecordingBackend()
+    service, _registry = _service(store, backend)
+
+    await service.save_artifact(
+        app_name="agent_app",
+        user_id="user-1",
+        filename="target.txt",
+        artifact=types.Part.from_text(text="resolved payload"),
+        session_id="sess-1",
+    )
+
+    valid_ref = types.Part(
+        file_data=types.FileData(
+            file_uri="artifact://apps/agent_app/users/user-1/sessions/sess-1/artifacts/target.txt/versions/0"
+        )
+    )
+    await service.save_artifact(
+        app_name="agent_app", user_id="user-1", filename="alias.txt", artifact=valid_ref, session_id="sess-1"
+    )
+
+    resolved = await service.load_artifact(
+        app_name="agent_app", user_id="user-1", filename="alias.txt", session_id="sess-1"
+    )
+    assert resolved is not None
+    assert resolved.text == "resolved payload"
+
+    cross_user_ref = types.Part(
+        file_data=types.FileData(
+            file_uri="artifact://apps/agent_app/users/other-user/sessions/sess-1/artifacts/target.txt/versions/0"
+        )
+    )
+    with pytest.raises(InputValidationError, match="same app and user scope"):
+        await service.save_artifact(
+            app_name="agent_app", user_id="user-1", filename="bad_ref.txt", artifact=cross_user_ref, session_id="sess-1"
+        )
+
+    self_ref = types.Part(
+        file_data=types.FileData(
+            file_uri="artifact://apps/agent_app/users/user-1/sessions/sess-1/artifacts/cycle.txt/versions/0"
+        )
+    )
+    await service.save_artifact(
+        app_name="agent_app", user_id="user-1", filename="cycle.txt", artifact=self_ref, session_id="sess-1"
+    )
+    with pytest.raises(InputValidationError, match="Exceeded maximum recursion depth"):
+        await service.load_artifact(app_name="agent_app", user_id="user-1", filename="cycle.txt", session_id="sess-1")
+
+
+async def test_load_artifact_returns_none_for_rewind_tombstone() -> None:
+    """load_artifact returns None when the stored Part equals _REWIND_TOMBSTONE or empty Part()."""
+    store = _RecordingStore()
+    backend = _RecordingBackend()
+    service, _registry = _service(store, backend)
+
+    await service.save_artifact(
+        app_name="agent_app", user_id="user-1", filename="rewound.bin", artifact=_REWIND_TOMBSTONE, session_id="sess-1"
+    )
+    loaded = await service.load_artifact(
+        app_name="agent_app", user_id="user-1", filename="rewound.bin", session_id="sess-1"
+    )
+    assert loaded is None

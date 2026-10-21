@@ -442,7 +442,9 @@ All table names and extension settings are configured through ``extension_config
 
 ``sqlspec.config.ADKConfig`` describes shared settings. Use
 ``sqlspec.adapters.asyncpg.adk.AsyncpgADKConfig``,
-``sqlspec.adapters.psycopg.adk.PsycopgADKConfig``, or
+``sqlspec.adapters.psycopg.adk.PsycopgADKConfig``,
+``sqlspec.adapters.psqlpy.adk.PsqlpyADKConfig``,
+``sqlspec.adapters.adbc.adk.AdbcADKConfig``, or
 ``sqlspec.adapters.spanner.adk.SpannerADKConfig`` when typing backend-specific
 vector, BM25, ScaNN, or Property Graph options. These options are rejected by
 other adapters.
