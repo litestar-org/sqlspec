@@ -52,6 +52,7 @@ if TYPE_CHECKING:
         build_explain_sql,
         build_generic_explain,
         build_mysql_explain,
+        build_oracle_display_cursor,
         build_oracle_explain,
         build_postgres_explain,
         build_sqlite_explain,
@@ -102,7 +103,12 @@ if TYPE_CHECKING:
     from sqlspec.builder._temporal import create_temporal_table, register_version_generators
     from sqlspec.builder._update import Update
     from sqlspec.builder._values import Values
-    from sqlspec.builder._vector_distance import VectorDistance
+    from sqlspec.builder._vector_distance import (
+        VectorDistance,
+        build_oracle_hnsw_subquery,
+        build_oracle_hybrid_rrf_query,
+        build_oracle_hybrid_rrf_sql,
+    )
     from sqlspec.exceptions import SQLBuilderError
 
 __all__ = (
@@ -179,7 +185,11 @@ __all__ = (
     "build_explain_sql",
     "build_generic_explain",
     "build_mysql_explain",
+    "build_oracle_display_cursor",
     "build_oracle_explain",
+    "build_oracle_hnsw_subquery",
+    "build_oracle_hybrid_rrf_query",
+    "build_oracle_hybrid_rrf_sql",
     "build_postgres_explain",
     "build_sqlite_explain",
     "create_temporal_table",
@@ -268,7 +278,11 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "build_explain_sql": ("sqlspec.builder._explain", "build_explain_sql"),
     "build_generic_explain": ("sqlspec.builder._explain", "build_generic_explain"),
     "build_mysql_explain": ("sqlspec.builder._explain", "build_mysql_explain"),
+    "build_oracle_display_cursor": ("sqlspec.builder._explain", "build_oracle_display_cursor"),
     "build_oracle_explain": ("sqlspec.builder._explain", "build_oracle_explain"),
+    "build_oracle_hnsw_subquery": ("sqlspec.builder._vector_distance", "build_oracle_hnsw_subquery"),
+    "build_oracle_hybrid_rrf_query": ("sqlspec.builder._vector_distance", "build_oracle_hybrid_rrf_query"),
+    "build_oracle_hybrid_rrf_sql": ("sqlspec.builder._vector_distance", "build_oracle_hybrid_rrf_sql"),
     "build_postgres_explain": ("sqlspec.builder._explain", "build_postgres_explain"),
     "build_sqlite_explain": ("sqlspec.builder._explain", "build_sqlite_explain"),
     "create_temporal_table": ("sqlspec.builder._temporal", "create_temporal_table"),

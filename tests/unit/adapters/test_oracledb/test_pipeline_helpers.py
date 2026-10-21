@@ -48,9 +48,11 @@ class _PipelineConnection:
 class _AsyncPipelineConnection:
     """Async connection stub exposing the python-oracledb async pipeline API."""
 
-    def __init__(self, *, thin: bool = True) -> None:
+    def __init__(self, *, thin: bool = True, version: str | None = None) -> None:
         self.in_transaction = False
         self.thin = thin
+        if version is not None:
+            self.version = version
 
     async def run_pipeline(self, *_args: object, **_kwargs: object) -> list[object]:
         return []
@@ -384,3 +386,21 @@ def test_dispatch_execute_script_filters_named_binds_per_statement() -> None:
     assert cursor.execute.call_count == 2
     assert cursor.execute.call_args_list[0].args[1] == {"a": 1}
     assert cursor.execute.call_args_list[1].args[1] == {"b": 2}
+
+
+async def test_oracle_async_driver_pipeline_native_supported_zero_rtt_from_connection_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _AsyncPipelineConnection(thin=True, version="23.4.0.24.05")
+    driver = OracleAsyncDriver(
+        connection=cast("OracleAsyncConnection", conn), statement_config=default_statement_config, driver_features={}
+    )
+    monkeypatch.setattr(OracleAsyncDriver, "_detect_oracledb_version", lambda _self: (4, 1, 0))
+    get_version_mock = AsyncMock(
+        side_effect=AssertionError("SQL get_version should not be called when connection.version is set")
+    )
+    monkeypatch.setattr(OracledbAsyncDataDictionary, "get_version", get_version_mock)
+
+    assert await driver._pipeline_native_supported() is True
+    assert driver._pipeline_support_reason is None
+    get_version_mock.assert_not_called()

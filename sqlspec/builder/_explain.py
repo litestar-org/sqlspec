@@ -10,7 +10,14 @@ from mypy_extensions import trait
 from sqlglot import Dialect, exp
 
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.core.explain import ORACLE_EXPLAIN_PREFIX, ORACLE_MANAGED_EXPLAIN_META_KEY, ExplainFormat, ExplainOptions
+from sqlspec.core.explain import (
+    ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY,
+    ORACLE_EXPLAIN_PREFIX,
+    ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY,
+    ORACLE_MANAGED_EXPLAIN_META_KEY,
+    ExplainFormat,
+    ExplainOptions,
+)
 from sqlspec.exceptions import SQLBuilderError
 from sqlspec.utils.type_guards import has_expression_and_sql, has_parameter_builder, is_expression
 
@@ -28,6 +35,7 @@ __all__ = (
     "build_explain_sql",
     "build_generic_explain",
     "build_mysql_explain",
+    "build_oracle_display_cursor",
     "build_oracle_explain",
     "build_postgres_explain",
     "build_sqlite_explain",
@@ -172,6 +180,30 @@ def build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
         return f"EXPLAIN (FORMAT JSON) {statement_sql}"
 
     return f"EXPLAIN {statement_sql}"
+
+
+def build_oracle_display_cursor(
+    sql_id: str | None = None, cursor_child_no: int | None = None, format: str = "TYPICAL"
+) -> str:
+    """Build an Oracle DBMS_XPLAN.DISPLAY_CURSOR query.
+
+    Args:
+        sql_id: Optional SQL_ID to inspect (defaults to NULL for last statement in session).
+        cursor_child_no: Optional cursor child number (defaults to NULL).
+        format: DBMS_XPLAN format string (e.g. 'TYPICAL +PREDICATE', 'ALLSTATS LAST +PEEKED_BINDS').
+
+    Returns:
+        SELECT statement querying TABLE(DBMS_XPLAN.DISPLAY_CURSOR(...)).
+    """
+    if "'" in format:
+        msg = f"Invalid Oracle XPLAN format string: {format!r}"
+        raise SQLBuilderError(msg)
+    if sql_id is not None and "'" in sql_id:
+        msg = f"Invalid Oracle sql_id: {sql_id!r}"
+        raise SQLBuilderError(msg)
+    sql_id_arg = f"'{sql_id}'" if sql_id is not None else "NULL"
+    child_arg = str(cursor_child_no) if cursor_child_no is not None else "NULL"
+    return f"SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR({sql_id_arg}, {child_arg}, '{format}'))"
 
 
 def build_oracle_explain(statement_sql: str, options: "ExplainOptions") -> str:
@@ -439,6 +471,33 @@ class Explain:
         self._options = self._options.copy(generic_plan=enabled)
         return self
 
+    def display_cursor(self, enabled: bool = True) -> Self:
+        """Enable Oracle DBMS_XPLAN.DISPLAY_CURSOR post-execution plan inspection.
+
+        Args:
+            enabled: Whether to use DISPLAY_CURSOR instead of EXPLAIN PLAN FOR.
+
+        Returns:
+            Self for method chaining
+        """
+        self._options = self._options.copy(display_cursor=enabled)
+        return self
+
+    def xplan_format(self, fmt: str) -> Self:
+        """Set Oracle DBMS_XPLAN format string (e.g. 'TYPICAL +PREDICATE +NOTE').
+
+        Args:
+            fmt: Oracle DBMS_XPLAN format string.
+
+        Returns:
+            Self for method chaining
+        """
+        if "'" in fmt:
+            msg = f"Invalid Oracle XPLAN format string: {fmt!r}"
+            raise SQLBuilderError(msg)
+        self._options = self._options.copy(xplan_format=fmt)
+        return self
+
     def with_options(self, options: "ExplainOptions") -> Self:
         """Replace all options with the provided ExplainOptions.
 
@@ -465,6 +524,12 @@ class Explain:
         if normalize_dialect_name(target_dialect) in ORACLE_DIALECTS:
             oracle_statement = exp.Command(this="EXPLAIN PLAN FOR", expression=exp.var(self._statement_sql))
             oracle_statement.meta[ORACLE_MANAGED_EXPLAIN_META_KEY] = True
+            if self._options.display_cursor:
+                oracle_statement.meta[ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY] = True
+            if self._options.xplan_format is not None:
+                oracle_statement.meta[ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY] = self._options.xplan_format
+            elif self._options.analyze and self._options.display_cursor:
+                oracle_statement.meta[ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY] = "ALLSTATS LAST"
             statement: str | exp.Expr = oracle_statement
         else:
             statement = build_explain_sql(self._statement_sql, self._options, target_dialect)

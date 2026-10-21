@@ -8,8 +8,13 @@ from typing_extensions import TypedDict
 from sqlspec import SQL
 from sqlspec.adapters.oracledb._storage import oracle_table_feature_report, validate_oracle_identifier
 from sqlspec.adapters.oracledb._typing import DatabaseError as OracleDatabaseError
-from sqlspec.adapters.oracledb.core import coerce_large_parameters_async, coerce_large_parameters_sync
+from sqlspec.adapters.oracledb.core import (
+    coerce_large_parameters_async,
+    coerce_large_parameters_sync,
+    sanitize_oracle_text_query,
+)
 from sqlspec.adapters.oracledb.data_dictionary import JSONStorageType, OracleVersionInfo, storage_type_from_version
+from sqlspec.builder._vector_distance import build_oracle_hnsw_subquery, build_oracle_hybrid_rrf_sql
 from sqlspec.config import ADKConfig
 from sqlspec.extensions.adk import (
     BaseAsyncADKStore,
@@ -2463,6 +2468,10 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         effective_limit = limit if limit is not None else self._max_results
 
         try:
+            if embedding is not None and self._use_fts:
+                return await self._search_entries_hybrid_rrf(
+                    query, embedding, app_name, user_id, effective_limit, scope_filter
+                )
             if self._use_fts:
                 return await self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
             return await self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
@@ -2659,6 +2668,9 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
     async def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
     ) -> "list[StoredMemory]":
+        sanitized_query = sanitize_oracle_text_query(query)
+        if not sanitized_query:
+            return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
@@ -2674,7 +2686,74 @@ class OracleAsyncADKMemoryStore(BaseAsyncADKMemoryStore["OracleAsyncConfig"]):
         )
         WHERE ROWNUM <= :limit
         """
-        params = {**scope_params, "query": query, "limit": limit}
+        params = {**scope_params, "query": sanitized_query, "limit": limit}
+        async with self._config.provide_connection() as conn:
+            with conn.cursor() as cursor:
+                await cursor.execute(sql, params)
+                rows = await cursor.fetchall()
+                return await self._rows_to_records(rows)
+
+    async def _search_entries_hybrid_rrf(
+        self,
+        query: str,
+        embedding: "Sequence[float] | Any",
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        vector_column: str = "embedding",
+        rrf_k: int = 60,
+        metric: str = "COSINE",
+    ) -> "list[StoredMemory]":
+        sanitized_query = sanitize_oracle_text_query(query)
+        where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        select_cols = (
+            "id",
+            "session_id",
+            "app_name",
+            "user_id",
+            "scope",
+            "event_id",
+            "author",
+            "timestamp",
+            "content_json",
+            "content_text",
+            "metadata_json",
+            "inserted_at",
+        )
+        if not sanitized_query:
+            sql = build_oracle_hnsw_subquery(
+                table=self._memory_table,
+                vector_column=vector_column,
+                select_columns=select_cols,
+                vector_param="query_vector",
+                top_k_param="top_k",
+                metric=metric,
+                where_clause=where_scope,
+            )
+            params: dict[str, Any] = {**scope_params, "query_vector": embedding, "top_k": limit}
+        else:
+            sql = build_oracle_hybrid_rrf_sql(
+                table=self._memory_table,
+                key_column="id",
+                vector_column=vector_column,
+                text_column="content_text",
+                select_columns=select_cols,
+                vector_param="query_vector",
+                text_param="text_query",
+                top_k_param="top_k",
+                rrf_k_param="rrf_k",
+                metric=metric,
+                where_clause=where_scope,
+            )
+            params = {
+                **scope_params,
+                "query_vector": embedding,
+                "text_query": sanitized_query,
+                "top_k": limit,
+                "rrf_k": rrf_k,
+            }
         async with self._config.provide_connection() as conn:
             with conn.cursor() as cursor:
                 await cursor.execute(sql, params)
@@ -2823,6 +2902,10 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         effective_limit = limit if limit is not None else self._max_results
 
         try:
+            if embedding is not None and self._use_fts:
+                return self._search_entries_hybrid_rrf(
+                    query, embedding, app_name, user_id, effective_limit, scope_filter
+                )
             if self._use_fts:
                 return self._search_entries_fts(query, app_name, user_id, effective_limit, scope_filter)
             return self._search_entries_simple(query, app_name, user_id, effective_limit, scope_filter)
@@ -3017,6 +3100,9 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
     def _search_entries_fts(
         self, query: str, app_name: str, user_id: str, limit: int, scope_filter: Literal["all", "user", "app"] = "all"
     ) -> "list[StoredMemory]":
+        sanitized_query = sanitize_oracle_text_query(query)
+        if not sanitized_query:
+            return []
         where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
         sql = f"""
         SELECT id, session_id, app_name, user_id, scope, event_id, author,
@@ -3032,7 +3118,73 @@ class OracleSyncADKMemoryStore(BaseSyncADKMemoryStore["OracleSyncConfig"]):
         )
         WHERE ROWNUM <= :limit
         """
-        params = {**scope_params, "query": query, "limit": limit}
+        params = {**scope_params, "query": sanitized_query, "limit": limit}
+        with self._config.provide_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            return self._rows_to_records(rows)
+
+    def _search_entries_hybrid_rrf(
+        self,
+        query: str,
+        embedding: "Sequence[float] | Any",
+        app_name: str,
+        user_id: str,
+        limit: int,
+        scope_filter: Literal["all", "user", "app"] = "all",
+        *,
+        vector_column: str = "embedding",
+        rrf_k: int = 60,
+        metric: str = "COSINE",
+    ) -> "list[StoredMemory]":
+        sanitized_query = sanitize_oracle_text_query(query)
+        where_scope, scope_params = _build_oracle_scope_where(app_name, user_id, scope_filter)
+        select_cols = (
+            "id",
+            "session_id",
+            "app_name",
+            "user_id",
+            "scope",
+            "event_id",
+            "author",
+            "timestamp",
+            "content_json",
+            "content_text",
+            "metadata_json",
+            "inserted_at",
+        )
+        if not sanitized_query:
+            sql = build_oracle_hnsw_subquery(
+                table=self._memory_table,
+                vector_column=vector_column,
+                select_columns=select_cols,
+                vector_param="query_vector",
+                top_k_param="top_k",
+                metric=metric,
+                where_clause=where_scope,
+            )
+            params: dict[str, Any] = {**scope_params, "query_vector": embedding, "top_k": limit}
+        else:
+            sql = build_oracle_hybrid_rrf_sql(
+                table=self._memory_table,
+                key_column="id",
+                vector_column=vector_column,
+                text_column="content_text",
+                select_columns=select_cols,
+                vector_param="query_vector",
+                text_param="text_query",
+                top_k_param="top_k",
+                rrf_k_param="rrf_k",
+                metric=metric,
+                where_clause=where_scope,
+            )
+            params = {
+                **scope_params,
+                "query_vector": embedding,
+                "text_query": sanitized_query,
+                "top_k": limit,
+                "rrf_k": rrf_k,
+            }
         with self._config.provide_connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()

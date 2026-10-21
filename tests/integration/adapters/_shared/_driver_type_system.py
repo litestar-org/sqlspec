@@ -290,6 +290,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "events_backend",
         "enable_direct_path_load",
+        "session_context_hook",
     ),
     "psqlpy": (
         "enable_cast_detection",

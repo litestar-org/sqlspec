@@ -16,3 +16,11 @@ FROM all_objects
 WHERE owner = COALESCE(:schema_name, USER)
   AND (:object_name IS NULL OR object_name = :object_name)
 ORDER BY owner, object_type, object_name;
+
+-- name: cloud_ai_available
+-- dialect: oracle
+SELECT
+    COUNT(*) AS "cnt"
+FROM all_objects
+WHERE object_name = 'DBMS_CLOUD_AI'
+  AND object_type = 'PACKAGE';

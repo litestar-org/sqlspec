@@ -1,11 +1,16 @@
 """Unit tests for Oracle native Arrow batch export."""
 
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 import pytest
 
+from sqlspec.adapters.oracledb.core import (
+    build_arrow_fetch_kwargs,
+    coerce_oracle_df_to_arrow_batches,
+    coerce_oracle_df_to_arrow_table,
+)
 from sqlspec.adapters.oracledb.driver import OracleAsyncDriver, OracleSyncDriver
 
 if TYPE_CHECKING:
@@ -73,10 +78,10 @@ def test_sync_select_to_arrow_batches_uses_fetch_df_batches() -> None:
     assert result.rows_affected == 3
     assert connection.fetch_batch_calls[0]["size"] == 2
     assert connection.fetch_batch_calls[0]["fetch_decimals"] is True
-    assert connection.fetch_batch_calls[0]["fetch_lobs"] is False
+    assert "fetch_lobs" not in connection.fetch_batch_calls[0]
 
 
-def test_sync_select_to_arrow_table_forwards_fetch_lobs_to_fetch_df_all() -> None:
+def test_sync_select_to_arrow_table_omits_fetch_lobs_from_fetch_df_all() -> None:
     connection = _OracleAllConnection()
     driver = OracleSyncDriver(
         cast("OracleSyncConnection", connection),
@@ -88,7 +93,7 @@ def test_sync_select_to_arrow_table_forwards_fetch_lobs_to_fetch_df_all() -> Non
     assert result.get_data().to_pydict() == {"id": [1], "value": [10]}
     assert connection.fetch_all_calls[0]["arraysize"] == 2
     assert connection.fetch_all_calls[0]["fetch_decimals"] is True
-    assert connection.fetch_all_calls[0]["fetch_lobs"] is False
+    assert "fetch_lobs" not in connection.fetch_all_calls[0]
 
 
 @pytest.mark.anyio
@@ -105,11 +110,11 @@ async def test_async_select_to_arrow_reader_uses_fetch_df_batches() -> None:
     assert result.get_data().read_all().to_pydict() == {"id": [1, 2, 3], "value": [10, 20, 30]}
     assert connection.fetch_batch_calls[0]["size"] == 2
     assert connection.fetch_batch_calls[0]["fetch_decimals"] is True
-    assert connection.fetch_batch_calls[0]["fetch_lobs"] is False
+    assert "fetch_lobs" not in connection.fetch_batch_calls[0]
 
 
 @pytest.mark.anyio
-async def test_async_select_to_arrow_table_forwards_fetch_lobs_to_fetch_df_all() -> None:
+async def test_async_select_to_arrow_table_omits_fetch_lobs_from_fetch_df_all() -> None:
     connection = _OracleAsyncAllConnection()
     driver = OracleAsyncDriver(
         cast("OracleAsyncConnection", connection),
@@ -121,4 +126,66 @@ async def test_async_select_to_arrow_table_forwards_fetch_lobs_to_fetch_df_all()
     assert result.get_data().to_pydict() == {"id": [1], "value": [10]}
     assert connection.fetch_all_calls[0]["arraysize"] == 2
     assert connection.fetch_all_calls[0]["fetch_decimals"] is True
-    assert connection.fetch_all_calls[0]["fetch_lobs"] is False
+    assert "fetch_lobs" not in connection.fetch_all_calls[0]
+
+
+class _StreamOnlyOracleDataFrame:
+    """Fake OracleDataFrame that exposes only __arrow_c_stream__."""
+
+    def __init__(self, table: pa.Table) -> None:
+        self._table = table
+        self.stream_calls = 0
+
+    def __arrow_c_stream__(self, requested_schema: Any = None) -> Any:
+        self.stream_calls += 1
+        return cast("Any", self._table).__arrow_c_stream__(requested_schema=requested_schema)
+
+    def __arrow_c_array__(self, *_args: Any, **_kwargs: Any) -> Any:
+        msg = "select_to_arrow must use __arrow_c_stream__ rather than __arrow_c_array__"
+        raise AssertionError(msg)
+
+
+def test_build_arrow_fetch_kwargs_excludes_fetch_lobs_and_passes_requested_schema() -> None:
+    schema = pa.schema([("id", pa.int64())])
+    kwargs = build_arrow_fetch_kwargs({"fetch_lobs": True, "fetch_decimals": True}, arrow_schema=schema, batch_size=500)
+    assert "fetch_lobs" not in kwargs
+    assert kwargs["arraysize"] == 500
+    assert kwargs["fetch_decimals"] is True
+    assert kwargs["requested_schema"] is schema
+
+
+def test_select_to_arrow_consumes_arrow_c_stream_pycapsule_sync() -> None:
+    raw_table = pa.table({"ID": [1, 2], "VALUE": [10, 20]})
+    stream_df = _StreamOnlyOracleDataFrame(raw_table)
+
+    class _StreamConn:
+        def fetch_df_all(self, **_kwargs: object) -> _StreamOnlyOracleDataFrame:
+            return stream_df
+
+    driver = OracleSyncDriver(
+        cast("OracleSyncConnection", _StreamConn()), driver_features={"enable_lowercase_column_names": True}
+    )
+    res_table = driver.select_to_arrow("SELECT id, value FROM example", return_format="table")
+    assert res_table.get_data().to_pydict() == {"id": [1, 2], "value": [10, 20]}
+    assert stream_df.stream_calls == 1
+
+    batches = coerce_oracle_df_to_arrow_batches(stream_df, pa)
+    assert sum(b.num_rows for b in batches) == 2
+    assert coerce_oracle_df_to_arrow_table(stream_df, pa).num_rows == 2
+
+
+@pytest.mark.anyio
+async def test_select_to_arrow_consumes_arrow_c_stream_pycapsule_async() -> None:
+    raw_table = pa.table({"ID": [1, 2], "VALUE": [10, 20]})
+    stream_df = _StreamOnlyOracleDataFrame(raw_table)
+
+    class _AsyncStreamConn:
+        async def fetch_df_all(self, **_kwargs: object) -> _StreamOnlyOracleDataFrame:
+            return stream_df
+
+    driver = OracleAsyncDriver(
+        cast("OracleAsyncConnection", _AsyncStreamConn()), driver_features={"enable_lowercase_column_names": True}
+    )
+    res_table = await driver.select_to_arrow("SELECT id, value FROM example", return_format="table")
+    assert res_table.get_data().to_pydict() == {"id": [1, 2], "value": [10, 20]}
+    assert stream_df.stream_calls == 1

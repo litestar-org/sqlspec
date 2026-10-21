@@ -27,3 +27,11 @@ SELECT
 FROM dual
 WHERE :include_diagnostics = 1
   AND :acknowledge_license = 1;
+
+-- name: vector_memory_pool
+-- dialect: oracle
+SELECT
+    pool AS "pool",
+    alloc_bytes AS "alloc_bytes",
+    used_bytes AS "used_bytes"
+FROM v$vector_memory_pool;

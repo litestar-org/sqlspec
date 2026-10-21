@@ -9,7 +9,14 @@ from typing import Any, Final
 
 from mypy_extensions import mypyc_attr
 
-__all__ = ("ExplainFormat", "ExplainOptions")
+__all__ = (
+    "ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY",
+    "ORACLE_EXPLAIN_PREFIX",
+    "ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY",
+    "ORACLE_MANAGED_EXPLAIN_META_KEY",
+    "ExplainFormat",
+    "ExplainOptions",
+)
 
 
 EXPLAIN_OPTION_FIELDS: Final[tuple[str, ...]] = (
@@ -24,9 +31,13 @@ EXPLAIN_OPTION_FIELDS: Final[tuple[str, ...]] = (
     "settings",
     "wal",
     "generic_plan",
+    "display_cursor",
+    "xplan_format",
 )
 EXPLAIN_OPTIONS_SLOTS: Final = EXPLAIN_OPTION_FIELDS
 ORACLE_MANAGED_EXPLAIN_META_KEY: Final[str] = "sqlspec_managed_oracle_explain"
+ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY: Final[str] = "sqlspec_oracle_explain_display_cursor"
+ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY: Final[str] = "sqlspec_oracle_explain_xplan_format"
 ORACLE_EXPLAIN_PREFIX: Final[str] = "EXPLAIN PLAN FOR "
 
 
@@ -104,6 +115,8 @@ class ExplainOptions:
         settings: bool | None = None,
         wal: bool | None = None,
         generic_plan: bool | None = None,
+        display_cursor: bool | None = None,
+        xplan_format: str | None = None,
     ) -> None:
         """Initialize ExplainOptions.
 
@@ -119,6 +132,8 @@ class ExplainOptions:
             settings: Include configuration parameter information
             wal: Include WAL usage information
             generic_plan: Generate a generic plan ignoring parameter values
+            display_cursor: Use Oracle DBMS_XPLAN.DISPLAY_CURSOR instead of PLAN_TABLE
+            xplan_format: Custom Oracle DBMS_XPLAN format string
         """
         self.analyze = analyze
         self.verbose = verbose
@@ -130,6 +145,8 @@ class ExplainOptions:
         self.settings = settings
         self.wal = wal
         self.generic_plan = generic_plan
+        self.display_cursor = display_cursor
+        self.xplan_format = xplan_format
 
         if format is not None:
             if isinstance(format, ExplainFormat):
@@ -178,6 +195,8 @@ class ExplainOptions:
         settings: "bool | None" = None,
         wal: "bool | None" = None,
         generic_plan: "bool | None" = None,
+        display_cursor: "bool | None" = None,
+        xplan_format: "str | None" = None,
     ) -> "ExplainOptions":
         """Create a copy with modifications.
 
@@ -193,6 +212,8 @@ class ExplainOptions:
             settings: Override settings setting
             wal: Override wal setting
             generic_plan: Override generic_plan setting
+            display_cursor: Override Oracle display_cursor setting
+            xplan_format: Override Oracle xplan_format setting
 
         Returns:
             New ExplainOptions instance with modifications applied
@@ -209,6 +230,8 @@ class ExplainOptions:
             settings=settings if settings is not None else self.settings,
             wal=wal if wal is not None else self.wal,
             generic_plan=generic_plan if generic_plan is not None else self.generic_plan,
+            display_cursor=display_cursor if display_cursor is not None else self.display_cursor,
+            xplan_format=xplan_format if xplan_format is not None else self.xplan_format,
         )
 
     def to_dict(self) -> "dict[str, Any]":
@@ -254,4 +277,8 @@ class ExplainOptions:
             return self.wal
         if field_name == "generic_plan":
             return self.generic_plan
+        if field_name == "display_cursor":
+            return self.display_cursor
+        if field_name == "xplan_format":
+            return self.xplan_format
         return None
