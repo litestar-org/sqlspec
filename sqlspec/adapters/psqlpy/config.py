@@ -1,7 +1,8 @@
 """Psqlpy database configuration."""
 
 import sys
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, TypedDict, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NotRequired, Self, TypedDict, cast
 
 from mypy_extensions import mypyc_attr
 
@@ -82,6 +83,7 @@ class PsqlpyPoolParams(PsqlpyConnectionParams):
     ports: NotRequired[list[int]]
     conn_recycling_method: NotRequired[str]
     max_db_pool_size: NotRequired[int]
+    max_cached_statement_lifetime: NotRequired[int]
     configure: NotRequired["Callable[..., Any]"]
     extra: NotRequired["dict[str, Any]"]
 
@@ -127,6 +129,11 @@ class PsqlpyDriverFeatures(TypedDict):
     enable_pgvector: NotRequired[bool]
     enable_paradedb: NotRequired[bool]
     enable_pg_textsearch: NotRequired[bool]
+    enable_alloydb_columnar: NotRequired[bool]
+    pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"] | None]
+    pgbouncer: NotRequired[bool]
+    pgbouncer_mode: NotRequired[bool]
+    direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     json_serializer: NotRequired["Callable[[Any], str]"]
     json_deserializer: NotRequired["Callable[[str], Any]"]
     on_connection_create: "NotRequired[Callable[[PsqlpyConnection], Awaitable[None]]]"
@@ -245,12 +252,28 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
             extension_config: Extension-specific configuration.
             **kwargs: Additional keyword arguments.
         """
-        connection_config = build_connection_config(normalize_connection_config(connection_config))
+        raw_conn_cfg = normalize_connection_config(connection_config)
+        self._explicit_max_cached_statement_lifetime = "max_cached_statement_lifetime" in raw_conn_cfg
+        raw_options = raw_conn_cfg.get("options")
+        self._explicit_options: str | None = raw_options if isinstance(raw_options, str) else None
+        connection_config = build_connection_config(raw_conn_cfg)
 
         statement_config = statement_config or default_statement_config
         statement_config, driver_features = apply_driver_features(statement_config, driver_features)
 
         features_dict = dict(driver_features) if driver_features else {}
+        if features_dict.get("pooler_mode") in {"transaction", "statement"} or bool(
+            features_dict.get("pgbouncer") or features_dict.get("pgbouncer_mode")
+        ):
+            connection_config.setdefault("max_cached_statement_lifetime", 0)
+        if bool(features_dict.get("enable_alloydb_columnar", False)) and features_dict.get("pooler_mode") == "session":
+            columnar_opt = "-c google_columnar_engine.enabled=on"
+            existing_options = connection_config.get("options")
+            if isinstance(existing_options, str) and existing_options.strip():
+                if "google_columnar_engine.enabled" not in existing_options:
+                    connection_config["options"] = f"{existing_options} {columnar_opt}"
+            else:
+                connection_config["options"] = columnar_opt
         self._user_connection_hook: Callable[[PsqlpyConnection], Awaitable[None]] | None = features_dict.get(
             "on_connection_create"
         )
@@ -348,6 +371,40 @@ class PsqlpyConfig(AsyncDatabaseConfig[PsqlpyConnection, "ConnectionPool", Psqlp
         """Return LISTEN/NOTIFY defaults for Psqlpy adapters."""
 
         return EventRuntimeHints(poll_interval=0.5, select_for_update=True, skip_locked=True)
+
+    def derive_direct_config(self) -> Self:
+        """Derive a session-mode configuration using direct_dsn for DDL, migrations, or LISTEN/NOTIFY."""
+        direct_dsn = self.driver_features.get("direct_dsn")
+        if not direct_dsn:
+            return self
+        conn_cfg: dict[str, Any] = dict(self.connection_config)
+        if not self._explicit_max_cached_statement_lifetime and conn_cfg.get("max_cached_statement_lifetime") == 0:
+            conn_cfg.pop("max_cached_statement_lifetime", None)
+        if self._explicit_options is not None:
+            conn_cfg["options"] = self._explicit_options
+        else:
+            conn_cfg.pop("options", None)
+        if isinstance(direct_dsn, str):
+            conn_cfg["dsn"] = direct_dsn
+        elif isinstance(direct_dsn, Mapping):
+            conn_cfg.update(build_connection_config(direct_dsn))
+        features: dict[str, Any] = dict(self.driver_features)
+        features["pooler_mode"] = "session"
+        features["pgbouncer"] = False
+        features["pgbouncer_mode"] = False
+        features["direct_dsn"] = None
+        if self._user_connection_hook is not None:
+            features["on_connection_create"] = self._user_connection_hook
+        return type(self)(
+            connection_config=cast("PsqlpyPoolParams", conn_cfg),
+            connection_instance=None,
+            migration_config=dict(self.migration_config),
+            statement_config=self.statement_config,
+            driver_features=cast("PsqlpyDriverFeatures", features),
+            bind_key=self.bind_key,
+            extension_config=cast("ExtensionConfigs", dict(self.extension_config)),
+            observability_config=self.observability_config,
+        )
 
     async def _ensure_connection(self, connection: "PsqlpyConnection") -> None:
         """Ensure connection callback has been called once for this connection.

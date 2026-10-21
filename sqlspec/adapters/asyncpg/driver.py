@@ -236,6 +236,8 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
         transaction = self.connection.transaction()
         try:
             await transaction.start()
+            if self._should_set_local_columnar():
+                await self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
         except AsyncpgPostgresError as e:
             self._release_failed_transaction_claim(transaction)
             raise create_mapped_exception(e) from e
@@ -577,9 +579,18 @@ class AsyncpgDriver(AsyncDriverAdapterBase):
 
     async def _execute_stack_operation_prepared(self, normalized: "NormalizedStackOperation") -> StackResult:
         result = await self._execute_cached_statement(normalized.statement)
-        if not self.driver_features.get("pgbouncer"):
+        if not self._is_transaction_pooler_mode():
             result.metadata["prepared_statement"] = True
         return StackResult.from_sql_result(result)
+
+    def _is_transaction_pooler_mode(self) -> bool:
+        pooler_mode = self.driver_features.get("pooler_mode", "session")
+        return pooler_mode in {"transaction", "statement"} or bool(
+            self.driver_features.get("pgbouncer") or self.driver_features.get("pgbouncer_mode")
+        )
+
+    def _should_set_local_columnar(self) -> bool:
+        return bool(self.driver_features.get("enable_alloydb_columnar", False)) and self._is_transaction_pooler_mode()
 
     def _connection_in_transaction(self) -> bool:
         """Check if connection is in transaction."""

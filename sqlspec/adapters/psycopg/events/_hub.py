@@ -14,7 +14,7 @@ import contextlib
 import logging
 import queue as stdlib_queue
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from sqlspec.adapters.psycopg._typing import PsycopgComposed, PsycopgIdentifier, PsycopgSQL
@@ -44,6 +44,7 @@ class PsycopgAsyncListenerHub:
         "_config",
         "_connection",
         "_connection_cm",
+        "_listener_config",
         "_listener_queue_capacity",
         "_lock",
         "_pool_destroying_registered",
@@ -56,6 +57,7 @@ class PsycopgAsyncListenerHub:
     def __init__(self, config: "PsycopgAsyncConfig", backend_name: str = "notify") -> None:
         self._backend_name = backend_name
         self._config = config
+        self._listener_config: PsycopgAsyncConfig | None = None
         self._lock = asyncio.Lock()
         self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
@@ -137,6 +139,15 @@ class PsycopgAsyncListenerHub:
             with contextlib.suppress(Exception):
                 await connection_cm.__aexit__(None, None, None)
             _record_listener_lifecycle(self._config, self._backend_name, "release", is_async=True)
+        listener_config = self._listener_config
+        self._listener_config = None
+        if (
+            listener_config is not None
+            and listener_config is not self._config
+            and callable(getattr(listener_config, "close_pool", None))
+        ):
+            with contextlib.suppress(Exception):
+                await listener_config.close_pool()
         self._shutting_down = False
         self._stopping = False
 
@@ -156,6 +167,37 @@ class PsycopgAsyncListenerHub:
             queue = asyncio.Queue(maxsize=self._listener_queue_capacity or 0)
             queues[task] = queue
         return queue
+
+    def _resolve_listener_config(self) -> "PsycopgAsyncConfig":
+        if self._listener_config is not None:
+            return self._listener_config
+        raw_features = getattr(self._config, "driver_features", None)
+        driver_features = raw_features if isinstance(raw_features, dict) else {}
+        pooler_mode = str(
+            driver_features.get("pooler_mode")
+            or (
+                "transaction"
+                if driver_features.get("pgbouncer") or driver_features.get("pgbouncer_mode")
+                else "session"
+            )
+        ).lower()
+        raw_direct_dsn = driver_features.get("direct_dsn")
+        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, str) and raw_direct_dsn else None
+        if pooler_mode in {"transaction", "statement"} and not direct_dsn:
+            logger.warning(
+                "PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode=%r without configuring driver_features['direct_dsn']",
+                pooler_mode,
+            )
+            msg = (
+                f"PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode={pooler_mode!r} without "
+                "configuring driver_features['direct_dsn']"
+            )
+            raise ImproperConfigurationError(msg)
+        derive_fn = getattr(self._config, "derive_direct_config", None)
+        self._listener_config = (
+            cast("PsycopgAsyncConfig", derive_fn()) if direct_dsn and callable(derive_fn) else self._config
+        )
+        return self._listener_config
 
     async def _ensure_connection_locked(self) -> None:
         if (
@@ -179,7 +221,8 @@ class PsycopgAsyncListenerHub:
         self._connection_cm = None
         self._pump_task = None
         self._stopping = False
-        connection_cm = self._config.provide_connection()
+        listener_config = self._resolve_listener_config()
+        connection_cm = listener_config.provide_connection()
         connection = await connection_cm.__aenter__()
         if connection is None:
             with contextlib.suppress(Exception):
@@ -273,6 +316,7 @@ class PsycopgSyncListenerHub:
         "_config",
         "_connection",
         "_connection_cm",
+        "_listener_config",
         "_listener_queue_capacity",
         "_lock",
         "_pool_destroying_registered",
@@ -285,6 +329,7 @@ class PsycopgSyncListenerHub:
     def __init__(self, config: "PsycopgSyncConfig", backend_name: str = "notify") -> None:
         self._backend_name = backend_name
         self._config = config
+        self._listener_config: PsycopgSyncConfig | None = None
         self._lock = threading.Lock()
         self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[threading.Thread, stdlib_queue.Queue[str]]] = {}
@@ -361,6 +406,15 @@ class PsycopgSyncListenerHub:
             with contextlib.suppress(Exception):
                 connection_cm.__exit__(None, None, None)
             _record_listener_lifecycle(self._config, self._backend_name, "release", is_async=False)
+        listener_config = self._listener_config
+        self._listener_config = None
+        if (
+            listener_config is not None
+            and listener_config is not self._config
+            and callable(getattr(listener_config, "close_pool", None))
+        ):
+            with contextlib.suppress(Exception):
+                listener_config.close_pool()
         self._connection = None
         self._stopping = threading.Event()
         self._command_queue = stdlib_queue.Queue()
@@ -380,6 +434,37 @@ class PsycopgSyncListenerHub:
                 queue = stdlib_queue.Queue(maxsize=self._listener_queue_capacity or 0)
                 queues[thread] = queue
             return queue
+
+    def _resolve_listener_config(self) -> "PsycopgSyncConfig":
+        if self._listener_config is not None:
+            return self._listener_config
+        raw_features = getattr(self._config, "driver_features", None)
+        driver_features = raw_features if isinstance(raw_features, dict) else {}
+        pooler_mode = str(
+            driver_features.get("pooler_mode")
+            or (
+                "transaction"
+                if driver_features.get("pgbouncer") or driver_features.get("pgbouncer_mode")
+                else "session"
+            )
+        ).lower()
+        raw_direct_dsn = driver_features.get("direct_dsn")
+        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, str) and raw_direct_dsn else None
+        if pooler_mode in {"transaction", "statement"} and not direct_dsn:
+            logger.warning(
+                "PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode=%r without configuring driver_features['direct_dsn']",
+                pooler_mode,
+            )
+            msg = (
+                f"PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode={pooler_mode!r} without "
+                "configuring driver_features['direct_dsn']"
+            )
+            raise ImproperConfigurationError(msg)
+        derive_fn = getattr(self._config, "derive_direct_config", None)
+        self._listener_config = (
+            cast("PsycopgSyncConfig", derive_fn()) if direct_dsn and callable(derive_fn) else self._config
+        )
+        return self._listener_config
 
     def _ensure_connection_locked(self) -> None:
         if (
@@ -405,7 +490,8 @@ class PsycopgSyncListenerHub:
         self._worker_thread = None
         self._stopping = threading.Event()
         self._command_queue = stdlib_queue.Queue()
-        connection_cm = self._config.provide_connection()
+        listener_config = self._resolve_listener_config()
+        connection_cm = listener_config.provide_connection()
         connection = connection_cm.__enter__()
         if connection is None:
             with contextlib.suppress(Exception):

@@ -23,6 +23,7 @@ from sqlspec.adapters.psycopg.events.backend import (
     PsycopgSyncEventsBackend,
     PsycopgSyncHybridEventsBackend,
 )
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import EventMessage
 
 
@@ -1017,3 +1018,96 @@ async def _assert_dropped_marker_recovers(backend: Any, config: _HybridConfig) -
     assert "events.marker.miss" in metric_names
     assert "events.poll.fallback" in metric_names
     assert "events.dequeue.latency_ms" in metric_names
+
+
+async def test_listener_hub_refuses_transaction_pooler_without_direct_dsn() -> None:
+    """All four PostgreSQL ListenerHub classes raise ImproperConfigurationError in transaction mode without direct_dsn."""
+    asyncpg_cfg = _AsyncpgConfig(_AsyncpgConnection())
+    asyncpg_cfg.driver_features = {"pooler_mode": "transaction", "direct_dsn": None}  # type: ignore[attr-defined]
+    asyncpg_hub = AsyncpgListenerHub(asyncpg_cfg)  # type: ignore[arg-type]
+    with pytest.raises(ImproperConfigurationError, match="direct_dsn"):
+        await asyncpg_hub.subscribe("alerts")
+
+    psycopg_async_cfg = _PsycopgAsyncConfig(_PsycopgAsyncConnection())
+    psycopg_async_cfg.driver_features = {"pooler_mode": "statement", "direct_dsn": None}  # type: ignore[attr-defined]
+    psycopg_async_hub = PsycopgAsyncListenerHub(psycopg_async_cfg)  # type: ignore[arg-type]
+    with pytest.raises(ImproperConfigurationError, match="direct_dsn"):
+        await psycopg_async_hub.subscribe("alerts")
+
+    psycopg_sync_cfg = _PsycopgSyncConfig(_PsycopgSyncConnection())
+    psycopg_sync_cfg.driver_features = {"pgbouncer": True, "direct_dsn": None}  # type: ignore[attr-defined]
+    psycopg_sync_hub = PsycopgSyncListenerHub(psycopg_sync_cfg)  # type: ignore[arg-type]
+    with pytest.raises(ImproperConfigurationError, match="direct_dsn"):
+        psycopg_sync_hub.subscribe("alerts")
+
+    psqlpy_cfg = _PsqlpyConfig()
+    psqlpy_cfg.driver_features = {"pooler_mode": "transaction", "direct_dsn": None}  # type: ignore[attr-defined]
+    psqlpy_hub = PsqlpyListenerHub(psqlpy_cfg)  # type: ignore[arg-type]
+    with pytest.raises(ImproperConfigurationError, match="direct_dsn"):
+        await psqlpy_hub.subscribe("alerts")
+
+
+async def test_listener_hub_routes_over_direct_dsn() -> None:
+    """All four PostgreSQL ListenerHub classes route listener connections through derive_direct_config()."""
+    pooled_asyncpg_conn = _AsyncpgConnection()
+    direct_asyncpg_conn = _AsyncpgConnection()
+    pooled_asyncpg_cfg = _AsyncpgConfig(pooled_asyncpg_conn)
+    direct_asyncpg_cfg = _AsyncpgConfig(direct_asyncpg_conn)
+    pooled_asyncpg_cfg.driver_features = {  # type: ignore[attr-defined]
+        "pooler_mode": "transaction",
+        "direct_dsn": "postgresql://direct:5432/db",
+    }
+    pooled_asyncpg_cfg.derive_direct_config = lambda: direct_asyncpg_cfg  # type: ignore[attr-defined]
+
+    asyncpg_hub = AsyncpgListenerHub(pooled_asyncpg_cfg)  # type: ignore[arg-type]
+    await asyncpg_hub.subscribe("alerts")
+    assert pooled_asyncpg_cfg.connection_enters == 0
+    assert direct_asyncpg_cfg.connection_enters == 1
+    assert direct_asyncpg_conn.executed == ["LISTEN alerts"]
+    await asyncpg_hub.shutdown()
+
+    pooled_psycopg_async_conn = _PsycopgAsyncConnection()
+    direct_psycopg_async_conn = _PsycopgAsyncConnection()
+    pooled_psycopg_async_cfg = _PsycopgAsyncConfig(pooled_psycopg_async_conn)
+    direct_psycopg_async_cfg = _PsycopgAsyncConfig(direct_psycopg_async_conn)
+    pooled_psycopg_async_cfg.driver_features = {  # type: ignore[attr-defined]
+        "pooler_mode": "transaction",
+        "direct_dsn": "postgresql://direct:5432/db",
+    }
+    pooled_psycopg_async_cfg.derive_direct_config = lambda: direct_psycopg_async_cfg  # type: ignore[attr-defined]
+
+    psycopg_async_hub = PsycopgAsyncListenerHub(pooled_psycopg_async_cfg)  # type: ignore[arg-type]
+    await psycopg_async_hub.subscribe("alerts")
+    assert pooled_psycopg_async_cfg.connection_enters == 0
+    assert direct_psycopg_async_cfg.connection_enters == 1
+    await psycopg_async_hub.shutdown()
+
+    pooled_psycopg_sync_conn = _PsycopgSyncConnection()
+    direct_psycopg_sync_conn = _PsycopgSyncConnection()
+    pooled_psycopg_sync_cfg = _PsycopgSyncConfig(pooled_psycopg_sync_conn)
+    direct_psycopg_sync_cfg = _PsycopgSyncConfig(direct_psycopg_sync_conn)
+    pooled_psycopg_sync_cfg.driver_features = {  # type: ignore[attr-defined]
+        "pooler_mode": "transaction",
+        "direct_dsn": "postgresql://direct:5432/db",
+    }
+    pooled_psycopg_sync_cfg.derive_direct_config = lambda: direct_psycopg_sync_cfg  # type: ignore[attr-defined]
+
+    psycopg_sync_hub = PsycopgSyncListenerHub(pooled_psycopg_sync_cfg)  # type: ignore[arg-type]
+    psycopg_sync_hub.subscribe("alerts")
+    assert pooled_psycopg_sync_cfg.connection_enters == 0
+    assert direct_psycopg_sync_cfg.connection_enters == 1
+    psycopg_sync_hub.shutdown()
+
+    pooled_psqlpy_cfg = _PsqlpyConfig()
+    direct_psqlpy_cfg = _PsqlpyConfig()
+    pooled_psqlpy_cfg.driver_features = {  # type: ignore[attr-defined]
+        "pooler_mode": "transaction",
+        "direct_dsn": "postgresql://direct:5432/db",
+    }
+    pooled_psqlpy_cfg.derive_direct_config = lambda: direct_psqlpy_cfg  # type: ignore[attr-defined]
+
+    psqlpy_hub = PsqlpyListenerHub(pooled_psqlpy_cfg)  # type: ignore[arg-type]
+    await psqlpy_hub.subscribe("alerts")
+    assert pooled_psqlpy_cfg.pool.listener_calls == 0
+    assert direct_psqlpy_cfg.pool.listener_calls == 1
+    await psqlpy_hub.shutdown()

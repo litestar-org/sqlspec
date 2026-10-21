@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from sqlspec.core import SQL
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.extensions.events import normalize_event_channel_name
 from sqlspec.extensions.events._buffer import enqueue_with_capacity, resolve_listener_queue_capacity
 from sqlspec.utils.logging import get_logger, log_with_context
@@ -80,6 +81,7 @@ class PsqlpyListenerHub:
         "_callbacks",
         "_config",
         "_listener",
+        "_listener_config",
         "_listener_queue_capacity",
         "_listener_started",
         "_lock",
@@ -92,6 +94,7 @@ class PsqlpyListenerHub:
     def __init__(self, config: "PsqlpyConfig", backend_name: str = "notify") -> None:
         self._backend_name = backend_name
         self._config = config
+        self._listener_config: PsqlpyConfig | None = None
         self._lock = asyncio.Lock()
         self._listener_queue_capacity = resolve_listener_queue_capacity(config)
         self._queues: dict[str, WeakKeyDictionary[asyncio.Task[Any], asyncio.Queue[str]]] = {}
@@ -168,6 +171,15 @@ class PsqlpyListenerHub:
             with contextlib.suppress(Exception):
                 await listener.shutdown()
             _record_listener_lifecycle(self._config, self._backend_name, "release")
+        listener_config = self._listener_config
+        self._listener_config = None
+        if (
+            listener_config is not None
+            and listener_config is not self._config
+            and callable(getattr(listener_config, "close_pool", None))
+        ):
+            with contextlib.suppress(Exception):
+                await listener_config.close_pool()
         self._shutting_down = False
 
     def is_subscribed(self, channel: str) -> bool:
@@ -220,6 +232,37 @@ class PsqlpyListenerHub:
             raise
         return consumer_queue
 
+    def _resolve_listener_config(self) -> "PsqlpyConfig":
+        if self._listener_config is not None:
+            return self._listener_config
+        raw_features = getattr(self._config, "driver_features", None)
+        driver_features = raw_features if isinstance(raw_features, dict) else {}
+        pooler_mode = str(
+            driver_features.get("pooler_mode")
+            or (
+                "transaction"
+                if driver_features.get("pgbouncer") or driver_features.get("pgbouncer_mode")
+                else "session"
+            )
+        ).lower()
+        raw_direct_dsn = driver_features.get("direct_dsn")
+        direct_dsn = raw_direct_dsn if isinstance(raw_direct_dsn, str) and raw_direct_dsn else None
+        if pooler_mode in {"transaction", "statement"} and not direct_dsn:
+            logger.warning(
+                "PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode=%r without configuring driver_features['direct_dsn']",
+                pooler_mode,
+            )
+            msg = (
+                f"PostgreSQL LISTEN/NOTIFY cannot run under pooler_mode={pooler_mode!r} without "
+                "configuring driver_features['direct_dsn']"
+            )
+            raise ImproperConfigurationError(msg)
+        derive_fn = getattr(self._config, "derive_direct_config", None)
+        self._listener_config = (
+            cast("PsqlpyConfig", derive_fn()) if direct_dsn and callable(derive_fn) else self._config
+        )
+        return self._listener_config
+
     async def _ensure_listener_locked(self) -> "PsqlpyListener":
         if self._listener is not None and self._listener.is_started:
             return cast("PsqlpyListener", self._listener)
@@ -234,7 +277,8 @@ class PsqlpyListenerHub:
             _record_listener_lifecycle(self._config, self._backend_name, "release")
             self._listener = None
             self._listener_started = False
-        pool = await self._config.provide_pool()
+        listener_config = self._resolve_listener_config()
+        pool = await listener_config.provide_pool()
         listener = pool.listener()
         await listener.startup()
         self._listener = listener
@@ -271,7 +315,8 @@ class PsqlpyListenerHub:
         ready = asyncio.Event()
         self._ready_events.setdefault(channel, {})[payload] = ready
         try:
-            async with self._config.provide_session() as driver:
+            listener_config = self._resolve_listener_config()
+            async with listener_config.provide_session() as driver:
                 await driver.execute_script(SQL("SELECT pg_notify($1, $2)", channel, payload))
                 await driver.commit()
             await asyncio.wait_for(ready.wait(), timeout=timeout)

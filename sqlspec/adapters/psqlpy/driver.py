@@ -123,7 +123,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         params = cast("Sequence[Any] | Mapping[str, Any] | None", prepared_parameters) or []
 
         if statement.returns_rows():
-            query_result = await cursor.fetch(sql, params)
+            query_result = (
+                await cursor.fetch(sql, params, prepared=False)
+                if self._is_transaction_pooler_mode()
+                else await cursor.fetch(sql, params)
+            )
             dict_rows, column_names = collect_rows(query_result)
 
             return self.create_execution_result(
@@ -138,7 +142,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         if statement.operation_type in {"INSERT", "UPDATE", "DELETE"}:
             count_sql = _dml_count_query(sql)
             if count_sql is not None:
-                count_result = await cursor.fetch(count_sql, params)
+                count_result = (
+                    await cursor.fetch(count_sql, params, prepared=False)
+                    if self._is_transaction_pooler_mode()
+                    else await cursor.fetch(count_sql, params)
+                )
                 count_rows, _ = collect_rows(count_result)
                 if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:
                     msg = "psqlpy DML row count query returned an invalid result"
@@ -149,7 +157,11 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
                     raise SQLSpecError(msg)
                 return self.create_execution_result(cursor, rowcount_override=rows_affected)
 
-        result = await cursor.execute(sql, params)
+        result = (
+            await cursor.execute(sql, params, prepared=False)
+            if self._is_transaction_pooler_mode()
+            else await cursor.execute(sql, params)
+        )
         rows_affected = extract_rows_affected(result)
 
         return self.create_execution_result(cursor, rowcount_override=rows_affected)
@@ -171,7 +183,10 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         formatted_parameters = format_execute_many_parameters(prepared_parameters, coerce_numeric=False)
 
-        await cursor.execute_many(sql, formatted_parameters)
+        if self._is_transaction_pooler_mode():
+            await cursor.execute_many(sql, formatted_parameters, prepared=False)
+        else:
+            await cursor.execute_many(sql, formatted_parameters)
 
         rows_affected = len(formatted_parameters)
 
@@ -213,6 +228,8 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
 
         try:
             await self.connection.execute("BEGIN")
+            if self._should_set_local_columnar():
+                await self.connection.execute("SET LOCAL google_columnar_engine.enabled = 'on'")
         except (PsqlpyDatabaseError, PsqlpyConnectionExecuteError, PsqlpyError) as e:
             msg = f"Failed to begin psqlpy transaction: {e}"
             raise SQLSpecError(msg) from e
@@ -487,6 +504,15 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
         synchronously; the state is tracked via a flag toggled in begin/commit/rollback.
         """
         return self._transaction_active
+
+    def _is_transaction_pooler_mode(self) -> bool:
+        pooler_mode = self.driver_features.get("pooler_mode", "session")
+        return pooler_mode in {"transaction", "statement"} or bool(
+            self.driver_features.get("pgbouncer") or self.driver_features.get("pgbouncer_mode")
+        )
+
+    def _should_set_local_columnar(self) -> bool:
+        return bool(self.driver_features.get("enable_alloydb_columnar", False)) and self._is_transaction_pooler_mode()
 
 
 register_driver_profile("psqlpy", driver_profile)

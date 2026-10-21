@@ -177,6 +177,14 @@ def apply_driver_features(
     features.setdefault("enable_pgvector", PGVECTOR_INSTALLED)
     features.setdefault("enable_paradedb", True)
     features.setdefault("enable_pg_textsearch", True)
+    features.setdefault("enable_alloydb_columnar", False)
+    raw_pooler_mode = features.get("pooler_mode")
+    if raw_pooler_mode is None and (features.get("pgbouncer") or features.get("pgbouncer_mode")):
+        raw_pooler_mode = "transaction"
+    features["pooler_mode"] = raw_pooler_mode or "session"
+    features.setdefault("pgbouncer", False)
+    features.setdefault("pgbouncer_mode", False)
+    features.setdefault("direct_dsn", None)
 
     parameter_config = _parameter_config(driver_profile, serializer, deserializer)
     statement_config = statement_config.replace(parameter_config=parameter_config)

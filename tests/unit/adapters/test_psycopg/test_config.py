@@ -1,5 +1,6 @@
 """Psycopg configuration tests covering statement config builders."""
 
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +23,7 @@ from sqlspec.adapters.psycopg.core import (
     default_statement_config,
     resolve_postgres_extension_state,
 )
+from sqlspec.adapters.psycopg.driver import PsycopgAsyncDriver, PsycopgSyncDriver
 from sqlspec.core import SQL, StatementConfig
 from sqlspec.exceptions import ImproperConfigurationError
 
@@ -685,3 +687,116 @@ async def test_psycopg_async_configure_connection_supports_dict_row_and_rolls_ba
     assert config.pg_textsearch_available is True
     assert config.statement_config.dialect == "pg_textsearch"
     assert events == ["hook", "rollback"]
+
+
+def test_psycopg_pooler_mode_transaction_sets_prepare_threshold_none_and_alloydb_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pooler_mode in {'transaction', 'statement'} sets prepare_threshold=None on sync/async configs and AlloyDB connection class."""
+    sync_config = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://localhost/db"}, driver_features={"pooler_mode": "transaction"}
+    )
+    assert sync_config.connection_config["prepare_threshold"] is None
+    assert sync_config.driver_features["pooler_mode"] == "transaction"
+
+    async_config = PsycopgAsyncConfig(
+        connection_config={"conninfo": "postgresql://localhost/db"}, driver_features={"pooler_mode": "statement"}
+    )
+    assert async_config.connection_config["prepare_threshold"] is None
+    assert async_config.driver_features["pooler_mode"] == "statement"
+
+    alias_config = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://localhost/db"}, driver_features={"pgbouncer": True}
+    )
+    assert alias_config.connection_config["prepare_threshold"] is None
+    assert alias_config.driver_features["pooler_mode"] == "transaction"
+
+    mock_connector = MagicMock()
+    expected_conn = MagicMock()
+    expected_conn.prepare_threshold = 5
+    mock_connector.connect.return_value = expected_conn
+    monkeypatch.setattr(psycopg_config, "ALLOYDB_CONNECTOR_INSTALLED", True)
+    monkeypatch.setattr(psycopg_config._psycopg_typing, "PsycopgAlloydbConnector", lambda: mock_connector)
+    _CapturedSyncPool.calls.clear()
+    monkeypatch.setattr(psycopg_config, "ConnectionPool", _CapturedSyncPool)
+
+    alloydb_config = PsycopgSyncConfig(
+        connection_config={"user": "u", "password": "p", "dbname": "app"},
+        driver_features={
+            "enable_alloydb": True,
+            "alloydb_instance_uri": "projects/p/locations/r/clusters/c/instances/i",
+            "pooler_mode": "transaction",
+        },
+    )
+    alloydb_config._create_pool()  # pyright: ignore[reportPrivateUsage]
+
+    _conninfo, pool_kwargs = _CapturedSyncPool.calls[-1]
+    connection_class = pool_kwargs["connection_class"]
+    assert connection_class.default_prepare_threshold is None
+    conn = connection_class.connect("ignored")
+    assert conn.prepare_threshold is None
+
+
+@pytest.mark.anyio
+async def test_psycopg_enable_alloydb_columnar_and_derive_direct_config() -> None:
+    """enable_alloydb_columnar configures GUC by pooler_mode and derive_direct_config builds a session config."""
+    session_sync = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://localhost/db", "options": "-c statement_timeout=5000"},
+        driver_features={"enable_alloydb_columnar": True, "pooler_mode": "session"},
+    )
+    assert "-c statement_timeout=5000" in session_sync.connection_config["options"]
+    assert "-c google_columnar_engine.enabled=on" in session_sync.connection_config["options"]
+    assert session_sync.derive_direct_config() is session_sync
+
+    txn_sync = PsycopgSyncConfig(
+        connection_config={"conninfo": "postgresql://pooler:6432/db"},
+        driver_features={
+            "enable_alloydb_columnar": True,
+            "pooler_mode": "transaction",
+            "direct_dsn": "postgresql://direct:5432/db",
+        },
+    )
+    assert "options" not in txn_sync.connection_config
+    assert txn_sync.connection_config["prepare_threshold"] is None
+
+    derived_sync = txn_sync.derive_direct_config()
+    assert derived_sync is not txn_sync
+    assert derived_sync.connection_config["conninfo"] == "postgresql://direct:5432/db"
+    assert derived_sync.driver_features["pooler_mode"] == "session"
+    assert derived_sync.driver_features["direct_dsn"] is None
+    assert "prepare_threshold" not in derived_sync.connection_config
+    assert "-c google_columnar_engine.enabled=on" in derived_sync.connection_config["options"]
+
+    txn_async = PsycopgAsyncConfig(
+        connection_config={"conninfo": "postgresql://pooler:6432/db"},
+        driver_features={
+            "enable_alloydb_columnar": True,
+            "pooler_mode": "transaction",
+            "direct_dsn": "postgresql://direct:5432/db",
+        },
+    )
+    derived_async = txn_async.derive_direct_config()
+    assert derived_async is not txn_async
+    assert derived_async.connection_config["conninfo"] == "postgresql://direct:5432/db"
+    assert derived_async.driver_features["pooler_mode"] == "session"
+    assert derived_async.driver_features["direct_dsn"] is None
+    assert "prepare_threshold" not in derived_async.connection_config
+    assert "-c google_columnar_engine.enabled=on" in derived_async.connection_config["options"]
+
+    sync_conn = MagicMock()
+    sync_conn.autocommit = True
+    sync_conn.info = SimpleNamespace(transaction_status=0)
+    sync_driver = PsycopgSyncDriver(
+        connection=sync_conn, statement_config=txn_sync.statement_config, driver_features=txn_sync.driver_features
+    )
+    sync_driver.begin()
+    sync_conn.execute.assert_called_once_with("SET LOCAL google_columnar_engine.enabled = 'on'")
+
+    async_conn = AsyncMock()
+    async_conn.autocommit = True
+    async_conn.info = SimpleNamespace(transaction_status=0)
+    async_driver = PsycopgAsyncDriver(
+        connection=async_conn, statement_config=txn_async.statement_config, driver_features=txn_async.driver_features
+    )
+    await async_driver.begin()
+    async_conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enabled = 'on'")

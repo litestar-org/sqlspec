@@ -100,6 +100,7 @@ _POOL_ONLY_CONFIG_KEYS: Final[frozenset[str]] = frozenset({
     "timeout",
 })
 _ALLOYDB_CONNECTOR_PACKAGE = "google-cloud-alloydb-connector"
+_DEFAULT_PSYCOPG_PREPARE_THRESHOLD: Final[int] = 5
 
 
 class PsycopgConnectionParams(TypedDict):
@@ -191,6 +192,18 @@ class PsycopgDriverFeatures(TypedDict):
     enable_alloydb_iam_auth: Enable AlloyDB IAM database authentication for sync connector connections.
      Defaults to False.
     alloydb_ip_type: AlloyDB connector IP type. Defaults to PRIVATE.
+    enable_alloydb_columnar: Enable Google AlloyDB Columnar Engine acceleration.
+     Configures ``google_columnar_engine.enabled=on`` at the session level via ``options``
+     in session mode, or per-transaction via ``SET LOCAL`` in transaction/statement pooler mode.
+     Defaults to False.
+    pooler_mode: Connection pooler mode ("session", "transaction", "statement", "auto").
+     When "transaction" or "statement", sets ``prepare_threshold=None`` to disable server-side
+     prepared statements for PgBouncer / PgCat / Odyssey / Supavisor compatibility.
+     Defaults to "session".
+    pgbouncer: Legacy alias for ``pooler_mode="transaction"``.
+    pgbouncer_mode: Legacy alias for ``pooler_mode="transaction"``.
+    direct_dsn: Optional direct PostgreSQL DSN or connection config mapping bypassing the external
+     pooler for session-scoped operations (DDL/migrations and LISTEN/NOTIFY).
     null_pool: Enable NullConnectionPool / AsyncNullConnectionPool for serverless / PgBouncer environments.
     """
 
@@ -206,6 +219,11 @@ class PsycopgDriverFeatures(TypedDict):
     alloydb_instance_uri: NotRequired[str]
     enable_alloydb_iam_auth: NotRequired[bool]
     alloydb_ip_type: NotRequired[str]
+    enable_alloydb_columnar: NotRequired[bool]
+    pooler_mode: NotRequired[Literal["session", "transaction", "statement", "auto"]]
+    pgbouncer: NotRequired[bool]
+    pgbouncer_mode: NotRequired[bool]
+    direct_dsn: NotRequired["str | Mapping[str, Any] | None"]
     null_pool: NotRequired[bool]
 
 
@@ -329,6 +347,21 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         features_dict.setdefault("enable_alloydb", False)
         features_dict.setdefault("enable_alloydb_iam_auth", False)
         features_dict.setdefault("alloydb_ip_type", "PRIVATE")
+        pooler_mode = features_dict.get("pooler_mode", "session")
+        is_transaction_pooler = bool(
+            pooler_mode in {"transaction", "statement"}
+            or features_dict.get("pgbouncer")
+            or features_dict.get("pgbouncer_mode")
+        )
+        if is_transaction_pooler:
+            connection_config.setdefault("prepare_threshold", None)
+        if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
+            existing_options = connection_config.get("options")
+            columnar_opt = "-c google_columnar_engine.enabled=on"
+            if not existing_options:
+                connection_config["options"] = columnar_opt
+            elif columnar_opt not in str(existing_options):
+                connection_config["options"] = f"{existing_options} {columnar_opt}"
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
@@ -347,6 +380,37 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         )
 
         self._validate_alloydb_config()
+
+    def derive_direct_config(self) -> Self:
+        """Derive a session-mode Psycopg sync configuration targeting direct_dsn when configured."""
+        direct_dsn = self.driver_features.get("direct_dsn")
+        if not direct_dsn:
+            return self
+        conn_cfg = dict(self.connection_config)
+        if isinstance(direct_dsn, Mapping):
+            conn_cfg.update(build_connection_config(direct_dsn))
+        else:
+            conn_cfg["conninfo"] = str(direct_dsn)
+        is_pooled = bool(
+            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
+            or self.driver_features.get("pgbouncer")
+            or self.driver_features.get("pgbouncer_mode")
+        )
+        if is_pooled and conn_cfg.get("prepare_threshold") is None:
+            conn_cfg.pop("prepare_threshold", None)
+        features = dict(self.driver_features)
+        features["pooler_mode"] = "session"
+        features["pgbouncer"] = False
+        features["pgbouncer_mode"] = False
+        features["direct_dsn"] = None
+        return type(self)(
+            connection_config=conn_cfg,
+            migration_config=dict(self.migration_config) if self.migration_config else None,
+            statement_config=self.statement_config,
+            driver_features=features,
+            bind_key=self.bind_key,
+            extension_config=dict(self.extension_config) if self.extension_config else None,
+        )
 
     @property
     def pg_textsearch_available(self) -> bool:
@@ -469,6 +533,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
         user = config.get("user")
         password = config.get("password")
         database = config.get("dbname") or config.get("db")
+        prepare_threshold = config.pop("prepare_threshold", _DEFAULT_PSYCOPG_PREPARE_THRESHOLD)
 
         for key in _ALLOYDB_DIRECT_CONNECTION_KEYS:
             config.pop(key, None)
@@ -482,6 +547,7 @@ class PsycopgSyncConfig(SyncDatabaseConfig[PsycopgSyncConnection, ConnectionPool
                 user=cast("str | None", user),
                 password=cast("str | None", password),
                 database=cast("str | None", database),
+                prepare_threshold=cast("int | None", prepare_threshold),
             )
 
     def _create_pool(self) -> "ConnectionPool":
@@ -729,6 +795,21 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
         self._user_connection_hook: Callable[[PsycopgAsyncConnection], Awaitable[None]] | None = features_dict.get(
             "on_connection_create"
         )
+        pooler_mode = features_dict.get("pooler_mode", "session")
+        is_transaction_pooler = bool(
+            pooler_mode in {"transaction", "statement"}
+            or features_dict.get("pgbouncer")
+            or features_dict.get("pgbouncer_mode")
+        )
+        if is_transaction_pooler:
+            connection_config.setdefault("prepare_threshold", None)
+        if features_dict.get("enable_alloydb_columnar") and not is_transaction_pooler:
+            existing_options = connection_config.get("options")
+            columnar_opt = "-c google_columnar_engine.enabled=on"
+            if not existing_options:
+                connection_config["options"] = columnar_opt
+            elif columnar_opt not in str(existing_options):
+                connection_config["options"] = f"{existing_options} {columnar_opt}"
         self._pgvector_available: bool | None = None
         self._paradedb_available: bool | None = None
         self._pg_textsearch_available: bool | None = None
@@ -743,6 +824,37 @@ class PsycopgAsyncConfig(AsyncDatabaseConfig[PsycopgAsyncConnection, AsyncConnec
             bind_key=bind_key,
             extension_config=extension_config,
             **kwargs,
+        )
+
+    def derive_direct_config(self) -> Self:
+        """Derive a session-mode Psycopg async configuration targeting direct_dsn when configured."""
+        direct_dsn = self.driver_features.get("direct_dsn")
+        if not direct_dsn:
+            return self
+        conn_cfg = dict(self.connection_config)
+        if isinstance(direct_dsn, Mapping):
+            conn_cfg.update(build_connection_config(direct_dsn))
+        else:
+            conn_cfg["conninfo"] = str(direct_dsn)
+        is_pooled = bool(
+            self.driver_features.get("pooler_mode") in {"transaction", "statement"}
+            or self.driver_features.get("pgbouncer")
+            or self.driver_features.get("pgbouncer_mode")
+        )
+        if is_pooled and conn_cfg.get("prepare_threshold") is None:
+            conn_cfg.pop("prepare_threshold", None)
+        features = dict(self.driver_features)
+        features["pooler_mode"] = "session"
+        features["pgbouncer"] = False
+        features["pgbouncer_mode"] = False
+        features["direct_dsn"] = None
+        return type(self)(
+            connection_config=conn_cfg,
+            migration_config=dict(self.migration_config) if self.migration_config else None,
+            statement_config=self.statement_config,
+            driver_features=features,
+            bind_key=self.bind_key,
+            extension_config=dict(self.extension_config) if self.extension_config else None,
         )
 
     @property
@@ -970,19 +1082,20 @@ def _make_alloydb_connection_class(
     user: str | None,
     password: str | None,
     database: str | None,
+    prepare_threshold: int | None = _DEFAULT_PSYCOPG_PREPARE_THRESHOLD,
 ) -> "type[PsycopgConnection[Any]]":
     """Build a psycopg connection class backed by the AlloyDB connector."""
 
-    default_prepare_threshold = 5
-
     class _AlloyDBPsycopgConnection(PsycopgConnection[Any]):
+        default_prepare_threshold: ClassVar[int | None] = prepare_threshold
+
         @classmethod
         def connect(
             cls,
             conninfo: str = "",
             *,
             autocommit: bool = False,
-            prepare_threshold: int | None = default_prepare_threshold,
+            prepare_threshold: int | None = prepare_threshold,
             context: "AdaptContext | None" = None,
             row_factory: "RowFactory[Any] | None" = None,
             cursor_factory: "type[Cursor[Any]] | None" = None,
@@ -1001,7 +1114,7 @@ def _make_alloydb_connection_class(
             conn = connector.connect(instance_uri, "psycopg", **connector_kwargs)
             if autocommit:
                 conn.autocommit = autocommit
-            if prepare_threshold != default_prepare_threshold:
+            if prepare_threshold != _DEFAULT_PSYCOPG_PREPARE_THRESHOLD:
                 conn.prepare_threshold = prepare_threshold
             if row_factory is not None:
                 conn.row_factory = row_factory

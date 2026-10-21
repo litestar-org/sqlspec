@@ -447,6 +447,12 @@ class BaseMigrationCommands(Generic[ConfigT, DriverT]):
         Args:
             config: The SQLSpec configuration.
         """
+        raw_features = getattr(config, "driver_features", None)
+        driver_features = raw_features if isinstance(raw_features, dict) else {}
+        direct_dsn = driver_features.get("direct_dsn")
+        derive_fn = getattr(config, "derive_direct_config", None)
+        if isinstance(direct_dsn, str) and direct_dsn and callable(derive_fn):
+            config = cast("ConfigT", derive_fn())
         self.config = config
         migration_config = self._get_migration_config()
 

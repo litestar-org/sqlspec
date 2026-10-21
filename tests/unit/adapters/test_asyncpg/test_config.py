@@ -20,7 +20,8 @@ from sqlspec.adapters.asyncpg.core import (
     build_statement_config,
     resolve_postgres_extension_state,
 )
-from sqlspec.core import StatementConfig
+from sqlspec.adapters.asyncpg.driver import AsyncpgDriver
+from sqlspec.core import StatementConfig, StatementStack
 from sqlspec.exceptions import ImproperConfigurationError
 
 
@@ -389,3 +390,107 @@ async def test_asyncpg_extension_probe_retries_after_transient_error() -> None:
     assert config._pgvector_available is False  # pyright: ignore[reportPrivateUsage]
     assert config.pg_textsearch_available is True
     assert config.statement_config.dialect == "pg_textsearch"
+
+
+async def test_asyncpg_pooler_mode_transaction_sets_statement_cache_size_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Transaction pooler mode and pgbouncer aliases should disable statement_cache_size and prepared stack metadata."""
+    captured_connect_kwargs: dict[str, Any] = {}
+
+    async def fake_create_pool(*, init: Any = None, **kwargs: Any) -> object:
+        _ = init
+        captured_connect_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(config_mod, "asyncpg_create_pool", fake_create_pool)
+
+    config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"pooler_mode": "transaction"}
+    )
+    assert config.connection_config["statement_cache_size"] == 0
+    await config._create_pool()  # pyright: ignore[reportPrivateUsage]
+    assert captured_connect_kwargs["statement_cache_size"] == 0
+
+    alias_config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"pgbouncer": True}
+    )
+    assert alias_config.driver_features["pooler_mode"] == "transaction"
+    assert alias_config.connection_config["statement_cache_size"] == 0
+
+    mode_alias_config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test"}, driver_features={"pgbouncer_mode": True}
+    )
+    assert mode_alias_config.driver_features["pooler_mode"] == "transaction"
+    assert mode_alias_config.connection_config["statement_cache_size"] == 0
+
+    conn = AsyncMock()
+    conn.is_in_transaction = lambda: True
+    conn.execute.return_value = "UPDATE 1"
+    driver = AsyncpgDriver(
+        cast("Any", conn), statement_config=config.statement_config, driver_features=config.driver_features
+    )
+
+    stack = StatementStack().push_execute("UPDATE items SET name = :name", {"name": "x"})
+    results = await driver.execute_stack(stack)
+    assert results[0].result is not None
+    assert "prepared_statement" not in results[0].result.metadata
+
+
+def test_asyncpg_derive_direct_config_uses_direct_dsn_and_session_mode() -> None:
+    """derive_direct_config should return a session-mode config targeting direct_dsn or self when unset."""
+    base_config = AsyncpgConfig(connection_config={"dsn": "postgresql://localhost/test"})
+    assert base_config.derive_direct_config() is base_config
+
+    pooled_config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://pooler:6432/test"},
+        driver_features={
+            "pooler_mode": "transaction",
+            "direct_dsn": "postgresql://direct:5432/test",
+            "enable_alloydb_columnar": True,
+        },
+    )
+    direct_config = pooled_config.derive_direct_config()
+    assert direct_config is not pooled_config
+    assert direct_config.connection_config["dsn"] == "postgresql://direct:5432/test"
+    assert "statement_cache_size" not in direct_config.connection_config
+    assert direct_config.driver_features["pooler_mode"] == "session"
+    assert direct_config.driver_features["direct_dsn"] is None
+    assert direct_config.connection_config["server_settings"] == {"google_columnar_engine.enabled": "on"}
+
+    mapping_config = AsyncpgConfig(
+        connection_config={"host": "pooler.internal", "port": 6432, "database": "app"},
+        driver_features={"pooler_mode": "transaction", "direct_dsn": {"host": "direct.internal", "port": 5432}},
+    )
+    derived_mapping = mapping_config.derive_direct_config()
+    assert derived_mapping.connection_config["host"] == "direct.internal"
+    assert derived_mapping.connection_config["port"] == 5432
+    assert derived_mapping.connection_config["database"] == "app"
+    assert derived_mapping.driver_features["pooler_mode"] == "session"
+
+
+async def test_asyncpg_columnar_engine_session_vs_transaction() -> None:
+    """enable_alloydb_columnar should use server_settings in session mode and SET LOCAL in transaction mode."""
+    session_config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test", "server_settings": {"application_name": "sqlspec"}},
+        driver_features={"pooler_mode": "session", "enable_alloydb_columnar": True},
+    )
+    assert session_config.connection_config["server_settings"] == {
+        "application_name": "sqlspec",
+        "google_columnar_engine.enabled": "on",
+    }
+
+    tx_config = AsyncpgConfig(
+        connection_config={"dsn": "postgresql://localhost/test"},
+        driver_features={"pooler_mode": "transaction", "enable_alloydb_columnar": True},
+    )
+    assert "server_settings" not in tx_config.connection_config
+
+    tx_handle = AsyncMock()
+    conn = AsyncMock()
+    conn.is_in_transaction = lambda: False
+    conn.transaction = lambda: tx_handle
+    driver = AsyncpgDriver(
+        cast("Any", conn), statement_config=tx_config.statement_config, driver_features=tx_config.driver_features
+    )
+    await driver.begin()
+    tx_handle.start.assert_awaited_once()
+    conn.execute.assert_awaited_once_with("SET LOCAL google_columnar_engine.enabled = 'on'")

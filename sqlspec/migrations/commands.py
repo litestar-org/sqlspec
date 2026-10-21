@@ -161,7 +161,7 @@ class SyncMigrationCommands(BaseMigrationCommands["SyncConfigT", Any]):
         """
         super().__init__(config)
         self.tracker = self._create_tracker()
-        context = MigrationContext.from_config(config)
+        context = MigrationContext.from_config(self.config)
         context.extension_config = self.extension_configs
 
         self.runner = SyncMigrationRunner(
@@ -1122,7 +1122,7 @@ class AsyncMigrationCommands(BaseMigrationCommands["AsyncConfigT", Any]):
         """
         super().__init__(config)
         self.tracker = self._create_tracker()
-        context = MigrationContext.from_config(config)
+        context = MigrationContext.from_config(self.config)
         context.extension_config = self.extension_configs
 
         self.runner = AsyncMigrationRunner(
