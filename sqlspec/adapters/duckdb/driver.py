@@ -16,12 +16,15 @@ from sqlspec.adapters.duckdb.core import (
     _resolve_native_storage_target,
     _restore_uuid_columns,
     collect_rows,
+    configure_duckdb_statement_profiling,
+    create_duckdb_profile_path,
     create_mapped_exception,
     default_statement_config,
     description_has_arrow_divergent_types,
     driver_profile,
     format_identifier,
     normalize_execute_parameters,
+    read_duckdb_profile_json,
     resolve_rowcount,
 )
 from sqlspec.adapters.duckdb.data_dictionary import DuckDBDataDictionary
@@ -142,12 +145,17 @@ class DuckDBDriver(SyncDriverAdapterBase):
             ExecutionResult with execution metadata
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        profiling_enabled = bool(self.driver_features.get("enable_statement_profiling", False))
+        if profiling_enabled:
+            self._ensure_statement_profiling(cursor)
         cursor.execute(sql, normalize_execute_parameters(prepared_parameters))
 
         is_select_like = statement.returns_rows() or self._should_force_select(statement, cursor)
 
         if is_select_like:
             data, column_names, row_count, row_format = self._materialize_select_rows(cursor, sql)
+            if profiling_enabled:
+                self._capture_statement_profile(sql)
             return self.create_execution_result(
                 cursor,
                 selected_data=data,
@@ -158,6 +166,10 @@ class DuckDBDriver(SyncDriverAdapterBase):
             )
 
         row_count = resolve_rowcount(cursor)
+        if profiling_enabled:
+            with contextlib.suppress(Exception):
+                cursor.fetchall()
+            self._capture_statement_profile(sql)
 
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
@@ -222,15 +234,45 @@ class DuckDBDriver(SyncDriverAdapterBase):
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
         statements = self.split_script_statements(sql, statement.statement_config, strip_trailing_semicolon=True)
 
+        statement_count = len(statements)
         successful_count = 0
         last_result = None
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
+        profiling_enabled = bool(self.driver_features.get("enable_statement_profiling", False))
+        if profiling_enabled:
+            self._ensure_statement_profiling(cursor)
 
-        for stmt in statements:
+        for idx, stmt in enumerate(statements):
+            stmt_started = perf_counter() if has_observers else 0.0
             last_result = cursor.execute(stmt, normalize_execute_parameters(prepared_parameters))
+            if profiling_enabled and last_result is not None:
+                with contextlib.suppress(Exception):
+                    last_result.fetchall()
+            stmt_profile = self._capture_statement_profile(stmt) if profiling_enabled else None
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                single_stmt = self._sub_statement(stmt, prepared_parameters)
+                try:
+                    stmt_operation = single_stmt.operation_type
+                finally:
+                    self._release_pooled_statement(single_stmt)
+                self._emit_script_statement_event(
+                    sql=stmt,
+                    parameters=prepared_parameters,
+                    operation=stmt_operation,
+                    rows_affected=None,
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
             successful_count += 1
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
-            last_result, statement_count=len(statements), successful_statements=successful_count, is_script_result=True
+            last_result, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
 
     def dispatch_select_stream(self, statement: "SQL", chunk_size: int) -> "SyncRowStream[dict[str, Any]] | None":
@@ -564,10 +606,16 @@ class DuckDBDriver(SyncDriverAdapterBase):
         self, sql: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]", cached: "CachedQuery"
     ) -> "SQLResult":
         """Execute a cached query using DuckDB's unified row materializer."""
+        profiling_enabled = bool(self.driver_features.get("enable_statement_profiling", False))
         with self.with_cursor(self.connection) as cursor:
-            cursor.execute(cached.compiled_sql, normalize_execute_parameters(params))
+            if profiling_enabled:
+                self._ensure_statement_profiling(cursor)
+            wire_sql = self._format_wire_sql(cached.compiled_sql)
+            cursor.execute(wire_sql, normalize_execute_parameters(params))
             if cached.operation_profile.returns_rows:
                 data, column_names, row_count, row_format = self._materialize_select_rows(cursor, cached.compiled_sql)
+                if profiling_enabled:
+                    self._capture_statement_profile(wire_sql)
                 return self.build_cached_select_result(
                     sql,
                     params,
@@ -576,9 +624,29 @@ class DuckDBDriver(SyncDriverAdapterBase):
                     column_names=column_names,
                     data_row_count=row_count,
                     row_format=row_format,
+                    compiled_sql=wire_sql,
                 )
             affected_rows = resolve_rowcount(cursor)
+            if profiling_enabled:
+                with contextlib.suppress(Exception):
+                    cursor.fetchall()
+                self._capture_statement_profile(wire_sql)
             return DMLResult(cached.operation_type, affected_rows)
+
+    def _ensure_statement_profiling(self, cursor: Any) -> None:
+        """Ensure per-connection DuckDB JSON statement profiling is configured."""
+        if self.driver_features.get("_duckdb_profile_path"):
+            return
+        profile_path = create_duckdb_profile_path()
+        configure_duckdb_statement_profiling(cursor, profile_path)
+        self.driver_features["_duckdb_profile_path"] = str(profile_path)
+
+    def _capture_statement_profile(self, executed_sql: str) -> "dict[str, Any] | None":
+        """Read the latest DuckDB JSON profile and stage it for StatementEvent emission."""
+        profile_path = self.driver_features.get("_duckdb_profile_path")
+        profile = read_duckdb_profile_json(profile_path, executed_sql)
+        self._pending_statement_profile = profile
+        return profile
 
     def _materialize_select_rows(self, cursor: Any, compiled_sql: str) -> "tuple[list[Any], list[str], int, RowFormat]":
         """Materialize SELECT rows using DuckDB's native Python type contract."""

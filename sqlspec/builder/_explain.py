@@ -165,6 +165,7 @@ def build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
         - EXPLAIN statement
         - EXPLAIN ANALYZE statement
         - EXPLAIN (FORMAT JSON) statement
+        - EXPLAIN (ANALYZE, FORMAT JSON) statement
 
     Args:
         statement_sql: The SQL statement to explain
@@ -173,6 +174,9 @@ def build_duckdb_explain(statement_sql: str, options: "ExplainOptions") -> str:
     Returns:
         Complete EXPLAIN SQL string
     """
+    if options.analyze and options.format == ExplainFormat.JSON:
+        return f"EXPLAIN (ANALYZE, FORMAT JSON) {statement_sql}"
+
     if options.analyze:
         return f"EXPLAIN ANALYZE {statement_sql}"
 

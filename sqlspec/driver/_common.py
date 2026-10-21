@@ -39,6 +39,7 @@ from sqlspec.core.parameters import (
     value_fingerprint,
 )
 from sqlspec.core.result._base import RowFormat
+from sqlspec.core.sqlcommenter import format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.core.statement import ProcessedState
 from sqlspec.data_dictionary import (
     ForeignKeyMetadata,
@@ -545,6 +546,7 @@ class CommonDriverAttributesMixin:
     __slots__ = (
         "_cache_holder",
         "_observability",
+        "_pending_statement_profile",
         "_processed_state_pool",
         "_statement_cache",
         "_statement_pool",
@@ -583,6 +585,7 @@ class CommonDriverAttributesMixin:
         self.statement_config = statement_config
         self.driver_features = driver_features or {}
         self._observability = observability
+        self._pending_statement_profile: dict[str, Any] | None = None
         self._transaction_depth = 0
         self._stmt_cache_max_size = self._statement_cache_size()
         shared_holder = self.driver_features.get("_statement_cache_holder")
@@ -970,13 +973,14 @@ class CommonDriverAttributesMixin:
         data_row_count: int,
         row_format: "RowFormat" = "dict",
         last_inserted_id: int | str | None = None,
+        compiled_sql: str | None = None,
     ) -> "SQLResult":
         """Build a fast-path SELECT result with deferred statement materialization."""
         return SQLResult.create_cached_select(
             sql=sql,
             config=self.statement_config,
             cached_state=cached.processed_state,
-            compiled_sql=cached.compiled_sql,
+            compiled_sql=cached.compiled_sql if compiled_sql is None else compiled_sql,
             params=params,
             data=selected_data,
             column_names=column_names,
@@ -984,6 +988,12 @@ class CommonDriverAttributesMixin:
             row_format=row_format,
             last_inserted_id=last_inserted_id,
         )
+
+    def _format_wire_sql(self, sql: str) -> str:
+        """Apply wire-level sqlcommenter formatting when enabled on statement_config."""
+        if not self.statement_config.enable_sqlcommenter:
+            return sql
+        return format_wire_sqlcomment(sql, self.statement_config)
 
     def _statement_cache_size(self) -> int:
         """Return the configured statement-cache capacity."""
@@ -1067,6 +1077,41 @@ class CommonDriverAttributesMixin:
         ProcessedState.__init__(direct_state, compiled_sql=sql, execution_parameters=execution_parameters)
         return SQL._create_cached_direct(sql, self.statement_config, direct_state)
 
+    def _emit_script_statement_event(
+        self,
+        *,
+        sql: str,
+        parameters: Any,
+        operation: "OperationType",
+        rows_affected: int | None,
+        duration_s: float,
+        started_at: float | None,
+        profile: "dict[str, Any] | None",
+        script_ordinal: int,
+        script_statement_count: int,
+    ) -> None:
+        """Emit a per-statement StatementEvent during multi-statement script execution."""
+        runtime = self._observability
+        if runtime is None or not runtime.has_statement_observers:
+            return
+        runtime.emit_statement_event(
+            sql=sql,
+            parameters=parameters,
+            driver=type(self).__name__,
+            operation=operation,
+            execution_mode=self.statement_config.execution_mode,
+            is_many=False,
+            is_script=True,
+            rows_affected=rows_affected,
+            duration_s=duration_s,
+            storage_backend=None,
+            started_at=started_at,
+            profile=profile,
+            script_ordinal=script_ordinal,
+            script_statement_index=script_ordinal,
+            script_statement_count=script_statement_count,
+        )
+
     def _cached_execution(
         self, statement: str, params: "tuple[Any, ...] | list[Any] | dict[str, Any]"
     ) -> "SQLResult | Awaitable[SQLResult | None] | None":
@@ -1102,10 +1147,26 @@ class CommonDriverAttributesMixin:
             needs_rebind = parameter_values_need_processing(param_values, param_config.type_coercion_map)
 
         if not needs_rebind and not config._has_output_transformer:
+            effective_cached = cached
+            if config.enable_sqlcommenter:
+                wire_sql = self._format_wire_sql(cached.compiled_sql)
+                if wire_sql != cached.compiled_sql:
+                    effective_cached = CachedQuery(
+                        compiled_sql=wire_sql,
+                        parameter_profile=cached.parameter_profile,
+                        input_named_parameters=cached.input_named_parameters,
+                        applied_wrap_types=cached.applied_wrap_types,
+                        parameter_casts=cached.parameter_casts,
+                        operation_type=cached.operation_type,
+                        operation_profile=cached.operation_profile,
+                        param_count=cached.param_count,
+                        processed_state=cached.processed_state,
+                        needs_style_remap=cached.needs_style_remap,
+                    )
             runtime = self._observability
             if runtime is not None and not runtime.is_idle:
-                return self._execute_cache_hit_observed(statement, params, cached)
-            return self._execute_cache_hit(statement, params, cached)
+                return self._execute_cache_hit_observed(statement, params, effective_cached)
+            return self._execute_cache_hit(statement, params, effective_cached)
 
         if needs_rebind:
             rebound_params = self.stmt_cache_rebind(params, cached)
@@ -1114,7 +1175,7 @@ class CommonDriverAttributesMixin:
             rebound_params = params
             params_are_simple = True
 
-        compiled_sql = cached.compiled_sql
+        compiled_sql = self._format_wire_sql(cached.compiled_sql)
         output_transformer = config.output_transformer
         if output_transformer is not None:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
@@ -1148,7 +1209,7 @@ class CommonDriverAttributesMixin:
         implementations that bypass SQL object construction entirely.
         """
         prepared = self._cached_statement(
-            sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+            sql, params, cached, params, params_are_simple=True, compiled_sql=self._format_wire_sql(cached.compiled_sql)
         )
         return self._execute_cached_statement(prepared)
 
@@ -1202,9 +1263,14 @@ class CommonDriverAttributesMixin:
         operation_profile = processed.operation_profile
         if not operation_profile.returns_rows and statement.returns_rows():
             operation_profile = OperationProfile(returns_rows=True, modifies_rows=operation_profile.modifies_rows)
-        cached_state = _clone_processed_state(processed, operation_profile)
+        clean_sql = (
+            strip_sqlcomment(processed.compiled_sql)
+            if self.statement_config.enable_sqlcommenter
+            else processed.compiled_sql
+        )
+        cached_state = _clone_processed_state(processed, operation_profile, compiled_sql=clean_sql)
         cached = CachedQuery(
-            compiled_sql=processed.compiled_sql,
+            compiled_sql=clean_sql,
             parameter_profile=param_profile,
             input_named_parameters=processed.input_named_parameters,
             applied_wrap_types=processed.applied_wrap_types,
@@ -1611,8 +1677,13 @@ class CommonDriverAttributesMixin:
                     prepared_parameters = self.prepare_driver_parameters(
                         statement.parameters, statement_config, is_many=statement.is_many, prepared_statement=statement
                     )
+                wire_sql = (
+                    format_wire_sqlcomment(cached_result.compiled_sql, statement_config)
+                    if statement_config.enable_sqlcommenter
+                    else cached_result.compiled_sql
+                )
                 updated_cached = CachedStatement(
-                    compiled_sql=cached_result.compiled_sql,
+                    compiled_sql=wire_sql,
                     parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", prepared_parameters),
                     expression=cached_result.expression,
                     input_named_parameters=cached_result.input_named_parameters,
@@ -1637,6 +1708,7 @@ class CommonDriverAttributesMixin:
             )
 
         cached_parameters = tuple(prepared_parameters) if isinstance(prepared_parameters, list) else prepared_parameters
+        stored_sql = strip_sqlcomment(compiled_sql) if statement_config.enable_sqlcommenter else compiled_sql
         cached_statement = CachedStatement(
             compiled_sql=compiled_sql,
             parameters=cast("tuple[Any, ...] | list[Any] | dict[str, Any] | None", cached_parameters),
@@ -1647,7 +1719,19 @@ class CommonDriverAttributesMixin:
         )
 
         if cache_key is not None and cache is not None:
-            cache.put_statement(cache_key, cached_statement, dialect_key)
+            stored_statement = (
+                CachedStatement(
+                    compiled_sql=stored_sql,
+                    parameters=cached_statement.parameters,
+                    expression=cached_statement.expression,
+                    input_named_parameters=cached_statement.input_named_parameters,
+                    parameter_profile=cached_statement.parameter_profile,
+                    applied_wrap_types=cached_statement.applied_wrap_types,
+                )
+                if stored_sql != compiled_sql
+                else cached_statement
+            )
+            cache.put_statement(cache_key, stored_statement, dialect_key)
 
         self._cache_statement(statement)
         return cached_statement, prepared_parameters
@@ -2048,10 +2132,10 @@ def _cache_param_values(params: "tuple[Any, ...] | list[Any] | dict[str, Any]") 
 
 
 def _clone_processed_state(
-    processed: "ProcessedState", operation_profile: "OperationProfile | None" = None
+    processed: "ProcessedState", operation_profile: "OperationProfile | None" = None, compiled_sql: str | None = None
 ) -> "ProcessedState":
     return ProcessedState(
-        compiled_sql=processed.compiled_sql,
+        compiled_sql=processed.compiled_sql if compiled_sql is None else compiled_sql,
         execution_parameters=processed.execution_parameters,
         parsed_expression=processed.parsed_expression,
         operation_type=processed.operation_type,

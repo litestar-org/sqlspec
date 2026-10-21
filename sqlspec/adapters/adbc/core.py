@@ -1,5 +1,6 @@
 """ADBC adapter compiled helpers."""
 
+import contextlib
 import datetime as dt
 import decimal
 import re
@@ -50,6 +51,7 @@ from sqlspec.utils.uuids import uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+    from pathlib import Path
 
     from sqlspec.core import SQL
     from sqlspec.utils.dispatch import TypeDispatcher
@@ -59,6 +61,7 @@ __all__ = (
     "build_connection_config",
     "build_profile",
     "collect_rows",
+    "configure_adbc_duckdb_profiling",
     "create_mapped_exception",
     "detect_dialect",
     "detect_postgres_extensions",
@@ -983,11 +986,31 @@ def apply_driver_features(
     processed_features.setdefault("enable_paradedb", True)
     processed_features.setdefault("enable_pg_textsearch", True)
     processed_features.setdefault("enable_lowercase_column_names", resolved_dialect in {"oracle", "db2"})
+    processed_features.setdefault("enable_statement_profiling", False)
 
     if json_serializer is not None:
         statement_config = _apply_adbc_json_serializer(statement_config, json_serializer)
 
     return statement_config, processed_features
+
+
+def configure_adbc_duckdb_profiling(connection: Any, profile_path: "Path") -> None:
+    """Enable DuckDB JSON statement profiling on an ADBC DuckDB connection.
+
+    Args:
+        connection: Active ADBC DuckDB connection.
+        profile_path: Temporary file path where DuckDB writes statement profiles.
+    """
+    escaped_path = str(profile_path).replace("'", "''")
+    cursor = connection.cursor()
+    try:
+        cursor.execute("PRAGMA enable_profiling='json'")
+        with contextlib.suppress(Exception):
+            cursor.execute("SET profiling_coverage='ALL'")
+        cursor.execute(f"SET profiling_output='{escaped_path}'")
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
 
 
 def normalize_column_names(

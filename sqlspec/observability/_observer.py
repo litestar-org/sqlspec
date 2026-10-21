@@ -44,8 +44,12 @@ class StatementEvent:
         "operation",
         "parameters",
         "prepared_statement",
+        "profile",
         "rows_affected",
         "sampled",
+        "script_ordinal",
+        "script_statement_count",
+        "script_statement_index",
         "span_id",
         "sql",
         "sql_hash",
@@ -83,7 +87,12 @@ class StatementEvent:
         trace_id: "str | None",
         span_id: "str | None",
         sampled: bool = True,
+        profile: "dict[str, Any] | None" = None,
+        script_ordinal: "int | None" = None,
+        script_statement_index: "int | None" = None,
+        script_statement_count: "int | None" = None,
     ) -> None:
+        resolved_ordinal = script_ordinal if script_ordinal is not None else script_statement_index
         self.sql = sql
         self.parameters = parameters
         self.driver = driver
@@ -107,6 +116,10 @@ class StatementEvent:
         self.trace_id = trace_id
         self.span_id = span_id
         self.sampled = sampled
+        self.profile = profile
+        self.script_ordinal = resolved_ordinal
+        self.script_statement_index = resolved_ordinal
+        self.script_statement_count = script_statement_count
 
     def __hash__(self) -> int:  # pragma: no cover
         msg = "StatementEvent objects are mutable and unhashable"
@@ -117,7 +130,8 @@ class StatementEvent:
             f"StatementEvent(sql={self.sql!r}, parameters={self.parameters!r}, driver={self.driver!r}, adapter={self.adapter!r}, bind_key={self.bind_key!r}, db_system={self.db_system!r}, "
             f"operation={self.operation!r}, execution_mode={self.execution_mode!r}, is_many={self.is_many!r}, is_script={self.is_script!r}, rows_affected={self.rows_affected!r}, duration_s={self.duration_s!r}, "
             f"started_at={self.started_at!r}, correlation_id={self.correlation_id!r}, storage_backend={self.storage_backend!r}, sql_hash={self.sql_hash!r}, sql_truncated={self.sql_truncated!r}, "
-            f"sql_original_length={self.sql_original_length!r}, transaction_state={self.transaction_state!r}, prepared_statement={self.prepared_statement!r}, trace_id={self.trace_id!r}, span_id={self.span_id!r}, sampled={self.sampled!r})"
+            f"sql_original_length={self.sql_original_length!r}, transaction_state={self.transaction_state!r}, prepared_statement={self.prepared_statement!r}, trace_id={self.trace_id!r}, span_id={self.span_id!r}, sampled={self.sampled!r}, "
+            f"profile={self.profile!r}, script_ordinal={self.script_ordinal!r}, script_statement_index={self.script_statement_index!r}, script_statement_count={self.script_statement_count!r})"
         )
 
     def __eq__(self, other: object) -> bool:
@@ -147,6 +161,10 @@ class StatementEvent:
             and self.trace_id == other.trace_id
             and self.span_id == other.span_id
             and self.sampled == other.sampled
+            and self.profile == other.profile
+            and self.script_ordinal == other.script_ordinal
+            and self.script_statement_index == other.script_statement_index
+            and self.script_statement_count == other.script_statement_count
         )
 
     def as_dict(self) -> "dict[str, Any]":
@@ -176,6 +194,10 @@ class StatementEvent:
             "trace_id": self.trace_id,
             "span_id": self.span_id,
             "sampled": self.sampled,
+            "profile": self.profile,
+            "script_ordinal": self.script_ordinal,
+            "script_statement_index": self.script_statement_index,
+            "script_statement_count": self.script_statement_count,
         }
 
 
@@ -238,6 +260,10 @@ def create_event(
     trace_id: "str | None" = None,
     span_id: "str | None" = None,
     sampled: bool = True,
+    profile: "dict[str, Any] | None" = None,
+    script_ordinal: "int | None" = None,
+    script_statement_index: "int | None" = None,
+    script_statement_count: "int | None" = None,
 ) -> StatementEvent:
     """Factory helper for runtime statement events."""
 
@@ -265,6 +291,10 @@ def create_event(
         trace_id=trace_id,
         span_id=span_id,
         sampled=sampled,
+        profile=profile,
+        script_ordinal=script_ordinal,
+        script_statement_index=script_statement_index,
+        script_statement_count=script_statement_count,
     )
 
 
@@ -304,6 +334,16 @@ def _emit_otel_statement_log(
         extra["correlation_id"] = event.correlation_id
     if event.sql_hash:
         extra["db.statement.hash"] = event.sql_hash
+    if event.profile is not None:
+        extra["db.statement.profile"] = event.profile
+    if event.script_ordinal is not None:
+        extra["sqlspec.script.ordinal"] = event.script_ordinal
+        extra["sqlspec.script.statement_index"] = event.script_ordinal
+    elif event.script_statement_index is not None:
+        extra["sqlspec.script.ordinal"] = event.script_statement_index
+        extra["sqlspec.script.statement_index"] = event.script_statement_index
+    if event.script_statement_count is not None:
+        extra["sqlspec.script.statement_count"] = event.script_statement_count
 
     if logging_config.include_driver_name:
         extra["sqlspec.driver"] = event.driver

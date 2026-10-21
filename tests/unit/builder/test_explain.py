@@ -1546,3 +1546,14 @@ def test_explain_construction_with_has_expression_and_sql():
     explain = Explain(mock_obj)  # pyright: ignore[reportArgumentType]
 
     assert "SELECT * FROM mock_table" in explain._statement_sql
+
+
+def test_build_duckdb_explain_combines_analyze_and_format_json() -> None:
+    """build_duckdb_explain combines ANALYZE and FORMAT JSON into EXPLAIN (ANALYZE, FORMAT JSON)."""
+    options = ExplainOptions(analyze=True, format=ExplainFormat.JSON)
+    sql_str = build_duckdb_explain("SELECT * FROM users", options)
+    assert sql_str == "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users"
+
+    stmt = SQL("SELECT * FROM users", statement_config=StatementConfig(dialect="duckdb"))
+    explained = stmt.explain(analyze=True, format="json")
+    assert explained.raw_sql == "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users"

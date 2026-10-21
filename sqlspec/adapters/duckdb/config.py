@@ -176,6 +176,8 @@ class DuckDBDriverFeatures(TypedDict):
             extension_config["events"] is set; requires it for migrations.
         events_backend: Only "poll_queue" is supported, with lease-based retries
             and acknowledgements. DuckDB has no native pub/sub.
+        enable_statement_profiling: Enable per-statement JSON operator tree
+            profiling attached to ``StatementEvent.profile`` (default False).
     """
 
     extensions: NotRequired[Sequence[DuckDBExtensionConfig]]
@@ -186,6 +188,7 @@ class DuckDBDriverFeatures(TypedDict):
     extension_flags: NotRequired["dict[str, Any]"]
     enable_events: NotRequired[bool]
     events_backend: NotRequired[Literal["poll_queue"]]
+    enable_statement_profiling: NotRequired[bool]
 
 
 class DuckDBConnectionContext(SyncPoolConnectionContext):
@@ -369,6 +372,7 @@ class DuckDBConfig(SyncDatabaseConfig[DuckDBConnection, DuckDBConnectionPool, Du
             extensions=extensions_dicts,
             secrets=secrets_dicts,
             on_connection_create=self._user_connection_hook,
+            enable_statement_profiling=bool(self.driver_features.get("enable_statement_profiling", False)),
             **pool_kwargs,
         )
 

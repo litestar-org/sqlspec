@@ -19,6 +19,7 @@ from sqlspec import ObservabilityConfig, ObservabilityRuntime, RedactionConfig, 
 from sqlspec.adapters.sqlite import SqliteConfig
 from sqlspec.config import LifecycleConfig
 from sqlspec.core import SQL, ArrowResult, StatementConfig
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.data_dictionary import ColumnMetadata, ForeignKeyMetadata, IndexMetadata, TableMetadata
 from sqlspec.driver import SyncDataDictionaryBase, SyncDriverAdapterBase
 from sqlspec.exceptions import SQLSpecError
@@ -1062,3 +1063,102 @@ def test_fast_path_with_observability_spans_and_error_recording(tmp_path: Path) 
             assert isinstance(span_manager.finished[2].exception, SQLSpecError)
     finally:
         config.close_pool()
+
+
+def test_fast_path_statement_cache_preserved_with_sqlcommenter_and_refreshes_wire_comment(tmp_path: Path) -> None:
+    """enable_sqlcommenter=True preserves _stmt_cache_enabled and refreshes dynamic comments on cache hits."""
+    observed_events: list[Any] = []
+    stmt_config = StatementConfig(
+        dialect="sqlite",
+        enable_sqlcommenter=True,
+        sqlcommenter_enable_context=True,
+        sqlcommenter_enable_traceparent=True,
+    )
+    spec = SQLSpec()
+    config = SqliteConfig(
+        connection_config={"database": str(tmp_path / "obs_sqlcommenter.db")},
+        statement_config=stmt_config,
+        observability_config=ObservabilityConfig(statement_observers=(observed_events.append,)),
+    )
+    spec.add_config(config)
+
+    try:
+        with spec.provide_session(config) as session:
+            assert session._stmt_cache_enabled is True
+            session.execute("CREATE TABLE t_comment (id INTEGER PRIMARY KEY, val TEXT)")
+            observed_events.clear()
+
+            with (
+                patch(
+                    "sqlspec.core.sqlcommenter.get_trace_context",
+                    return_value=("0af7651916cd43dd8448eb211c80319c", "1111111111111111"),
+                ),
+                SQLCommenterContext.scope({"route": "/first"}),
+            ):
+                res1 = session.execute("SELECT val FROM t_comment WHERE id = ?", (1,))
+
+            cached_entry = session._stmt_cache.get("SELECT val FROM t_comment WHERE id = ?")
+            assert cached_entry is not None
+            assert "traceparent=" not in cached_entry.compiled_sql
+            assert "route=" not in cached_entry.compiled_sql
+
+            with (
+                patch(
+                    "sqlspec.core.sqlcommenter.get_trace_context",
+                    return_value=("0af7651916cd43dd8448eb211c80319c", "2222222222222222"),
+                ),
+                SQLCommenterContext.scope({"route": "/second"}),
+            ):
+                res2 = session.execute("SELECT val FROM t_comment WHERE id = ?", (1,))
+
+            assert len(observed_events) == 2
+            assert "1111111111111111" in observed_events[0].sql
+            assert "route='%2Ffirst'" in observed_events[0].sql
+            assert "2222222222222222" in observed_events[1].sql
+            assert "1111111111111111" not in observed_events[1].sql
+            assert "route='%2Fsecond'" in observed_events[1].sql
+            assert "route='%2Ffirst'" not in observed_events[1].sql
+            assert "1111111111111111" in res1.statement.compile()[0]
+            assert "2222222222222222" in res2.statement.compile()[0]
+    finally:
+        config.close_pool()
+
+
+def test_statement_event_profile_and_script_index_fields(caplog: Any) -> None:
+    """StatementEvent exposes profile, script_statement_index, and script_statement_count fields."""
+    observed: list[Any] = []
+    caplog.set_level(logging.INFO, logger="sqlspec.sql")
+    runtime = ObservabilityRuntime(
+        ObservabilityConfig(print_sql=True, statement_observers=(observed.append,)), config_name="DuckDBConfig"
+    )
+    sample_profile = {"format": "json", "latency": 0.0012, "children": []}
+    runtime.emit_statement_event(
+        sql="SELECT 1",
+        parameters=None,
+        driver="DuckDBDriver",
+        operation="SCRIPT",
+        execution_mode="single",
+        is_many=False,
+        is_script=True,
+        rows_affected=0,
+        duration_s=0.002,
+        storage_backend=None,
+        profile=sample_profile,
+        script_statement_index=0,
+        script_statement_count=2,
+    )
+    assert len(observed) == 1
+    ev = observed[0]
+    assert ev.profile == sample_profile
+    assert ev.script_statement_index == 0
+    assert ev.script_statement_count == 2
+    ev_dict = ev.as_dict()
+    assert ev_dict["profile"] == sample_profile
+    assert ev_dict["script_statement_index"] == 0
+    assert ev_dict["script_statement_count"] == 2
+    sql_records = [r for r in caplog.records if r.name == "sqlspec.sql"]
+    assert sql_records
+    last_record = sql_records[-1]
+    assert last_record.__dict__.get("db.statement.profile") == sample_profile
+    assert last_record.__dict__.get("sqlspec.script.statement_index") == 0
+    assert last_record.__dict__.get("sqlspec.script.statement_count") == 2

@@ -12,9 +12,14 @@ from sqlspec.core.compiler import SQLProcessor
 from sqlspec.core.sqlcommenter import (
     SQLCommenterContext,
     append_comment,
+    append_sqlcomment,
+    append_wire_sqlcomment,
     create_sqlcommenter_statement_transformer,
+    format_wire_sqlcomment,
     generate_comment,
     parse_comment,
+    split_sqlcomment,
+    strip_sqlcomment,
 )
 from sqlspec.utils.correlation import CorrelationContext
 
@@ -480,3 +485,140 @@ def test_statement_config_replace_preserves_sqlcommenter() -> None:
     config = StatementConfig(enable_sqlcommenter=True, sqlcommenter_attributes={"db_driver": "sqlite"})
     replaced = config.replace(enable_caching=False)
     assert len(replaced.statement_transformers) == 1
+
+
+def test_statement_config_enable_sqlcommenter_keeps_has_transformers_false_without_user_transformers() -> None:
+    """Enabling sqlcommenter without user statement_transformers must keep _has_transformers False."""
+    config = StatementConfig(enable_sqlcommenter=True, sqlcommenter_attributes={"db_driver": "sqlite"})
+    assert config._has_transformers is False
+
+    def user_transformer(expr: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
+        return expr, params
+
+    config_with_user = StatementConfig(enable_sqlcommenter=True, statement_transformers=[user_transformer])
+    assert config_with_user._has_transformers is True
+
+
+def test_split_and_strip_sqlcomment_wire_helpers() -> None:
+    """Wire-level sqlcommenter helpers split, strip, and append comments without mutating base SQL."""
+    commented = append_sqlcomment("SELECT * FROM users;", {"db_driver": "asyncpg", "route": "/users"})
+    assert commented == "SELECT * FROM users /* db_driver='asyncpg',route='%2Fusers' */;"
+    base_sql, suffix = split_sqlcomment(commented)
+    assert base_sql == "SELECT * FROM users;"
+    assert suffix == "/* db_driver='asyncpg',route='%2Fusers' */"
+    assert strip_sqlcomment(commented) == "SELECT * FROM users;"
+    assert split_sqlcomment("SELECT /* not sqlcommenter */ 1") == ("SELECT /* not sqlcommenter */ 1", "")
+
+
+def test_format_and_append_wire_sqlcomment_refreshes_dynamic_context() -> None:
+    """format_wire_sqlcomment and append_wire_sqlcomment replace stale comments with current context."""
+    config = StatementConfig(
+        enable_sqlcommenter=True,
+        sqlcommenter_enable_context=True,
+        sqlcommenter_enable_traceparent=True,
+        sqlcommenter_attributes={"db_driver": "sqlite"},
+    )
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "1111111111111111"),
+        ),
+        SQLCommenterContext.scope({"route": "/one"}),
+    ):
+        first = format_wire_sqlcomment("SELECT 1", config)
+
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "2222222222222222"),
+        ),
+        SQLCommenterContext.scope({"route": "/two"}),
+    ):
+        second = format_wire_sqlcomment(first, config)
+        direct = append_wire_sqlcomment(
+            first, attributes={"db_driver": "sqlite"}, enable_traceparent=True, enable_context=True
+        )
+
+    assert "1111111111111111" in first
+    assert "route='%2Fone'" in first
+    assert "2222222222222222" in second
+    assert "1111111111111111" not in second
+    assert "route='%2Ftwo'" in second
+    assert "route='%2Fone'" not in second
+    assert direct == second
+
+
+def test_rebind_cached_parameters_refreshes_sqlcommenter_comment() -> None:
+    """SQL._rebind_cached_parameters refreshes dynamic sqlcommenter comments across parameter rebinds."""
+    config = StatementConfig(
+        enable_sqlcommenter=True,
+        sqlcommenter_enable_context=True,
+        sqlcommenter_enable_traceparent=True,
+        sqlcommenter_attributes={"db_driver": "sqlite"},
+    )
+    base_stmt = SQL("SELECT * FROM users WHERE id = :id", {"id": 1}, statement_config=config)
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "aaaaaaaaaaaaaaaa"),
+        ),
+        SQLCommenterContext.scope({"route": "/alpha"}),
+    ):
+        first_sql, _ = base_stmt.compile()
+
+    rebound_stmt = base_stmt.copy(parameters={"id": 2})
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "bbbbbbbbbbbbbbbb"),
+        ),
+        SQLCommenterContext.scope({"route": "/beta"}),
+    ):
+        second_sql, _ = rebound_stmt.compile()
+
+    assert "aaaaaaaaaaaaaaaa" in first_sql
+    assert "route='%2Falpha'" in first_sql
+    assert "bbbbbbbbbbbbbbbb" in second_sql
+    assert "aaaaaaaaaaaaaaaa" not in second_sql
+    assert "route='%2Fbeta'" in second_sql
+    assert "route='%2Falpha'" not in second_sql
+
+
+def test_sqlcommenter_reads_ambient_correlation_context() -> None:
+    """CorrelationContext.get() populates correlation_id when enable_correlation_id or enable_context is True."""
+    with CorrelationContext.context("req-123"):
+        commented = append_wire_sqlcomment("SELECT 1", attributes={"db_driver": "sqlite"}, enable_correlation_id=True)
+    assert "correlation_id='req-123'" in commented
+
+
+def test_enable_sqlcommenter_preserves_stmt_cache_enabled_and_updates_traceparent_per_call() -> None:
+    """enable_sqlcommenter=True preserves _stmt_cache_enabled and refreshes traceparent per execution."""
+    config = StatementConfig(
+        enable_sqlcommenter=True,
+        sqlcommenter_enable_context=True,
+        sqlcommenter_enable_traceparent=True,
+        sqlcommenter_attributes={"db_driver": "sqlite"},
+    )
+    assert config._has_transformers is False
+    stmt = SQL("SELECT 1", statement_config=config)
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "1111111111111111"),
+        ),
+        CorrelationContext.context("req-one"),
+    ):
+        sql_one = format_wire_sqlcomment(stmt.compile()[0], config)
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "2222222222222222"),
+        ),
+        CorrelationContext.context("req-two"),
+    ):
+        sql_two = format_wire_sqlcomment(stmt.compile()[0], config)
+    assert "1111111111111111" in sql_one
+    assert "req-one" in sql_one
+    assert "2222222222222222" in sql_two
+    assert "req-two" in sql_two
+    assert "1111111111111111" not in sql_two

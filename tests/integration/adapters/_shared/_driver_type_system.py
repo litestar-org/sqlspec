@@ -107,6 +107,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "enable_events",
         "on_connection_create",
         "events_backend",
+        "enable_statement_profiling",
     ),
     "aiomysql": (
         "json_serializer",
@@ -257,6 +258,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "extension_flags",
         "enable_events",
         "events_backend",
+        "enable_statement_profiling",
     ),
     "mssql_python": (
         "use_pool",
@@ -291,6 +293,7 @@ DRIVER_FEATURE_CONSUMED_KEYS.update({
         "events_backend",
         "enable_direct_path_load",
         "session_context_hook",
+        "enable_session_tracing",
     ),
     "psqlpy": (
         "enable_cast_detection",

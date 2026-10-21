@@ -261,6 +261,7 @@ class OracleDriverFeatures(TypedDict):
     events_backend: NotRequired[OracleEventsBackend]
     enable_direct_path_load: NotRequired[bool]
     session_context_hook: NotRequired[OracleSessionContextConfig | dict[str, Any]]
+    enable_session_tracing: NotRequired[bool]
 
 
 class OracleSyncConnectionContext(SyncPoolConnectionContext):
