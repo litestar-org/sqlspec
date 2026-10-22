@@ -32,6 +32,7 @@ from sqlspec.adapters.psqlpy.core import (
 )
 from sqlspec.adapters.psqlpy.data_dictionary import PsqlpyDataDictionary
 from sqlspec.core import SQL, StatementConfig, get_cache_config, register_driver_profile
+from sqlspec.core.sqlcommenter import split_sqlcomment
 from sqlspec.driver import AsyncDriverAdapterBase, AsyncRowStream, BaseAsyncExceptionHandler
 from sqlspec.exceptions import SQLSpecError
 from sqlspec.utils.serializers import from_json
@@ -140,12 +141,14 @@ class PsqlpyDriver(AsyncDriverAdapterBase):
             )
 
         if statement.operation_type in {"INSERT", "UPDATE", "DELETE"}:
-            count_sql = _dml_count_query(sql)
+            base_sql, comment_suffix = split_sqlcomment(sql)
+            count_sql = _dml_count_query(base_sql)
             if count_sql is not None:
+                wire_count_sql = f"{count_sql} {comment_suffix}" if comment_suffix else count_sql
                 count_result = (
-                    await cursor.fetch(count_sql, params, prepared=False)
+                    await cursor.fetch(wire_count_sql, params, prepared=False)
                     if self._is_transaction_pooler_mode()
-                    else await cursor.fetch(count_sql, params)
+                    else await cursor.fetch(wire_count_sql, params)
                 )
                 count_rows, _ = collect_rows(count_result)
                 if len(count_rows) != 1 or set(count_rows[0]) != {_DML_COUNT_COLUMN}:

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from psqlpy import exceptions as psqlpy_exceptions
@@ -19,7 +20,9 @@ from sqlspec.adapters.psqlpy.core import (
     get_parameter_casts,
     prepare_parameters_with_casts,
 )
+from sqlspec.adapters.psqlpy.driver import PsqlpyDriver
 from sqlspec.core import SQL
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.driver import CachedQuery
 from sqlspec.exceptions import (
     ConnectionTimeoutError,
@@ -346,3 +349,52 @@ def test_create_mapped_exception_maps_connection_timeout_and_data_parse_errors()
 
     data_err = psqlpy_exceptions.DataError("invalid input syntax for type json: failed to parse value")
     assert type(psqlpy_core.create_mapped_exception(data_err)) is DataError
+
+
+@pytest.mark.anyio
+async def test_psqlpy_dispatch_execute_strips_sqlcommenter_before_dml_count_cache_lookup() -> None:
+    """PsqlpyDriver.dispatch_execute strips trailing sqlcommenter comments before _dml_count_query cache lookup."""
+    psqlpy_core._dml_count_query.cache_clear()
+    fetched_queries: list[str] = []
+
+    class _FakeResult:
+        def result(self) -> list[dict[str, int]]:
+            return [{psqlpy_core._DML_COUNT_COLUMN: 1}]
+
+    def _fake_fetch(query: str, _params: Any) -> _FakeResult:
+        fetched_queries.append(query)
+        return _FakeResult()
+
+    connection = SimpleNamespace(fetch=AsyncMock(side_effect=_fake_fetch), execute=AsyncMock())
+    stmt_config = build_statement_config().replace(
+        enable_sqlcommenter=True, sqlcommenter_enable_context=True, sqlcommenter_enable_traceparent=True
+    )
+    driver = PsqlpyDriver(connection=cast("Any", connection), statement_config=stmt_config)
+
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "1111111111111111"),
+        ),
+        SQLCommenterContext.scope({"route": "/items/1"}),
+    ):
+        stmt1 = driver.prepare_statement("UPDATE events SET payload = $1 WHERE id = $2", ("a", 1))
+        await driver.dispatch_execute(cast("Any", connection), stmt1)
+
+    with (
+        patch(
+            "sqlspec.core.sqlcommenter.get_trace_context",
+            return_value=("0af7651916cd43dd8448eb211c80319c", "2222222222222222"),
+        ),
+        SQLCommenterContext.scope({"route": "/items/2"}),
+    ):
+        stmt2 = driver.prepare_statement("UPDATE events SET payload = $1 WHERE id = $2", ("b", 2))
+        await driver.dispatch_execute(cast("Any", connection), stmt2)
+
+    cache_info = psqlpy_core._dml_count_query.cache_info()
+    assert cache_info.misses == 1
+    assert cache_info.hits >= 1
+    assert len(fetched_queries) == 2
+    assert "1111111111111111" in fetched_queries[0]
+    assert "2222222222222222" in fetched_queries[1]
+    assert "1111111111111111" not in fetched_queries[1]

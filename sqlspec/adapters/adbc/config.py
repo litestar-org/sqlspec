@@ -1,11 +1,13 @@
 """ADBC database configuration."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict, cast
 
 from sqlspec.adapters.adbc._typing import AdbcConnection, AdbcCursor, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     build_connection_config,
+    configure_adbc_duckdb_profiling,
     detect_postgres_extensions,
     get_statement_config,
     is_postgres_dialect,
@@ -15,6 +17,7 @@ from sqlspec.adapters.adbc.core import (
     resolve_driver_connect_func,
 )
 from sqlspec.adapters.adbc.driver import AdbcDriver, AdbcExceptionHandler
+from sqlspec.adapters.duckdb.core import cleanup_duckdb_profile_path, create_duckdb_profile_path
 from sqlspec.config import ExtensionConfigs, NoPoolSyncConfig
 from sqlspec.core import StatementConfig
 from sqlspec.core.capabilities import TypeCoercionCapabilities
@@ -135,6 +138,8 @@ class AdbcDriverFeatures(TypedDict):
             Only option: "poll_queue" (durable table-backed queue with lease-based retries and acknowledgements).
             ADBC does not have native pub/sub, so poll_queue is the only backend.
             Defaults to "poll_queue".
+        enable_statement_profiling: Enable DuckDB JSON statement profiling when using a DuckDB ADBC backend.
+            Defaults to False.
     """
 
     json_serializer: "NotRequired[Callable[[Any], str]]"
@@ -150,6 +155,7 @@ class AdbcDriverFeatures(TypedDict):
     enable_events: NotRequired[bool]
     on_connection_create: "NotRequired[Callable[[AdbcConnection], None]]"
     events_backend: NotRequired[Literal["poll_queue"]]
+    enable_statement_profiling: NotRequired[bool]
 
 
 class AdbcConnectionContext(SyncPoolConnectionContext):
@@ -176,22 +182,42 @@ class AdbcConnectionContext(SyncPoolConnectionContext):
 
 
 class _AdbcSessionConnectionHandler(SyncPoolSessionFactory):
-    __slots__ = ("_connection",)
+    __slots__ = ("_connection", "_driver_features", "_profile_path")
 
     def __init__(self, config: "AdbcConfig") -> None:
         super().__init__(config)
         self._connection: AdbcConnection | None = None
+        self._driver_features: dict[str, Any] = dict(config.driver_features)
+        self._profile_path: Path | None = None
+
+    @property
+    def driver_features(self) -> "dict[str, Any]":
+        return self._driver_features
 
     def acquire_connection(self) -> "AdbcConnection":
         self._connection = self._config.create_connection()
+        if self._config._resolved_dialect == "duckdb" and bool(
+            self._driver_features.get("enable_statement_profiling", False)
+        ):
+            self._profile_path = create_duckdb_profile_path()
+            configure_adbc_duckdb_profiling(self._connection, self._profile_path)
+            self._driver_features["_duckdb_profile_path"] = str(self._profile_path)
         return cast("AdbcConnection", self._connection)
 
     def release_connection(self, _conn: "AdbcConnection", **kwargs: Any) -> None:
         if self._connection is None:
             return
-        if self._connection is not self._config.connection_instance:
-            self._connection.close()
-        self._connection = None
+        try:
+            if self._connection is not self._config.connection_instance:
+                self._connection.close()
+        finally:
+            self._connection = None
+            if self._profile_path is not None:
+                cleanup_duckdb_profile_path(self._profile_path)
+                self._profile_path = None
+            raw_path = self._driver_features.pop("_duckdb_profile_path", None)
+            if isinstance(raw_path, str):
+                cleanup_duckdb_profile_path(Path(raw_path))
 
 
 class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
@@ -369,7 +395,7 @@ class AdbcConfig(NoPoolSyncConfig[AdbcConnection, AdbcDriver]):
             acquire_connection=handler.acquire_connection,
             release_connection=handler.release_connection,
             statement_config=statement_config,
-            driver_features=self.driver_features,
+            driver_features=handler.driver_features,
             prepare_driver=self._prepare_driver,
         )
 

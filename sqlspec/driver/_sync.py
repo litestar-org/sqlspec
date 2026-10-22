@@ -233,7 +233,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             return self._execute_with_observability_sync(
                 compiled_sql=compiled_sql,
                 execution_parameters=execution_parameters,
-                operation=statement.operation_type,
+                operation="SCRIPT" if statement.is_script else statement.operation_type,
                 is_many=statement.is_many,
                 is_script=statement.is_script,
                 runner=self._dispatch_statement_observed_sync,
@@ -290,15 +290,35 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
 
         statement_count: int = len(statements)
         successful_count: int = 0
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
 
-        for stmt in statements:
+        for idx, stmt in enumerate(statements):
             single_stmt = self._sub_statement(stmt, prepared_parameters)
+            stmt_started = perf_counter() if has_observers else 0.0
+            self._pending_statement_profile = None
             try:
-                self.dispatch_execute(cursor, single_stmt)
+                sub_result = self.dispatch_execute(cursor, single_stmt)
             finally:
                 self._release_pooled_statement(single_stmt)
+            if has_observers:
+                stmt_duration = perf_counter() - stmt_started
+                stmt_profile: dict[str, Any] | None = self._pending_statement_profile
+                self._pending_statement_profile = None
+                self._emit_script_statement_event(
+                    sql=stmt,
+                    parameters=prepared_parameters,
+                    operation=single_stmt.operation_type,
+                    rows_affected=sub_result.rowcount_override,
+                    duration_s=stmt_duration,
+                    started_at=stmt_started,
+                    profile=stmt_profile,
+                    script_ordinal=idx,
+                    script_statement_count=statement_count,
+                )
             successful_count += 1
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
             cursor, statement_count=statement_count, successful_statements=successful_count, is_script_result=True
         )
@@ -1491,12 +1511,16 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             sql_hash = observability_runtime.compute_sql_hash(compiled_sql)
         span = runtime.start_query_span(compiled_sql, operation, driver_name, sql_hash=sql_hash)
         started = perf_counter()
+        self._pending_statement_profile = None
         try:
             result = runner(**runner_kwargs)
         except Exception as exc:
+            self._pending_statement_profile = None
             runtime.span_manager.end_span(span, error=exc)
             runtime.emit_error_sync(exc, **query_context)
             raise
+        profile: dict[str, Any] | None = self._pending_statement_profile
+        self._pending_statement_profile = None
         runtime.span_manager.end_span(span)
         duration = perf_counter() - started
         runtime.emit_query_complete_sync(**{**query_context, "rows_affected": result.rows_affected})
@@ -1513,6 +1537,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
             storage_backend=(result.metadata or {}).get("storage_backend"),
             started_at=started,
             precomputed_sql_hash=sql_hash,
+            profile=profile,
         )
         return result
 
@@ -1579,7 +1604,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         """Execute a fast-path cache hit wrapped in observability instrumentation."""
         obs_params = list(params) if isinstance(params, tuple) else params
         return self._execute_with_observability_sync(
-            compiled_sql=cached.compiled_sql,
+            compiled_sql=self._format_wire_sql(cached.compiled_sql),
             execution_parameters=obs_params,
             operation=cached.operation_type,
             is_many=False,
@@ -1676,6 +1701,7 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
         result: SQLResult | None = None
         try:
             with self.with_cursor(self.connection) as cursor:
+                wire_sql = self._format_wire_sql(cached.compiled_sql)
                 returns_rows = cached.operation_profile.returns_rows
                 execute = getattr(cursor, "execute", None) if cursor is not self.connection else None
                 fetchall = getattr(cursor, "fetchall", None) if execute is not None and returns_rows else None
@@ -1685,9 +1711,9 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                 if can_use_cursor_fast_path:
                     assert execute is not None
                     if params:
-                        execute(cached.compiled_sql, params)
+                        execute(wire_sql, params)
                     else:
-                        execute(cached.compiled_sql)
+                        execute(wire_sql)
                     if returns_rows:
                         assert fetchall is not None
                         fetched_data = fetchall()
@@ -1700,13 +1726,14 @@ class SyncDriverAdapterBase(CommonDriverAttributesMixin):
                             column_names=column_names,
                             data_row_count=row_count,
                             row_format=resolve_row_format(data),
+                            compiled_sql=wire_sql,
                         )
                     else:
                         affected_rows = self.resolve_rowcount(cursor)
                         result = DMLResult(cached.operation_type, affected_rows)
                 else:
                     direct_statement = self._cached_statement(
-                        sql, params, cached, params, params_are_simple=True, compiled_sql=cached.compiled_sql
+                        sql, params, cached, params, params_are_simple=True, compiled_sql=wire_sql
                     )
                     execution_result = self.dispatch_execute(cursor, direct_statement)
                     if returns_rows:

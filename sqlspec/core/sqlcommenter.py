@@ -20,9 +20,14 @@ __all__ = (
     "SQLCommenterAttributes",
     "SQLCommenterContext",
     "append_comment",
+    "append_sqlcomment",
+    "append_wire_sqlcomment",
     "create_sqlcommenter_statement_transformer",
+    "format_wire_sqlcomment",
     "generate_comment",
     "parse_comment",
+    "split_sqlcomment",
+    "strip_sqlcomment",
 )
 
 
@@ -155,14 +160,161 @@ def parse_comment(expression: exp.Expr) -> tuple[exp.Expr, dict[str, str]]:
     return expression, attrs
 
 
+def split_sqlcomment(sql: str) -> tuple[str, str]:
+    """Split a leading or trailing sqlcommenter block comment from SQL text.
+
+    Args:
+        sql: SQL text that may contain a sqlcommenter block comment.
+
+    Returns:
+        Tuple of ``(base_sql, comment_block)`` where ``comment_block`` is the
+        full ``/* ... */`` comment or ``""`` when no sqlcommenter comment is present.
+    """
+    if "/*" not in sql:
+        return sql, ""
+
+    stripped = sql.rstrip()
+    trailing_semi = stripped.endswith(";")
+    candidate = stripped[:-1].rstrip() if trailing_semi else stripped
+    if candidate.endswith("*/"):
+        open_idx = candidate.rfind("/*")
+        if open_idx != -1:
+            inner = candidate[open_idx + 2 : -2].strip()
+            if _is_sqlcommenter_comment(inner):
+                comment_block = candidate[open_idx:].strip()
+                prefix = candidate[:open_idx].rstrip()
+                base_sql = f"{prefix};" if trailing_semi else prefix
+                return base_sql, comment_block
+
+    lstripped = sql.lstrip()
+    if lstripped.startswith("/*"):
+        close_idx = lstripped.find("*/")
+        if close_idx != -1:
+            inner = lstripped[2:close_idx].strip()
+            if _is_sqlcommenter_comment(inner):
+                comment_block = lstripped[: close_idx + 2].strip()
+                rest = lstripped[close_idx + 2 :].lstrip()
+                return rest, comment_block
+
+    return sql, ""
+
+
+def strip_sqlcomment(sql: str) -> str:
+    """Remove a leading or trailing sqlcommenter block comment from SQL text.
+
+    Args:
+        sql: SQL text that may contain a sqlcommenter block comment.
+
+    Returns:
+        Clean SQL text without the sqlcommenter block comment.
+    """
+    base_sql, _ = split_sqlcomment(sql)
+    return base_sql
+
+
+def append_sqlcomment(sql: str, attrs: Mapping[str, str | None]) -> str:
+    """Append or replace a sqlcommenter block comment on rendered SQL text.
+
+    Args:
+        sql: Rendered SQL text.
+        attrs: Attributes to serialize into the comment.
+
+    Returns:
+        SQL text with the formatted sqlcommenter comment appended.
+    """
+    base_sql = strip_sqlcomment(sql)
+    return _append_comment(base_sql, attrs)
+
+
+def format_wire_sqlcomment(
+    sql: str,
+    config: Any = None,
+    *,
+    attributes: Mapping[str, str | None] | None = None,
+    enable_traceparent: bool = False,
+    enable_context: bool = False,
+    enable_correlation_id: bool = False,
+) -> str:
+    """Format wire-level SQL with static and dynamic sqlcommenter attributes.
+
+    Args:
+        sql: Compiled SQL string.
+        config: Optional ``StatementConfig`` carrying sqlcommenter settings.
+        attributes: Optional static attributes when ``config`` is omitted.
+        enable_traceparent: Include OpenTelemetry ``traceparent`` when ``config`` is omitted.
+        enable_context: Include ``SQLCommenterContext`` and ``CorrelationContext`` when ``config`` is omitted.
+        enable_correlation_id: Include ``CorrelationContext`` when ``config`` is omitted.
+
+    Returns:
+        SQL string with wire-level sqlcommenter comment applied.
+    """
+    if config is not None:
+        if not getattr(config, "enable_sqlcommenter", False):
+            return sql
+        static_attrs: Mapping[str, str | None] = getattr(config, "sqlcommenter_attributes", None) or {}
+        use_traceparent = bool(getattr(config, "sqlcommenter_enable_traceparent", False))
+        use_context = bool(getattr(config, "sqlcommenter_enable_context", True))
+        use_correlation_id = bool(getattr(config, "sqlcommenter_enable_correlation_id", False))
+    else:
+        static_attrs = attributes or {}
+        use_traceparent = enable_traceparent
+        use_context = enable_context
+        use_correlation_id = enable_correlation_id
+
+    merged = _comment_attributes(
+        static_attrs,
+        enable_traceparent=use_traceparent,
+        enable_context=use_context,
+        enable_correlation_id=use_correlation_id,
+    )
+    base_sql = strip_sqlcomment(sql)
+    return _append_comment(base_sql, merged)
+
+
+def append_wire_sqlcomment(
+    sql: str,
+    config: Any = None,
+    *,
+    attributes: Mapping[str, str | None] | None = None,
+    enable_traceparent: bool = False,
+    enable_context: bool = False,
+    enable_correlation_id: bool = False,
+) -> str:
+    """Append wire-level sqlcommenter comment to compiled SQL text.
+
+    Args:
+        sql: Compiled SQL string.
+        config: Optional ``StatementConfig`` carrying sqlcommenter settings.
+        attributes: Optional static attributes when ``config`` is omitted.
+        enable_traceparent: Include OpenTelemetry ``traceparent`` when ``config`` is omitted.
+        enable_context: Include ``SQLCommenterContext`` and ``CorrelationContext`` when ``config`` is omitted.
+        enable_correlation_id: Include ``CorrelationContext`` when ``config`` is omitted.
+
+    Returns:
+        SQL string with wire-level sqlcommenter comment applied.
+    """
+    return format_wire_sqlcomment(
+        sql,
+        config,
+        attributes=attributes,
+        enable_traceparent=enable_traceparent,
+        enable_context=enable_context,
+        enable_correlation_id=enable_correlation_id,
+    )
+
+
 def create_sqlcommenter_statement_transformer(
-    *, attributes: dict[str, str | None] | None = None, enable_traceparent: bool = False, enable_context: bool = False
+    *,
+    attributes: dict[str, str | None] | None = None,
+    enable_traceparent: bool = False,
+    enable_context: bool = False,
+    enable_correlation_id: bool = False,
 ) -> Callable[[exp.Expr, Any], tuple[exp.Expr, Any]]:
     """Create a ``statement_transformer`` that adds sqlcommenter comments to the AST.
 
     Static attributes are pre-serialized at creation time. When
-    ``enable_traceparent`` or ``enable_context`` is True, dynamic attributes
-    are resolved per invocation.
+    ``enable_traceparent``, ``enable_context``, or ``enable_correlation_id`` is True,
+    dynamic attributes are resolved per invocation.
 
     Args:
         attributes: Static key-value pairs to include in every comment.
@@ -170,12 +322,14 @@ def create_sqlcommenter_statement_transformer(
             current OpenTelemetry span context on each invocation.
         enable_context: If True, read request-scoped attributes from
             :class:`SQLCommenterContext` and merge them with static attributes.
+        enable_correlation_id: If True, read ``correlation_id`` from
+            :class:`CorrelationContext` when not already present.
 
     Returns:
         A callable suitable for ``StatementConfig(statement_transformers=[...])``.
     """
     static_attrs: dict[str, str | None] = dict(attributes) if attributes else {}
-    is_dynamic = enable_traceparent or enable_context
+    is_dynamic = enable_traceparent or enable_context or enable_correlation_id
 
     if not is_dynamic and not static_attrs:
         return _NOOP_SQLCOMMENTER_TRANSFORMER
@@ -184,7 +338,10 @@ def create_sqlcommenter_statement_transformer(
         return _StaticSQLCommenterTransformer(static_attrs)
 
     return _DynamicSQLCommenterTransformer(
-        static_attrs, enable_traceparent=enable_traceparent, enable_context=enable_context
+        static_attrs,
+        enable_traceparent=enable_traceparent,
+        enable_context=enable_context,
+        enable_correlation_id=enable_correlation_id,
     )
 
 
@@ -231,7 +388,11 @@ def _append_comment(sql: str, attrs: Mapping[str, str | None]) -> str:
 
 
 def _comment_attributes(
-    static_attrs: Mapping[str, str | None], *, enable_traceparent: bool, enable_context: bool
+    static_attrs: Mapping[str, str | None] | None = None,
+    *,
+    enable_traceparent: bool = False,
+    enable_context: bool = False,
+    enable_correlation_id: bool = False,
 ) -> dict[str, str | None]:
     """Resolve static and dynamic sqlcommenter attributes for the current call."""
     merged: dict[str, str | None] = {}
@@ -239,10 +400,12 @@ def _comment_attributes(
         ctx_attrs = SQLCommenterContext.get()
         if ctx_attrs:
             merged.update(ctx_attrs)
+    if enable_context or enable_correlation_id:
         correlation_id = CorrelationContext.get()
         if correlation_id and "correlation_id" not in merged:
             merged["correlation_id"] = correlation_id
-    merged.update(static_attrs)
+    if static_attrs:
+        merged.update(static_attrs)
     if enable_traceparent:
         trace_id, span_id = get_trace_context()
         if trace_id and span_id:
@@ -278,18 +441,27 @@ class _StaticSQLCommenterTransformer:
 
 @final
 class _DynamicSQLCommenterTransformer:
-    __slots__ = ("_enable_context", "_enable_traceparent", "_static_attrs")
+    __slots__ = ("_enable_context", "_enable_correlation_id", "_enable_traceparent", "_static_attrs")
 
     def __init__(
-        self, static_attrs: Mapping[str, str | None], *, enable_traceparent: bool, enable_context: bool
+        self,
+        static_attrs: Mapping[str, str | None],
+        *,
+        enable_traceparent: bool,
+        enable_context: bool,
+        enable_correlation_id: bool = False,
     ) -> None:
         self._static_attrs = dict(static_attrs)
         self._enable_traceparent = enable_traceparent
         self._enable_context = enable_context
+        self._enable_correlation_id = enable_correlation_id
 
     def __call__(self, expression: exp.Expr, params: Any) -> tuple[exp.Expr, Any]:
         merged = _comment_attributes(
-            self._static_attrs, enable_traceparent=self._enable_traceparent, enable_context=self._enable_context
+            self._static_attrs,
+            enable_traceparent=self._enable_traceparent,
+            enable_context=self._enable_context,
+            enable_correlation_id=self._enable_correlation_id,
         )
         return append_comment(expression, merged), params
 

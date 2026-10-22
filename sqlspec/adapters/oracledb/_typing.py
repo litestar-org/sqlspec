@@ -90,17 +90,24 @@ __all__ = (
 class OracleSyncCursor:
     """Sync context manager for Oracle cursor management."""
 
-    __slots__ = ("arraysize", "connection", "cursor", "prefetchrows")
+    __slots__ = ("arraysize", "connection", "cursor", "on_enter", "prefetchrows")
 
     def __init__(
-        self, connection: OracleSyncConnection, arraysize: "int | None" = None, prefetchrows: "int | None" = None
+        self,
+        connection: OracleSyncConnection,
+        arraysize: "int | None" = None,
+        prefetchrows: "int | None" = None,
+        on_enter: "Callable[[Any], None] | None" = None,
     ) -> None:
         self.connection = connection
         self.cursor: OracleSyncRawCursor | None = None
         self.arraysize = arraysize
         self.prefetchrows = prefetchrows
+        self.on_enter = on_enter
 
     def __enter__(self) -> "OracleSyncRawCursor":
+        if self.on_enter is not None:
+            self.on_enter(self.connection)
         self.cursor = self.connection.cursor()
         if self.arraysize is not None:
             self.cursor.arraysize = self.arraysize
@@ -117,17 +124,24 @@ class OracleSyncCursor:
 class OracleAsyncCursor:
     """Async context manager for Oracle cursor management."""
 
-    __slots__ = ("arraysize", "connection", "cursor", "prefetchrows")
+    __slots__ = ("arraysize", "connection", "cursor", "on_enter", "prefetchrows")
 
     def __init__(
-        self, connection: OracleAsyncConnection, arraysize: "int | None" = None, prefetchrows: "int | None" = None
+        self,
+        connection: OracleAsyncConnection,
+        arraysize: "int | None" = None,
+        prefetchrows: "int | None" = None,
+        on_enter: "Callable[[Any], None] | None" = None,
     ) -> None:
         self.connection = connection
         self.cursor: OracleAsyncRawCursor | None = None
         self.arraysize = arraysize
         self.prefetchrows = prefetchrows
+        self.on_enter = on_enter
 
     async def __aenter__(self) -> "OracleAsyncRawCursor":
+        if self.on_enter is not None:
+            self.on_enter(self.connection)
         self.cursor = self.connection.cursor()
         if self.arraysize is not None:
             self.cursor.arraysize = self.arraysize

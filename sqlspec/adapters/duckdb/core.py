@@ -2,8 +2,10 @@
 
 import contextlib
 import re
+import tempfile
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlsplit
 
@@ -40,11 +42,11 @@ from sqlspec.exceptions import (
 from sqlspec.storage import ResolvedStorageTarget
 from sqlspec.storage.backends.fsspec import FSSpecBackend
 from sqlspec.storage.backends.obstore import ObStoreBackend
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.text import quote_identifier, split_qualified_identifier
 from sqlspec.utils.type_converters import build_decimal_converter, build_uuid_coercions, time_iso_convert
 from sqlspec.utils.type_guards import has_rowcount
-from sqlspec.utils.uuids import uuid_from_string
+from sqlspec.utils.uuids import uuid4, uuid_from_string
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -58,13 +60,17 @@ __all__ = (
     "build_connection_config",
     "build_profile",
     "build_statement_config",
+    "cleanup_duckdb_profile_path",
     "collect_rows",
+    "configure_duckdb_statement_profiling",
+    "create_duckdb_profile_path",
     "create_mapped_exception",
     "default_statement_config",
     "description_has_arrow_divergent_types",
     "driver_profile",
     "format_identifier",
     "normalize_execute_parameters",
+    "read_duckdb_profile_json",
     "resolve_rowcount",
 )
 
@@ -271,6 +277,7 @@ def apply_driver_features(
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     features.setdefault("enable_events", True)
     features.setdefault("events_backend", "poll_queue")
+    features.setdefault("enable_statement_profiling", False)
 
     param_config = statement_config.parameter_config
     json_serializer = features.get("json_serializer")
@@ -288,6 +295,58 @@ def apply_driver_features(
     if param_config is statement_config.parameter_config:
         return statement_config, features
     return statement_config.replace(parameter_config=param_config), features
+
+
+def create_duckdb_profile_path() -> Path:
+    """Allocate a unique temporary file path for DuckDB JSON statement profiling."""
+    return Path(tempfile.gettempdir()) / f"sqlspec_duckdb_profile_{uuid4().hex}.json"
+
+
+def configure_duckdb_statement_profiling(connection: Any, profile_path: Path) -> None:
+    """Enable DuckDB JSON statement profiling on a connection without observer emission."""
+    escaped_path = str(profile_path).replace("'", "''")
+    connection.execute("PRAGMA enable_profiling='json'")
+    with contextlib.suppress(Exception):
+        connection.execute("SET profiling_coverage='ALL'")
+    connection.execute(f"SET profiling_output='{escaped_path}'")
+
+
+def cleanup_duckdb_profile_path(profile_path: "Path | str | None") -> None:
+    """Remove a temporary DuckDB JSON statement profile file if it exists."""
+    if not profile_path:
+        return
+    with contextlib.suppress(OSError):
+        Path(profile_path).unlink(missing_ok=True)
+
+
+def read_duckdb_profile_json(
+    profile_path: "Path | str | None", executed_sql: str | None = None
+) -> "dict[str, Any] | None":
+    """Read and validate the DuckDB JSON profile file written for executed_sql."""
+    if not profile_path:
+        return None
+    path_obj = Path(profile_path)
+    if not path_obj.exists():
+        return None
+    try:
+        raw_bytes = path_obj.read_bytes()
+    except OSError:
+        return None
+    if not raw_bytes:
+        return None
+    try:
+        parsed: Any = from_json(raw_bytes)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    query_name = parsed.get("query_name")
+    if isinstance(query_name, str) and executed_sql:
+        normalized_query = query_name.strip().rstrip(";").strip()
+        normalized_sql = executed_sql.strip().rstrip(";").strip()
+        if normalized_sql and normalized_query != normalized_sql:
+            return None
+    return cast("dict[str, Any]", parsed)
 
 
 _EXCEPTION_MAPPING: Final[dict[type[BaseException], tuple[type[SQLSpecError], str]]] = {

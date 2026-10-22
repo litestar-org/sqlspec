@@ -20,6 +20,7 @@ from sqlspec.adapters.oracledb.core import (
     ORACLEDB_VERSION,
     OracleAsyncStreamSource,
     OracleSyncStreamSource,
+    apply_oracle_session_trace_attributes,
     build_arrow_fetch_kwargs,
     build_fetch_kwargs,
     build_insert_statement,
@@ -64,6 +65,7 @@ from sqlspec.core.explain import (
     ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY,
     ORACLE_MANAGED_EXPLAIN_META_KEY,
 )
+from sqlspec.core.sqlcommenter import SQLCommenterContext, format_wire_sqlcomment, strip_sqlcomment
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
     AsyncRowStream,
@@ -150,6 +152,52 @@ class OraclePipelineMixin:
     """Shared helpers for Oracle pipeline execution."""
 
     __slots__ = ()
+
+    def _session_tracing_enabled(self) -> bool:
+        driver = cast("OraclePipelineDriver", self)
+        return bool(
+            driver.driver_features.get("enable_session_tracing", False) or driver.statement_config.enable_sqlcommenter
+        )
+
+    def _apply_session_tracing(self, connection: Any = None) -> None:
+        if not self._session_tracing_enabled():
+            return
+        driver = cast("OraclePipelineDriver", self)
+        target_conn = connection if connection is not None else getattr(self, "connection", None)
+        if target_conn is None:
+            return
+        ctx = SQLCommenterContext.get() or {}
+        attrs = driver.statement_config.sqlcommenter_attributes or {}
+        default_module = (
+            ctx.get("module")
+            or ctx.get("framework")
+            or ctx.get("controller")
+            or attrs.get("module")
+            or attrs.get("framework")
+            or attrs.get("controller")
+            or "sqlspec"
+        )
+        default_action = ctx.get("action") or ctx.get("route") or attrs.get("action") or attrs.get("route")
+        apply_oracle_session_trace_attributes(target_conn, module=default_module, action=default_action)
+
+    def _format_wire_sql(self, sql: str, config: "StatementConfig | None" = None) -> str:
+        driver = cast("OraclePipelineDriver", self)
+        effective_config = config or driver.statement_config
+        if self._session_tracing_enabled():
+            return strip_sqlcomment(sql)
+        if not effective_config.enable_sqlcommenter:
+            return sql
+        return format_wire_sqlcomment(sql, effective_config)
+
+    def _compiled_sql(
+        self, statement: "SQL", statement_config: "StatementConfig", flatten_single_parameters: bool = False
+    ) -> "tuple[str, Any]":
+        compiled_sql, prepared_parameters = super()._compiled_sql(  # type: ignore[misc]
+            statement, statement_config, flatten_single_parameters=flatten_single_parameters
+        )
+        if self._session_tracing_enabled():
+            return strip_sqlcomment(compiled_sql), prepared_parameters
+        return compiled_sql, prepared_parameters
 
     def _stack_native_blocker(self, stack: "StatementStack") -> "str | None":
         for operation in stack.operations:
@@ -583,6 +631,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
             connection,
             arraysize=self.driver_features.get("arraysize"),
             prefetchrows=self.driver_features.get("prefetchrows"),
+            on_enter=self._apply_session_tracing if self._session_tracing_enabled() else None,
         )
 
     @overload
@@ -704,6 +753,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
         try:
+            self._apply_session_tracing(self.connection)
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
                 record_batches, batch_schema = self._fetch_arrow_record_batches(
                     sql, prepared_parameters, batch_size, arrow_schema
@@ -1312,6 +1362,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
             connection,
             arraysize=self.driver_features.get("arraysize"),
             prefetchrows=self.driver_features.get("prefetchrows"),
+            on_enter=self._apply_session_tracing if self._session_tracing_enabled() else None,
         )
 
     @overload
@@ -1433,6 +1484,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         prepared_parameters = cast("list[Any] | tuple[Any, ...] | dict[Any, Any] | None", prepared_parameters)
 
         try:
+            self._apply_session_tracing(self.connection)
             if return_format in {"batches", "reader"} and supports_df_batches(self.connection):
                 record_batches, batch_schema = await self._fetch_arrow_record_batches(
                     sql, prepared_parameters, batch_size, arrow_schema
@@ -1818,6 +1870,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 if owns_transaction and not continue_on_error:
                     await self.begin()
 
+                self._apply_session_tracing(self.connection)
                 pipeline_results = await self.connection.run_pipeline(pipeline, continue_on_error=True)
                 results = self._build_stack_results_from_pipeline(
                     compiled_operations, pipeline_results, continue_on_error, observer

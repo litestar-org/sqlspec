@@ -26,6 +26,7 @@ from sqlspec.core import (
     build_statement_config_from_profile,
     create_sql_result,
 )
+from sqlspec.core.sqlcommenter import SQLCommenterContext
 from sqlspec.data_dictionary.dialects.oracle import ORACLE_JSON_STORAGE_NATIVE, resolve_oracle_json_storage
 from sqlspec.driver import rows_to_dicts
 from sqlspec.exceptions import (
@@ -46,7 +47,9 @@ from sqlspec.exceptions import (
     TransactionError,
     UniqueViolationError,
 )
+from sqlspec.observability import get_trace_context
 from sqlspec.typing import NUMPY_INSTALLED
+from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
 from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
@@ -71,6 +74,10 @@ __all__ = (
     "DB_TYPE_CLOB",
     "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
     "ORACLEDB_VERSION",
+    "ORACLE_ACTION_MAX_BYTES",
+    "ORACLE_CLIENT_IDENTIFIER_MAX_BYTES",
+    "ORACLE_ECID_MAX_BYTES",
+    "ORACLE_MODULE_MAX_BYTES",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
     "VALID_ORACLE_DRIVER_FEATURE_KEYS",
     "OracleAsyncStreamSource",
@@ -82,6 +89,7 @@ __all__ = (
     "OracleSyncStreamSource",
     "OracleTopologyConfig",
     "apply_driver_features",
+    "apply_oracle_session_trace_attributes",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
     "build_duality_etag_update_sql",
@@ -126,6 +134,7 @@ __all__ = (
     "sanitize_oracle_text_query",
     "supports_df_batches",
     "supports_direct_path_load",
+    "truncate_utf8_bytes",
 )
 
 
@@ -319,6 +328,7 @@ VALID_ORACLE_DRIVER_FEATURE_KEYS: "Final[frozenset[str]]" = frozenset({
     "enable_lob_fetch",
     "enable_lowercase_column_names",
     "enable_numpy_vectors",
+    "enable_session_tracing",
     "enable_uuid_binary",
     "events_backend",
     "fetch_decimals",
@@ -1155,6 +1165,85 @@ def resolve_rowcount(cursor: Any) -> int:
     return 0
 
 
+ORACLE_MODULE_MAX_BYTES: int = 48
+ORACLE_ACTION_MAX_BYTES: int = 64
+ORACLE_CLIENT_IDENTIFIER_MAX_BYTES: int = 64
+ORACLE_ECID_MAX_BYTES: int = 64
+
+
+def truncate_utf8_bytes(value: str, max_bytes: int) -> str:
+    """Truncate a string to at most max_bytes in UTF-8 without splitting multi-byte codepoints.
+
+    Args:
+        value: Input string to truncate.
+        max_bytes: Maximum UTF-8 byte length allowed.
+
+    Returns:
+        UTF-8 safe truncated string.
+    """
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def apply_oracle_session_trace_attributes(
+    connection: Any,
+    *,
+    module: "str | None" = None,
+    action: "str | None" = None,
+    client_identifier: "str | None" = None,
+    econtext_id: "str | None" = None,
+    ecid: "str | None" = None,
+) -> None:
+    """Set Oracle end-to-end tracing attributes on connection for zero-RTT OALL8 piggybacking.
+
+    Args:
+        connection: Oracle sync or async connection object.
+        module: Optional explicit V$SESSION.MODULE value (truncated to 48 UTF-8 bytes).
+        action: Optional explicit V$SESSION.ACTION value (truncated to 64 UTF-8 bytes).
+        client_identifier: Optional explicit V$SESSION.CLIENT_IDENTIFIER value (truncated to 64 UTF-8 bytes).
+        econtext_id: Optional explicit V$SESSION.ECID value (truncated to 64 UTF-8 bytes).
+        ecid: Optional alias for ``econtext_id``.
+    """
+    ctx = SQLCommenterContext.get() or {}
+    resolved_module = (
+        module if module is not None else (ctx.get("module") or ctx.get("framework") or ctx.get("controller"))
+    )
+    resolved_action = action if action is not None else (ctx.get("action") or ctx.get("route"))
+    resolved_client_id = (
+        client_identifier
+        if client_identifier is not None
+        else (CorrelationContext.get() or ctx.get("correlation_id") or ctx.get("client_identifier"))
+    )
+    resolved_ecid = econtext_id if econtext_id is not None else ecid
+    if resolved_ecid is None:
+        trace_id, span_id = get_trace_context()
+        if trace_id and span_id:
+            resolved_ecid = f"00-{trace_id}-{span_id}-01"
+        elif trace_id:
+            resolved_ecid = trace_id
+        else:
+            resolved_ecid = ctx.get("traceparent") or ctx.get("econtext_id") or ctx.get("ecid")
+
+    if resolved_module is not None:
+        with contextlib.suppress(Exception):
+            connection.module = truncate_utf8_bytes(resolved_module, ORACLE_MODULE_MAX_BYTES)
+    if resolved_action is not None:
+        with contextlib.suppress(Exception):
+            connection.action = truncate_utf8_bytes(resolved_action, ORACLE_ACTION_MAX_BYTES)
+    if resolved_client_id is not None:
+        with contextlib.suppress(Exception):
+            connection.client_identifier = truncate_utf8_bytes(resolved_client_id, ORACLE_CLIENT_IDENTIFIER_MAX_BYTES)
+    if resolved_ecid is not None:
+        truncated_ecid = truncate_utf8_bytes(resolved_ecid, ORACLE_ECID_MAX_BYTES)
+        with contextlib.suppress(Exception):
+            try:
+                connection.econtext_id = truncated_ecid
+            except AttributeError:
+                connection.ecid = truncated_ecid
+
+
 def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
@@ -1188,6 +1277,7 @@ def apply_driver_features(
     session_hook = features.get("session_context_hook")
     if isinstance(session_hook, Mapping):
         features["session_context_hook"] = OracleSessionContextConfig(**session_hook)
+    features.setdefault("enable_session_tracing", False)
     return statement_config, features
 
 

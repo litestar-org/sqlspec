@@ -8,7 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 from sqlspec.observability._common import compute_sql_hash, get_trace_context, redact_sql_literals, resolve_db_system
 from sqlspec.observability._config import LoggingConfig, ObservabilityConfig, StatementObserver
 from sqlspec.observability._dispatcher import LifecycleDispatcher, LifecycleHook
-from sqlspec.observability._observer import create_event, create_statement_observer
+from sqlspec.observability._observer import StatementEvent, create_event, create_statement_observer
 from sqlspec.observability._spans import SpanManager
 from sqlspec.utils.correlation import CorrelationContext
 from sqlspec.utils.logging import get_logger
@@ -348,37 +348,31 @@ class ObservabilityRuntime:
     def emit_error(self, exception: Exception, **extras: Any) -> None:
         self.emit_error_sync(exception, **extras)
 
-    def emit_statement_event(
+    def create_statement_event(
         self,
         *,
         sql: str,
         parameters: Any,
         driver: str,
         operation: str,
-        execution_mode: str | None,
-        is_many: bool,
-        is_script: bool,
-        rows_affected: int | None,
-        duration_s: float,
-        storage_backend: str | None,
+        execution_mode: str | None = None,
+        is_many: bool = False,
+        is_script: bool = False,
+        rows_affected: int | None = None,
+        duration_s: float = 0.0,
+        storage_backend: str | None = None,
         started_at: float | None = None,
         precomputed_sql_hash: str | None = None,
         transaction_state: str | None = None,
         prepared_statement: bool | None = None,
-        is_error: bool = False,
-    ) -> None:
-        """Emit a statement event to all registered observers."""
-
-        if not self._statement_observers:
-            return
+        sampled: bool = True,
+        profile: dict[str, Any] | None = None,
+        script_ordinal: int | None = None,
+        script_statement_index: int | None = None,
+        script_statement_count: int | None = None,
+    ) -> StatementEvent:
+        """Create a redacted and enriched StatementEvent instance."""
         correlation_id = CorrelationContext.get()
-        sampled = True
-        if self.config.sampling is not None:
-            sampled = self.config.sampling.should_sample(
-                correlation_id=correlation_id, duration_ms=duration_s * 1000, is_error=is_error
-            )
-            if not sampled:
-                return
         sanitized_sql = self._redact_sql(sql)
         sanitized_params = self._redact_parameters(parameters)
         logging_config = self.config.logging
@@ -401,7 +395,7 @@ class ObservabilityRuntime:
         resolved_started_at = (
             started_at if (started_at is not None and started_at >= _MIN_WALL_CLOCK_EPOCH_S) else (time() - duration_s)
         )
-        event = create_event(
+        return create_event(
             sql=sanitized_sql,
             parameters=sanitized_params,
             driver=driver,
@@ -425,6 +419,67 @@ class ObservabilityRuntime:
             trace_id=trace_id,
             span_id=span_id,
             sampled=sampled,
+            profile=profile,
+            script_ordinal=script_ordinal,
+            script_statement_index=script_statement_index,
+            script_statement_count=script_statement_count,
+        )
+
+    def emit_statement_event(
+        self,
+        *,
+        sql: str,
+        parameters: Any,
+        driver: str,
+        operation: str,
+        execution_mode: str | None,
+        is_many: bool,
+        is_script: bool,
+        rows_affected: int | None,
+        duration_s: float,
+        storage_backend: str | None,
+        started_at: float | None = None,
+        precomputed_sql_hash: str | None = None,
+        transaction_state: str | None = None,
+        prepared_statement: bool | None = None,
+        is_error: bool = False,
+        profile: dict[str, Any] | None = None,
+        script_ordinal: int | None = None,
+        script_statement_index: int | None = None,
+        script_statement_count: int | None = None,
+    ) -> None:
+        """Emit a statement event to all registered observers."""
+
+        if not self._statement_observers:
+            return
+        correlation_id = CorrelationContext.get()
+        sampled = True
+        if self.config.sampling is not None:
+            sampled = self.config.sampling.should_sample(
+                correlation_id=correlation_id, duration_ms=duration_s * 1000, is_error=is_error
+            )
+            if not sampled:
+                return
+        event = self.create_statement_event(
+            sql=sql,
+            parameters=parameters,
+            driver=driver,
+            operation=operation,
+            execution_mode=execution_mode,
+            is_many=is_many,
+            is_script=is_script,
+            rows_affected=rows_affected,
+            duration_s=duration_s,
+            storage_backend=storage_backend,
+            started_at=started_at,
+            precomputed_sql_hash=precomputed_sql_hash,
+            transaction_state=transaction_state,
+            prepared_statement=prepared_statement,
+            sampled=sampled,
+            profile=profile,
+            script_ordinal=script_ordinal,
+            script_statement_index=script_statement_index,
+            script_statement_count=script_statement_count,
         )
         for observer in self._statement_observers:
             try:

@@ -5,12 +5,15 @@ database dialects, parameter style conversion, and transaction management.
 """
 
 import contextlib
+from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, cast, final
 
 from sqlspec.adapters.adbc._typing import AdbcCursor, AdbcNativeError, AdbcSessionContext
 from sqlspec.adapters.adbc.core import (
     apply_driver_features,
     collect_rows,
+    configure_adbc_duckdb_profiling,
     create_mapped_exception,
     detect_dialect,
     driver_profile,
@@ -31,6 +34,11 @@ from sqlspec.adapters.adbc.core import (
     resolve_rowcount,
 )
 from sqlspec.adapters.adbc.data_dictionary import AdbcDataDictionary
+from sqlspec.adapters.duckdb.core import (
+    cleanup_duckdb_profile_path,
+    create_duckdb_profile_path,
+    read_duckdb_profile_json,
+)
 from sqlspec.core import (
     SQL,
     StatementConfig,
@@ -239,6 +247,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             Execution result with data or row count
         """
         sql, prepared_parameters = self._compiled_sql(statement, self.statement_config)
+        self._ensure_statement_profiling()
 
         try:
             execute_parameters = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
@@ -252,6 +261,7 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         if is_select_like:
             arrow_table = cursor.fetch_arrow_table()
+            self._capture_statement_profile(sql)
             raw_column_names = list(arrow_table.column_names)
             column_names = normalize_column_names(raw_column_names, self.driver_features)
             if column_names != raw_column_names and hasattr(arrow_table, "rename_columns"):
@@ -270,6 +280,7 @@ class AdbcDriver(SyncDriverAdapterBase):
             )
 
         row_count = self._resolve_count_result_rowcount(cursor, fallback=resolve_rowcount(cursor))
+        self._capture_statement_profile(sql)
         return self.create_execution_result(cursor, rowcount_override=row_count)
 
     def dispatch_execute_many(self, cursor: "AdbcRawCursor", statement: SQL) -> "ExecutionResult":
@@ -338,28 +349,57 @@ class AdbcDriver(SyncDriverAdapterBase):
 
         successful_count = 0
         last_rowcount = 0
+        total_statements = len(statements)
+        runtime = self._observability
+        has_observers = runtime is not None and runtime.has_statement_observers
+        profiling_enabled = self._dialect_name == "duckdb" and bool(
+            self.driver_features.get("enable_statement_profiling", False)
+        )
+        if profiling_enabled:
+            self._ensure_statement_profiling()
         try:
-            for stmt in statements:
+            for idx, stmt in enumerate(statements):
+                stmt_started = perf_counter() if has_observers else 0.0
+                stmt_params: Any = ()
                 if prepared_parameters and (
-                    len(statements) == 1 or any(marker in stmt for marker in ("?", "$", "%", "@", ":"))
+                    total_statements == 1 or any(marker in stmt for marker in ("?", "$", "%", "@", ":"))
                 ):
-                    postgres_compatible_params = normalize_postgres_empty_parameters(
-                        self._dialect_name, prepared_parameters
-                    )
-                    cursor.execute(stmt, parameters=postgres_compatible_params)
+                    stmt_params = normalize_postgres_empty_parameters(self._dialect_name, prepared_parameters)
+                    cursor.execute(stmt, parameters=stmt_params)
                 else:
                     cursor.execute(stmt)
                 successful_count += 1
-                last_rowcount = self._resolve_count_result_rowcount(
+                stmt_rowcount = self._resolve_count_result_rowcount(
                     cursor, fallback=normalize_script_rowcount(last_rowcount, cursor)
                 )
+                last_rowcount = stmt_rowcount
+                stmt_profile = self._capture_statement_profile(stmt) if profiling_enabled else None
+                if has_observers:
+                    stmt_duration = perf_counter() - stmt_started
+                    single_stmt = self._sub_statement(stmt, stmt_params)
+                    try:
+                        stmt_operation = single_stmt.operation_type
+                    finally:
+                        self._release_pooled_statement(single_stmt)
+                    self._emit_script_statement_event(
+                        sql=stmt,
+                        parameters=stmt_params,
+                        operation=stmt_operation,
+                        rows_affected=stmt_rowcount,
+                        duration_s=stmt_duration,
+                        started_at=stmt_started,
+                        profile=stmt_profile,
+                        script_ordinal=idx,
+                        script_statement_count=total_statements,
+                    )
         except Exception:
             handle_postgres_rollback(self._dialect_name, cursor, logger)
             raise
 
+        self._pending_statement_profile = None
         return self.create_execution_result(
             cursor,
-            statement_count=len(statements),
+            statement_count=total_statements,
             successful_statements=successful_count,
             rowcount_override=last_rowcount,
             is_script_result=True,
@@ -825,6 +865,33 @@ class AdbcDriver(SyncDriverAdapterBase):
 
     def _resolve_column_names(self, description: Any) -> list[str]:
         return resolve_column_names(description, self._column_name_cache, self.driver_features)
+
+    def _ensure_statement_profiling(self) -> "Path | None":
+        if self._dialect_name != "duckdb" or not bool(self.driver_features.get("enable_statement_profiling", False)):
+            return None
+        raw_path = self.driver_features.get("_duckdb_profile_path")
+        if isinstance(raw_path, Path):
+            return raw_path
+        if isinstance(raw_path, str) and raw_path:
+            return Path(raw_path)
+        profile_path = create_duckdb_profile_path()
+        try:
+            configure_adbc_duckdb_profiling(self.connection, profile_path)
+        except Exception:
+            cleanup_duckdb_profile_path(profile_path)
+            return None
+        self.driver_features["_duckdb_profile_path"] = str(profile_path)
+        return profile_path
+
+    def _capture_statement_profile(self, executed_sql: str) -> "dict[str, Any] | None":
+        if self._dialect_name != "duckdb" or not bool(self.driver_features.get("enable_statement_profiling", False)):
+            return None
+        profile_path = self._ensure_statement_profiling()
+        if profile_path is None:
+            return None
+        profile = read_duckdb_profile_json(profile_path, executed_sql)
+        self._pending_statement_profile = profile
+        return profile
 
     @staticmethod
     def _resolve_count_result_rowcount(cursor: "AdbcRawCursor", *, fallback: int) -> int:

@@ -9,11 +9,17 @@ from typing import TYPE_CHECKING, Any, Final, cast, final
 
 from sqlspec.adapters.duckdb._typing import DuckDBConnection
 from sqlspec.adapters.duckdb._typing import duckdb_module as duckdb
+from sqlspec.adapters.duckdb.core import (
+    cleanup_duckdb_profile_path,
+    configure_duckdb_statement_profiling,
+    create_duckdb_profile_path,
+)
 from sqlspec.utils.logging import POOL_LOGGER_NAME, get_logger, log_with_context
 from sqlspec.utils.uuids import uuid4
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
+    from pathlib import Path
 
 __all__ = ("DuckDBConnectionPool",)
 
@@ -72,6 +78,7 @@ class DuckDBConnectionPool:
     __slots__ = (
         "_connection_config",
         "_connection_registry",
+        "_enable_statement_profiling",
         "_extensions",
         "_generation",
         "_health_check_interval",
@@ -80,6 +87,7 @@ class DuckDBConnectionPool:
         "_lock",
         "_on_connection_create",
         "_pool_id",
+        "_profile_paths",
         "_recycle",
         "_secrets",
         "_thread_local",
@@ -93,6 +101,7 @@ class DuckDBConnectionPool:
         extensions: "list[dict[str, Any]] | None" = None,
         secrets: "list[dict[str, Any]] | None" = None,
         on_connection_create: "Callable[[DuckDBConnection], DuckDBConnection | None] | None" = None,
+        enable_statement_profiling: bool = False,
     ) -> None:
         """Initialize the thread-local connection manager.
 
@@ -103,6 +112,7 @@ class DuckDBConnectionPool:
             extensions: List of extensions to install/load
             secrets: List of secrets to create
             on_connection_create: Callback executed when connection is created
+            enable_statement_profiling: Whether to enable per-connection JSON statement profiling
         """
         self._connection_config = connection_config
         self._recycle = pool_recycle_seconds
@@ -110,6 +120,8 @@ class DuckDBConnectionPool:
         self._extensions = extensions or []
         self._secrets = secrets or []
         self._on_connection_create = on_connection_create
+        self._enable_statement_profiling = enable_statement_profiling
+        self._profile_paths: dict[int, Path] = {}
         self._installed_signatures: set[tuple[Any, ...]] = set()
         self._thread_local = threading.local()
         self._connection_registry: set[DuckDBConnection] = set()
@@ -229,11 +241,18 @@ class DuckDBConnectionPool:
             modified = self._on_connection_create(connection)
             if modified is not None:
                 connection = modified
+        profile_path: Path | None = None
+        if self._enable_statement_profiling:
+            profile_path = create_duckdb_profile_path()
+            configure_duckdb_statement_profiling(connection, profile_path)
+            with self._lock:
+                self._profile_paths[id(connection)] = profile_path
         storage_protocols.update(connection.list_filesystems())
         if record_thread_state:
             self._thread_local.storage_extensions = frozenset(loaded_extensions)
             self._thread_local.storage_secrets = tuple(created_secrets)
             self._thread_local.storage_protocols = frozenset(storage_protocols)
+            self._thread_local.profile_path = profile_path
         return connection
 
     @contextmanager
@@ -280,10 +299,14 @@ class DuckDBConnectionPool:
         with self._lock:
             orphaned = list(self._connection_registry)
             self._connection_registry.clear()
+            profile_paths = list(self._profile_paths.values())
+            self._profile_paths.clear()
             self._generation += 1
         for connection in orphaned:
             with suppress(Exception):
                 connection.close()
+        for profile_path in profile_paths:
+            cleanup_duckdb_profile_path(profile_path)
 
     def size(self) -> int:
         """Get current pool size (always 1 for thread-local)."""
@@ -322,12 +345,20 @@ class DuckDBConnectionPool:
         """Return storage setup completed for this thread's current connection."""
         state = self._thread_local.__dict__
         if state.get("connection") is not connection:
+            with self._lock:
+                profile_path = self._profile_paths.get(id(connection))
+            if profile_path is not None:
+                return {"_duckdb_profile_path": str(profile_path)}
             return {}
-        return {
+        settings: dict[str, Any] = {
             "_duckdb_storage_extensions": state.get("storage_extensions", frozenset()),
             "_duckdb_storage_secrets": state.get("storage_secrets", ()),
             "_duckdb_storage_protocols": state.get("storage_protocols", frozenset()),
         }
+        profile_path = state.get("profile_path")
+        if profile_path is not None:
+            settings["_duckdb_profile_path"] = str(profile_path)
+        return settings
 
     def _install_extension_once(
         self,
@@ -416,8 +447,10 @@ class DuckDBConnectionPool:
         """Close a pool-owned connection and drop it from the shutdown registry."""
         with self._lock:
             self._connection_registry.discard(connection)
+            profile_path = self._profile_paths.pop(id(connection), None)
         with suppress(Exception):
             connection.close()
+        cleanup_duckdb_profile_path(profile_path)
 
     def _close_thread_connection(self) -> None:
         """Close the connection for the current thread."""
@@ -425,6 +458,7 @@ class DuckDBConnectionPool:
         thread_state.pop("storage_extensions", None)
         thread_state.pop("storage_secrets", None)
         thread_state.pop("storage_protocols", None)
+        thread_state.pop("profile_path", None)
         if "connection" in thread_state:
             self._retire_connection(cast("DuckDBConnection", self._thread_local.connection))
             del self._thread_local.connection

@@ -53,7 +53,7 @@ from sqlspec.core.query_modifiers import (
     safe_modify_with_cte,
     wrap_as_subquery,
 )
-from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer
+from sqlspec.core.sqlcommenter import create_sqlcommenter_statement_transformer, format_wire_sqlcomment
 from sqlspec.observability import resolve_db_system
 from sqlspec.typing import Empty, EmptyEnum
 from sqlspec.utils.logging import get_logger
@@ -1398,6 +1398,8 @@ class SQL:
             apply_wrap_types=state.applied_wrap_types,
         )
         compiled_sql = state.compiled_sql
+        if self._statement_config.enable_sqlcommenter:
+            compiled_sql = format_wire_sqlcomment(compiled_sql, self._statement_config)
         output_transformer = self._statement_config.output_transformer
         if output_transformer:
             compiled_sql, rebound_params = output_transformer(compiled_sql, rebound_params)
@@ -1815,7 +1817,7 @@ class StatementConfig:
         self._fingerprint_cache: str | None = None
         self._hash_cache: int | None = None
         self._is_frozen = False
-        self._has_transformers = bool(self.statement_transformers)
+        self._has_transformers = bool(self._user_statement_transformers)
         self._has_output_transformer = self.output_transformer is not None
 
     def __hash__(self) -> int:
