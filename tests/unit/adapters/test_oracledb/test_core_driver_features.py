@@ -2,6 +2,10 @@
 """Unit tests for OracleDB ``apply_driver_features`` defaults."""
 
 import inspect
+import io
+import shutil
+import zipfile
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -9,9 +13,21 @@ import pytest
 import sqlspec.adapters.oracledb._typing as oracle_typing
 from sqlspec.adapters.oracledb import config
 from sqlspec.adapters.oracledb._typing import OracleAsyncCursor
-from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleSyncConfig
-from sqlspec.adapters.oracledb.core import apply_driver_features
+from sqlspec.adapters.oracledb.config import OracleAsyncConfig, OracleDriverFeatures, OracleSyncConfig
+from sqlspec.adapters.oracledb.core import (
+    OracleEndpoint,
+    OracleTopologyConfig,
+    apply_driver_features,
+    build_duality_etag_update_sql,
+    build_tns_description,
+    extract_duality_etag,
+    extract_duality_view_etag,
+    extract_oracle_wallet_zip,
+    inject_duality_view_etag,
+    sanitize_oracle_text_query,
+)
 from sqlspec.core import StatementConfig
+from sqlspec.exceptions import ImproperConfigurationError
 from sqlspec.typing import NUMPY_INSTALLED
 
 if TYPE_CHECKING:
@@ -195,3 +211,86 @@ def test_typing_exports_oracle_sync_cursor_still_importable() -> None:
     from sqlspec.adapters.oracledb._typing import OracleSyncCursor
 
     assert OracleSyncCursor is oracle_typing.OracleSyncCursor
+
+
+def test_apply_driver_features_rejects_unknown_keys() -> None:
+    assert OracleDriverFeatures is not None
+    with pytest.raises(ImproperConfigurationError, match="Unknown Oracle driver_features"):
+        apply_driver_features(StatementConfig(), {"unknown_oracle_knob": True})
+
+
+def test_build_tns_description_multi_endpoint_and_rejects_injection() -> None:
+    topology = OracleTopologyConfig(
+        endpoints=(
+            OracleEndpoint(host="rac1.example.com", port=1521, protocol="tcp"),
+            OracleEndpoint(host="rac2.example.com", port=2484, protocol="tcps"),
+        ),
+        service_name="orcl_high.adb.oraclecloud.com",
+        load_balance=True,
+        failover=True,
+        retry_count=3,
+        retry_delay=2,
+        transport_connect_timeout=5,
+        sdu=65535,
+        source_route=True,
+        server="DEDICATED",
+        failover_mode_type="SELECT",
+        failover_mode_method="BASIC",
+    )
+    dsn = build_tns_description(topology)
+    assert "(HOST=rac1.example.com)(PORT=1521)" in dsn
+    assert "(PROTOCOL=TCPS)(HOST=rac2.example.com)(PORT=2484)" in dsn
+    assert "(SERVICE_NAME=orcl_high.adb.oraclecloud.com)" in dsn
+    assert "(LOAD_BALANCE=ON)" in dsn
+    assert "(FAILOVER=ON)" in dsn
+    assert "(RETRY_COUNT=3)" in dsn
+    assert "(RETRY_DELAY=2)" in dsn
+    assert "(TRANSPORT_CONNECT_TIMEOUT=5)" in dsn
+    assert "(SDU=65535)" in dsn
+    assert "(SOURCE_ROUTE=ON)" in dsn
+    assert "(SERVER=DEDICATED)" in dsn
+    assert "(FAILOVER_MODE=(TYPE=SELECT)(METHOD=BASIC))" in dsn
+
+    with pytest.raises(ImproperConfigurationError):
+        build_tns_description(
+            OracleTopologyConfig(endpoints=(OracleEndpoint(host="bad)host", port=1521),), service_name="svc")
+        )
+
+
+def test_extract_oracle_wallet_zip_validates_entries_and_permissions() -> None:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("ewallet.pem", b"pem-content")
+        zf.writestr("tnsnames.ora", b"orcl_high = (DESCRIPTION=...)")
+    extracted_dir = extract_oracle_wallet_zip(buf.getvalue())
+    try:
+        wallet_path = Path(extracted_dir)
+        assert (wallet_path / "ewallet.pem").read_bytes() == b"pem-content"
+        assert (wallet_path / "tnsnames.ora").exists()
+    finally:
+        shutil.rmtree(extracted_dir, ignore_errors=True)
+
+    slip_buf = io.BytesIO()
+    with zipfile.ZipFile(slip_buf, "w") as zf:
+        zf.writestr("../evil.pem", b"pwn")
+    with pytest.raises(ImproperConfigurationError, match="Unsafe path in Oracle wallet archive"):
+        extract_oracle_wallet_zip(slip_buf.getvalue())
+
+
+def test_sanitize_oracle_text_query_escapes_reserved_words_and_syntax() -> None:
+    sanitized = sanitize_oracle_text_query("NOT (foo & bar) OR NEAR")
+    assert sanitized == "{NOT} ACCUM {foo} ACCUM {bar} ACCUM {OR} ACCUM {NEAR}"
+    assert sanitize_oracle_text_query("   !@#$%^&*()   ") == ""
+
+
+def test_duality_view_etag_helpers_extract_inject_and_build_update_sql() -> None:
+    doc = {"_metadata": {"etag": "etag-abc-123"}, "id": 42, "name": "Order"}
+    assert extract_duality_etag(doc) == "etag-abc-123"
+    assert extract_duality_view_etag(doc) == "etag-abc-123"
+    assert extract_duality_etag({"id": 42}) is None
+
+    injected = inject_duality_view_etag({"id": 42}, "etag-999")
+    assert injected["_metadata"]["etag"] == "etag-999"
+
+    sql = build_duality_etag_update_sql("orders_dv")
+    assert "JSON_VALUE(DATA, '$._metadata.etag') = :expected_etag" in sql

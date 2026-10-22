@@ -8,7 +8,13 @@ import pytest
 from sqlglot import exp
 
 from sqlspec import sql
-from sqlspec.builder import Column, VectorDistance
+from sqlspec.builder import (
+    Column,
+    VectorDistance,
+    build_oracle_hnsw_subquery,
+    build_oracle_hybrid_rrf_query,
+    build_oracle_hybrid_rrf_sql,
+)
 from sqlspec.builder._vector_distance import is_vector_distance_expression, vector_distance_metric
 
 
@@ -567,3 +573,43 @@ def test_distance_with_null_handling() -> None:
 
     assert "IS NULL" in stmt.sql
     assert "<->" in stmt.sql
+
+
+def test_oracle_select_approx_limit_and_hybrid_rrf_builders() -> None:
+    dist_col = Column("embedding").vector_distance([0.1, 0.2], metric="cosine")
+    query = (
+        sql
+        .select("id", "content_text", dist_col.alias("dist"))
+        .from_("docs")
+        .order_by("dist")
+        .approx_limit(10, target_accuracy=95)
+    )
+    stmt = query.build(dialect="oracle")
+    assert "FETCH APPROX FIRST 10 ROWS ONLY WITH TARGET ACCURACY 95" in stmt.sql
+
+    hnsw_sql = build_oracle_hnsw_subquery(
+        "docs",
+        vector_column="embedding",
+        query_vector_bind="query_vec",
+        metric="COSINE",
+        top_k_bind="vec_top_k",
+        where_clause="app_name = :app_name",
+        target_accuracy=90,
+    )
+    assert "VECTOR_DISTANCE(embedding, :query_vec, COSINE)" in hnsw_sql
+    assert "FETCH APPROX FIRST :vec_top_k ROWS ONLY WITH TARGET ACCURACY 90" in hnsw_sql
+
+    rrf_sql = build_oracle_hybrid_rrf_sql(
+        "docs",
+        id_column="id",
+        text_column="content_text",
+        vector_column="embedding",
+        select_columns=("id", "content_text"),
+        where_clause="app_name = :app_name",
+    )
+    assert "CONTAINS(content_text, :fts_query, 1) > 0" in rrf_sql
+    assert "FULL OUTER JOIN fts_candidates" in rrf_sql
+    assert "ORDER BY rrf.rrf_score DESC" in rrf_sql
+
+    rrf_stmt = build_oracle_hybrid_rrf_query("docs", vector_column="embedding", text_column="content_text")
+    assert "rrf_score" in rrf_stmt

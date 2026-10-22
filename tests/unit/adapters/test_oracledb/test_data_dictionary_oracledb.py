@@ -481,3 +481,40 @@ async def test_async_oracle_replacement_methods_execute_domain_queries() -> None
     statement_text, kwargs = async_driver_stub.select_value_calls[0]
     assert "all_objects" in statement_text.lower()
     assert kwargs == {"schema_name": "APP", "object_name": None}
+
+
+def test_oracle_26ai_sync_data_dictionary_introspection_methods() -> None:
+    data_dictionary = OracledbSyncDataDictionary()
+    sync_driver_stub = _RecordingSyncOracleDriver()
+    sync_driver = cast("OracleSyncDriver", sync_driver_stub)
+
+    vpool = data_dictionary.get_vector_memory_pool(sync_driver)
+    assert isinstance(vpool, list)
+
+    has_ai = data_dictionary.has_cloud_ai(sync_driver)
+    assert has_ai is True
+
+    apex = data_dictionary.get_apex_release(sync_driver)
+    assert isinstance(apex, dict)
+
+    dviews = data_dictionary.get_json_duality_views(sync_driver, schema="app")
+    assert isinstance(dviews, list)
+
+
+@pytest.mark.anyio
+async def test_oracle_26ai_async_data_dictionary_introspection_methods() -> None:
+    data_dictionary = OracledbAsyncDataDictionary()
+    async_driver_stub = _RecordingAsyncOracleDriver()
+    async_driver = cast("OracleAsyncDriver", async_driver_stub)
+
+    vpool = await data_dictionary.get_vector_memory_pool(async_driver)
+    assert isinstance(vpool, list)
+
+    has_ai = await data_dictionary.has_cloud_ai(async_driver)
+    assert has_ai is True
+
+    apex = await data_dictionary.get_apex_release(async_driver)
+    assert isinstance(apex, dict)
+
+    dviews = await data_dictionary.get_json_duality_views(async_driver, schema="app")
+    assert isinstance(dviews, list)

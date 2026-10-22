@@ -1,19 +1,21 @@
 """Unit tests for the Oracle EXPLAIN PLAN retrieval flow."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sqlspec.adapters.oracledb.driver import (
     PLAN_STATEMENT_ID_MAX_LENGTH,
+    OracleAsyncDriver,
     OracleSyncDriver,
+    _managed_explain_options,
     _managed_explain_statement,
     _new_plan_statement_id,
     _tagged_explain_plan_sql,
 )
-from sqlspec.builder import Explain
+from sqlspec.builder import Explain, build_oracle_display_cursor
 from sqlspec.core import SQL, StatementConfig
-from sqlspec.exceptions import SQLSpecError
+from sqlspec.exceptions import SQLBuilderError, SQLSpecError
 
 
 def test_managed_explain_plan_yields_the_explained_statement() -> None:
@@ -74,3 +76,54 @@ def test_tagged_sql_preserves_the_explained_statement() -> None:
     tagged = _tagged_explain_plan_sql("sqlspec_abc123", "SELECT * FROM t WHERE a = :1")
 
     assert tagged == "EXPLAIN PLAN SET STATEMENT_ID = 'sqlspec_abc123' FOR SELECT * FROM t WHERE a = :1"
+
+
+def test_oracle_explain_builder_display_cursor_and_xplan_format() -> None:
+    stmt = (
+        Explain("SELECT * FROM t WHERE a = :1", dialect="oracle")
+        .display_cursor()
+        .xplan_format("ALLSTATS LAST +PEEKED_BINDS")
+        .build()
+    )
+    display_cursor, xplan_format = _managed_explain_options(stmt)
+    assert display_cursor is True
+    assert xplan_format == "ALLSTATS LAST +PEEKED_BINDS"
+
+    sql_cursor = build_oracle_display_cursor(format="TYPICAL +PREDICATE +NOTE")
+    assert (
+        sql_cursor
+        == "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'TYPICAL +PREDICATE +NOTE'))"
+    )
+
+    with pytest.raises(SQLBuilderError):
+        Explain("SELECT 1 FROM dual", dialect="oracle").xplan_format("BAD'FMT")
+
+
+def test_oracle_explain_plan_custom_xplan_format_and_display_cursor_sync() -> None:
+    driver = OracleSyncDriver(MagicMock())
+    cursor = MagicMock()
+    cursor.description = [("PLAN_TABLE_OUTPUT", None, None, None, None, None, None)]
+    cursor.fetchall.return_value = [("Plan hash value: 123",)]
+
+    driver._dispatch_explain_plan(
+        cursor, "SELECT 1 FROM dual", {}, display_cursor=True, xplan_format="ALLSTATS LAST +PEEKED_BINDS"
+    )
+    executed_sqls = [call.args[0] for call in cursor.execute.call_args_list]
+    assert executed_sqls[0] == "SELECT 1 FROM dual"
+    assert "DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST +PEEKED_BINDS')" in executed_sqls[1]
+
+
+@pytest.mark.anyio
+async def test_oracle_explain_plan_custom_xplan_format_and_display_cursor_async() -> None:
+    driver = OracleAsyncDriver(MagicMock())
+    cursor = MagicMock()
+    cursor.description = [("PLAN_TABLE_OUTPUT", None, None, None, None, None, None)]
+    cursor.execute = AsyncMock()
+    cursor.fetchall = AsyncMock(return_value=[("Plan hash value: 123",)])
+
+    await driver._dispatch_explain_plan(
+        cursor, "SELECT 1 FROM dual", {}, display_cursor=True, xplan_format="ALLSTATS LAST +PEEKED_BINDS"
+    )
+    executed_sqls = [call.args[0] for call in cursor.execute.call_args_list]
+    assert executed_sqls[0] == "SELECT 1 FROM dual"
+    assert "DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST +PEEKED_BINDS')" in executed_sqls[1]

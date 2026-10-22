@@ -29,6 +29,7 @@ from sqlspec.adapters.oracledb.core import (
     coerce_large_parameters_sync,
     coerce_many_parameters_async,
     coerce_many_parameters_sync,
+    coerce_oracle_df_to_arrow_table,
     collect_async_rows,
     collect_sync_rows,
     connection_is_thin,
@@ -45,6 +46,7 @@ from sqlspec.adapters.oracledb.data_dictionary import (
     OracledbAsyncDataDictionary,
     OracledbSyncDataDictionary,
     OracleVersionCache,
+    resolve_oracle_connection_major,
 )
 from sqlspec.core import (
     SQL,
@@ -56,7 +58,12 @@ from sqlspec.core import (
     get_cache_config,
     register_driver_profile,
 )
-from sqlspec.core.explain import ORACLE_EXPLAIN_PREFIX, ORACLE_MANAGED_EXPLAIN_META_KEY
+from sqlspec.core.explain import (
+    ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY,
+    ORACLE_EXPLAIN_PREFIX,
+    ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY,
+    ORACLE_MANAGED_EXPLAIN_META_KEY,
+)
 from sqlspec.driver import (
     AsyncDriverAdapterBase,
     AsyncRowStream,
@@ -394,7 +401,10 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
 
         explained_sql = _managed_explain_statement(statement, sql)
         if explained_sql is not None:
-            return self._dispatch_explain_plan(cursor, explained_sql, prepared_parameters)
+            display_cursor, xplan_format = _managed_explain_options(statement)
+            return self._dispatch_explain_plan(
+                cursor, explained_sql, prepared_parameters, display_cursor=display_cursor, xplan_format=xplan_format
+            )
 
         cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
@@ -722,7 +732,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        arrow_table = pa.table(oracle_df)
+        arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
         column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
@@ -881,27 +891,63 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
     def _resolve_row_metadata(self, description: Any) -> "tuple[list[str], bool]":
         return resolve_row_metadata(description, self.driver_features, self._row_metadata_cache)
 
-    def _dispatch_explain_plan(self, cursor: Any, explained_sql: str, parameters: Any) -> "ExecutionResult":
+    def _dispatch_explain_plan(
+        self,
+        cursor: Any,
+        explained_sql: str,
+        parameters: Any,
+        *,
+        display_cursor: bool = False,
+        xplan_format: str = "TYPICAL",
+    ) -> "ExecutionResult":
         """Request a plan, read it back, and release the plan table rows.
 
         Oracle writes the plan to a table instead of returning it, so the plan is
         tagged with a generated statement id, formatted through ``DBMS_XPLAN``, and
         deleted again. All three statements run in the caller's transaction, so the
-        plan is read before a rollback can discard it.
+        plan is read before a rollback can discard it. When ``display_cursor`` is
+        enabled, the statement is executed first and formatted through
+        ``DBMS_XPLAN.DISPLAY_CURSOR``.
 
         Args:
             cursor: Oracle cursor object.
             explained_sql: Statement whose plan is wanted.
             parameters: Bind values for the explained statement.
+            display_cursor: Whether to inspect actual cursor execution statistics via ``DBMS_XPLAN.DISPLAY_CURSOR``.
+            xplan_format: ``DBMS_XPLAN`` format string.
 
         Returns:
             Execution result carrying the formatted plan rows.
         """
+        if display_cursor:
+            cursor.execute(explained_sql, parameters or {}, **build_fetch_kwargs(self.driver_features))
+            if cursor.description is not None:
+                cursor.fetchall()
+            cursor.execute(_format_display_cursor_sql(xplan_format), {}, **build_fetch_kwargs(self.driver_features))
+            fetched_data = cursor.fetchall()
+            column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+            data, column_names = collect_sync_rows(
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
+            )
+            return self.create_execution_result(
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="tuple",
+            )
+
         statement_id = _new_plan_statement_id()
         cursor.execute(_tagged_explain_plan_sql(statement_id, explained_sql), parameters or {})
+        display_sql = PLAN_DISPLAY_SQL if xplan_format == "TYPICAL" else _format_plan_display_sql(xplan_format)
 
         try:
-            cursor.execute(PLAN_DISPLAY_SQL, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features))
+            cursor.execute(display_sql, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features))
             fetched_data = cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
             data, column_names = collect_sync_rows(
@@ -977,7 +1023,7 @@ class OracleSyncDriver(OraclePipelineMixin, SyncDriverAdapterBase):
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
         for oracle_df in oracle_dfs:
-            batch_table = pa.table(oracle_df)
+            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
             column_names = normalize_column_names(batch_table.column_names, self.driver_features)
             if column_names != batch_table.column_names:
                 batch_table = batch_table.rename_columns(column_names)
@@ -1079,7 +1125,10 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
 
         explained_sql = _managed_explain_statement(statement, sql)
         if explained_sql is not None:
-            return await self._dispatch_explain_plan(cursor, explained_sql, prepared_parameters)
+            display_cursor, xplan_format = _managed_explain_options(statement)
+            return await self._dispatch_explain_plan(
+                cursor, explained_sql, prepared_parameters, display_cursor=display_cursor, xplan_format=xplan_format
+            )
 
         await cursor.execute(sql, prepared_parameters or {}, **build_fetch_kwargs(self.driver_features))
 
@@ -1412,7 +1461,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 arrow_schema=arrow_schema,
             )
 
-        arrow_table = pa.table(oracle_df)
+        arrow_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
         column_names = normalize_column_names(arrow_table.column_names, self.driver_features)
         if column_names != arrow_table.column_names:
             arrow_table = arrow_table.rename_columns(column_names)
@@ -1580,28 +1629,66 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
     def _resolve_row_metadata(self, description: Any) -> "tuple[list[str], bool]":
         return resolve_row_metadata(description, self.driver_features, self._row_metadata_cache)
 
-    async def _dispatch_explain_plan(self, cursor: Any, explained_sql: str, parameters: Any) -> "ExecutionResult":
+    async def _dispatch_explain_plan(
+        self,
+        cursor: Any,
+        explained_sql: str,
+        parameters: Any,
+        *,
+        display_cursor: bool = False,
+        xplan_format: str = "TYPICAL",
+    ) -> "ExecutionResult":
         """Request a plan, read it back, and release the plan table rows.
 
         Oracle writes the plan to a table instead of returning it, so the plan is
         tagged with a generated statement id, formatted through ``DBMS_XPLAN``, and
         deleted again. All three statements run in the caller's transaction, so the
-        plan is read before a rollback can discard it.
+        plan is read before a rollback can discard it. When ``display_cursor`` is
+        enabled, the statement is executed first and formatted through
+        ``DBMS_XPLAN.DISPLAY_CURSOR``.
 
         Args:
             cursor: Oracle cursor object.
             explained_sql: Statement whose plan is wanted.
             parameters: Bind values for the explained statement.
+            display_cursor: Whether to inspect actual cursor execution statistics via ``DBMS_XPLAN.DISPLAY_CURSOR``.
+            xplan_format: ``DBMS_XPLAN`` format string.
 
         Returns:
             Execution result carrying the formatted plan rows.
         """
+        if display_cursor:
+            await cursor.execute(explained_sql, parameters or {}, **build_fetch_kwargs(self.driver_features))
+            if cursor.description is not None:
+                await cursor.fetchall()
+            await cursor.execute(
+                _format_display_cursor_sql(xplan_format), {}, **build_fetch_kwargs(self.driver_features)
+            )
+            fetched_data = await cursor.fetchall()
+            column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
+            data, column_names = await collect_async_rows(
+                cast("list[Any] | None", fetched_data),
+                cursor.description,
+                self.driver_features,
+                column_names=column_names,
+                requires_lob_coercion=requires_lob_coercion,
+            )
+            return self.create_execution_result(
+                cursor,
+                selected_data=data,
+                column_names=column_names,
+                data_row_count=len(data),
+                is_select_result=True,
+                row_format="tuple",
+            )
+
         statement_id = _new_plan_statement_id()
         await cursor.execute(_tagged_explain_plan_sql(statement_id, explained_sql), parameters or {})
+        display_sql = PLAN_DISPLAY_SQL if xplan_format == "TYPICAL" else _format_plan_display_sql(xplan_format)
 
         try:
             await cursor.execute(
-                PLAN_DISPLAY_SQL, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features)
+                display_sql, {"statement_id": statement_id}, **build_fetch_kwargs(self.driver_features)
             )
             fetched_data = await cursor.fetchall()
             column_names, requires_lob_coercion = self._resolve_row_metadata(cursor.description)
@@ -1678,7 +1765,7 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
                 statement=sql, parameters=params, size=batch_size or 1000, **retry_kwargs
             )
         async for oracle_df in oracle_dfs:
-            batch_table = pa.table(oracle_df)
+            batch_table = coerce_oracle_df_to_arrow_table(oracle_df, pa)
             column_names = normalize_column_names(batch_table.column_names, self.driver_features)
             if column_names != batch_table.column_names:
                 batch_table = batch_table.rename_columns(column_names)
@@ -1772,6 +1859,16 @@ class OracleAsyncDriver(OraclePipelineMixin, AsyncDriverAdapterBase):
         if not connection_is_thin(self.connection):
             self._pipeline_support = False
             self._pipeline_support_reason = "thin_mode_required"
+            return False
+
+        connection_major = resolve_oracle_connection_major(self.connection, self._oracle_version_cache)
+        if connection_major is not None:
+            if connection_major >= PIPELINE_MIN_DATABASE_MAJOR:
+                self._pipeline_support = True
+                self._pipeline_support_reason = None
+                return True
+            self._pipeline_support = False
+            self._pipeline_support_reason = "database_version"
             return False
 
         version_info = await self.data_dictionary.get_version(self)
@@ -1899,6 +1996,33 @@ def _tagged_explain_plan_sql(statement_id: str, explained_sql: str) -> str:
         Plan request tagged with the statement id.
     """
     return f"EXPLAIN PLAN SET STATEMENT_ID = '{statement_id}' FOR {explained_sql}"
+
+
+def _format_plan_display_sql(xplan_format: str = "TYPICAL") -> str:
+    """Build a DBMS_XPLAN.DISPLAY query with a validated format string."""
+    if "'" in xplan_format:
+        msg = f"Invalid Oracle XPLAN format string: {xplan_format!r}"
+        raise SQLSpecError(msg)
+    return f"SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, :statement_id, '{xplan_format}'))"
+
+
+def _format_display_cursor_sql(xplan_format: str = "TYPICAL") -> str:
+    """Build a DBMS_XPLAN.DISPLAY_CURSOR query with a validated format string."""
+    if "'" in xplan_format:
+        msg = f"Invalid Oracle XPLAN format string: {xplan_format!r}"
+        raise SQLSpecError(msg)
+    return f"SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, '{xplan_format}'))"
+
+
+def _managed_explain_options(statement: "SQL") -> "tuple[bool, str]":
+    """Extract Oracle display_cursor and xplan_format options from a managed Explain statement."""
+    expression = statement.raw_expression
+    if expression is None:
+        return False, "TYPICAL"
+    display_cursor = bool(expression.meta.get(ORACLE_EXPLAIN_DISPLAY_CURSOR_META_KEY, False))
+    raw_format = expression.meta.get(ORACLE_EXPLAIN_XPLAN_FORMAT_META_KEY)
+    xplan_format = str(raw_format) if isinstance(raw_format, str) and raw_format else "TYPICAL"
+    return display_cursor, xplan_format
 
 
 def _retry_arrow_without_fetch_lobs(exc: TypeError, fetch_kwargs: "dict[str, object]") -> "dict[str, object] | None":

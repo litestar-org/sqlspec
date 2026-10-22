@@ -1,9 +1,14 @@
 """OracleDB adapter compiled helpers."""
 
 import contextlib
+import io
 import re
-from collections.abc import Iterable, Sized
-from typing import TYPE_CHECKING, Any, Protocol, cast
+import shutil
+import tempfile
+import zipfile
+from collections.abc import Callable, Iterable, Mapping, Sequence, Sized
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from sqlspec.adapters.oracledb._json_handlers import is_json_payload
 from sqlspec.adapters.oracledb._param_types import OracleBlob, OracleClob, OracleJson
@@ -30,6 +35,7 @@ from sqlspec.exceptions import (
     DataError,
     DeadlockError,
     ForeignKeyViolationError,
+    ImproperConfigurationError,
     IntegrityError,
     NotNullViolationError,
     OperationalError,
@@ -41,12 +47,13 @@ from sqlspec.exceptions import (
     UniqueViolationError,
 )
 from sqlspec.typing import NUMPY_INSTALLED
-from sqlspec.utils.serializers import to_json
+from sqlspec.utils.module_loader import ensure_pyarrow, import_optional
+from sqlspec.utils.serializers import from_json, to_json
 from sqlspec.utils.type_converters import build_uuid_coercions
 from sqlspec.utils.type_guards import has_rowcount, is_async_readable, is_readable
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable
 
     from sqlspec.adapters.oracledb._typing import (
         OracleAsyncConnection,
@@ -56,6 +63,7 @@ if TYPE_CHECKING:
     )
     from sqlspec.core import SQL
     from sqlspec.driver import AsyncExceptionHandler, SyncExceptionHandler
+    from sqlspec.typing import ArrowRecordBatch, ArrowRecordBatchReader, ArrowTable
 
 
 __all__ = (
@@ -64,35 +72,58 @@ __all__ = (
     "ORACLEDB_SUPPORTS_SPARSE_VECTORS",
     "ORACLEDB_VERSION",
     "SPARSE_VECTOR_MIN_DATABASE_MAJOR",
+    "VALID_ORACLE_DRIVER_FEATURE_KEYS",
     "OracleAsyncStreamSource",
     "OracleBlob",
     "OracleClob",
+    "OracleEndpoint",
     "OracleJson",
+    "OracleSessionContextConfig",
     "OracleSyncStreamSource",
+    "OracleTopologyConfig",
     "apply_driver_features",
     "build_arrow_fetch_kwargs",
     "build_connection_config",
+    "build_duality_etag_update_sql",
     "build_fetch_kwargs",
     "build_insert_statement",
     "build_pipeline_stack_result",
     "build_profile",
+    "build_session_checkout_plsql",
+    "build_session_context_plsql",
+    "build_session_release_plsql",
+    "build_session_reset_plsql",
     "build_statement_config",
+    "build_tns_description",
     "build_truncate_statement",
     "coerce_large_parameters_async",
     "coerce_large_parameters_sync",
     "coerce_many_parameters_async",
     "coerce_many_parameters_sync",
+    "coerce_oracle_df_to_arrow_batches",
+    "coerce_oracle_df_to_arrow_table",
     "collect_async_rows",
     "collect_sync_rows",
     "connection_is_thin",
     "create_mapped_exception",
     "default_statement_config",
     "driver_profile",
+    "execute_session_checkout_async",
+    "execute_session_checkout_sync",
+    "execute_session_release_async",
+    "execute_session_release_sync",
+    "extract_duality_etag",
+    "extract_duality_view_etag",
+    "extract_oracle_wallet_zip",
+    "inject_duality_view_etag",
     "normalize_column_names",
     "normalize_execute_many_parameters_async",
     "normalize_execute_many_parameters_sync",
+    "oracle_df_batches_to_arrow_reader",
+    "oracle_df_to_arrow_table",
     "resolve_row_metadata",
     "resolve_rowcount",
+    "sanitize_oracle_text_query",
     "supports_df_batches",
     "supports_direct_path_load",
 )
@@ -212,6 +243,7 @@ _ORACLE_RESERVED_COLUMN_NAMES: "frozenset[str]" = frozenset({
 })
 _VERSION_COMPONENTS: int = 3
 TYPE_CONVERTER = OracleOutputConverter()
+_pa: Any = import_optional("pyarrow")
 _LOB_TYPE_NAME_MARKERS: "tuple[str, ...]" = ("LOB", "BFILE")
 _SCALAR_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, str, bytes, bytearray, type(None))
 _BIND_PASSTHROUGH_TYPES: "tuple[type[Any], ...]" = (bool, int, float, type(None))
@@ -277,6 +309,398 @@ SPARSE_VECTOR_MIN_DATABASE_MAJOR: int = 23
 
 ORACLEDB_SUPPORTS_SPARSE_VECTORS: bool = True
 
+VALID_ORACLE_DRIVER_FEATURE_KEYS: "Final[frozenset[str]]" = frozenset({
+    "_statement_cache_holder",
+    "arraysize",
+    "arrow_requested_schema",
+    "custom",
+    "enable_direct_path_load",
+    "enable_events",
+    "enable_lob_fetch",
+    "enable_lowercase_column_names",
+    "enable_numpy_vectors",
+    "enable_uuid_binary",
+    "events_backend",
+    "fetch_decimals",
+    "fetch_lobs",
+    "json_deserializer",
+    "json_serializer",
+    "on_connection_create",
+    "on_connection_destroy",
+    "on_pool_create",
+    "on_pool_destroy",
+    "oracle_raw_byte_limit",
+    "oracle_varchar2_byte_limit",
+    "prefetchrows",
+    "session_context_hook",
+    "storage_capabilities",
+    "vector_return_format",
+})
+
+_ORACLE_TIME_ZONE_PATTERN: "re.Pattern[str]" = re.compile(r"^[A-Za-z0-9_+\-/:]{1,64}$")
+_ORACLE_NLS_KEY_PATTERN: "re.Pattern[str]" = re.compile(r"^NLS_[A-Z0-9_]{1,60}$")
+_ORACLE_TEXT_TOKEN_PATTERN: "re.Pattern[str]" = re.compile(r"[A-Za-z0-9_]+")
+_ORACLE_TEXT_RESERVED_OPERATORS: "frozenset[str]" = frozenset({
+    "ABOUT",
+    "ACCUM",
+    "AND",
+    "BT",
+    "DEFINEMERGE",
+    "DEFINESCORE",
+    "EQUIV",
+    "FUZZY",
+    "HASPATH",
+    "INPATH",
+    "MDATA",
+    "MINUS",
+    "NEAR",
+    "NOT",
+    "NT",
+    "OR",
+    "PT",
+    "RT",
+    "SOUNDEX",
+    "SQE",
+    "STEM",
+    "SYN",
+    "TR",
+    "TRSYN",
+    "WEIGHT",
+    "WILDCARD",
+    "WITHIN",
+})
+
+
+_MAX_TCP_PORT: int = 65535
+
+
+class OracleEndpoint:
+    """Typed Oracle Net listener endpoint for multi-endpoint TNS descriptors."""
+
+    __slots__ = ("host", "port", "protocol")
+
+    def __init__(self, host: str, port: int = 1521, protocol: str = "tcp") -> None:
+        if not host or not host.strip():
+            msg = "OracleEndpoint host must be non-empty"
+            raise ImproperConfigurationError(msg)
+        cleaned_host = host.strip()
+        _validate_tns_token(cleaned_host, "host")
+        if isinstance(port, bool) or not isinstance(port, int) or port <= 0 or port > _MAX_TCP_PORT:
+            msg = "OracleEndpoint port must be an integer between 1 and 65535"
+            raise ImproperConfigurationError(msg)
+        normalized_protocol = protocol.strip().lower()
+        if normalized_protocol not in {"tcp", "tcps"}:
+            msg = f"OracleEndpoint protocol must be 'tcp' or 'tcps', got {protocol!r}"
+            raise ImproperConfigurationError(msg)
+        self.host: str = cleaned_host
+        self.port: int = port
+        self.protocol: str = normalized_protocol
+
+    def __repr__(self) -> str:
+        return f"OracleEndpoint(host={self.host!r}, port={self.port!r}, protocol={self.protocol!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, OracleEndpoint):
+            return NotImplemented
+        return (self.host, self.port, self.protocol) == (other.host, other.port, other.protocol)
+
+    def __hash__(self) -> int:
+        return hash((self.host, self.port, self.protocol))
+
+
+class OracleTopologyConfig:
+    """Typed Oracle Net multi-endpoint topology configuration for RAC, Data Guard, and CMAN."""
+
+    __slots__ = (
+        "endpoints",
+        "failover",
+        "failover_delay",
+        "failover_mode_method",
+        "failover_mode_type",
+        "failover_retries",
+        "load_balance",
+        "retry_count",
+        "retry_delay",
+        "sdu",
+        "server",
+        "service_name",
+        "source_route",
+        "transport_connect_timeout",
+    )
+
+    def __init__(
+        self,
+        endpoints: "Sequence[OracleEndpoint | Mapping[str, Any]]",
+        service_name: str,
+        *,
+        load_balance: bool | None = True,
+        failover: bool | None = True,
+        retry_count: int | None = None,
+        retry_delay: int | None = None,
+        transport_connect_timeout: float | None = None,
+        sdu: int | None = None,
+        source_route: bool = False,
+        server: str | None = None,
+        failover_mode_type: str | None = None,
+        failover_mode_method: str | None = None,
+        failover_type: str | None = None,
+        failover_method: str | None = None,
+        failover_retries: int | None = None,
+        failover_delay: int | None = None,
+    ) -> None:
+        if not endpoints:
+            msg = "OracleTopologyConfig requires at least one endpoint"
+            raise ImproperConfigurationError(msg)
+        if not service_name or not service_name.strip():
+            msg = "OracleTopologyConfig service_name must be non-empty"
+            raise ImproperConfigurationError(msg)
+        cleaned_service_name = service_name.strip()
+        _validate_tns_token(cleaned_service_name, "service_name")
+        normalized_endpoints: list[OracleEndpoint] = []
+        for ep in endpoints:
+            if isinstance(ep, OracleEndpoint):
+                normalized_endpoints.append(ep)
+            elif isinstance(ep, Mapping):
+                normalized_endpoints.append(
+                    OracleEndpoint(
+                        host=str(ep.get("host", "")),
+                        port=int(ep.get("port", 1521)),
+                        protocol=str(ep.get("protocol", "tcp")),
+                    )
+                )
+            else:
+                msg = f"Invalid endpoint in OracleTopologyConfig: {ep!r}"
+                raise ImproperConfigurationError(msg)
+        resolved_server = server.strip().upper() if server else None
+        if resolved_server is not None:
+            _validate_tns_token(resolved_server, "server")
+        raw_fm_type = failover_mode_type if failover_mode_type is not None else failover_type
+        raw_fm_method = failover_mode_method if failover_mode_method is not None else failover_method
+        resolved_fm_type = raw_fm_type.strip().upper() if raw_fm_type else None
+        if resolved_fm_type is not None:
+            _validate_tns_token(resolved_fm_type, "failover_mode_type")
+        resolved_fm_method = raw_fm_method.strip().upper() if raw_fm_method else None
+        if resolved_fm_method is not None:
+            _validate_tns_token(resolved_fm_method, "failover_mode_method")
+        self.endpoints: tuple[OracleEndpoint, ...] = tuple(normalized_endpoints)
+        self.service_name: str = cleaned_service_name
+        self.load_balance: bool | None = None if load_balance is None else bool(load_balance)
+        self.failover: bool | None = None if failover is None else bool(failover)
+        self.retry_count: int | None = retry_count
+        self.retry_delay: int | None = retry_delay
+        self.transport_connect_timeout: float | None = transport_connect_timeout
+        self.sdu: int | None = sdu
+        self.source_route: bool = bool(source_route)
+        self.server: str | None = resolved_server
+        self.failover_mode_type: str | None = resolved_fm_type
+        self.failover_mode_method: str | None = resolved_fm_method
+        self.failover_retries: int | None = failover_retries
+        self.failover_delay: int | None = failover_delay
+
+    def __repr__(self) -> str:
+        return (
+            f"OracleTopologyConfig(endpoints={self.endpoints!r}, service_name={self.service_name!r}, "
+            f"load_balance={self.load_balance!r}, failover={self.failover!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, OracleTopologyConfig):
+            return NotImplemented
+        return (
+            self.endpoints,
+            self.service_name,
+            self.load_balance,
+            self.failover,
+            self.retry_count,
+            self.retry_delay,
+            self.transport_connect_timeout,
+            self.sdu,
+            self.source_route,
+            self.server,
+            self.failover_mode_type,
+            self.failover_mode_method,
+            self.failover_retries,
+            self.failover_delay,
+        ) == (
+            other.endpoints,
+            other.service_name,
+            other.load_balance,
+            other.failover,
+            other.retry_count,
+            other.retry_delay,
+            other.transport_connect_timeout,
+            other.sdu,
+            other.source_route,
+            other.server,
+            other.failover_mode_type,
+            other.failover_mode_method,
+            other.failover_retries,
+            other.failover_delay,
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.endpoints,
+            self.service_name,
+            self.load_balance,
+            self.failover,
+            self.retry_count,
+            self.retry_delay,
+            self.transport_connect_timeout,
+            self.sdu,
+            self.source_route,
+            self.server,
+            self.failover_mode_type,
+            self.failover_mode_method,
+            self.failover_retries,
+            self.failover_delay,
+        ))
+
+
+class OracleSessionContextConfig:
+    """Declarative Oracle session context, EBR edition, NLS, EBS, APEX, and VPD configuration."""
+
+    __slots__ = (
+        "action",
+        "apex_detach",
+        "apex_session",
+        "clear_context_namespaces",
+        "clear_identifier",
+        "client_identifier",
+        "context_attributes",
+        "contexts",
+        "ebs_apps_initialize",
+        "ecid",
+        "edition",
+        "mo_global_policy",
+        "module",
+        "nls_parameters",
+        "reset_on_release",
+        "reset_package",
+        "time_zone",
+    )
+
+    def __init__(
+        self,
+        *,
+        module: "str | Callable[[], str | None] | None" = None,
+        action: "str | Callable[[], str | None] | None" = None,
+        client_identifier: "str | Callable[[], str | None] | None" = None,
+        ecid: "str | Callable[[], str | None] | None" = None,
+        edition: "str | Callable[[], str | None] | None" = None,
+        time_zone: "str | Callable[[], str | None] | None" = None,
+        nls_parameters: "Mapping[str, str] | Callable[[], Mapping[str, str] | None] | None" = None,
+        contexts: "Mapping[str, Mapping[str, str | Callable[[], str | None]]] | Callable[[], Mapping[str, Mapping[str, str]] | None] | None" = None,
+        context_attributes: "Mapping[str, Mapping[str, str | Callable[[], str | None]]] | Callable[[], Mapping[str, Mapping[str, str]] | None] | None" = None,
+        ebs_apps_initialize: "tuple[int, int, int] | None" = None,
+        mo_global_policy: "tuple[str, int | None] | None" = None,
+        apex_session: "tuple[int, int, int] | None" = None,
+        reset_package: bool = False,
+        clear_identifier: bool = False,
+        clear_context_namespaces: "Sequence[str]" = (),
+        apex_detach: bool = False,
+        reset_on_release: bool = True,
+    ) -> None:
+        if isinstance(edition, str):
+            _validate_oracle_identifier(edition, "edition")
+        if isinstance(time_zone, str):
+            _validate_oracle_time_zone(time_zone)
+        if isinstance(nls_parameters, Mapping):
+            _validate_oracle_nls_parameters(nls_parameters)
+        resolved_contexts = contexts if contexts is not None else context_attributes
+        if isinstance(resolved_contexts, Mapping):
+            _validate_oracle_contexts(resolved_contexts)
+        for ns in clear_context_namespaces:
+            _validate_oracle_identifier(ns, "context namespace")
+        self.module = module
+        self.action = action
+        self.client_identifier = client_identifier
+        self.ecid = ecid
+        self.edition = edition
+        self.time_zone = time_zone
+        self.nls_parameters = dict(nls_parameters) if isinstance(nls_parameters, Mapping) else nls_parameters
+        normalized_ctx = (
+            {ns: dict(attrs) for ns, attrs in resolved_contexts.items()}
+            if isinstance(resolved_contexts, Mapping)
+            else resolved_contexts
+        )
+        self.contexts = normalized_ctx
+        self.context_attributes = normalized_ctx
+        self.ebs_apps_initialize = ebs_apps_initialize
+        self.mo_global_policy = mo_global_policy
+        self.apex_session = apex_session
+        self.reset_package = bool(reset_package)
+        self.clear_identifier = bool(clear_identifier)
+        self.clear_context_namespaces: tuple[str, ...] = tuple(clear_context_namespaces)
+        self.apex_detach = bool(apex_detach)
+        self.reset_on_release = bool(reset_on_release)
+
+    def __repr__(self) -> str:
+        return (
+            f"OracleSessionContextConfig(module={self.module!r}, action={self.action!r}, "
+            f"client_identifier={self.client_identifier!r}, ecid={self.ecid!r}, "
+            f"edition={self.edition!r}, time_zone={self.time_zone!r}, "
+            f"nls_parameters={self.nls_parameters!r}, contexts={self.contexts!r}, "
+            f"reset_on_release={self.reset_on_release!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, OracleSessionContextConfig):
+            return NotImplemented
+        return (
+            self.module,
+            self.action,
+            self.client_identifier,
+            self.ecid,
+            self.edition,
+            self.time_zone,
+            self.nls_parameters,
+            self.contexts,
+            self.ebs_apps_initialize,
+            self.mo_global_policy,
+            self.apex_session,
+            self.reset_package,
+            self.clear_identifier,
+            self.clear_context_namespaces,
+            self.apex_detach,
+            self.reset_on_release,
+        ) == (
+            other.module,
+            other.action,
+            other.client_identifier,
+            other.ecid,
+            other.edition,
+            other.time_zone,
+            other.nls_parameters,
+            other.contexts,
+            other.ebs_apps_initialize,
+            other.mo_global_policy,
+            other.apex_session,
+            other.reset_package,
+            other.clear_identifier,
+            other.clear_context_namespaces,
+            other.apex_detach,
+            other.reset_on_release,
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.module,
+            self.action,
+            self.client_identifier,
+            self.ecid,
+            self.edition,
+            self.time_zone,
+            self.ebs_apps_initialize,
+            self.mo_global_policy,
+            self.apex_session,
+            self.reset_package,
+            self.clear_identifier,
+            self.clear_context_namespaces,
+            self.apex_detach,
+            self.reset_on_release,
+        ))
+
 
 def connection_is_thin(connection: object) -> bool:
     """Return whether an Oracle connection is in Thin mode."""
@@ -329,9 +753,104 @@ def build_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]"
     return fetch_kwargs
 
 
-def build_arrow_fetch_kwargs(driver_features: "dict[str, Any]") -> "dict[str, object]":
-    """Build Oracle Arrow/DataFrame fetch keyword arguments."""
-    return build_fetch_kwargs(driver_features)
+def build_arrow_fetch_kwargs(
+    driver_features_or_batch_size: "Mapping[str, Any] | int | None" = None,
+    driver_features: "Mapping[str, Any] | None" = None,
+    arrow_schema: Any = None,
+    *,
+    batch_size: int | None = None,
+) -> "dict[str, object]":
+    """Build Oracle Arrow/DataFrame fetch keyword arguments.
+
+    ``oracledb.Connection.fetch_df_all`` and ``fetch_df_batches`` accept only
+    ``statement``, ``parameters``, ``arraysize``, ``fetch_decimals``, and
+    ``requested_schema``; passing ``fetch_lobs`` raises ``TypeError``.
+    """
+    if isinstance(driver_features_or_batch_size, Mapping):
+        resolved_features: Mapping[str, Any] | None = driver_features_or_batch_size
+        resolved_batch_size = batch_size
+    else:
+        resolved_features = driver_features
+        resolved_batch_size = batch_size if batch_size is not None else driver_features_or_batch_size
+
+    fetch_kwargs: dict[str, object] = {}
+    if resolved_batch_size is not None:
+        fetch_kwargs["arraysize"] = resolved_batch_size
+    if resolved_features is not None:
+        fetch_decimals = resolved_features.get("fetch_decimals")
+        if fetch_decimals is not None:
+            fetch_kwargs["fetch_decimals"] = fetch_decimals
+        requested_schema = resolved_features.get("arrow_requested_schema")
+        if arrow_schema is None and requested_schema is not None:
+            fetch_kwargs["requested_schema"] = requested_schema
+    if arrow_schema is not None:
+        fetch_kwargs["requested_schema"] = arrow_schema
+    return fetch_kwargs
+
+
+def oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
+    """Convert an Oracle DataFrame to a PyArrow Table using zero-copy PyCapsule when supported."""
+    if pa_module is None:
+        ensure_pyarrow()
+        pa_module = _pa
+
+    if hasattr(oracle_df, "__arrow_c_stream__"):
+        reader = (
+            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
+            if arrow_schema is not None
+            else pa_module.RecordBatchReader.from_stream(oracle_df)
+        )
+        return cast("ArrowTable", reader.read_all())
+    table = pa_module.table(oracle_df)
+    if arrow_schema is not None:
+        table = table.cast(arrow_schema)
+    return cast("ArrowTable", table)
+
+
+def coerce_oracle_df_to_arrow_table(oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None) -> "ArrowTable":
+    """Alias for :func:`oracle_df_to_arrow_table`."""
+    return oracle_df_to_arrow_table(oracle_df, pa_module=pa_module, arrow_schema=arrow_schema)
+
+
+def coerce_oracle_df_to_arrow_batches(
+    oracle_df: Any, pa_module: Any = None, arrow_schema: Any = None
+) -> "list[ArrowRecordBatch]":
+    """Convert an Oracle DataFrame batch into PyArrow RecordBatches via PyCapsule when supported."""
+    if pa_module is None:
+        ensure_pyarrow()
+        pa_module = _pa
+
+    if hasattr(oracle_df, "__arrow_c_stream__"):
+        reader = (
+            pa_module.RecordBatchReader.from_stream(oracle_df, schema=arrow_schema)
+            if arrow_schema is not None
+            else pa_module.RecordBatchReader.from_stream(oracle_df)
+        )
+        return cast("list[ArrowRecordBatch]", list(reader))
+    table = pa_module.table(oracle_df)
+    if arrow_schema is not None:
+        table = table.cast(arrow_schema)
+    return cast("list[ArrowRecordBatch]", table.to_batches())
+
+
+def oracle_df_batches_to_arrow_reader(
+    batches: "Iterable[Any]", schema: Any = None, pa_module: Any = None
+) -> "ArrowRecordBatchReader":
+    """Convert an iterable of Oracle DataFrame batches into a PyArrow RecordBatchReader."""
+    if pa_module is None:
+        ensure_pyarrow()
+        pa_module = _pa
+
+    collected_batches: list[Any] = []
+    for df_batch in batches:
+        collected_batches.extend(coerce_oracle_df_to_arrow_batches(df_batch, pa_module=pa_module, arrow_schema=schema))
+    if collected_batches:
+        resolved_schema = schema if schema is not None else collected_batches[0].schema
+        return cast(
+            "ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, collected_batches)
+        )
+    resolved_schema = schema if schema is not None else pa_module.schema([])
+    return cast("ArrowRecordBatchReader", pa_module.RecordBatchReader.from_batches(resolved_schema, []))
 
 
 def normalize_column_names(column_names: "list[str]", driver_features: "dict[str, Any]") -> "list[str]":
@@ -371,32 +890,6 @@ def normalize_execute_many_parameters_async(parameters: Any) -> Any:
         Normalized parameters payload.
     """
     return normalize_execute_many_parameters_sync(parameters)
-
-
-class _OracleJsonBindingState:
-    """Lazily resolve whether JSON-shaped values require BLOB locators."""
-
-    __slots__ = ("_connection", "_resolved", "_use_blob", "_version_cache")
-
-    def __init__(self, connection: Any, version_cache: Any) -> None:
-        self._connection = connection
-        self._version_cache = version_cache
-        self._resolved = False
-        self._use_blob = False
-
-    def uses_blob(self) -> bool:
-        """Return the operation-scoped JSON storage decision."""
-        if not self._resolved:
-            server_major = resolve_oracle_connection_major(self._connection, self._version_cache)
-            compatible_major = resolve_oracle_connection_compatible_major(self._connection, self._version_cache)
-            self._use_blob = (
-                isinstance(server_major, int)
-                and not isinstance(server_major, bool)
-                and resolve_oracle_json_storage(server_major, compatible_major=compatible_major)
-                != ORACLE_JSON_STORAGE_NATIVE
-            )
-            self._resolved = True
-        return self._use_blob
 
 
 def coerce_large_parameters_sync(
@@ -665,16 +1158,23 @@ def resolve_rowcount(cursor: Any) -> int:
 def apply_driver_features(
     statement_config: "StatementConfig", driver_features: "Mapping[str, Any] | None"
 ) -> "tuple[StatementConfig, dict[str, Any]]":
-    """Apply OracleDB driver feature defaults.
+    """Apply OracleDB driver feature defaults and validate known keys.
 
     Defaults ``fetch_lobs`` to ``False`` so direct LOB reads under the 1 GB
     fetch ceiling return text/bytes by default. Locators remain available for
     OUT binds, PL/SQL, and explicit ``fetch_lobs=True``.
     """
+    if driver_features:
+        unknown_keys = sorted(set(driver_features.keys()) - VALID_ORACLE_DRIVER_FEATURE_KEYS)
+        if unknown_keys:
+            msg = f"Unknown Oracle driver_features key(s): {', '.join(unknown_keys)}"
+            raise ImproperConfigurationError(msg)
     features: dict[str, Any] = dict(driver_features) if driver_features else {}
     features.setdefault("enable_numpy_vectors", NUMPY_INSTALLED)
     features.setdefault("enable_lowercase_column_names", True)
     features.setdefault("enable_uuid_binary", True)
+    if "enable_lob_fetch" in features and "fetch_lobs" not in features:
+        features["fetch_lobs"] = bool(features["enable_lob_fetch"])
     features.setdefault("fetch_lobs", False)
     if "vector_return_format" not in features:
         if not NUMPY_INSTALLED:
@@ -685,6 +1185,9 @@ def apply_driver_features(
             features["vector_return_format"] = "array"
     features.setdefault("oracle_varchar2_byte_limit", 4000)
     features.setdefault("oracle_raw_byte_limit", 2000)
+    session_hook = features.get("session_context_hook")
+    if isinstance(session_hook, Mapping):
+        features["session_context_hook"] = OracleSessionContextConfig(**session_hook)
     return statement_config, features
 
 
@@ -1142,6 +1645,571 @@ def build_statement_config(*, json_serializer: "Callable[[Any], str] | None" = N
     )
 
 
+driver_profile = build_profile()
+
+default_statement_config = build_statement_config()
+
+
+def extract_oracle_wallet_zip(
+    wallet_zip: "Path | str | bytes", target_dir: "Path | None" = None, *, prefix: str = "sqlspec_oracle_wallet_"
+) -> Path:
+    """Extract an Oracle mTLS wallet archive safely into a 0o700 directory.
+
+    Validates all archive entries against path traversal (ZipSlip), sets
+    ``0o600`` permissions on extracted files, and verifies expected Oracle
+    wallet artifacts (``ewallet.pem`` or ``tnsnames.ora``) exist.
+
+    Args:
+        wallet_zip: Path to a wallet ``.zip`` archive or raw archive bytes.
+        target_dir: Optional directory to extract into. When ``None``, creates
+            a temporary directory with ``prefix``.
+        prefix: Temporary directory prefix when ``target_dir`` is omitted.
+
+    Returns:
+        Path to the extracted wallet directory.
+
+    Raises:
+        ImproperConfigurationError: If the archive is missing, corrupt, contains
+            unsafe paths, or lacks required wallet files.
+    """
+    created_temp = target_dir is None
+    if target_dir is None:
+        extract_dir = Path(tempfile.mkdtemp(prefix=prefix))
+    else:
+        extract_dir = Path(target_dir)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+    extract_dir.chmod(0o700)
+
+    resolved_root = extract_dir.resolve()
+    try:
+        _extract_wallet_archive_into(wallet_zip, extract_dir, resolved_root)
+    except BaseException:
+        if created_temp:
+            shutil.rmtree(extract_dir, ignore_errors=True)
+        raise
+
+    return extract_dir
+
+
+def build_tns_description(topology: "OracleTopologyConfig | Mapping[str, Any]") -> str:
+    """Compile a multi-endpoint Oracle Net ``(DESCRIPTION=...)`` connect descriptor.
+
+    Args:
+        topology: :class:`OracleTopologyConfig` or mapping of topology options.
+
+    Returns:
+        Formatted TNS descriptor string.
+    """
+    resolved = OracleTopologyConfig(**topology) if isinstance(topology, Mapping) else topology
+    if not resolved.endpoints:
+        msg = "OracleTopologyConfig requires at least one endpoint"
+        raise ImproperConfigurationError(msg)
+    _validate_tns_token(resolved.service_name, "service_name")
+    for ep in resolved.endpoints:
+        _validate_tns_token(ep.host, "host")
+    desc_parts: list[str] = []
+    if resolved.sdu is not None:
+        desc_parts.append(f"(SDU={resolved.sdu})")
+    if resolved.retry_count is not None:
+        desc_parts.append(f"(RETRY_COUNT={resolved.retry_count})")
+    if resolved.retry_delay is not None:
+        desc_parts.append(f"(RETRY_DELAY={resolved.retry_delay})")
+    if resolved.transport_connect_timeout is not None:
+        desc_parts.append(f"(TRANSPORT_CONNECT_TIMEOUT={resolved.transport_connect_timeout})")
+
+    addr_parts: list[str] = []
+    if resolved.load_balance is not None:
+        addr_parts.append(f"(LOAD_BALANCE={'ON' if resolved.load_balance else 'OFF'})")
+    if resolved.failover is not None:
+        addr_parts.append(f"(FAILOVER={'ON' if resolved.failover else 'OFF'})")
+    if resolved.source_route:
+        addr_parts.append("(SOURCE_ROUTE=ON)")
+    addr_parts.extend(
+        f"(ADDRESS=(PROTOCOL={ep.protocol.upper()})(HOST={ep.host})(PORT={ep.port}))" for ep in resolved.endpoints
+    )
+    desc_parts.append(f"(ADDRESS_LIST={''.join(addr_parts)})")
+
+    connect_parts: list[str] = [f"(SERVICE_NAME={resolved.service_name})"]
+    if resolved.server is not None:
+        _validate_tns_token(resolved.server, "server")
+        connect_parts.append(f"(SERVER={resolved.server})")
+    if resolved.failover_mode_type is not None or resolved.failover_mode_method is not None:
+        fm_type = resolved.failover_mode_type or "SELECT"
+        fm_method = resolved.failover_mode_method or "BASIC"
+        _validate_tns_token(fm_type, "failover_mode_type")
+        _validate_tns_token(fm_method, "failover_mode_method")
+        fm_clauses = [f"(TYPE={fm_type})", f"(METHOD={fm_method})"]
+        if resolved.failover_retries is not None:
+            fm_clauses.append(f"(RETRIES={resolved.failover_retries})")
+        if resolved.failover_delay is not None:
+            fm_clauses.append(f"(DELAY={resolved.failover_delay})")
+        connect_parts.append(f"(FAILOVER_MODE={''.join(fm_clauses)})")
+    desc_parts.append(f"(CONNECT_DATA={''.join(connect_parts)})")
+    return f"(DESCRIPTION={''.join(desc_parts)})"
+
+
+def _build_session_checkout_plan(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    piggyback_attrs: dict[str, str | None] = {}
+
+    client_id = _resolve_callable_or_str(resolved.client_identifier)
+    if client_id is not None:
+        piggyback_attrs["client_identifier"] = client_id
+    mod = _resolve_callable_or_str(resolved.module)
+    if mod is not None:
+        piggyback_attrs["module"] = mod
+    act = _resolve_callable_or_str(resolved.action)
+    if act is not None:
+        piggyback_attrs["action"] = act
+    ecid_val = _resolve_callable_or_str(resolved.ecid)
+    if ecid_val is not None:
+        piggyback_attrs["econtext_id"] = ecid_val
+
+    alter_clauses: list[str] = []
+    tz = _resolve_callable_or_str(resolved.time_zone)
+    if tz is not None:
+        _validate_oracle_time_zone(tz)
+        alter_clauses.append(f"TIME_ZONE = ''{tz}''")
+
+    ed = _resolve_callable_or_str(resolved.edition)
+    if ed is not None:
+        _validate_oracle_identifier(ed, "edition")
+        alter_clauses.append(f"EDITION = {ed}")
+
+    nls_raw = resolved.nls_parameters() if callable(resolved.nls_parameters) else resolved.nls_parameters
+    if nls_raw:
+        _validate_oracle_nls_parameters(nls_raw)
+        for key in sorted(nls_raw.keys()):
+            val = nls_raw[key]
+            alter_clauses.append(f"{key.upper()} = ''{val}''")
+
+    plsql_statements: list[str] = []
+    if alter_clauses:
+        joined_alter = " ".join(alter_clauses)
+        plsql_statements.append(f"EXECUTE IMMEDIATE 'ALTER SESSION SET {joined_alter}';")
+
+    bind_params: dict[str, Any] = {}
+    uses_plsql_identifier = bool(
+        resolved.clear_identifier
+        or resolved.ebs_apps_initialize is not None
+        or resolved.mo_global_policy is not None
+        or resolved.apex_session is not None
+        or (
+            client_id is not None
+            and resolved.module is None
+            and resolved.action is None
+            and resolved.ecid is None
+            and not alter_clauses
+            and not resolved.contexts
+        )
+    )
+    if client_id is not None and uses_plsql_identifier:
+        plsql_statements.append("DBMS_SESSION.SET_IDENTIFIER(:p_client_id);")
+        bind_params["p_client_id"] = client_id
+
+    ctx_raw = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
+    if ctx_raw:
+        _validate_oracle_contexts(ctx_raw)
+        idx = 0
+        for namespace in sorted(ctx_raw.keys()):
+            attrs = ctx_raw[namespace]
+            for attr_key in sorted(attrs.keys()):
+                raw_val = attrs[attr_key]
+                attr_val = _resolve_callable_or_str(raw_val)
+                ns_param = f"ctx_ns_{idx}"
+                key_param = f"ctx_attr_{idx}"
+                val_param = f"ctx_val_{idx}"
+                bind_params[ns_param] = namespace
+                bind_params[key_param] = attr_key
+                bind_params[val_param] = attr_val
+                plsql_statements.append(f"DBMS_SESSION.SET_CONTEXT(:{ns_param}, :{key_param}, :{val_param});")
+                idx += 1
+
+    if resolved.ebs_apps_initialize is not None:
+        u_id, r_id, a_id = resolved.ebs_apps_initialize
+        plsql_statements.append(
+            "FND_GLOBAL.APPS_INITIALIZE(user_id => :p_ebs_uid, resp_id => :p_ebs_rid, resp_appl_id => :p_ebs_aid);"
+        )
+        bind_params["p_ebs_uid"] = u_id
+        bind_params["p_ebs_rid"] = r_id
+        bind_params["p_ebs_aid"] = a_id
+
+    if resolved.mo_global_policy is not None:
+        mode, org_id = resolved.mo_global_policy
+        plsql_statements.append("MO_GLOBAL.SET_POLICY_CONTEXT(:p_mo_mode, :p_mo_org);")
+        bind_params["p_mo_mode"] = mode
+        bind_params["p_mo_org"] = org_id
+
+    if resolved.apex_session is not None:
+        app_id, page_id, sess_id = resolved.apex_session
+        plsql_statements.append(
+            "APEX_SESSION.ATTACH(p_app_id => :p_apex_app, p_page_id => :p_apex_page, p_session_id => :p_apex_sess);"
+        )
+        bind_params["p_apex_app"] = app_id
+        bind_params["p_apex_page"] = page_id
+        bind_params["p_apex_sess"] = sess_id
+
+    if not plsql_statements:
+        return None, bind_params, piggyback_attrs
+    return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
+
+
+def build_session_checkout_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Compile checkout session context into a single PL/SQL block and bind parameters."""
+    plsql, bind_params, _ = _build_session_checkout_plan(config)
+    return plsql, bind_params
+
+
+def build_session_context_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Return checkout PL/SQL block and bind parameters for :class:`OracleSessionContextConfig`."""
+    return build_session_checkout_plsql(config)
+
+
+def _build_session_release_plan(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any], dict[str, str | None]]":
+    resolved = OracleSessionContextConfig(**config) if isinstance(config, Mapping) else config
+    if not resolved.reset_on_release and not (
+        resolved.apex_detach or resolved.clear_identifier or resolved.clear_context_namespaces or resolved.reset_package
+    ):
+        return None, {}, {}
+
+    piggyback_attrs: dict[str, str | None] = {}
+    if resolved.client_identifier is not None or resolved.clear_identifier:
+        piggyback_attrs["client_identifier"] = ""
+    if resolved.module is not None:
+        piggyback_attrs["module"] = ""
+    if resolved.action is not None:
+        piggyback_attrs["action"] = ""
+    if resolved.ecid is not None:
+        piggyback_attrs["econtext_id"] = ""
+
+    plsql_statements: list[str] = []
+    bind_params: dict[str, Any] = {}
+    if resolved.apex_detach:
+        plsql_statements.append("APEX_SESSION.DETACH;")
+    if resolved.clear_identifier:
+        plsql_statements.append("DBMS_SESSION.CLEAR_IDENTIFIER;")
+    for idx, namespace in enumerate(resolved.clear_context_namespaces):
+        plsql_statements.append(f"DBMS_SESSION.CLEAR_ALL_CONTEXT(:p_clr_ns_{idx});")
+        bind_params[f"p_clr_ns_{idx}"] = namespace
+    if resolved.reset_on_release:
+        ctx_raw = resolved.contexts() if callable(resolved.contexts) else resolved.contexts
+        if ctx_raw:
+            _validate_oracle_contexts(ctx_raw)
+            plsql_statements.extend(
+                f"DBMS_SESSION.CLEAR_CONTEXT('{namespace}');"
+                for namespace in sorted(ctx_raw.keys())
+                if namespace not in resolved.clear_context_namespaces
+            )
+    if resolved.reset_package:
+        plsql_statements.append("DBMS_SESSION.RESET_PACKAGE;")
+
+    if not plsql_statements:
+        return None, bind_params, piggyback_attrs
+    return f"BEGIN {' '.join(plsql_statements)} END;", bind_params, piggyback_attrs
+
+
+def build_session_release_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Compile release reset PL/SQL block and bind parameters."""
+    plsql, bind_params, _ = _build_session_release_plan(config)
+    return plsql, bind_params
+
+
+def build_session_reset_plsql(
+    config: "OracleSessionContextConfig | Mapping[str, Any]",
+) -> "tuple[str | None, dict[str, Any]]":
+    """Return release reset PL/SQL block and bind parameters for :class:`OracleSessionContextConfig`."""
+    return build_session_release_plsql(config)
+
+
+def execute_session_checkout_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
+    """Apply TTC piggyback attributes and execute session checkout PL/SQL synchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                cursor.execute(plsql, bind_params)
+            else:
+                cursor.execute(plsql)
+
+
+def execute_session_release_sync(connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]") -> None:
+    """Clear TTC piggyback attributes and execute session release PL/SQL synchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                cursor.execute(plsql, bind_params)
+            else:
+                cursor.execute(plsql)
+
+
+async def execute_session_checkout_async(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
+) -> None:
+    """Apply TTC piggyback attributes and execute session checkout PL/SQL asynchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_checkout_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                await cursor.execute(plsql, bind_params)
+            else:
+                await cursor.execute(plsql)
+
+
+async def execute_session_release_async(
+    connection: Any, config: "OracleSessionContextConfig | Mapping[str, Any]"
+) -> None:
+    """Clear TTC piggyback attributes and execute session release PL/SQL asynchronously."""
+    plsql, bind_params, piggyback_attrs = _build_session_release_plan(config)
+    for attr_name, attr_val in piggyback_attrs.items():
+        with contextlib.suppress(AttributeError):
+            setattr(connection, attr_name, attr_val)
+    if plsql is not None:
+        with connection.cursor() as cursor:
+            if bind_params:
+                await cursor.execute(plsql, bind_params)
+            else:
+                await cursor.execute(plsql)
+
+
+def sanitize_oracle_text_query(raw_query: str, *, operator: str = "ACCUM") -> str:
+    """Sanitize a free-text search string for Oracle Text ``CONTAINS``.
+
+    Extracts alphanumeric tokens and wraps each token in ``{token}`` literal
+    braces so user queries containing Oracle Text reserved keywords or syntax
+    punctuation never raise ``DRG-50901``.
+
+    Args:
+        raw_query: Raw user search string.
+        operator: Operator used to join escaped tokens (defaults to ``"ACCUM"``).
+
+    Returns:
+        Sanitized Oracle Text query string, or ``""`` when no tokens remain.
+    """
+    if not raw_query or not raw_query.strip():
+        return ""
+    tokens = [match.group(0) for match in _ORACLE_TEXT_TOKEN_PATTERN.finditer(raw_query)]
+    if not tokens:
+        return ""
+    joiner = f" {operator} " if operator else " "
+    return joiner.join(f"{{{tok}}}" for tok in tokens)
+
+
+def extract_duality_view_etag(row_or_doc: "Mapping[str, Any] | str | bytes") -> str | None:
+    """Extract ``_metadata.etag`` from an Oracle 26ai JSON Relational Duality View document or row.
+
+    Args:
+        row_or_doc: Duality view document mapping, row mapping containing a
+            ``data``/``DATA`` document, or raw JSON string/bytes.
+
+    Returns:
+        The hex ETag string if present, otherwise ``None``.
+    """
+    parsed: Any = row_or_doc
+    if isinstance(parsed, (str, bytes)):
+        try:
+            parsed = from_json(parsed)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(parsed, Mapping):
+        return None
+    metadata = parsed.get("_metadata")
+    if isinstance(metadata, Mapping):
+        etag = metadata.get("etag")
+        if isinstance(etag, str) and etag:
+            return etag
+    for key in ("data", "DATA"):
+        nested = parsed.get(key)
+        if isinstance(nested, (str, bytes)):
+            try:
+                nested = from_json(nested)
+            except (ValueError, TypeError):
+                continue
+        if isinstance(nested, Mapping):
+            nested_meta = nested.get("_metadata")
+            if isinstance(nested_meta, Mapping):
+                etag = nested_meta.get("etag")
+                if isinstance(etag, str) and etag:
+                    return etag
+    return None
+
+
+def extract_duality_etag(payload: "Mapping[str, Any] | str | bytes") -> str | None:
+    """Alias for :func:`extract_duality_view_etag`."""
+    return extract_duality_view_etag(payload)
+
+
+def inject_duality_view_etag(doc: "Mapping[str, Any]", etag: str) -> "dict[str, Any]":
+    """Return a copy of a Duality View document with ``_metadata.etag`` injected for optimistic concurrency."""
+    result: dict[str, Any] = dict(doc)
+    existing_meta = result.get("_metadata")
+    merged_meta: dict[str, Any] = dict(existing_meta) if isinstance(existing_meta, Mapping) else {}
+    merged_meta["etag"] = etag
+    result["_metadata"] = merged_meta
+    return result
+
+
+def build_duality_etag_update_sql(
+    view_name: str, id_column: str = "ID", data_column: str = "DATA", *, etag_param: str = "expected_etag"
+) -> str:
+    """Build an optimistic-concurrency ``UPDATE`` statement for an Oracle 26ai JSON Relational Duality View."""
+    _validate_oracle_identifier(view_name, "view_name")
+    _validate_oracle_identifier(id_column, "id_column")
+    _validate_oracle_identifier(data_column, "data_column")
+    _validate_oracle_identifier(etag_param, "etag_param")
+    return (
+        f"UPDATE {view_name} SET {data_column} = :data "
+        f"WHERE {id_column} = :id AND JSON_VALUE({data_column}, '$._metadata.etag') = :{etag_param}"
+    )
+
+
+def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """Build a normalized connection configuration dictionary.
+
+    Args:
+        connection_config: Raw connection configuration mapping.
+
+    Returns:
+        Normalized connection parameters.
+    """
+    config = {k: v for k, v in connection_config.items() if v is not None}
+    if "wallet_zip" in config:
+        wallet_dir = extract_oracle_wallet_zip(config.pop("wallet_zip"))
+        config.setdefault("config_dir", str(wallet_dir))
+        config.setdefault("wallet_location", str(wallet_dir))
+    if "topology" in config:
+        topology_val = config.pop("topology")
+        resolved_topology = OracleTopologyConfig(**topology_val) if isinstance(topology_val, Mapping) else topology_val
+        if "dsn" not in config:
+            config["dsn"] = build_tns_description(resolved_topology)
+        if resolved_topology.retry_count is not None and "retry_count" not in config:
+            config["retry_count"] = resolved_topology.retry_count
+        if resolved_topology.retry_delay is not None and "retry_delay" not in config:
+            config["retry_delay"] = resolved_topology.retry_delay
+    if "dsn" not in config:
+        dsn = config.pop("url", None) or config.pop("connection_string", None)
+        if dsn is not None:
+            config["dsn"] = dsn
+    else:
+        config.pop("url", None)
+        config.pop("connection_string", None)
+    user_alias = config.pop("username", None)
+    if "user" not in config and user_alias is not None:
+        config["user"] = user_alias
+    return config
+
+
+def _extract_wallet_archive_into(wallet_zip: "Path | str | bytes", extract_dir: Path, resolved_root: Path) -> None:
+    if isinstance(wallet_zip, bytes):
+        zip_source: Any = io.BytesIO(wallet_zip)
+    else:
+        zip_path = Path(wallet_zip)
+        if not zip_path.is_file():
+            msg = f"Oracle wallet archive does not exist: {zip_path}"
+            raise ImproperConfigurationError(msg)
+        zip_source = zip_path
+
+    try:
+        with zipfile.ZipFile(zip_source, "r") as archive:
+            for info in archive.infolist():
+                raw_name = info.filename
+                member_path = Path(raw_name)
+                if (
+                    member_path.is_absolute()
+                    or ".." in member_path.parts
+                    or raw_name.startswith(("/", "\\"))
+                    or ":" in raw_name
+                ):
+                    msg = f"Unsafe path in Oracle wallet archive: {raw_name!r}"
+                    raise ImproperConfigurationError(msg)
+                dest_path = (resolved_root / member_path).resolve()
+                if dest_path != resolved_root and resolved_root not in dest_path.parents:
+                    msg = f"Unsafe path in Oracle wallet archive: {raw_name!r}"
+                    raise ImproperConfigurationError(msg)
+
+            for info in archive.infolist():
+                dest_path = (resolved_root / Path(info.filename)).resolve()
+                if info.is_dir() or info.filename.endswith("/"):
+                    dest_path.mkdir(parents=True, exist_ok=True)
+                    dest_path.chmod(0o700)
+                    continue
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                dest_path.parent.chmod(0o700)
+                with archive.open(info, "r") as src_file, dest_path.open("wb") as dst_file:
+                    shutil.copyfileobj(src_file, dst_file)
+                dest_path.chmod(0o600)
+    except zipfile.BadZipFile as exc:
+        msg = f"Invalid Oracle wallet zip archive: {exc}"
+        raise ImproperConfigurationError(msg) from exc
+
+    if not (extract_dir / "ewallet.pem").exists() and not (extract_dir / "tnsnames.ora").exists():
+        msg = "Oracle wallet archive must contain 'ewallet.pem' or 'tnsnames.ora'"
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_tns_token(value: str, field_name: str) -> None:
+    if any(ch in value for ch in ("(", ")", "=", "'", '"', "\r", "\n", "\x00")):
+        msg = f"Unsafe TNS descriptor character in {field_name}: {value!r}"
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_oracle_identifier(value: str, field_name: str) -> None:
+    if not value or not _UNQUOTED_ORACLE_IDENTIFIER_PATTERN.fullmatch(value):
+        msg = f"Invalid Oracle identifier for {field_name}: {value!r}"
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_oracle_time_zone(value: str) -> None:
+    if not value or not _ORACLE_TIME_ZONE_PATTERN.fullmatch(value) or "'" in value or ";" in value:
+        msg = f"Invalid Oracle session time_zone: {value!r}"
+        raise ImproperConfigurationError(msg)
+
+
+def _validate_oracle_nls_parameters(nls_parameters: "Mapping[str, str]") -> None:
+    for key, val in nls_parameters.items():
+        if not isinstance(key, str) or not _ORACLE_NLS_KEY_PATTERN.fullmatch(key.upper()):
+            msg = f"Invalid Oracle NLS parameter name: {key!r}"
+            raise ImproperConfigurationError(msg)
+        if not isinstance(val, str) or "'" in val or ";" in val or "--" in val or "/*" in val or "\n" in val:
+            msg = f"Unsafe Oracle NLS parameter value for {key!r}: {val!r}"
+            raise ImproperConfigurationError(msg)
+
+
+def _validate_oracle_contexts(contexts: "Mapping[str, Mapping[str, Any]]") -> None:
+    for namespace, attrs in contexts.items():
+        _validate_oracle_identifier(namespace, "context namespace")
+        if not isinstance(attrs, Mapping):
+            msg = f"Oracle context attributes for namespace {namespace!r} must be a mapping"
+            raise ImproperConfigurationError(msg)
+        for attr_key in attrs:
+            _validate_oracle_identifier(attr_key, "context attribute")
+
+
+def _resolve_callable_or_str(value: "str | Callable[[], str | None] | None") -> str | None:
+    if callable(value):
+        return value()
+    return value
+
+
 class _OracleSyncStreamDriver(Protocol):
     connection: "OracleSyncConnection"
     driver_features: dict[str, Any]
@@ -1172,32 +2240,30 @@ class _OracleAsyncStreamDriver(Protocol):
     def _resolve_row_metadata(self, description: object) -> tuple[list[str], bool]: ...
 
 
-driver_profile = build_profile()
+class _OracleJsonBindingState:
+    """Lazily resolve whether JSON-shaped values require BLOB locators."""
 
-default_statement_config = build_statement_config()
+    __slots__ = ("_connection", "_resolved", "_use_blob", "_version_cache")
 
+    def __init__(self, connection: Any, version_cache: Any) -> None:
+        self._connection = connection
+        self._version_cache = version_cache
+        self._resolved = False
+        self._use_blob = False
 
-def build_connection_config(connection_config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """Build a normalized connection configuration dictionary.
-
-    Args:
-        connection_config: Raw connection configuration mapping.
-
-    Returns:
-        Normalized connection parameters.
-    """
-    config = dict(connection_config)
-    if "dsn" not in config:
-        dsn = config.pop("url", None) or config.pop("connection_string", None)
-        if dsn is not None:
-            config["dsn"] = dsn
-    else:
-        config.pop("url", None)
-        config.pop("connection_string", None)
-    user_alias = config.pop("username", None)
-    if "user" not in config and user_alias is not None:
-        config["user"] = user_alias
-    return config
+    def uses_blob(self) -> bool:
+        """Return the operation-scoped JSON storage decision."""
+        if not self._resolved:
+            server_major = resolve_oracle_connection_major(self._connection, self._version_cache)
+            compatible_major = resolve_oracle_connection_compatible_major(self._connection, self._version_cache)
+            self._use_blob = (
+                isinstance(server_major, int)
+                and not isinstance(server_major, bool)
+                and resolve_oracle_json_storage(server_major, compatible_major=compatible_major)
+                != ORACLE_JSON_STORAGE_NATIVE
+            )
+            self._resolved = True
+        return self._use_blob
 
 
 def _parse_version_tuple(version: str) -> "tuple[int, int, int]":

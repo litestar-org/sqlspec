@@ -624,3 +624,48 @@ def test_oracle_adk_owner_id_column_ddl_escapes_single_quotes() -> None:
 
     assert "DEFAULT ''anon'' NOT NULL" in session_ddl
     assert "DEFAULT ''anon'' NOT NULL" in memory_ddl
+
+
+def test_oracle_sync_adk_memory_fts_sanitizes_query_and_hybrid_rrf_fuses_candidates() -> None:
+    cursor = _RecordingCursor()
+    conn = _RecordingConnection(cursor)
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {"memory_use_fts": True}}
+    config.provide_connection = lambda *_a, **_k: conn
+    store = OracleSyncADKMemoryStore(config)
+
+    store.search_entries(query="NOT (alpha & beta)", app_name="app", user_id="u1", limit=5)
+    assert len(cursor.calls) == 1
+    fts_sql, fts_params = cursor.calls[0]
+    assert "CONTAINS(content_text, :query, 1) > 0" in fts_sql
+    assert fts_params["query"] == "{NOT} ACCUM {alpha} ACCUM {beta}"
+
+    cursor.calls.clear()
+    assert store.search_entries(query="   !@#   ", app_name="app", user_id="u1", limit=5) == []
+    assert cursor.calls == []
+
+    store.search_entries(query="alpha beta", app_name="app", user_id="u1", limit=5, embedding=[0.1, 0.2, 0.3])
+    assert len(cursor.calls) == 1
+    rrf_sql, rrf_params = cursor.calls[0]
+    assert "rrf_score" in rrf_sql
+    assert "FETCH APPROX FIRST :top_k ROWS ONLY" in rrf_sql
+    assert rrf_params["text_query"] == "{alpha} ACCUM {beta}"
+    assert rrf_params["top_k"] == 5
+
+
+@pytest.mark.anyio
+async def test_oracle_async_adk_memory_fts_sanitizes_query_and_hybrid_rrf_fuses_candidates() -> None:
+    cursor = _AsyncRecordingCursor()
+    conn = _RecordingConnection(cursor)
+    config = _config_for_storage(JSONStorageType.JSON_NATIVE)
+    config.extension_config = {"adk": {"memory_use_fts": True}}
+    config.provide_connection = lambda *_a, **_k: conn
+    store = OracleAsyncADKMemoryStore(config)
+
+    await store.search_entries(
+        query="NOT (alpha & beta)", app_name="app", user_id="u1", limit=5, embedding=[0.1, 0.2, 0.3]
+    )
+    assert len(cursor.calls) == 1
+    rrf_sql, rrf_params = cursor.calls[0]
+    assert "rrf_score" in rrf_sql
+    assert rrf_params["text_query"] == "{NOT} ACCUM {alpha} ACCUM {beta}"

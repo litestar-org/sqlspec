@@ -18,3 +18,10 @@ SELECT sys_context('USERENV', 'CLOUD_SERVICE') AS "service" FROM dual;
 SELECT value AS compatible
 FROM v$parameter
 WHERE name = 'compatible';
+
+-- name: apex_release
+-- dialect: oracle
+SELECT
+    version_no AS "version_no",
+    api_compatibility AS "api_compatibility"
+FROM apex_release;

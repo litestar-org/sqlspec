@@ -67,10 +67,7 @@ def test_build_fetch_kwargs_includes_explicit_fetch_options() -> None:
 
 
 def test_build_arrow_fetch_kwargs_matches_execute_fetch_options() -> None:
-    assert build_arrow_fetch_kwargs({"fetch_lobs": False, "fetch_decimals": True}) == {
-        "fetch_lobs": False,
-        "fetch_decimals": True,
-    }
+    assert build_arrow_fetch_kwargs({"fetch_lobs": False, "fetch_decimals": True}) == {"fetch_decimals": True}
 
 
 def test_oracle_sync_cursor_applies_arraysize_and_prefetchrows() -> None:

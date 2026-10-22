@@ -353,6 +353,13 @@ class LimitOffsetClauseMixin:
         builder.set_expression(select_expr.limit(exp.convert(value), copy=False))
         return cast("Self", builder)
 
+    def approx_limit(self, value: int, *, target_accuracy: int | None = None) -> Self:
+        self.limit(value)
+        hints = getattr(self, "_hints", None)
+        if isinstance(hints, list):
+            hints.append({"location": "approx_limit", "target_accuracy": target_accuracy})
+        return self
+
     def offset(self, value: int) -> Self:
         builder = cast("SQLBuilderProtocol", self)
         select_expr = _ensure_select_expression(builder, error_message="OFFSET only valid for SELECT.")
@@ -1248,6 +1255,17 @@ class Select(
         target_dialect = _normalize_dialect(dialect or self.dialect)
         modified_sql = sql_string
         for hint_dict in self._hints:
+            if hint_dict.get("location") == "approx_limit":
+                acc = hint_dict.get("target_accuracy")
+                replacement = (
+                    r"FETCH APPROX FIRST \1 ROWS ONLY"
+                    if acc is None
+                    else rf"FETCH APPROX FIRST \1 ROWS ONLY WITH TARGET ACCURACY {int(cast('int', acc))}"
+                )
+                modified_sql = re.sub(
+                    r"\bFETCH\s+FIRST\s+(\S+)\s+ROWS\s+ONLY\b", replacement, modified_sql, count=1, flags=re.IGNORECASE
+                )
+                continue
             if (
                 hint_dict.get("location") == "table"
                 and hint_dict.get("table")

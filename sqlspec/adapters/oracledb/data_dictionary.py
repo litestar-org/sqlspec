@@ -536,6 +536,55 @@ class OracledbSyncDataDictionary(SyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
+    def get_vector_memory_pool(self, driver: "OracleSyncDriver") -> "list[dict[str, Any]]":
+        """Return V$VECTOR_MEMORY_POOL allocation rows or empty list when unavailable."""
+        try:
+            return driver.select(self.get_query("system", "vector_memory_pool"))
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return []
+            raise
+
+    def has_cloud_ai(self, driver: "OracleSyncDriver") -> bool:
+        """Return True when DBMS_CLOUD_AI is installed and accessible."""
+        try:
+            rows = driver.select(self.get_query("objects", "cloud_ai_available"))
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return False
+            raise
+        if not rows:
+            return False
+        first = rows[0]
+        if isinstance(first, dict):
+            if "cnt" in first or "CNT" in first:
+                return int(first.get("cnt", 0) or first.get("CNT", 0) or 0) > 0
+            return bool(first)
+        return bool(first)
+
+    def get_apex_release(self, driver: "OracleSyncDriver") -> "dict[str, Any] | None":
+        """Return APEX_RELEASE metadata row or None when APEX is not installed."""
+        try:
+            rows = driver.select(self.get_query("version", "apex_release"))
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return None
+            raise
+        return rows[0] if rows else None
+
+    def get_json_duality_views(self, driver: "OracleSyncDriver", schema: "str | None" = None) -> "list[dict[str, Any]]":
+        """Return Oracle 26ai JSON Relational Duality View catalog rows."""
+        try:
+            if schema is None:
+                return driver.select(self.get_query("views", "json_duality_views"))
+            return driver.select(
+                self.get_query("views", "json_duality_views_by_schema"), schema_name=self.resolve_schema(schema)
+            )
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return []
+            raise
+
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
     ) -> "OracleVersionInfo | None":
@@ -910,6 +959,57 @@ class OracledbAsyncDataDictionary(AsyncDataDictionaryBase):
             schema_type=ForeignKeyMetadata,
         )
 
+    async def get_vector_memory_pool(self, driver: "OracleAsyncDriver") -> "list[dict[str, Any]]":
+        """Return V$VECTOR_MEMORY_POOL allocation rows or empty list when unavailable."""
+        try:
+            return await driver.select(self.get_query("system", "vector_memory_pool"))
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return []
+            raise
+
+    async def has_cloud_ai(self, driver: "OracleAsyncDriver") -> bool:
+        """Return True when DBMS_CLOUD_AI is installed and accessible."""
+        try:
+            rows = await driver.select(self.get_query("objects", "cloud_ai_available"))
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return False
+            raise
+        if not rows:
+            return False
+        first = rows[0]
+        if isinstance(first, dict):
+            if "cnt" in first or "CNT" in first:
+                return int(first.get("cnt", 0) or first.get("CNT", 0) or 0) > 0
+            return bool(first)
+        return bool(first)
+
+    async def get_apex_release(self, driver: "OracleAsyncDriver") -> "dict[str, Any] | None":
+        """Return APEX_RELEASE metadata row or None when APEX is not installed."""
+        try:
+            rows = await driver.select(self.get_query("version", "apex_release"))
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return None
+            raise
+        return rows[0] if rows else None
+
+    async def get_json_duality_views(
+        self, driver: "OracleAsyncDriver", schema: "str | None" = None
+    ) -> "list[dict[str, Any]]":
+        """Return Oracle 26ai JSON Relational Duality View catalog rows."""
+        try:
+            if schema is None:
+                return await driver.select(self.get_query("views", "json_duality_views"))
+            return await driver.select(
+                self.get_query("views", "json_duality_views_by_schema"), schema_name=self.resolve_schema(schema)
+            )
+        except Exception as error:
+            if _is_missing_or_inaccessible_oracle_object(error):
+                return []
+            raise
+
     def _build_version_info(
         self, version_value: "str | None", compatible: "str | None", is_autonomous: bool
     ) -> "OracleVersionInfo | None":
@@ -1148,6 +1248,18 @@ def _oracle_system_metadata_request(
         kwargs.setdefault("allow_license_gated_diagnostics", True)
         kwargs.setdefault("include_performance", True)
     return ensure_system_metadata_request(request, **kwargs)
+
+
+def _is_missing_or_inaccessible_oracle_object(error: BaseException) -> bool:
+    """Return True when an error corresponds to ORA-00942 or ORA-01031."""
+    msg = str(error).upper()
+    if "ORA-00942" in msg or "ORA-01031" in msg:
+        return True
+    if error.args:
+        code = getattr(error.args[0], "code", None)
+        if code in {942, 1031}:
+            return True
+    return False
 
 
 def _storage_type_from_version(version_info: "OracleVersionInfo | None") -> JSONStorageType:
