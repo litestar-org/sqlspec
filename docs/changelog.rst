@@ -9,6 +9,131 @@ important operational fixes.
 Recent Updates
 ==============
 
+v0.68.0 - Oracle enterprise and 26ai capabilities, PostgreSQL pooler modes, Google ADK v2 parity, wire-level SQLCommenter, and DuckDB profiling
+------------------------------------------------------------------------------------------------------------------------------------------------
+
+**Added:**
+
+* Added Oracle enterprise connection topology and in-memory wallet support,
+  including ``OracleEndpoint``, ``OracleTopologyConfig``, ``build_tns_description(...)``
+  (with ``(ADDRESS_LIST=...)`` and ``(CONNECT_DATA=...)`` support), and
+  ``extract_oracle_wallet_zip(...)`` supporting in-memory and base64-encoded zip
+  wallets with zip-slip path validation and automatic temporary directory cleanup
+  on pool shutdown.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Added ``OracleSessionContextConfig`` with batched anonymous PL/SQL session
+  checkout and release callbacks (``DBMS_SESSION.SET_IDENTIFIER``,
+  ``DBMS_SESSION.SET_CONTEXT``, ``DBMS_APPLICATION_INFO.SET_MODULE``,
+  ``NLS_*`` session parameters, ``EDITION``, ``CURRENT_SCHEMA``, and
+  ``DBMS_SESSION.MODIFY_PACKAGE_STATE(DBMS_SESSION.REINITIALIZE)``) wired into
+  ``session_callback``.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Added ``Select.vector_top_k(...)``, ``build_oracle_vector_top_k(...)``, and
+  ``build_oracle_hybrid_rrf_sql(...)`` supporting Oracle ``FETCH APPROX FIRST ...
+  ROWS ONLY`` HNSW index syntax (``TARGET ACCURACY``) and single-round-trip
+  Reciprocal Rank Fusion (``1 / (:k + rank)``) across ``VECTOR_DISTANCE`` and
+  ``CONTAINS`` CTEs.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Added hybrid vector and full-text search (``mode="hybrid"`` and ``rrf_k=60``) to
+  ``OracleSyncADKMemoryStore`` and ``OracleAsyncADKMemoryStore`` with automatic
+  fallback when query embeddings or full-text search are omitted.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Added Oracle 26ai catalog probes (``get_vector_memory_pool``, ``has_cloud_ai``,
+  ``get_apex_release``, ``get_json_duality_views``), JSON Relational Duality View
+  ETag helpers (``extract_duality_view_etag``, ``inject_duality_view_etag``,
+  ``build_duality_etag_update_sql``), and ``DBMS_XPLAN.DISPLAY_CURSOR`` execution
+  plan diagnostics via ``explain_statement``.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Added ``DatabaseConfig.derive_pool(**overrides)`` on ``SyncDatabaseConfig`` and
+  ``AsyncDatabaseConfig`` to clone pooled adapter configurations with shallow-merged
+  ``connection_config`` and ``driver_features`` overrides for isolated sub-pools.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Added first-class ``pooler_mode`` (``"session"``, ``"transaction"``,
+  ``"statement"``) and ``direct_dsn`` / ``derive_direct_config()`` across
+  ``AsyncpgConfig``, ``PsqlpyConfig``, ``PsycopgSyncConfig``, and
+  ``PsycopgAsyncConfig``, automatically disabling protocol-level prepared
+  statements in transaction and statement pooling modes.
+  (`#850 <https://github.com/litestar-org/sqlspec/pull/850>`_)
+* Added ``enable_alloydb_columnar`` in ``driver_features`` across PostgreSQL
+  adapters to inject ``google_columnar_engine.enabled = 'on'`` session-wide or
+  transaction-locally (``SET LOCAL``) inside ``begin()``.
+  (`#850 <https://github.com/litestar-org/sqlspec/pull/850>`_)
+* Routed PostgreSQL ``ListenerHub`` (``LISTEN``/``NOTIFY``) and ``MigrationCommands``
+  over ``derive_direct_config()`` to bypass transaction and statement poolers when
+  ``direct_dsn`` is provided.
+  (`#850 <https://github.com/litestar-org/sqlspec/pull/850>`_)
+* Updated Google ADK extension for ``google-adk>=2.10.0`` parity:
+  ``SQLSpecSessionService`` adds ``session_id.strip()`` normalization,
+  ``AlreadyExistsError`` on duplicate session creation, re-delivered event
+  deduplication, marker-less ``_session_matches_storage_revision`` concurrency
+  checks, reference-counted per-session ``asyncio.Lock``, and async context
+  manager lifecycle (``close()``, ``__aenter__``, ``__aexit__``).
+  (`#852 <https://github.com/litestar-org/sqlspec/pull/852>`_)
+* ``SQLSpecMemoryService`` adds ``custom_metadata`` support on
+  ``add_session_to_memory`` round-tripping through ``metadata_json``.
+  (`#852 <https://github.com/litestar-org/sqlspec/pull/852>`_)
+* ``SQLSpecArtifactService`` adds ``user:``-prefixed auto-scoping, flat-storage
+  validation via ``artifact_util``, recursive ``artifact://`` reference
+  resolution, and ``_REWIND_TOMBSTONE`` suppression on ``load_artifact``.
+  (`#852 <https://github.com/litestar-org/sqlspec/pull/852>`_)
+* Added ``decode_postgres_vector(...)`` supporting text (``"[0.1,0.2]"``), UTF-8
+  bytes, ``pgvector`` binary payloads (``>hh{dim}f``), and sequence embeddings
+  across ``PsqlpyADKMemoryStore``, ``PsycopgSyncADKMemoryStore``, and
+  ``PsycopgAsyncADKMemoryStore``, with ``pg_textsearch`` probing on ``psqlpy``.
+  (`#852 <https://github.com/litestar-org/sqlspec/pull/852>`_)
+* Extended ``AdbcADKMemoryStore`` with PostgreSQL ``VECTOR(N)`` DDL, ``hnsw``,
+  ``ivfflat``, and ``scann`` index creation, ``?::text::vector`` parameter
+  binding, cosine (``<=>``) distance ranking, and hybrid RRF search.
+  (`#852 <https://github.com/litestar-org/sqlspec/pull/852>`_)
+* Added wire-level ``sqlcommenter`` injection (``append_wire_sqlcomment``) in
+  ``SyncDriverAdapterBase._prepare_driver_statement`` and
+  ``AsyncDriverAdapterBase._prepare_driver_statement``, decoupling comment
+  appending from statement AST transformers so ``_stmt_cache_enabled=True`` is
+  preserved while bridging ``CorrelationContext.get()`` and
+  ``SQLCommenterContext.get()``.
+  (`#851 <https://github.com/litestar-org/sqlspec/pull/851>`_)
+* Added zero-RTT Oracle session trace piggybacking (``enable_session_tracing`` in
+  ``driver_features``) staging ``connection.module``, ``connection.action``,
+  ``connection.client_identifier``, and ``connection.econtext_id`` (``ECID``)
+  onto TTC ``OALL8`` packet round-trips with dirty-state tracking.
+  (`#851 <https://github.com/litestar-org/sqlspec/pull/851>`_)
+* Added opt-in DuckDB statement profiling (``enable_statement_profiling``) and
+  per-statement ``StatementEvent`` emission (``profile``, ``script_ordinal``,
+  ``script_statement_count``) during ``dispatch_execute_script`` across
+  ``DuckDBConfig``/``DuckDBDriver`` and DuckDB-backed
+  ``AdbcConfig``/``AdbcDriver``.
+  (`#851 <https://github.com/litestar-org/sqlspec/pull/851>`_)
+
+**Changed:**
+
+* Oracle ``select_to_arrow(..., return_format="batches")`` now streams PyCapsule
+  ``RecordBatch`` chunks directly via ``pa.RecordBatch.from_pyarrow(odf)`` without
+  converting full tables into memory.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* ``OracleAsyncDriver._pipeline_native_supported()`` now inspects cached
+  ``connection.version`` in zero RTTs instead of issuing runtime version probes.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Pre-computed ``_dml_count_query(clean_sql)`` before appending dynamic wire
+  comments in ``PsqlpyDriver`` so LRU cache hits remain stable across varying
+  trace contexts.
+  (`#851 <https://github.com/litestar-org/sqlspec/pull/851>`_)
+* Upgraded CI ``astral-sh/setup-uv`` action from ``10.2.0`` to ``10.3.0``.
+  (`#840 <https://github.com/litestar-org/sqlspec/pull/840>`_)
+* Upgraded pre-commit ``ruff-pre-commit`` from ``v0.16.10`` to ``v0.17.0`` and
+  refreshed project lockfile dependencies.
+
+**Fixed:**
+
+* Fixed ``build_duckdb_explain(...)`` to emit parenthesized
+  ``EXPLAIN (ANALYZE, FORMAT JSON) <sql>`` options syntax.
+  (`#851 <https://github.com/litestar-org/sqlspec/pull/851>`_)
+* Removed unsupported ``fetch_lobs`` argument from ``python-oracledb`` batch
+  dataframe requests.
+  (`#849 <https://github.com/litestar-org/sqlspec/pull/849>`_)
+* Fixed ``_make_alloydb_connection_class`` in ``psycopg`` to honor
+  ``prepare_threshold=None`` in transaction and statement pooling modes.
+  (`#850 <https://github.com/litestar-org/sqlspec/pull/850>`_)
+
 v0.67.0 - Enterprise ADBC drivers, Spanner graph and hybrid search, hot-path execution, and Python 3.11+
 --------------------------------------------------------------------------------------------------------
 

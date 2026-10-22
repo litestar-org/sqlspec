@@ -435,6 +435,9 @@ class DuckDBDriver(SyncDriverAdapterBase):
                 sql, driver_params = self._compiled_sql(prepared_statement, config)
                 cursor.execute(sql, driver_params or ())
                 arrow_table = cursor.to_arrow_table()
+                if arrow_table is None:
+                    msg = "DuckDB cursor did not produce an Arrow table"
+                    raise SQLSpecError(msg)
                 arrow_result = build_arrow_result_from_table(
                     prepared_statement,
                     arrow_table,
